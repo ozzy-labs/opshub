@@ -1,6 +1,6 @@
 # Phase 2 Implementation Plan
 
-> Status: Draft (planning). Last reviewed: 2026-05-17.
+> Status: Revision 2 (post-prep). Last reviewed: 2026-05-17. Prep PRs #24 (ADR-0013) / #25 (docs alignment) / #26 (atomic transaction + registry + AllEvent) は merged。
 
 Phase 2 の目的は **Coordination layer** を Phase 1 の foundation 上に追加すること。inbox triage / decisions / locks / work sessions + agent runs / handoffs の 5 ワークストリームを event-sourced + projection + CLI + markdown のパターンで揃え、複数 agent + 人手の同時作業を安全に扱える状態にする。Connector (Phase 3) / Semantic recall (Phase 4) は範囲外。
 
@@ -15,6 +15,16 @@ Phase 1 完了時点で Phase 2 着手前に解消が必要な事項は **なし
 3. **Triage の LLM 利用** — Phase 2 は LLM を呼ばない。triage は CLI コマンドが明示的に `--to-task` / `--decision` / `--discard` を指定する (principles.md Open Q #1 の判断は Phase 3+ に持ち越し)
 4. **ファイル系 inbox の扱い** — Phase 2 では `workspace/{inbox,plans,notes}/*.md` の自動 ingest は実装しない。inbox は CLI 経由の manual enqueue のみ。ファイル系 ingest は Phase 3 connector framework で扱う
 5. **Project entity の導入タイミング** — Phase 2 step 5 では `project:` lock scope は schema 上のみ予約し CLI から acquire 不可 (NotImplementedError)。Phase 2 内では project entity 自体を導入しない。Phase 2.x または Phase 3 で別途検討
+6. **`tests/integration/test_coordination_lifecycle.py` の構造** — 1 ファイルだが、`conftest.py` に共通 fixture (tmp_path SQLite + monkeypatched OPSHUB_*) を切り出し、workstream ごとに `test_inbox_triage_lifecycle` / `test_lock_lifecycle` / `test_session_run_bracket` / `test_handoff_lifecycle` の独立 test 関数に分割する (Phase 1 の `test_lifecycle.py` は 1 関数構造、Phase 2 は workstream 数 × 命令ステップ数で 500 行超を避けるための判断)
+
+### 1.1 Prep PR で確立した実装契約 (step 3-7 が継承する)
+
+PR #26 で Phase 1 コードを refactor し、Phase 2 の service / projection 追加が機械的に揃うよう以下の契約を導入済。**step 3-7 の各 service / projection はこれを踏襲する**:
+
+- **`EventStore` / `Projector` Protocol** が `connection: Connection | None = None` を受け取る。SQLAlchemy-backed 実装は connection 必須、in-memory 実装は ignore。**新規 service は constructor に `uow_factory: Callable[[], ContextManager[Connection]]` を取り、`with self._uow_factory() as conn: self._store.append(event, conn); self._projector.apply(event, conn)` の atomic pattern で event + projection を 1 transaction にまとめる** (TaskService と同じ shape)。これにより multi-event command (例: `ItemTriaged` → `TaskCreated` + `ItemTriaged`) を atomic に扱える
+- **`projections/registry.py:all_projections() -> list[Projection]`** が SSOT。新規 projection は registry に追記するだけで `_PersistingProjector` と `projections rebuild` の両方が自動で拾う。**step 3-7 各 PR で対応 projection を registry に登録する**
+- **`AllEvent` discriminated union** は `opshub.domain.events.AllEvent` として既に export 済 (現状 `TaskEvent` と等価)。**step 1 はこれを `TaskEvent | Phase2Event` に拡張する** (新規定義ではない)
+- **`events_table` は `db/schema.py` 直下** に定義済。Phase 2 の各 projection table も同じ pattern (Table を `projections/<entity>.py` で定義し、import 時点で `metadata` 登録) に従う
 
 ## 2. Phase 2 Commit 順序
 
@@ -26,27 +36,29 @@ step 1-2 は Phase 2 全体の土台。1 では全 event 型を一度に追加�
 
 | # | Commit | 概要 | 想定 PR # |
 |---|---|---|---|
-| 1 | `feat(domain): phase 2 events` | `domain/events/{inbox,decision,coordination,handoff}.py` を追加。`ItemEnqueued` / `ItemTriaged` / `DecisionRecorded` / `WorkSessionStarted` / `WorkSessionEnded` / `AgentRunStarted` / `AgentRunEnded` / `LockAcquired` / `LockReleased` / `HandoffOpened` / `HandoffClosed` の 11 event 型。`Phase2Event` discriminated union と `AllEvent = TaskEvent \| Phase2Event` を export。`SqlAlchemyEventStore.iter_all()` の TypeAdapter を更新 | PR #N |
-| 2 | `feat(db): phase 2 projection tables` | migration `0004` - `0009` を **6 ファイルに分割** して 1 migration = 1 table を維持 (Phase 1 convention 準拠)。順序: `0004_create_inbox_items_table.py` / `0005_create_decisions_table.py` / `0006_create_work_sessions_table.py` / `0007_create_agent_runs_table.py` / `0008_create_locks_table.py` / `0009_create_handoffs_table.py`。`locks` migration には `UNIQUE(scope_type, scope_id) WHERE released_at IS NULL` partial unique index を含める。`opshub.db.schema.metadata` に各 Table 定義を登録 (projections module で公開) | PR #N |
+| 1 | `feat(domain): phase 2 events` | `domain/events/{inbox,decision,coordination,handoff}.py` を追加。`ItemEnqueued` / `ItemTriaged` / `DecisionRecorded` / `WorkSessionStarted` / `WorkSessionEnded` / `AgentRunStarted` / `AgentRunEnded` / `LockAcquired` / `LockReleased` / `HandoffOpened` / `HandoffClosed` の 11 event 型。`Phase2Event` discriminated union を新規定義し、**既存の `AllEvent` (PR #26 で `TaskEvent` と等価で export 済) を `TaskEvent \| Phase2Event` に拡張** (`opshub/domain/events/__init__.py` の 1 行修正)。`SqlAlchemyEventStore._decode` は既に `TypeAdapter(AllEvent)` 経由なので追加変更不要。**M1**: 同 PR で `cli/app.py` に `OpsHubError` の top-level handler を追加 (catch → `typer.echo(err=True)` + `raise typer.Exit(code)` で traceback 露出を防ぐ)。**M6**: 同 PR で `tests/integration/test_cli_imports.py` を追加し `cli/*.py` の module-level import が `__future__` / `typer` / `typing` のみに限定されていることを `ast.parse` で静的検査 (cold-start regression guard) | PR #N |
+| 2 | `feat(db): phase 2 projection tables` | migration `0004` - `0009` を **6 ファイルに分割** して 1 migration = 1 table を維持。順序: `0004_create_inbox_items_table.py` / `0005_create_decisions_table.py` / `0006_create_work_sessions_table.py` / `0007_create_agent_runs_table.py` / `0008_create_locks_table.py` / `0009_create_handoffs_table.py`。`locks` migration には `UNIQUE(scope_type, scope_id) WHERE released_at IS NULL` partial unique index を含める。`opshub.db.schema.metadata` に各 Table 定義を登録 (projections module で公開、`events_table` と同じ pattern)。**M4**: 同 PR で `tests/integration/test_projections_rebuild.py` に「同 recorded_at での tie-break」「schema_version 不整合での abort + rollback」の property test を追加 | PR #N |
 
 ### 2.2 Vertical features (5 PR、並列可)
 
 step 3-7 は **互いに独立** で、step 1-2 完了後に同時着手可能。各 step は 1 ワークストリームを service + projection + CLI まで縦に貫く (markdown は step 8 で一括)。
 
+**全 step 共通**: §1.1 の実装契約 (uow_factory / `EventStore.append(event, conn)` / `Projector.apply(event, conn)` / `projections/registry.py` 登録) に従う。新規 service の test は `InMemoryEventStore` で書け、`tests/integration/` の SqlAlchemy backed test 1 件で atomicity (PR #26 同等の failing-projector test) を確認する。
+
 | # | Commit | 概要 | 想定 PR # |
 |---|---|---|---|
-| 3 | `feat(coordination): inbox triage workflow` | `services/inbox_service.py` (`enqueue` / `triage` command) + `projections/inbox.py` (reducer) + `cli/inbox.py` (`opshub inbox add` / `list` / `triage --to-task <title>\|--decision <text>\|--discard <reason>`) | PR #N |
-| 4 | `feat(coordination): decisions workflow` | `services/decision_service.py` + `projections/decisions.py` + `cli/decision.py` (`opshub decision record "<text>"` / `list`)。inbox triage から派生するルートも step 3 と整合する | PR #N |
-| 5 | `feat(coordination): lock implementation` | `services/lock_service.py` (acquire / release、failure semantics は fail-fast) + `projections/locks.py` + `cli/lock.py` (`opshub lock acquire <scope>` / `release <id>` / `list`)。ADR-0013 (既に main に merged) に従って実装。lock owner = (actor, work_session_id) は `OPSHUB_ACTOR` / `OPSHUB_WORK_SESSION_ID` 環境変数または CLI フラグから解決 (step 5 PR 内で wiring helper として実装)。`project:` scope は schema 上は予約するが CLI からは acquire 不可 (NotImplementedError) | PR #N |
-| 6 | `feat(coordination): work sessions and agent runs` | `services/{agent_session_service,work_session_service}.py` + `projections/{work_sessions,agent_runs}.py` + `cli/{session,agent}.py` (`opshub session start [--scope]` / `end`、`opshub agent run begin <agent-name>` / `end --summary`)。session は agent_run の outer bracket | PR #N |
-| 7 | `feat(coordination): handoffs workflow` | `services/handoff_service.py` + `projections/handoffs.py` + `cli/handoff.py` (`opshub handoff open --from <a> --to <b> --topic "<...>"` / `close <id> --note`)。markdown 出力は step 8 | PR #N |
+| 3 | `feat(coordination): inbox triage workflow` | `services/inbox_service.py` (`enqueue` / `triage` command、step 5 が landing 前ならまだ lock を取らない設計でも可) + `projections/inbox.py` (reducer、registry 登録) + `cli/inbox.py` (`opshub inbox add` / `list` / `triage --to-task <title>\|--decision <text>\|--discard <reason>`)。**M3**: 同 PR で `cli/_render.py` を新設し、`render_table(rows, columns)` / `render_json(rows, columns)` / `render_md(rows, columns)` の共通関数 + `Column` descriptor を抽出。`_task_list.py` も同モジュールに移行 (`inbox list` がこれを使い、step 4/5/7 もこのモジュールに依存させる) | PR #N |
+| 4 | `feat(coordination): decisions workflow` | `services/decision_service.py` + `projections/decisions.py` (registry 登録) + `cli/decision.py` (`opshub decision record "<text>"` / `list`、step 3 の `cli/_render` 共通モジュール使用)。inbox triage から派生するルートも step 3 と整合する (`InboxService.triage(decision=...)` が `DecisionService.record_decision()` を呼ぶ単純委譲、または event 連鎖で対応) | PR #N |
+| 5 | `feat(coordination): lock implementation` | `services/lock_service.py` (acquire / release、failure semantics は fail-fast) + `projections/locks.py` (registry 登録) + `cli/lock.py` (`opshub lock acquire <scope>` / `release <id>` / `list --format ...`)。ADR-0013 (main に merged) に従って実装。lock owner = (actor, work_session_id) は **`OPSHUB_ACTOR` / `OPSHUB_WORK_SESSION_ID` 環境変数または `--actor` / `--session` CLI フラグから解決する `cli/_actor.py` (新設) wiring helper を本 step で実装**。`project:` scope は schema 上は予約するが CLI からは acquire 不可 (NotImplementedError) | PR #N |
+| 6 | `feat(coordination): work sessions and agent runs` | `services/{agent_session_service,work_session_service}.py` + `projections/{work_sessions,agent_runs}.py` (registry 登録) + `cli/{session,agent}.py` (`opshub session start [--scope]` / `end`、`opshub agent run begin <agent-name>` / `end --summary`)。session は agent_run の outer bracket。**現在の session_id を解決する `cli/_actor.py` (step 5 で新設) を拡張**: session start で `~/.local/state/opshub/current-session` のような state ファイルに session_id を書き、`get_current_session_id()` がこれを読む (env var 上書き可) | PR #N |
+| 7 | `feat(coordination): handoffs workflow` | `services/handoff_service.py` + `projections/handoffs.py` (registry 登録) + `cli/handoff.py` (`opshub handoff open --from <a> --to <b> --topic "<...>"` / `close <id> --note` / `list --format ...`)。markdown 出力は step 8 | PR #N |
 
 ### 2.3 Surfaces (2 PR)
 
 | # | Commit | 概要 | 想定 PR # |
 |---|---|---|---|
-| 8 | `feat(markdown): inbox/decisions/handoffs rendering` | `markdown/{inbox,decisions,handoffs}.py` + Jinja2 template 追加。`opshub workspace generate` を拡張して `~/opshub/workspace/generated/{inbox,decisions,handoffs}/*.md` を出力。冪等テスト (step 16 と同じパターン) | PR #N |
-| 9 | `test: phase 2 end-to-end + docs` | `tests/integration/test_coordination_lifecycle.py` (enqueue → triage → task / decision、lock acquire / release、session + agent run bracket、handoff open / close)。README に Phase 2 command 一覧を追記。AGENTS.md / CLAUDE.md / principles.md / architecture.md に Phase 2 完了状態を反映 | PR #N |
+| 8 | `feat(markdown): inbox/decisions/handoffs rendering` | **M7**: 先に `markdown/workspace.py` を refactor し `WorkspaceRenderer` Protocol (`subdir`, `read_and_render(engine) -> dict[str, str]`) を抽出。既存 `tasks` renderer をその 1 実装に転換 (behavior 変更なし)。次に `markdown/{inbox,decisions,handoffs}.py` + Jinja2 template を各 renderer として追加し、`generate_workspace` が `[TasksRenderer, InboxRenderer, DecisionsRenderer, HandoffsRenderer]` を iterate する形に。**M2**: 同 PR で `_sync_files` を `tmp file + os.replace` パターンに変更し各ファイル書き込みを atomic に。出力先: `~/opshub/workspace/generated/{tasks,inbox,decisions,handoffs}/*.md`。冪等テスト (Phase 1 step 16 と同じパターン、`tests/integration/test_workspace_generate.py` 拡張) | PR #N |
+| 9 | `test: phase 2 end-to-end + docs` | §1 第 6 項に従い `tests/integration/test_coordination_lifecycle.py` を **workstream ごとに分割** (`test_inbox_triage_lifecycle` / `test_decisions_lifecycle` / `test_lock_lifecycle` / `test_session_run_bracket` / `test_handoff_lifecycle`)。共通 fixture (tmp_path SQLite + monkeypatched OPSHUB_*) は `tests/integration/conftest.py` に切り出し (Phase 1 `test_lifecycle.py` の `_isolate_env` を lift)。README に Phase 2 command 一覧を追記。AGENTS.md / CLAUDE.md / principles.md / architecture.md に Phase 2 完了状態を反映 | PR #N |
 
 **論理グルーピング** (milestone 候補):
 
@@ -93,8 +105,8 @@ Phase 1 の経験 (`auto-merge-fires-fast` memory) から、wave 内並列は 5 
 
 1. README に Phase 2 command 一覧を追記
 2. AGENTS.md / CLAUDE.md / docs/principles.md / docs/architecture.md に Phase 2 完了状態を反映 (principles §9 Phased Delivery テーブルを Phase 2 = ✅ Complete に更新)
-3. **ADR-0013 (Lock 粒度)** を新規起票し Accepted に昇格 (step 5 の前提) — ✅ 完了 (PR #24)
-4. `docs/repository-structure.md` の `services/` / `projections/` / `cli/` セクションに Phase 2 ファイルを追記
+3. **ADR-0013 (Lock 粒度)** ✅ 完了 (PR #24)
+4. `docs/repository-structure.md` の `services/` / `projections/` / `cli/` セクションの annotation を Phase 2 ファイル分 `[P2]` → `[P1]` (完了済) に更新
 5. `docs/data-model.md` (Phase 1 plan で「後日作成予定」だった) を本 phase で起こすか、本 plan に骨子を追記する判断
 
 ## 4. Phase 2 完了時に解消する Open Questions
@@ -160,7 +172,6 @@ Phase 3 着手時点で連動して見直すべき docs: principles §7 (Connect
 
 ## Open Questions (本ドキュメント固有)
 
-1. Work session と project の関係 (session が複数 project に跨れるか、1 session = 1 project か)
+1. Work session と project の関係 (session が複数 project に跨れるか、1 session = 1 project か)。**Phase 2 では session は project 概念に依存しない (project entity 未導入のため)。Phase 2.x 以降で project 導入時に再検討**
 2. Handoff の有効期限 (auto-close TTL を持つか、明示 close まで open のままか)
 3. `opshub inbox triage --to-task <title>` が新規 task を作るとき、source ref から body を継承する規約 (今は title のみ受け取る案)
-4. `tests/integration/test_coordination_lifecycle.py` の scope: 1 ファイルで全 workstream を貫くか、workstream ごとに分けるか (Phase 1 は `test_lifecycle.py` 1 本にまとめた)
