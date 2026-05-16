@@ -27,8 +27,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
 
+    from opshub.domain.events import DomainEvent
+    from opshub.services import TaskService
 
-__all__ = ["build_engine"]
+
+__all__ = ["build_engine", "build_task_service"]
 
 
 def build_engine() -> Engine:
@@ -64,3 +67,47 @@ def _require_initialised(engine: Engine) -> None:
 
     if "events" not in inspect(engine).get_table_names():
         raise ConfigError("OpsHub DB is not initialised; run `opshub init` first.")
+
+
+def build_task_service(actor: str) -> TaskService:
+    """Wire a :class:`TaskService` against the configured database.
+
+    The returned service appends events to the SQLite-backed
+    :class:`~opshub.db.SqlAlchemyEventStore` *and* projects them inline through
+    a :class:`_PersistingProjector` that writes to the ``tasks`` table in the
+    same database. Failures during projection do not roll back the appended
+    event — the event log is the source of truth and projections can always
+    be rebuilt via :func:`opshub.projections.rebuild_all` (ADR-0002).
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import TaskService
+
+    engine = build_engine()
+    return TaskService(
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(engine),
+        actor=actor,
+    )
+
+
+class _PersistingProjector:
+    """Apply events to the ``tasks`` projection on a SQLAlchemy engine.
+
+    Wraps :class:`~opshub.projections.TasksProjection` so each ``apply`` call
+    opens its own short-lived transaction via ``engine.begin()``. This keeps
+    :mod:`opshub.services.task_service` oblivious to SQLAlchemy: the service
+    only sees the :class:`~opshub.services.projector.Projector` Protocol.
+    """
+
+    def __init__(self, engine: Engine) -> None:
+        # Lazy import: keep CLI cold start fast (ADR-0001).
+        from opshub.projections import TasksProjection
+
+        self._engine = engine
+        self._projection = TasksProjection()
+
+    def apply(self, event: DomainEvent) -> None:
+        """Open a short transaction and let the projection apply the event."""
+        with self._engine.begin() as conn:
+            self._projection.apply(conn, event)
