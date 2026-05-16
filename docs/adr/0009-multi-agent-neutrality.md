@@ -1,7 +1,7 @@
 # 0009. Multi-Agent Neutrality
 
-- Status: Proposed
-- Date: 2026-05-16
+- Status: Accepted
+- Date: 2026-05-17
 - Deciders: ozzy
 
 ## Context

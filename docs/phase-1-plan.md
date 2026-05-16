@@ -1,6 +1,6 @@
 # Phase 1 Implementation Plan
 
-> Status: Draft (in active design). Last reviewed: 2026-05-16.
+> Status: Completed 2026-05-17 (retained as historical record). PR # in tables are forecasts; actual PR numbers diverged — see git history.
 
 Phase 1 の目的は「event store + tasks + CLI + markdown 生成」が一気通貫で動く foundation を提供すること。Connector / Vector / Lock / Triage は含まない (Phase 2 以降)。
 
