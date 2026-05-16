@@ -54,5 +54,7 @@ build/
 *.sqlite-journal
 *.sqlite-shm
 *.sqlite-wal
-db/
+# Anchor `/db/` so it only matches a repo-root `db/` directory, not the
+# `src/opshub/db/` source package or `tests/unit/db/`.
+/db/
 workspace/runtime/
