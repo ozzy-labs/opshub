@@ -101,4 +101,4 @@ Python 3.13+ / uv / Typer / SQLAlchemy Core / Pydantic v2 を採用。ただし 
 
 - **Embedding モデル選定** → ADR-0012 で Pluggable Embedder 設計を採択。具体モデル選定は Phase 4 着手時 (ADR-0012 の Open Questions 1-2)
 - **Task runner** → `just` 採用 (ADR-0001)
-- **Lock の粒度設計** → ADR-0013 で `task:<id>` / `project:<id>` / `global:` の 3 階層 + fail-fast conflict semantics を採択 (Phase 2 step 5 で実装)
+- **Lock の粒度設計** (旧 Open Q #2) → ADR-0013 で `task:<id>` / `project:<id>` / `global:` の 3 階層 + fail-fast conflict semantics を採択 (Phase 2 step 5 で実装)

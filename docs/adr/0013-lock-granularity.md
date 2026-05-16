@@ -29,7 +29,7 @@ Lock scope は **3 階層** とする。すべて scope 文字列で表現し、
 | Scope | 形式 | 用途 |
 |---|---|---|
 | `task:<task-ulid>` | task ID で指定 | 単一 task の state-modifying 操作を排他。`opshub task complete <id>` / `opshub task activate <id>` 等が取得 |
-| `project:<project-ulid>` | project ID で指定 | project スコープの構造変更を排他。project 概念自体は step 6 (work sessions) で定義。Phase 2.x で project entity を導入するまで pre-allocated scope として残す |
+| `project:<project-ulid>` | project ID で指定 | project スコープの構造変更を排他。project 概念自体は step 6 (work sessions) で定義予定。**Phase 2 step 5 (lock service 実装) 時点では `projects` projection が存在せず scope_id の実在検証ができないため、CLI からの `opshub lock acquire project:<id>` は `NotImplementedError` で返す**。`scope_type='project'` の格納は schema として残し、step 6 以降で CLI を解禁する |
 | `global:` | 引数なし (scope_id は空) | opshub 全体を排他。`opshub projections rebuild` / `opshub db migrate` / `opshub workspace generate` 等のメンテナンスが取得 |
 
 ### Owner
@@ -41,14 +41,14 @@ Lock owner は `(actor, work_session_id)` の組。
 
 ### Conflict semantics
 
-- **同 owner の再 acquire**: 同 scope に既に同 owner の lock がある場合、新しい lock event を append せず既存 lock を返す (idempotent reacquire)
+- **同 owner の再 acquire**: 同 scope に既に同 owner の lock がある場合、新しい lock event を append せず既存 lock を返す (idempotent reacquire)。**owner の同一性は `(actor, work_session_id)` の完全一致** で判定する。actor のみ一致で session が異なる場合は別 owner 扱いで ConflictError
 - **異 owner の acquire**: scope に既に lock が存在し owner が異なる場合、`ConflictError` を raise (fail-fast)。retry は呼び出し側の責任 (CLI exit code → agent / 人間が判断)
 - **異 owner の release**: lock owner と release を試みた owner が一致しない場合、`OwnershipError` を raise。lock は外れない
 
 ### Scope 間の関係
 
 - **`global:` lock は他のすべての lock を block する**。`global:` 取得時に既存 task / project lock があれば ConflictError。逆も同様 (任意の scope の lock 取得時に `global:` lock があれば ConflictError)
-- **`task:` と `project:` は互いに独立**。`project:X` lock を持っていても、`task:Y` (X 配下の task) の acquire は通る。理由は §3.3 (Negative §2) を参照
+- **`task:` と `project:` は互いに独立**。`project:X` lock を持っていても、`task:Y` (X 配下の task) の acquire は通る。理由は Consequences > Negative §2 を参照
 - **同一 scope_type 内の異なる scope_id は独立**。`task:A` と `task:B` は競合しない
 
 ### 永続化
@@ -65,7 +65,7 @@ Lock state は event-sourced。Phase 2 step 1 で導入する `LockAcquired` / `
 | `acquired_at` | TIMESTAMP NOT NULL | LockAcquired event の occurred_at |
 | `released_at` | TIMESTAMP NULL | LockReleased event の occurred_at。NULL = active |
 
-`UNIQUE(scope_type, scope_id) WHERE released_at IS NULL` 相当の partial index で「同 scope の active lock は最大 1 件」を強制する (SQLite の partial index で実装可能)。
+`UNIQUE(scope_type, scope_id) WHERE released_at IS NULL` 相当の partial index で「同 scope の active lock は最大 1 件」を強制する。SQLite は partial index をサポートしており、Alembic migration では `op.create_index(..., unique=True, sqlite_where=sa.text("released_at IS NULL"))` で宣言する (step 2 の `0004_create_phase_2_projections.py` で実装)。
 
 ### Lock の TTL
 
