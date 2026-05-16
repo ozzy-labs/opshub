@@ -88,6 +88,7 @@ NNNN-kebab-case-title.md
 | 0010 | [Connector Contract](0010-connector-contract.md) | Proposed |
 | 0011 | [Ozzy-Labs Ecosystem Adoption](0011-ozzy-labs-ecosystem-adoption.md) | Accepted |
 | 0012 | [Embedding Strategy](0012-embedding-strategy.md) | Accepted |
+| 0013 | [Lock Granularity](0013-lock-granularity.md) | Accepted |
 
 ## Open Questions
 

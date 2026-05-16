@@ -95,10 +95,10 @@ Python 3.13+ / uv / Typer / SQLAlchemy Core / Pydantic v2 を採用。ただし 
 検討中の項目 (本ドキュメントの今後の更新対象):
 
 1. **LLM 利用方針** — ADR-0004 で agent 委ねが原則だが、embedding API 呼び出し (ADR-0012) と triage / summary 用途で OpsHub 自身が API を呼ぶケースの運用線引きは未確定
-2. **Lock の粒度設計** (`task:<id>` / `project:<id>` / `global` の三階層案あり、Phase 2 で確定)
-3. **SaaS token 保管方式** (`keyring` library / `pass` / `secret-tool`、Phase 3 で確定)
+2. **SaaS token 保管方式** (`keyring` library / `pass` / `secret-tool`、Phase 3 で確定)
 
 ## 確定済み (旧 Open Question)
 
 - **Embedding モデル選定** → ADR-0012 で Pluggable Embedder 設計を採択。具体モデル選定は Phase 4 着手時 (ADR-0012 の Open Questions 1-2)
 - **Task runner** → `just` 採用 (ADR-0001)
+- **Lock の粒度設計** (旧 Open Q #2) → ADR-0013 で `task:<id>` / `project:<id>` / `global:` の 3 階層 + fail-fast conflict semantics を採択 (Phase 2 step 5 で実装)
