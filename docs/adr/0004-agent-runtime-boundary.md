@@ -1,6 +1,6 @@
 # 0004. Agent Runtime Boundary
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-05-16
 - Deciders: ozzy
 

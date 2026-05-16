@@ -51,7 +51,7 @@ OpsHub では以下を ADR 化する。
 | `Deprecated` | 採用を取り下げ。後継 ADR を必須としない |
 | `Superseded by ADR-NNNN` | 新しい ADR で置き換え。新 ADR にリンク |
 
-設計フェーズ中はほとんどの ADR が `Proposed` 状態。Phase 1 着手時に主要 ADR を一括 `Accepted` に上げる予定。
+Phase 1 着手前に主要 ADR (0001-0007 + 0012) を一括 `Accepted` に昇格させた。Phase 2-3 を担う ADR-0009 (Multi-Agent Neutrality) / ADR-0010 (Connector Contract) は該当 Phase 着手時に評価・昇格を判断する。
 
 ## 4. ファイル命名
 
@@ -76,18 +76,18 @@ NNNN-kebab-case-title.md
 | Number | Title | Status |
 |---|---|---|
 | 0000 | [Use Architecture Decision Records](0000-use-adrs.md) | Accepted |
-| 0001 | [Python Stack](0001-python-stack.md) | Proposed |
-| 0002 | [Event-Sourced Architecture](0002-event-sourced-architecture.md) | Proposed |
-| 0003 | [Markdown as Workspace Surface](0003-markdown-as-workspace-surface.md) | Proposed |
-| 0004 | [Agent Runtime Boundary](0004-agent-runtime-boundary.md) | Proposed |
-| 0005 | [External Content Minimization](0005-external-content-minimization.md) | Proposed |
-| 0006 | [CLI-first MVP, defer MCP](0006-cli-first-mvp.md) | Proposed |
-| 0007 | [Single Python Package, defer Monorepo](0007-single-python-package.md) | Proposed |
+| 0001 | [Python Stack](0001-python-stack.md) | Accepted |
+| 0002 | [Event-Sourced Architecture](0002-event-sourced-architecture.md) | Accepted |
+| 0003 | [Markdown as Workspace Surface](0003-markdown-as-workspace-surface.md) | Accepted |
+| 0004 | [Agent Runtime Boundary](0004-agent-runtime-boundary.md) | Accepted |
+| 0005 | [External Content Minimization](0005-external-content-minimization.md) | Accepted |
+| 0006 | [CLI-first MVP, defer MCP](0006-cli-first-mvp.md) | Accepted |
+| 0007 | [Single Python Package, defer Monorepo](0007-single-python-package.md) | Accepted |
 | 0008 | [Naming: opshub](0008-naming-opshub.md) | Accepted |
 | 0009 | [Multi-Agent Neutrality](0009-multi-agent-neutrality.md) | Proposed |
 | 0010 | [Connector Contract](0010-connector-contract.md) | Proposed |
 | 0011 | [Ozzy-Labs Ecosystem Adoption](0011-ozzy-labs-ecosystem-adoption.md) | Accepted |
-| 0012 | [Embedding Strategy](0012-embedding-strategy.md) | Proposed |
+| 0012 | [Embedding Strategy](0012-embedding-strategy.md) | Accepted |
 
 ## Open Questions
 
