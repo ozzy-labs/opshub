@@ -1,0 +1,17 @@
+# Handoff `{{ handoff.id[:8] }}`
+
+- **ID:** `{{ handoff.id }}`
+- **State:** {{ handoff.state }}
+- **From:** {{ handoff.from_actor }}
+- **To:** {{ handoff.to_actor }}
+- **Topic:** {{ handoff.topic }}
+- **Opened:** {{ handoff.opened_at.isoformat() }}
+{% if handoff.closed_at %}
+- **Closed:** {{ handoff.closed_at.isoformat() }}
+{% endif %}
+{% if handoff.note %}
+
+## Note
+
+{{ handoff.note }}
+{% endif %}

@@ -1,0 +1,15 @@
+# Decision `{{ decision.id[:8] }}`
+
+- **ID:** `{{ decision.id }}`
+- **Recorded:** {{ decision.recorded_at.isoformat() }}
+- **Actor:** {{ decision.actor }}
+
+## Decision
+
+{{ decision.text }}
+{% if decision.context %}
+
+## Context
+
+{{ decision.context }}
+{% endif %}
