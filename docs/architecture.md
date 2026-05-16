@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Draft (in active design). Last reviewed: 2026-05-16.
+> Status: Phase 1 (foundation) shipped 2026-05-17 (event store + tasks projection + CLI + markdown 生成). Phase 2-4 sections remain in active design.
 
 OpsHub の高レベルアーキテクチャ・データフロー・データモデル・用語を記述する。具体的な決定の根拠は対応 ADR を参照。
 

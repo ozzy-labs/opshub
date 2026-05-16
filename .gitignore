@@ -14,6 +14,10 @@ Thumbs.db
 # Claude Code per-user settings (project defaults belong in .claude/settings.json)
 .claude/settings.local.json
 
+# Claude Code agent worktrees (created by Agent tool with isolation: worktree).
+# These are throwaway working copies of the repo; they should not be tracked.
+.claude/worktrees/
+
 # Re-include project-level VSCode workspace defaults (global gitignore may exclude .vscode/).
 !.vscode/
 !.vscode/extensions.json

@@ -75,12 +75,12 @@ CI でこの不変条件を検証する。
 
 ## 9. Phased Delivery
 
-| Phase | スコープ |
-|---|---|
-| 1 | Foundation: event store + tasks + CLI + markdown 生成 + tests + CI |
-| 2 | Coordination: inbox triage / decisions / locks / handoffs / work sessions |
-| 3 | Connectors: GitHub / Slack / Microsoft 365 / Box |
-| 4 | Semantic Layer: vector recall / semantic search / duplicate detection / briefing 自動生成 |
+| Phase | スコープ | Status |
+|---|---|---|
+| 1 | Foundation: event store + tasks + CLI + markdown 生成 + tests + CI | ✅ Complete (2026-05) |
+| 2 | Coordination: inbox triage / decisions / locks / handoffs / work sessions | Planned |
+| 3 | Connectors: GitHub / Slack / Microsoft 365 / Box | Planned |
+| 4 | Semantic Layer: vector recall / semantic search / duplicate detection / briefing 自動生成 | Planned |
 
 各 phase で価値検証してから次へ進む。Phase をスキップしない。
 

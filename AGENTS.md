@@ -13,6 +13,8 @@
 
 `opshub`: Local-first operational memory and execution hub for humans and AI agents.
 
+**Status**: Phase 1 (foundation) complete — event store, tasks projection, CLI (`init` / `task` / `projections` / `embeddings` / `workspace generate` / `db migrate`), markdown 生成が end-to-end で動作。Phase 2 (coordination: inbox triage / decisions / locks / handoffs) が次の対象 (詳細は `docs/principles.md` §9)。
+
 ## Tech Stack
 
 - Runtime: Python 3.13+ (ADR-0001)
@@ -60,8 +62,6 @@ CI では追加で `uv sync --locked` と `uv run mypy src` を実行する。
 ## 規約
 
 言語・コミット・ブランチ・PR のルールは README.md を参照すること。
-
-## Available Skills
 
 <!-- begin: @ozzylabs/skills -->
 
