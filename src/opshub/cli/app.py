@@ -5,6 +5,14 @@ Step 13 added `opshub init` and `opshub db migrate` for first-time setup and
 on-demand schema upgrades. Subcommand callbacks defer heavy imports
 (``opshub.core``, ``opshub.db``, ``alembic``) to call time so that
 ``opshub --help`` cold start stays under ~300ms (ADR-0001).
+
+Phase 2 step 1 adds a top-level :class:`OpsHubError` handler in
+:func:`main` (the console-script entry point). Domain failures surface
+as a single ``Error: <message>`` line on stderr plus a meaningful exit
+code, rather than leaking a Python traceback at the user. The wrapper
+only sits on :func:`main` so existing tests using
+``typer.testing.CliRunner`` (which invokes ``app`` directly) still see
+the raw exception on ``result.exception``.
 """
 
 from __future__ import annotations
@@ -75,8 +83,49 @@ def db_migrate() -> None:
 
 
 def main() -> None:
-    """Console script entry point (referenced by [project.scripts].opshub)."""
-    app()
+    """Console script entry point (referenced by ``[project.scripts].opshub``).
+
+    Wraps the Typer ``app`` so that :class:`OpsHubError` subclasses surface
+    as a single ``Error: <message>`` line on stderr plus a meaningful exit
+    code, rather than leaking a Python traceback at the user:
+
+    * :class:`ValidationError` (bad command input) → exit code 2 — mirrors
+      the conventional Unix "usage error" code that Typer itself returns
+      for argument parsing failures.
+    * Any other :class:`OpsHubError` (config / not-found / conflict) →
+      exit code 1 — the generic "command failed" code.
+
+    The catch order matters: :class:`ValidationError` is a subclass of
+    :class:`OpsHubError`, so the narrower handler must come first.
+    Unexpected (non-OpsHub) exceptions are deliberately left to
+    propagate so a real bug still shows its traceback in CI logs.
+
+    Implementation notes:
+
+    * ``SystemExit`` is raised (not ``typer.Exit``) because the Typer /
+      Click runtime is no longer on the stack by the time ``app()`` has
+      returned or raised — ``typer.Exit`` is a ``RuntimeError`` subclass
+      that only Click's runtime knows how to translate into an exit
+      code. Raising ``SystemExit`` directly is the idiomatic way to
+      surface a process exit code from a plain ``main()`` entry point.
+    * The exception types are imported lazily so that
+      ``tests/integration/test_cli_imports.py`` can keep
+      ``opshub.cli.app``'s module-level surface limited to ``typer``
+      and the sub-app objects (ADR-0001 cold-start discipline).
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001) and satisfy the
+    # ``test_cli_imports`` static check that bans top-level
+    # ``opshub.core`` imports inside ``opshub.cli.*``.
+    from opshub.core.errors import OpsHubError, ValidationError
+
+    try:
+        app()
+    except ValidationError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise SystemExit(2) from exc
+    except OpsHubError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":
