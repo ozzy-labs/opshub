@@ -30,14 +30,14 @@ def projections_rebuild() -> None:
     # Lazy imports: keep CLI cold start fast (ADR-0001).
     from opshub.cli._wiring import build_engine
     from opshub.db import SqlAlchemyEventStore
-    from opshub.projections import Projection, TasksProjection, rebuild_all
+    from opshub.projections import all_projections, rebuild_all
 
     engine = build_engine()
     store = SqlAlchemyEventStore(engine)
-    # Annotate as ``list[Projection]`` so ``rebuild_all`` (invariant list)
-    # accepts the value without a cast. Adding more projection types later
-    # is then a one-line append.
-    projections: list[Projection] = [TasksProjection()]
+    # The registry is the single source of truth for "which projections
+    # OpsHub knows about". The inline projector used by the task service
+    # reads the same function, so the two paths can never drift.
+    projections = all_projections()
 
     # Count events up front. ``iter_all`` is a generator backed by a
     # streaming SELECT, so this is one read pass; ``rebuild_all`` will

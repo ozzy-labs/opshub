@@ -16,6 +16,11 @@ Design notes:
 - :class:`InMemoryEventStore` returns a *defensive copy* from
   :meth:`InMemoryEventStore.events` so callers cannot mutate the internal log
   through the snapshot. Append order is preserved (list semantics).
+- The optional ``connection`` argument on :meth:`EventStore.append` is what
+  lets the service layer commit an event append and a projection apply in the
+  same Unit of Work. In-memory implementations ignore it; the SQLAlchemy
+  implementation routes the insert through the caller's connection so the
+  caller controls commit / rollback.
 - Thread safety is out of scope for Phase 1: the CLI is single-process and
   step 10's SQLAlchemy-backed store will provide its own transactional
   guarantees through the :class:`~opshub.db.UnitOfWork`.
@@ -23,9 +28,12 @@ Design notes:
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from opshub.domain.events import DomainEvent
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Connection
 
 
 @runtime_checkable
@@ -36,8 +44,13 @@ class EventStore(Protocol):
     (step 10), or any other store; the service layer only sees this Protocol.
     """
 
-    def append(self, event: DomainEvent) -> None:
-        """Append ``event`` to the store. Must preserve insertion order."""
+    def append(self, event: DomainEvent, connection: Connection | None = None) -> None:
+        """Append ``event`` to the store. Must preserve insertion order.
+
+        ``connection`` lets the caller bind the append to an existing
+        Unit of Work. Implementations that don't speak SQLAlchemy
+        (in-memory, in-process queues) may ignore the argument.
+        """
         ...
 
 
@@ -54,13 +67,17 @@ class InMemoryEventStore:
     def __init__(self) -> None:
         self._events: list[DomainEvent] = []
 
-    def append(self, event: DomainEvent) -> None:
+    def append(self, event: DomainEvent, connection: Connection | None = None) -> None:
         """Append ``event`` to the internal log.
 
         ``DomainEvent`` is frozen (Pydantic ``model_config.frozen=True``) so we
         can store the instance directly without copying — the caller cannot
         mutate it after the fact.
+
+        ``connection`` is accepted for Protocol conformance and ignored —
+        the in-memory store has no database transaction to join.
         """
+        _ = connection
         self._events.append(event)
 
     @property

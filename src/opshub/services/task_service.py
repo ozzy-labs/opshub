@@ -23,15 +23,35 @@ Design notes:
 - ``services/`` may import from ``opshub.core`` and ``opshub.domain.events``
   but NOT from ``opshub.db`` (ADR-0004 dependency direction). The SQLAlchemy
   event store plugs in via the :class:`EventStore` Protocol in step 10.
+
+Atomicity (post Phase 2 prep refactor):
+
+The service accepts an optional ``uow_factory``. When supplied, every
+command opens a single Unit of Work, runs ``store.append`` and
+``projector.apply`` on the *same* connection, and commits once both
+succeed. A failure in either half rolls back the entire UoW so the event
+log and the projection can never disagree. When ``uow_factory`` is
+``None`` (the default, exercised by the in-memory stack), the service
+falls back to the historical "call append, then apply" pattern and the
+store / projector handle their own transactions independently.
 """
 
 from __future__ import annotations
+
+from contextlib import contextmanager, nullcontext
+from typing import TYPE_CHECKING
 
 from opshub.core.errors import ValidationError
 from opshub.core.ids import new_ulid, parse_ulid_timestamp_ms
 from opshub.domain.events import TaskActivated, TaskCompleted, TaskCreated
 from opshub.services.event_store import EventStore
 from opshub.services.projector import Projector
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Generator
+    from contextlib import AbstractContextManager
+
+    from sqlalchemy.engine import Connection
 
 _DEFAULT_ACTOR = "cli:default"
 
@@ -65,6 +85,16 @@ class TaskService:
         Stamped onto every event's ``actor`` field. Defaults to
         ``"cli:default"`` so unit tests and ad-hoc scripts work without
         plumbing through a user identity.
+    uow_factory:
+        Optional zero-argument callable returning a context manager that
+        yields a SQLAlchemy :class:`~sqlalchemy.engine.Connection`. When
+        supplied, every command runs ``store.append`` and
+        ``projector.apply`` on the same connection inside the context
+        manager, giving atomic append+project semantics. The context
+        manager is responsible for commit on clean exit and rollback on
+        exception (e.g. :class:`opshub.db.UnitOfWork`). When ``None``
+        (the default), the service makes no transaction guarantee
+        beyond what the store and projector provide individually.
     """
 
     def __init__(
@@ -72,10 +102,12 @@ class TaskService:
         store: EventStore,
         projector: Projector,
         actor: str = _DEFAULT_ACTOR,
+        uow_factory: Callable[[], AbstractContextManager[Connection]] | None = None,
     ) -> None:
         self._store = store
         self._projector = projector
         self._actor = actor
+        self._uow_factory = uow_factory
 
     def create_task(self, title: str, body: str | None = None) -> TaskCreated:
         """Register a new task.
@@ -127,11 +159,33 @@ class TaskService:
     # ------------------------------------------------------------------ helpers
 
     def _commit(self, event: TaskCreated | TaskActivated | TaskCompleted) -> None:
-        """Append and project in a single step.
+        """Append and project inside a single Unit of Work when configured.
 
-        Append happens first so that a projector failure leaves the event log
-        as the source of truth (replayable). The projector is expected to be
-        idempotent on ``event_id`` once step 10 introduces projection offsets.
+        With a ``uow_factory``: ``store.append(event, conn)`` and
+        ``projector.apply(event, conn)`` run on the same connection. A
+        failure in either rolls back both (and the UoW context manager
+        owns the rollback). The event log and the projection cannot
+        diverge.
+
+        Without a factory: legacy path — append then apply on whatever
+        transaction the store / projector open internally.
         """
-        self._store.append(event)
-        self._projector.apply(event)
+        with self._open_uow() as connection:
+            self._store.append(event, connection)
+            self._projector.apply(event, connection)
+
+    @contextmanager
+    def _open_uow(self) -> Generator[Connection | None]:
+        """Yield a connection (when a UoW factory is configured) or ``None``.
+
+        Wrapping the optional factory in a context manager keeps
+        :meth:`_commit` linear regardless of whether the caller passed a
+        ``uow_factory``. When ``None``, we yield ``None`` and the
+        store/projector run with their own internal transactions.
+        """
+        if self._uow_factory is None:
+            with nullcontext(None) as connection:
+                yield connection
+            return
+        with self._uow_factory() as connection:
+            yield connection

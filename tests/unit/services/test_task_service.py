@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from pydantic import ValidationError as PydanticValidationError
 
@@ -12,14 +14,23 @@ from opshub.services.event_store import InMemoryEventStore
 from opshub.services.projector import NoOpProjector
 from opshub.services.task_service import TaskService
 
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Connection
+
 
 class _RecordingProjector:
-    """Projector test double that captures applied events in order."""
+    """Projector test double that captures applied events in order.
+
+    The ``connection`` argument matches the
+    :class:`opshub.services.projector.Projector` Protocol — the in-memory
+    suite passes ``None`` because there is no SQL transaction to join.
+    """
 
     def __init__(self) -> None:
         self.applied: list[DomainEvent] = []
 
-    def apply(self, event: DomainEvent) -> None:
+    def apply(self, event: DomainEvent, connection: Connection | None = None) -> None:
+        _ = connection
         self.applied.append(event)
 
 
