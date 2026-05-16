@@ -106,7 +106,7 @@
 |---|---|
 | 初版 | `Local-first operational memory and execution hub for humans and AI agents — aggregating GitHub, Slack, Microsoft 365, and Box into one markdown store.` |
 | 改訂 1 (拡張性反映) | `... Pluggable connectors aggregate work signals — GitHub, Slack, Microsoft 365, Box, and more — into a single markdown store.` |
-| 改訂 2 (storage 抽象化 + `Connectors` 単独化) | `... Connectors aggregate work signals — GitHub, Slack, Microsoft 365, Box, and more — into a single local store.` ← **採用**
+| 改訂 2 (storage 抽象化 + `Connectors` 単独化) | `... Connectors aggregate work signals — GitHub, Slack, Microsoft 365, Box, and more — into a single local store.` ← **採用** |
 
 ## 11. Embedding 戦略 (ADR-0012)
 
@@ -118,4 +118,4 @@
 | 複数 vector store 並列 (sqlite-vec + LanceDB) | 単一 sqlite-vec | ADR-0002 単一 SQLite 原則違反、backup / replay 対象増 | ADR-0012 |
 | 単一 model + version 列なし | `model_id` + `model_version` 列で増分 re-embed 可能に | モデル変更で全件 re-embed 必須、A/B 比較不能 | ADR-0012 |
 | event payload も embed | summary 系のみ | event は immutable で量が多い、検索は projection で代替可能 | ADR-0012 |
-| Hybrid (短期 API + 長期 local archive) | Pluggable で柔軟性 | 同一 entity が異 embedder で recall 結果不安定、切替ロジック複雑 | ADR-0012 | |
+| Hybrid (短期 API + 長期 local archive) | Pluggable で柔軟性 | 同一 entity が異 embedder で recall 結果不安定、切替ロジック複雑 | ADR-0012 |
