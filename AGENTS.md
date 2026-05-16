@@ -13,7 +13,7 @@
 
 `opshub`: Local-first operational memory and execution hub for humans and AI agents.
 
-**Status**: Phase 1 (foundation) complete — event store, tasks projection, CLI (`init` / `task` / `projections` / `embeddings` / `workspace generate` / `db migrate`), markdown 生成が end-to-end で動作。Phase 2 (coordination: inbox triage / decisions / locks / handoffs) が次の対象 (詳細は `docs/principles.md` §9)。
+**Status**: Phase 1 (foundation) + Phase 2 (coordination) complete (2026-05-17) — event store、全 projection (tasks / inbox_items / decisions / work_sessions / agent_runs / locks / handoffs)、CLI (`init` / `task` / `inbox` / `decision` / `lock` / `session` / `agent run` / `handoff` / `workspace generate` / `projections rebuild` / `embeddings` / `db migrate`)、markdown 生成が end-to-end で動作。次は Phase 3 (connectors: GitHub / Slack / Microsoft 365 / Box) の設計に着手 (詳細は `docs/principles.md` §9)。
 
 ## Tech Stack
 

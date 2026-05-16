@@ -78,7 +78,7 @@ CI でこの不変条件を検証する。
 | Phase | スコープ | Status |
 |---|---|---|
 | 1 | Foundation: event store + tasks + CLI + markdown 生成 + tests + CI | ✅ Complete (2026-05-17) |
-| 2 | Coordination: inbox triage / decisions / locks / handoffs / work sessions | Planned |
+| 2 | Coordination: inbox triage / decisions / locks / handoffs / work sessions / agent runs | ✅ Complete (2026-05-17) |
 | 3 | Connectors: GitHub / Slack / Microsoft 365 / Box | Planned |
 | 4 | Semantic Layer: vector recall / semantic search / duplicate detection / briefing 自動生成 | Planned |
 
