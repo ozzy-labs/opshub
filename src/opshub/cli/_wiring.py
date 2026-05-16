@@ -29,10 +29,11 @@ if TYPE_CHECKING:
 
     from opshub.domain.events import DomainEvent
     from opshub.projections import Projection
-    from opshub.services import InboxService, LockService, TaskService
+    from opshub.services import DecisionService, InboxService, LockService, TaskService
 
 
 __all__ = [
+    "build_decision_service",
     "build_engine",
     "build_inbox_service",
     "build_lock_service",
@@ -90,15 +91,7 @@ def build_inbox_service(actor: str) -> InboxService:
 
 
 def build_lock_service(actor: str) -> LockService:
-    """Wire a :class:`LockService` against the configured database.
-
-    Mirrors :func:`build_task_service`: a SQLite-backed
-    :class:`~opshub.db.SqlAlchemyEventStore` for appends, a
-    :class:`_PersistingProjector` that writes every registered
-    projection on the same connection, and ``engine.begin`` as the
-    ``uow_factory`` so the active-lock pre-check, the event append, and
-    the ``locks`` projection update all share a single transaction.
-    """
+    """Wire a :class:`LockService` against the configured database."""
     from opshub.db import SqlAlchemyEventStore
     from opshub.services import LockService
 
@@ -108,6 +101,20 @@ def build_lock_service(actor: str) -> LockService:
         projector=_PersistingProjector(),
         uow_factory=engine.begin,
         actor=actor,
+    )
+
+
+def build_decision_service(actor: str) -> DecisionService:
+    """Wire a :class:`DecisionService` against the configured database."""
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import DecisionService
+
+    engine = build_engine()
+    return DecisionService(
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(),
+        actor=actor,
+        uow_factory=engine.begin,
     )
 
 
