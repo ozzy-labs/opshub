@@ -7,12 +7,6 @@ from typing import cast
 from opshub.db.schema import metadata
 
 
-def test_metadata_is_initially_empty() -> None:
-    # Step 7 will register Table objects here; until then the registry stays
-    # empty so autogenerate sees a clean baseline.
-    assert metadata.tables == {}
-
-
 def test_naming_convention_is_set() -> None:
     # SQLAlchemy types `naming_convention` as a TypedDict with all-optional
     # keys; we know our concrete dict has every key set, so cast to plain
