@@ -26,11 +26,13 @@ from typing import Any
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.engine import Engine
 
+from opshub.core.errors import OpsHubError
 from opshub.db.engine import create_engine_for_sqlite
 from opshub.db.event_store import SqlAlchemyEventStore
+from opshub.db.schema import events_table
 from opshub.domain.events import TaskActivated, TaskCompleted, TaskCreated
 from opshub.projections import TasksProjection, rebuild_all, tasks_table
 from opshub.services.projector import NoOpProjector
@@ -205,3 +207,149 @@ def test_rebuild_all_respects_recorded_at_order_when_inserted_out_of_sequence(
     # reflect UTC so we compare against the naive equivalents.
     assert row["created_at"] == t0.replace(tzinfo=None)
     assert row["updated_at"] == t2.replace(tzinfo=None)
+
+
+def test_rebuild_all_tie_break_on_same_recorded_at_orders_by_id_asc(
+    migrated_engine: Engine,
+) -> None:
+    """Two events with identical ``recorded_at`` replay in ``id`` ASC order.
+
+    ``SqlAlchemyEventStore.iter_all`` orders by ``(recorded_at, id)`` —
+    when the wall clock collides (multiple events recorded in the same
+    millisecond, common for batch imports / scripted replay) the ULID
+    ``id`` is the tie-break. The rebuild driver inherits that order
+    because it iterates ``store.iter_all()`` in sequence.
+
+    We pin the contract by appending three task events that all share a
+    single fixed ``recorded_at`` (so the wall-clock tie-break is the
+    only signal). The ``event_id`` values are crafted so that the
+    business-time order (``created`` → ``activated`` → ``completed``)
+    matches the lex-sorted ``event_id`` order — exactly the property
+    real ULIDs guarantee when generated within the same millisecond.
+    The projection must end in the ``completed`` state.
+    """
+    store = SqlAlchemyEventStore(migrated_engine)
+    projection = TasksProjection()
+
+    aggregate_id = "01HA00000000000000000000ZZ"
+    fixed_recorded_at = datetime(2026, 5, 17, 12, 0, 0, tzinfo=UTC)
+    # Lex-sorted id suffixes: "...AA" < "...AB" < "...AC". These take
+    # the place of the ULID random component when ``time_ms`` collides;
+    # ASC ordering must put created → activated → completed.
+    created_id = "01HA000000000000000000AAAA"
+    activated_id = "01HA000000000000000000AAAB"
+    completed_id = "01HA000000000000000000AAAC"
+
+    created = TaskCreated(
+        event_id=created_id,
+        aggregate_id=aggregate_id,
+        occurred_at=fixed_recorded_at,
+        recorded_at=fixed_recorded_at,
+        actor="test",
+        title="tie-break",
+    )
+    activated = TaskActivated(
+        event_id=activated_id,
+        aggregate_id=aggregate_id,
+        occurred_at=fixed_recorded_at,
+        recorded_at=fixed_recorded_at,
+        actor="test",
+    )
+    completed = TaskCompleted(
+        event_id=completed_id,
+        aggregate_id=aggregate_id,
+        occurred_at=fixed_recorded_at,
+        recorded_at=fixed_recorded_at,
+        actor="test",
+        result_note="tie-break done",
+    )
+
+    # Insert in an order *different* from both business-time order and
+    # id ASC, so the only way the test can pass is if iter_all sorts by
+    # id when recorded_at ties. If iter_all sorted by insertion order
+    # we'd see ``TaskCompleted`` applied first and the projection would
+    # diverge (no row to update; or row would not reach completed).
+    store.append(activated)
+    store.append(completed)
+    store.append(created)
+
+    rebuild_all(migrated_engine, store, [projection])
+
+    snapshot = _read_tasks(migrated_engine)
+    assert len(snapshot) == 1
+    row = snapshot[0]
+    assert row["id"] == aggregate_id
+    # Final state == completed proves the events applied in id ASC
+    # order: created (insert) → activated (update) → completed (update).
+    # Any other order would either leave the row at "active" or fail to
+    # insert and produce an empty projection.
+    assert row["state"] == "completed"
+    assert row["result_note"] == "tie-break done"
+
+
+def test_rebuild_all_aborts_and_rolls_back_on_unknown_event_type(
+    migrated_engine: Engine,
+) -> None:
+    """An unknown ``event_type`` aborts ``rebuild_all`` and rolls back the txn.
+
+    The ``SqlAlchemyEventStore._decode`` path raises
+    :class:`OpsHubError` for an ``event_type`` the binary cannot
+    deserialise (typically: an event written by a newer build, or a
+    corrupted ``schema_version`` bump that never landed here). That
+    error propagates out of the ``engine.begin()`` block the rebuild
+    driver wraps replay in, which means the projection state must be
+    **byte-identical to what it was before the rebuild attempt** — the
+    transaction rolls back and a partially-rewound projection cannot
+    overwrite the previous good snapshot.
+
+    We seed the projection by running a known-good rebuild first
+    (snapshot A), then manually inject a row with ``event_type =
+    'unknown.event_type'`` into the events table (bypassing the
+    service), then run rebuild again and assert it raises
+    :class:`OpsHubError` and the snapshot is unchanged.
+    """
+    store = SqlAlchemyEventStore(migrated_engine)
+    projection = TasksProjection()
+    service = TaskService(store=store, projector=NoOpProjector())
+
+    # Seed: one good task, drive it to completed, run a clean rebuild
+    # so the ``tasks`` table holds the canonical snapshot.
+    created = service.create_task(title="seed", body="for rollback")
+    service.activate_task(created.aggregate_id)
+    service.complete_task(created.aggregate_id, "shipped")
+    rebuild_all(migrated_engine, store, [projection])
+    snapshot_before = _read_tasks(migrated_engine)
+    assert len(snapshot_before) == 1
+
+    # Manually insert an unknown event_type, bypassing the service /
+    # event model so pydantic validation does not block us. This
+    # simulates either a forward-compat scenario (newer binary wrote
+    # the event) or a corrupted store; the rebuild contract treats
+    # both identically.
+    now = datetime.now(UTC)
+    with migrated_engine.begin() as conn:
+        conn.execute(
+            insert(events_table).values(
+                id="01HA000000000000000000UNKN",
+                aggregate_id="01HA0000000000000000AGGUNK",
+                event_type="unknown.event_type",
+                payload='{"event_type": "unknown.event_type"}',
+                schema_version=1,
+                occurred_at=now,
+                recorded_at=now,
+                actor="test",
+            )
+        )
+
+    # ``rebuild_all`` opens its own ``engine.begin()`` transaction; the
+    # OpsHubError raised by _decode propagates out and triggers
+    # rollback. Without the rollback, the in-progress ``reset`` would
+    # leave ``tasks`` empty.
+    with pytest.raises(OpsHubError):
+        rebuild_all(migrated_engine, store, [projection])
+
+    snapshot_after = _read_tasks(migrated_engine)
+    assert snapshot_after == snapshot_before, (
+        "rebuild_all must rollback its transaction on unknown event_type; "
+        "projection state diverged from the pre-rebuild snapshot"
+    )
