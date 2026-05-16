@@ -25,9 +25,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from sqlalchemy.engine import Engine
+    from sqlalchemy.engine import Connection, Engine
 
     from opshub.domain.events import DomainEvent
+    from opshub.projections import Projection
     from opshub.services import TaskService
 
 
@@ -73,11 +74,12 @@ def build_task_service(actor: str) -> TaskService:
     """Wire a :class:`TaskService` against the configured database.
 
     The returned service appends events to the SQLite-backed
-    :class:`~opshub.db.SqlAlchemyEventStore` *and* projects them inline through
-    a :class:`_PersistingProjector` that writes to the ``tasks`` table in the
-    same database. Failures during projection do not roll back the appended
-    event — the event log is the source of truth and projections can always
-    be rebuilt via :func:`opshub.projections.rebuild_all` (ADR-0002).
+    :class:`~opshub.db.SqlAlchemyEventStore` *and* projects them inline
+    through a :class:`_PersistingProjector` that writes to every
+    registered :class:`~opshub.projections.Projection` in the same
+    database. Both writes share a single transaction opened via
+    ``engine.begin()`` — a failure in either rolls back both, so the
+    event log and the projections can never disagree.
     """
     # Lazy imports: keep CLI cold start fast (ADR-0001).
     from opshub.db import SqlAlchemyEventStore
@@ -86,28 +88,49 @@ def build_task_service(actor: str) -> TaskService:
     engine = build_engine()
     return TaskService(
         store=SqlAlchemyEventStore(engine),
-        projector=_PersistingProjector(engine),
+        projector=_PersistingProjector(),
         actor=actor,
+        # ``engine.begin()`` returns a context manager that yields the
+        # active ``Connection`` and commits on clean exit / rolls back
+        # on exception — exactly the contract :class:`TaskService`
+        # expects from ``uow_factory``.
+        uow_factory=engine.begin,
     )
 
 
 class _PersistingProjector:
-    """Apply events to the ``tasks`` projection on a SQLAlchemy engine.
+    """Apply events to every registered projection on a shared connection.
 
-    Wraps :class:`~opshub.projections.TasksProjection` so each ``apply`` call
-    opens its own short-lived transaction via ``engine.begin()``. This keeps
-    :mod:`opshub.services.task_service` oblivious to SQLAlchemy: the service
-    only sees the :class:`~opshub.services.projector.Projector` Protocol.
+    The projector reads the projection list from
+    :func:`opshub.projections.all_projections` so the CLI wiring and the
+    ``projections rebuild`` driver always see the same set of
+    projections — no second hard-coded list to drift.
+
+    Each call fans the event out to every projection on the connection
+    supplied by the service. The service opens a single transaction via
+    its ``uow_factory`` and threads that connection in, so all
+    projections (and the underlying event row) participate in the same
+    Unit of Work.
     """
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self) -> None:
         # Lazy import: keep CLI cold start fast (ADR-0001).
-        from opshub.projections import TasksProjection
+        from opshub.projections import all_projections
 
-        self._engine = engine
-        self._projection = TasksProjection()
+        self._projections: list[Projection] = all_projections()
 
-    def apply(self, event: DomainEvent) -> None:
-        """Open a short transaction and let the projection apply the event."""
-        with self._engine.begin() as conn:
-            self._projection.apply(conn, event)
+    def apply(self, event: DomainEvent, connection: Connection | None = None) -> None:
+        """Apply ``event`` to every registered projection on ``connection``.
+
+        ``connection`` is required in the CLI wiring path — the service
+        threads in the UoW connection so all projection writes share
+        the event-append transaction. Falling back to ``None`` would
+        silently undo the atomicity guarantee, so we raise instead.
+        """
+        if connection is None:
+            raise RuntimeError(
+                "_PersistingProjector requires a Connection from the service's"
+                " uow_factory; received None"
+            )
+        for projection in self._projections:
+            projection.apply(connection, event)

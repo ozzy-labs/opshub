@@ -43,19 +43,28 @@ class _InlineProjector:
     the projection without going through the rebuild driver. The
     production wiring (which lives in step 14's ``cli/_wiring.py`` task
     service constructor) follows the same shape.
+
+    The ``connection`` keyword matches the
+    :class:`opshub.services.projector.Projector` Protocol; when the
+    service threads in a transaction connection we honour it, otherwise
+    we open a short-lived one against the engine.
     """
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
         self._projection = TasksProjection()
 
-    def apply(self, event: object) -> None:
+    def apply(self, event: object, connection: object | None = None) -> None:
         # The ``DomainEvent`` shape matches what ``TasksProjection.apply``
         # expects; the cast is intentional so this helper stays free of
         # domain imports.
         from opshub.domain.events.base import DomainEvent  # local import
 
         assert isinstance(event, DomainEvent)
+        if connection is not None:
+            # Trust the caller's transaction.
+            self._projection.apply(connection, event)  # type: ignore[arg-type]
+            return
         with self._engine.begin() as conn:
             self._projection.apply(conn, event)
 

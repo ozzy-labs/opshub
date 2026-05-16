@@ -15,11 +15,13 @@ services, per the one-way dependency rule in ADR-0004).
 
 from opshub.projections.base import Projection
 from opshub.projections.rebuild import rebuild_all
+from opshub.projections.registry import all_projections
 from opshub.projections.tasks import TasksProjection, tasks_table
 
 __all__ = [
     "Projection",
     "TasksProjection",
+    "all_projections",
     "rebuild_all",
     "tasks_table",
 ]
