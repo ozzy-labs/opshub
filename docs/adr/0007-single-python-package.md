@@ -1,6 +1,6 @@
 # 0007. Single Python Package, defer Monorepo
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-05-16
 - Deciders: ozzy
 
@@ -89,6 +89,7 @@ opshub/
 
 1. **モジュール責務の鉄則を厳格に守る** ([repository-structure.md 3](../repository-structure.md))
 2. **connector 専用依存は `optional-dependencies` で分離**
+
    ```toml
    [project.optional-dependencies]
    github = ["PyGithub>=2"]
@@ -97,6 +98,7 @@ opshub/
    box = ["boxsdk>=3"]
    all = ["opshub[github,slack,msgraph,box]"]
    ```
+
    ユーザーは `pip install "opshub[github,slack]"` で必要分のみ install
 3. **import の循環チェック** — `import-linter` または ruff の `TID` rule で connector → core の単方向依存を強制
 4. **テスト境界** — connector テストはディレクトリ単位で実行可能にする (`pytest tests/connectors/github/`)
