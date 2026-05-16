@@ -16,6 +16,7 @@ Centralising the list here keeps the contract honest: every consumer of
 from __future__ import annotations
 
 from opshub.projections.base import Projection
+from opshub.projections.decisions import DecisionsProjection
 from opshub.projections.inbox import InboxProjection
 from opshub.projections.locks import LocksProjection
 from opshub.projections.tasks import TasksProjection
@@ -31,4 +32,9 @@ def all_projections() -> list[Projection]:
     The list itself is fresh too — callers may append to / sort it
     without affecting other consumers.
     """
-    return [TasksProjection(), InboxProjection(), LocksProjection()]
+    return [
+        TasksProjection(),
+        InboxProjection(),
+        DecisionsProjection(),
+        LocksProjection(),
+    ]

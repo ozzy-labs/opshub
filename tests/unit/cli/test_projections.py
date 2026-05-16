@@ -67,7 +67,13 @@ def _count_task_rows(db_path: Path) -> int:
 def test_rebuild_reports_event_and_projection_counts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """After seeding two tasks, rebuild reports ``2 event(s)`` and the active projections count."""
+    """After seeding two tasks, rebuild reports ``2 event(s)`` and the active projections count.
+
+    The projection count tracks :func:`opshub.projections.all_projections`,
+    which grows as Phase 2 registers inbox / decisions / locks / etc.
+    The seed task events still only touch the tasks projection; the other
+    projections process zero events but are still counted as rebuilt.
+    """
     db_path = _isolate_env(monkeypatch, tmp_path)
     runner = CliRunner()
 
