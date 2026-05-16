@@ -29,12 +29,19 @@ if TYPE_CHECKING:
 
     from opshub.domain.events import DomainEvent
     from opshub.projections import Projection
-    from opshub.services import DecisionService, InboxService, LockService, TaskService
+    from opshub.services import (
+        DecisionService,
+        HandoffService,
+        InboxService,
+        LockService,
+        TaskService,
+    )
 
 
 __all__ = [
     "build_decision_service",
     "build_engine",
+    "build_handoff_service",
     "build_inbox_service",
     "build_lock_service",
     "build_task_service",
@@ -115,6 +122,29 @@ def build_decision_service(actor: str) -> DecisionService:
         projector=_PersistingProjector(),
         actor=actor,
         uow_factory=engine.begin,
+    )
+
+
+def build_handoff_service(actor: str) -> HandoffService:
+    """Wire a :class:`HandoffService` against the configured database.
+
+    Parallels :func:`build_task_service`: the returned service shares
+    a single transaction across event append and projection apply via
+    ``engine.begin``, and the engine is also stashed on the service so
+    :meth:`HandoffService.list_open` can read the ``handoffs``
+    projection through the same connection pool.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import HandoffService
+
+    engine = build_engine()
+    return HandoffService(
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(),
+        actor=actor,
+        uow_factory=engine.begin,
+        engine=engine,
     )
 
 
