@@ -12,6 +12,8 @@ from __future__ import annotations
 import typer
 
 from opshub import __version__
+from opshub.cli.embeddings import embeddings_app
+from opshub.cli.projections import projections_app
 
 app = typer.Typer(
     name="opshub",
@@ -25,6 +27,8 @@ db_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(db_app)
+app.add_typer(projections_app)
+app.add_typer(embeddings_app)
 
 
 @app.callback()
