@@ -50,3 +50,10 @@ def test_parse_ulid_rejects_invalid_alphabet() -> None:
     # must fail rather than silently decoding to garbage.
     with pytest.raises(ValueError):
         parse_ulid_timestamp_ms("I" * 26)
+
+
+def test_parse_ulid_rejects_overflow_above_128_bits() -> None:
+    # First char '8' would set bit 128 → overall value > 2^128. Spec requires
+    # the leading char to be 0-7 so the 128-bit ceiling is respected.
+    with pytest.raises(ValueError):
+        parse_ulid_timestamp_ms("8" + "0" * 25)

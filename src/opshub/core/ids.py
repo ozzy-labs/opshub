@@ -58,10 +58,17 @@ def _encode_crockford(value: int, length: int) -> str:
 
 
 def _decode_crockford(s: str) -> int:
+    # Strict alphabet: does not apply Crockford I/L/O aliases since ULIDs are
+    # machine-generated. Human-typed IDs are not a use case here.
     value = 0
     for ch in s.upper():
         idx = _CROCKFORD_INDEX.get(ch)
         if idx is None:
             raise ValueError(f"invalid Crockford Base32 character: {ch!r}")
         value = (value << 5) | idx
+    # 26 chars * 5 bits = 130 bits, but a valid ULID is 128 bits. The first
+    # character must therefore be 0-7 (top two bits = 0). Reject overflow so
+    # parse_ulid_timestamp_ms cannot return a >48-bit value for malformed input.
+    if value >> 128:
+        raise ValueError(f"ULID exceeds 128 bits (first char must be 0-7): {s!r}")
     return value
