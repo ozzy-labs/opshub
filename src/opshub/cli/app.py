@@ -22,6 +22,7 @@ import typer
 from opshub import __version__
 from opshub.cli.decision import decision_app
 from opshub.cli.embeddings import embeddings_app
+from opshub.cli.handoff import handoff_app
 from opshub.cli.inbox import inbox_app
 from opshub.cli.lock import lock_app
 from opshub.cli.projections import projections_app
@@ -46,6 +47,7 @@ app.add_typer(task_app)
 app.add_typer(inbox_app)
 app.add_typer(decision_app)
 app.add_typer(lock_app)
+app.add_typer(handoff_app)
 app.add_typer(workspace_app)
 
 

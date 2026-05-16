@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from opshub.projections.base import Projection
 from opshub.projections.decisions import DecisionsProjection
+from opshub.projections.handoffs import HandoffsProjection
 from opshub.projections.inbox import InboxProjection
 from opshub.projections.locks import LocksProjection
 from opshub.projections.tasks import TasksProjection
@@ -25,16 +26,11 @@ __all__ = ["all_projections"]
 
 
 def all_projections() -> list[Projection]:
-    """Return a fresh list of every registered projection.
-
-    Projection instances are constructed per call so callers cannot
-    accidentally share mutable state through a module-level singleton.
-    The list itself is fresh too — callers may append to / sort it
-    without affecting other consumers.
-    """
+    """Return a fresh list of every registered projection."""
     return [
         TasksProjection(),
         InboxProjection(),
         DecisionsProjection(),
         LocksProjection(),
+        HandoffsProjection(),
     ]
