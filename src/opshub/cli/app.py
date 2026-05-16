@@ -1,8 +1,10 @@
 """Typer CLI entry point.
 
 Phase 1 step 3 skeleton: provides `opshub version` as a smoke command.
-Subcommands (task / event / projections / workspace / embeddings / ...) are
-added in subsequent Phase 1 commits (see docs/phase-1-plan.md §2).
+Step 13 added `opshub init` and `opshub db migrate` for first-time setup and
+on-demand schema upgrades. Subcommand callbacks defer heavy imports
+(``opshub.core``, ``opshub.db``, ``alembic``) to call time so that
+``opshub --help`` cold start stays under ~300ms (ADR-0001).
 """
 
 from __future__ import annotations
@@ -17,6 +19,13 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+db_app = typer.Typer(
+    name="db",
+    help="Database operations.",
+    no_args_is_help=True,
+)
+app.add_typer(db_app)
+
 
 @app.callback()
 def _root() -> None:  # pyright: ignore[reportUnusedFunction]
@@ -29,6 +38,32 @@ def _root() -> None:  # pyright: ignore[reportUnusedFunction]
 def version() -> None:
     """Show the installed opshub version."""
     typer.echo(f"opshub {__version__}")
+
+
+@app.command("init")
+def init(
+    *,
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite existing config.toml with the starter template.",
+    ),
+) -> None:
+    """First-time setup: create dirs, write starter config, apply migrations."""
+    # Lazy import: heavy modules (pydantic_settings, alembic) load only when
+    # the command actually runs.
+    from opshub.cli.init import init_command
+
+    init_command(force=force)
+
+
+@db_app.command("migrate")
+def db_migrate() -> None:
+    """Apply pending Alembic migrations."""
+    # Lazy import: see module docstring.
+    from opshub.cli.db import migrate_command
+
+    migrate_command()
 
 
 def main() -> None:
