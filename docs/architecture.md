@@ -80,7 +80,7 @@ current state の relational view。`tasks` / `sources` / `inbox_items` / `decis
 
 entity 間の関係性 (`task → source` / `decision → meeting` 等) を `links` テーブルで relational に持つ。専用 graph DB は採用しない (Phase 4 以降で再評価)。
 
-### 2.6 Vector Layer (Phase 4)
+### 2.6 Vector Layer (interfaces in Phase 1, implementation in Phase 4)
 
 semantic 索引層は **Pluggable Embedder + Pluggable VectorStore** として設計する (ADR-0012)。Phase 1 で抽象境界 (`Embedder` / `VectorStore` Protocol) と `embeddings` projection schema を確定し、具象実装 (local `sentence-transformers` / OpenAI / Voyage 等の embedder、sqlite-vec backed store) は Phase 4 で着手する。
 
@@ -114,20 +114,21 @@ agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換�
 
 ### 4.1 必須テーブル
 
-| Table | 種別 | 概要 |
-|---|---|---|
-| `events` | authoritative | append-only domain event log |
-| `tasks` | projection | current task state |
-| `projects` | projection | task / decision のグルーピング (Phase 2+) |
-| `sources` | projection | external item の現在状態 |
-| `inbox_items` | projection | 未 triage queue |
-| `decisions` | projection | 決定記録 |
-| `links` | projection | entity 間 graph 関係 |
-| `work_sessions` | projection | 人間 / agent の execution session |
-| `agent_runs` | projection | agent 実行記録 |
-| `locks` | projection | coordination lock |
-| `connector_cursors` | projection | 差分同期チェックポイント |
-| `embeddings` | projection | 派生 semantic 索引メタ (Phase 4) |
+| Table | 種別 | Phase | 概要 |
+|---|---|---|---|
+| `events` | authoritative | Phase 1 (✅ 実装済) | append-only domain event log |
+| `tasks` | projection | Phase 1 (✅ 実装済) | current task state |
+| `embeddings` | projection | Phase 1 (✅ schema 実装済) / Phase 4 (具象 backend) | 派生 semantic 索引メタ (sqlite-vec binding は Phase 4) |
+| `inbox_items` | projection | Phase 2 (phase-2-plan §2 step 2 で追加) | 未 triage queue |
+| `decisions` | projection | Phase 2 (phase-2-plan §2 step 2 で追加) | 決定記録 |
+| `work_sessions` | projection | Phase 2 (phase-2-plan §2 step 2 で追加) | 人間 / agent の execution session |
+| `agent_runs` | projection | Phase 2 (phase-2-plan §2 step 2 で追加) | agent 実行記録 |
+| `locks` | projection | Phase 2 (phase-2-plan §2 step 2 で追加) | coordination lock |
+| `handoffs` | projection | Phase 2 (phase-2-plan §2 step 2 で追加) | agent 間 / 人 - agent 間の引き継ぎ記録 |
+| `sources` | projection | Phase 3+ | external item の現在状態 |
+| `connector_cursors` | projection | Phase 3+ | 差分同期チェックポイント |
+| `links` | projection | Phase 3+ | entity 間 graph 関係 |
+| `projects` | projection | Phase 3+ | task / decision のグルーピング (lock scope は Phase 2 で予約のみ) |
 
 ### 4.2 Event 命名規約
 
@@ -164,7 +165,7 @@ OpsHub は次を前提とする。
 複数 agent の同時実行を想定し、以下の概念を導入する。
 
 - `Work Session`: 作業の上位スコープ (start - end)
-- `Lock`: 競合回避 (粒度は Open Questions 参照)
+- `Lock`: 競合回避。粒度は [ADR-0013](adr/0013-lock-granularity.md) で `task:<id>` / `project:<id>` / `global:` の 3 階層、owner = (actor, work_session_id)、fail-fast conflict semantics を採択
 - `Agent Run`: 個別 agent の実行記録
 - `Handoff`: agent 間 / 人 - agent 間の引き継ぎ記録
 
@@ -200,6 +201,8 @@ workspace/
 - `handoffs/`: 人手 + 生成のハイブリッド
 - `generated/`: 完全に disposable
 - `runtime/`: gitignore 対象
+
+> Phase 1 では `generated/tasks/` のみ実体化される。`inbox/` / `plans/` / `notes/` / `handoffs/` / `runtime/` および `generated/{briefings,reviews}/` は Phase 2-4 で順次追加。`opshub init` がこれらのディレクトリを自動作成するかは Phase 2 で決定する。
 
 ## 8. Security Principles
 
@@ -240,7 +243,6 @@ Agent は以下を行わない。
 ## Open Questions
 
 1. 4.x で扱う `embeddings` テーブルのスキーマ (sqlite-vec への bind 方法を含む)
-2. Lock の粒度 (`task:<id>` / `project:<id>` / `global` の三階層案あり)
-3. `Decision` テーブルと `Task` テーブルの関係 (Decision は Task の親か別 entity か)
-4. `events` の partitioning / archive 戦略 (long-term 運用時)
-5. multi-machine 利用 (将来 sync を許す場合の競合解決)
+2. `Decision` テーブルと `Task` テーブルの関係 (Decision は Task の親か別 entity か)
+3. `events` の partitioning / archive 戦略 (long-term 運用時)
+4. multi-machine 利用 (将来 sync を許す場合の競合解決)

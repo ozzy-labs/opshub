@@ -58,8 +58,8 @@ opshub/
 │   ├── triage.md
 │   ├── summarize_thread.md
 │   └── extract_action_items.md
-├── workspace/
-│   └── _template/                  # 実 workspace の seed (実体は repo 外)
+├── workspace/                      # Phase 2 以降で実装予定 (現状未存在)
+│   └── _template/                  # 実 workspace の seed (実体は repo 外)、Phase 2 以降で実装
 └── scripts/
     └── dev/                        # 開発補助シェル
 ```
@@ -79,88 +79,105 @@ opshub/
 
 ## 2. Python パッケージ構成 (src/opshub/)
 
+各エントリの末尾にある `[P1]` / `[P2]` / `[P3]` / `[P4]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で merge 済 (2026-05-17)。
+
 ```text
 src/opshub/
-├── __init__.py
-├── __main__.py                     # `python -m opshub` エントリ
+├── __init__.py                     # [P1]
+├── __main__.py                     # `python -m opshub` エントリ [P1]
 ├── cli/                            # Typer command 群
-│   ├── __init__.py
-│   ├── app.py                      # Typer app root
-│   ├── init.py
-│   ├── db.py                       # migrate / status
-│   ├── event.py                    # event append / list
-│   ├── task.py                     # create / list / status / archive
-│   ├── source.py                   # source add / list
-│   ├── inbox.py                    # list / triage
-│   ├── workspace.py                # generate
-│   ├── projections.py              # rebuild
-│   ├── lock.py                     # acquire / release / list
-│   ├── agent.py                    # session start / end
-│   └── connector.py                # sync / status (Phase 3+)
-├── core/                           # 共通ユーティリティ
-│   ├── config.py                   # Pydantic Settings
-│   ├── ids.py                      # ULID / UUID
-│   ├── time.py                     # tz-aware datetime helpers
-│   ├── logging.py                  # structlog
-│   └── errors.py
-├── db/                             # 永続化レイヤ
-│   ├── engine.py                   # SQLAlchemy Engine / Session
-│   ├── schema.py                   # Core Table 定義
-│   ├── unit_of_work.py
-│   └── migrations/                 # Alembic env.py 等
+│   ├── __init__.py                 # [P1]
+│   ├── app.py                      # Typer app root [P1]
+│   ├── init.py                     # [P1]
+│   ├── db.py                       # migrate / status [P1]
+│   ├── task.py                     # create / list / status / archive [P1]
+│   ├── workspace.py                # generate [P1]
+│   ├── projections.py              # rebuild [P1]
+│   ├── embeddings.py               # status [P1] (Phase 4 で機能拡張)
+│   ├── _wiring.py                  # 内部 helper: service/projection の組み立て [P1]
+│   ├── _task_list.py               # 内部 helper: task list 共通フォーマッタ [P1]
+│   ├── inbox.py                    # list / triage [P2]
+│   ├── decision.py                 # record / list [P2]
+│   ├── lock.py                     # acquire / release / list [P2]
+│   ├── session.py                  # work session start / end [P2]
+│   ├── agent.py                    # agent run begin / end [P2]
+│   ├── handoff.py                  # open / close [P2]
+│   ├── event.py                    # event append / list [P3]
+│   ├── source.py                   # source add / list [P3]
+│   └── connector.py                # sync / status [P3+]
+├── core/                           # 共通ユーティリティ [P1]
+│   ├── config.py                   # Pydantic Settings [P1]
+│   ├── ids.py                      # ULID / UUID [P1]
+│   ├── time.py                     # tz-aware datetime helpers [P1]
+│   ├── logging.py                  # structlog [P1]
+│   └── errors.py                   # [P1]
+├── db/                             # 永続化レイヤ [P1]
+│   ├── engine.py                   # SQLAlchemy Engine / Session [P1]
+│   ├── schema.py                   # Core Table 定義 [P1]
+│   ├── unit_of_work.py             # [P1]
+│   └── migrations/                 # Alembic env.py 等 [P1]
 ├── domain/                         # event / aggregate / value object
 │   ├── events/
-│   │   ├── base.py                 # DomainEvent 抽象
-│   │   ├── task.py
-│   │   ├── source.py
-│   │   ├── decision.py
-│   │   ├── inbox.py
-│   │   └── agent.py
-│   ├── ids.py                      # TaskId / SourceId など
-│   └── value_objects.py
+│   │   ├── base.py                 # DomainEvent 抽象 [P1]
+│   │   ├── task.py                 # [P1]
+│   │   ├── inbox.py                # [P2]
+│   │   ├── decision.py             # [P2]
+│   │   ├── coordination.py         # work_session / agent_run / lock [P2]
+│   │   ├── handoff.py              # [P2]
+│   │   ├── source.py               # [P3]
+│   │   └── agent.py                # [P3+]
+│   ├── ids.py                      # TaskId / SourceId など [P1]
+│   └── value_objects.py            # [P1]
 ├── services/                       # application services
-│   ├── task_service.py
-│   ├── source_service.py
-│   ├── inbox_service.py
-│   ├── decision_service.py
-│   ├── lock_service.py
-│   ├── agent_session_service.py
-│   └── workspace_service.py
+│   ├── task_service.py             # [P1]
+│   ├── inbox_service.py            # [P2]
+│   ├── decision_service.py         # [P2]
+│   ├── lock_service.py             # [P2]
+│   ├── agent_session_service.py    # [P2]
+│   ├── handoff_service.py          # [P2]
+│   ├── workspace_service.py        # [P2+]
+│   └── source_service.py           # [P3]
 ├── projections/                    # event → projection reducer
-│   ├── base.py
-│   ├── tasks.py
-│   ├── sources.py
-│   ├── inbox.py
-│   ├── decisions.py
-│   ├── links.py
-│   └── rebuild.py
-├── connectors/                     # Phase 3+
-│   ├── base.py                     # Connector 抽象
-│   ├── github/
-│   ├── slack/
-│   ├── msgraph/
-│   └── box/
+│   ├── base.py                     # [P1]
+│   ├── tasks.py                    # [P1]
+│   ├── rebuild.py                  # [P1]
+│   ├── inbox.py                    # [P2]
+│   ├── decisions.py                # [P2]
+│   ├── work_sessions.py            # [P2]
+│   ├── agent_runs.py               # [P2]
+│   ├── locks.py                    # [P2]
+│   ├── handoffs.py                 # [P2]
+│   ├── sources.py                  # [P3]
+│   ├── connector_cursors.py        # [P3]
+│   └── links.py                    # [P3]
+├── connectors/                     # [P3+]
+│   ├── base.py                     # Connector 抽象 [P3]
+│   ├── github/                     # [P3]
+│   ├── slack/                      # [P3]
+│   ├── msgraph/                    # [P3]
+│   └── box/                        # [P3]
 ├── markdown/                       # workspace surface 生成
-│   ├── render/                     # Jinja2 テンプレート
-│   ├── tasks.py
-│   ├── briefings.py
-│   ├── reviews.py
-│   └── handoffs.py
-├── graph/                          # entity 間 link
+│   ├── render/                     # Jinja2 テンプレート [P1]
+│   ├── tasks.py                    # [P1]
+│   ├── workspace.py                # workspace 全体生成 [P1]
+│   ├── briefings.py                # [P4]
+│   ├── reviews.py                  # [P4]
+│   └── handoffs.py                 # [P2]
+├── vectors/                        # 抽象 interface [P1] / 具象 backend [P4]
+│   ├── embedder.py                 # Embedder Protocol [P1]
+│   ├── store.py                    # VectorStore Protocol [P1] / sqlite-vec backend [P4]
+│   └── recall.py                   # [P4]
+├── graph/                          # entity 間 link [Phase 4 以降で検討]
 │   ├── links.py
 │   └── queries.py
-├── vectors/                        # Phase 4+
-│   ├── embedder.py
-│   ├── store.py                    # sqlite-vec
-│   └── recall.py
-├── runtime/                        # multi-agent coordination
+├── runtime/                        # 現時点で計画なし (将来検討、`services/` に統合する案あり)
 │   ├── locks.py
 │   ├── work_session.py
 │   └── handoff.py
-└── agents/                         # agent runtime helpers
+└── agents/                         # 現時点で計画なし (将来検討、MCP 経路を採るか未確定)
     ├── prompts.py
     ├── boundary.py
-    └── mcp_server.py               # 任意、Phase 4+ で追加
+    └── mcp_server.py
 ```
 
 ## 3. モジュール責務の鉄則
@@ -171,6 +188,8 @@ src/opshub/
 4. **`markdown/` は read-only**。projection を読んで render するだけ。書き込み禁止。
 5. **`domain/events/` の event 型は immutable, versioned**。`schema_version` フィールド必須。
 6. **`core/` は他のモジュールに依存しない**。逆依存防止。
+
+> これらは現状コードレビューで担保。CI による機械的強制 (import-linter / カスタム ruff rule) は Phase 2.x で検討する。
 
 → [ADR-0004: Agent Runtime Boundary](adr/0004-agent-runtime-boundary.md)
 

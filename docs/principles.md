@@ -77,7 +77,7 @@ CI でこの不変条件を検証する。
 
 | Phase | スコープ | Status |
 |---|---|---|
-| 1 | Foundation: event store + tasks + CLI + markdown 生成 + tests + CI | ✅ Complete (2026-05) |
+| 1 | Foundation: event store + tasks + CLI + markdown 生成 + tests + CI | ✅ Complete (2026-05-17) |
 | 2 | Coordination: inbox triage / decisions / locks / handoffs / work sessions | Planned |
 | 3 | Connectors: GitHub / Slack / Microsoft 365 / Box | Planned |
 | 4 | Semantic Layer: vector recall / semantic search / duplicate detection / briefing 自動生成 | Planned |
@@ -98,6 +98,8 @@ Python 3.13+ / uv / Typer / SQLAlchemy Core / Pydantic v2 を採用。ただし 
 2. **SaaS token 保管方式** (`keyring` library / `pass` / `secret-tool`、Phase 3 で確定)
 
 ## 確定済み (旧 Open Question)
+
+> 旧 Open Q 番号 trace: 旧 Open Q #1 = LLM 利用方針 (現 §Open Questions #1 として残置)、旧 Open Q #2 = Lock 粒度 (本セクションで解決)、旧 Open Q #3 = SaaS token 保管方式 (現 §Open Questions #2 として残置)。
 
 - **Embedding モデル選定** → ADR-0012 で Pluggable Embedder 設計を採択。具体モデル選定は Phase 4 着手時 (ADR-0012 の Open Questions 1-2)
 - **Task runner** → `just` 採用 (ADR-0001)

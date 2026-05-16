@@ -84,7 +84,7 @@ NNNN-kebab-case-title.md
 | 0006 | [CLI-first MVP, defer MCP](0006-cli-first-mvp.md) | Accepted |
 | 0007 | [Single Python Package, defer Monorepo](0007-single-python-package.md) | Accepted |
 | 0008 | [Naming: opshub](0008-naming-opshub.md) | Accepted |
-| 0009 | [Multi-Agent Neutrality](0009-multi-agent-neutrality.md) | Proposed |
+| 0009 | [Multi-Agent Neutrality](0009-multi-agent-neutrality.md) | Accepted |
 | 0010 | [Connector Contract](0010-connector-contract.md) | Proposed |
 | 0011 | [Ozzy-Labs Ecosystem Adoption](0011-ozzy-labs-ecosystem-adoption.md) | Accepted |
 | 0012 | [Embedding Strategy](0012-embedding-strategy.md) | Accepted |

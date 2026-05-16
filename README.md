@@ -4,7 +4,7 @@
 
 *人間と AI エージェントのための、ローカルファーストな Operational Memory 兼 実行ハブ。*
 
-> Status: **Design phase**. 実装はまだ開始していません。`docs/` 配下のドキュメントは設計方針であり、議論を踏まえて更新されます。
+> Status: **Phase 1 (foundation) complete (2026-05-17)**. Phase 2 (coordination layer) is planned — see [docs/phase-2-plan.md](docs/phase-2-plan.md). `docs/` 配下のドキュメントは現状の方針を反映しつつ、議論を踏まえて更新されます。
 
 ## 概要
 
@@ -77,14 +77,14 @@ All state lives under XDG directories; override via `OPSHUB_*` env vars (e.g.
 
 ## ステータス
 
-このリポジトリは設計フェーズにあり、Python 実装は未着手です。`docs/` のドキュメントは現時点の方向性を示すもので、議論を踏まえて随時更新されます。
+Phase 1 (foundation) を 2026-05-17 に完了しました。`opshub init` / `opshub task create` / `opshub task list` / `opshub workspace generate` / `opshub projections rebuild` が動作し、event store + tasks projection + markdown 生成 + tests + CI が green の状態です。次は Phase 2 (coordination layer) の実装に着手します。
 
-実装着手後の予定:
+Phase ロードマップ:
 
-1. **Phase 1**: Event store + tasks + CLI + markdown 生成 (foundation)
-2. **Phase 2**: Inbox triage / decisions / locks / handoffs (coordination)
-3. **Phase 3**: GitHub / Slack / Microsoft 365 / Box connectors
-4. **Phase 4**: Vector recall / semantic search / briefing 自動生成 (semantic layer)
+1. **Phase 1**: Event store + tasks + CLI + markdown 生成 (foundation) — ✅ Complete (2026-05-17)
+2. **Phase 2**: Inbox triage / decisions / locks / handoffs (coordination) — Planned (see [docs/phase-2-plan.md](docs/phase-2-plan.md))
+3. **Phase 3**: GitHub / Slack / Microsoft 365 / Box connectors — Planned
+4. **Phase 4**: Vector recall / semantic search / briefing 自動生成 (semantic layer) — Planned
 
 詳細は [Principles 項 9 (Phased Delivery)](docs/principles.md) と各 ADR を参照。
 
