@@ -12,12 +12,14 @@ dependency direction).
 """
 
 from opshub.services.event_store import EventStore, InMemoryEventStore
+from opshub.services.inbox_service import InboxService
 from opshub.services.projector import NoOpProjector, Projector
 from opshub.services.task_service import TaskService
 
 __all__ = [
     "EventStore",
     "InMemoryEventStore",
+    "InboxService",
     "NoOpProjector",
     "Projector",
     "TaskService",

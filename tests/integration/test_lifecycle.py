@@ -156,8 +156,9 @@ def test_full_phase1_lifecycle_via_cli(
     rebuild_result = runner.invoke(app, ["projections", "rebuild"])
     assert rebuild_result.exit_code == 0, rebuild_result.stdout
     # Report contract from cli/projections.py: "rebuilt N projection(s) from M event(s)".
+    # Projection count grows as Phase 2 adds new projections; assert format presence only.
     assert "2 event(s)" in rebuild_result.stdout
-    assert "1 projection(s)" in rebuild_result.stdout
+    assert "projection(s)" in rebuild_result.stdout
 
     # Replay preserves the row count.
     rows_after_rebuild = _tasks_projection_rows(paths["db_path"])
