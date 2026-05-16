@@ -1,0 +1,23 @@
+extends:
+  - lefthook-base.yaml
+
+# Python-specific hooks. Base hooks (shell/markdownlint/yaml/taplo/gitleaks/
+# trivy) come from lefthook-base.yaml via extends.
+#
+# mypy is intentionally NOT in pre-commit; it's CI-only because of its slow
+# warm time (~5-10s on the OpsHub codebase). Local pre-commit uses pyright
+# which is ~10x faster (ADR-0001 Negative §2).
+pre-commit:
+  parallel: true
+  commands:
+    ruff-check:
+      glob: "**/*.py"
+      run: mise exec -- uv run ruff check --fix {staged_files}
+      stage_fixed: true
+    ruff-format:
+      glob: "**/*.py"
+      run: mise exec -- uv run ruff format {staged_files}
+      stage_fixed: true
+    pyright:
+      glob: "**/*.py"
+      run: mise exec -- uv run pyright {staged_files}

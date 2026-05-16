@@ -1,0 +1,46 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(curl*)",
+      "Bash(wget*)",
+      "Bash(git push*--force*)",
+      "Bash(git push* -f*)",
+      "Read(.env*)"
+    ],
+    "allow": [
+      "Bash(mise *)",
+      "Bash(pnpm *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git branch*)",
+      "Bash(git show*)",
+      "Bash(git add *)",
+      "Bash(git commit*)",
+      "Bash(git checkout*)",
+      "Bash(git switch*)",
+      "Bash(git push*)",
+      "Bash(git fetch*)",
+      "Bash(git pull*)",
+      "Bash(git stash*)",
+      "Bash(gh issue *)",
+      "Bash(gh pr *)",
+      "Bash(npx *)",
+      "Bash(lefthook *)",
+      "Bash(biome *)",
+      "Bash(shellcheck *)",
+      "Bash(shfmt *)",
+      "Bash(markdownlint-cli2 *)",
+      "Bash(yamlfmt *)",
+      "Bash(yamllint *)",
+      "Bash(taplo *)",
+      "Bash(actionlint *)",
+      "Bash(gitleaks *)",
+      "Bash(trivy *)",
+      "Bash(mdformat *)",
+      "Bash(bats *)",
+      "Bash(gh auth *)",
+      "Bash(gh api *)"
+    ]
+  }
+}
