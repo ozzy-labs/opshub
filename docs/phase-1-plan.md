@@ -37,27 +37,27 @@ bootstrap 部分は 7 TODO を 4 commit に集約し PR #1 で squash merge 済�
 
 | # | Commit | 概要 | 想定 PR # |
 |---|---|---|---|
-| 5 | `feat(core): foundational utilities` | `core/{ids,time,logging,errors,config}.py`。ULID 生成、tz-aware datetime helpers、structlog config、`OpsHubError` 基底、Pydantic Settings 基底。後続 step が依存する foundation | PR #2 |
-| 6 | `feat(db): set up sqlalchemy engine and alembic` | `db/{engine,unit_of_work,schema}.py` + alembic init (`src/opshub/db/migrations/`)。`~/.local/share/opshub/db/opshub.sqlite` デフォルトパス解決 | PR #3 |
-| 7 | `feat(db): initial migration with events and embeddings tables` | `0001_events.py` + `0002_embeddings.py` の 2 migration。`embeddings` は Phase 4 まで空運用、`UNIQUE(entity_type, entity_id, model_id, model_version)` 制約 (ADR-0012) | PR #4 |
-| 8 | `feat(domain): task events` | `domain/events/{base,task}.py`。`DomainEvent` 抽象 + `TaskCreated` / `TaskActivated` / `TaskCompleted`、Pydantic `frozen=True` + discriminator + `schema_version` (ADR-0002) | PR #5 |
-| 9 | `feat(services): task service` | `services/task_service.py`。CLI / agent からの command を検証 → event を append → projector に通知。lock は Phase 2 で実装 (ADR-0004) | PR #6 |
-| 10 | `feat(projections): tasks projection + replay test` | `projections/{base,tasks,rebuild}.py`。冪等テスト (`projections rebuild` を 2 回 → 同一結果) を `tests/integration/` に (Principles §8) | PR #7 |
-| 11 | `feat(vectors): pluggable embedder/store protocols` | `vectors/{embedder,store}.py` の Protocol 定義のみ (Phase 4 用、実装ゼロ)。interface freeze 用 unit test 併設 (ADR-0012) | PR #8 |
-| 12 | `feat(config): settings for storage/workspace/embedding` | Pydantic Settings 拡張。`[storage]` (db path / cache path) + `[workspace]` (workspace root) + `[embedding]` (backend = "disabled" デフォルト) の 3 section (ADR-0012) | PR #9 |
-| 13 | `feat(cli): bootstrap commands (init, db migrate)` | `opshub init` (first-time setup: dir 作成、config 初期化、migration 適用)、`opshub db migrate` (apply pending)。Typer lazy import 規約に従う (ADR-0001) | PR #10 |
-| 14 | `feat(cli): task commands (create, list)` | `opshub task create` / `task list`。`--format md` 等の出力オプションを Phase 1 で確定 | PR #11 |
-| 15 | `feat(cli): ops commands (projections, embeddings)` | `opshub projections rebuild`、`opshub embeddings status` (backend=disabled / 件数 0 を表示) | PR #12 |
-| 16 | `feat(markdown): task list rendering to workspace` | `markdown/{render,tasks}.py` + `opshub workspace generate`。Jinja2 template、冪等テスト (Principles §8) | PR #13 |
-| 17 | `test: end-to-end lifecycle + docs: readme quickstart` | `tests/integration/test_lifecycle.py` (create → list → generate)、README に Quickstart、cold-start 観測 (`time opshub version` < 300ms) | PR #14 |
+| 5 | `feat(core): foundational utilities` | `core/{ids,time,logging,errors,config}.py`。ULID 生成、tz-aware datetime helpers、structlog config、`OpsHubError` 基底、Pydantic Settings 基底。後続 step が依存する foundation | PR #5 |
+| 6 | `feat(db): set up sqlalchemy engine and alembic` | `db/{engine,unit_of_work,schema}.py` + alembic init (`src/opshub/db/migrations/`)。`~/.local/share/opshub/db/opshub.sqlite` デフォルトパス解決 | PR #6 |
+| 7 | `feat(db): initial migration with events and embeddings tables` | `0001_events.py` + `0002_embeddings.py` の 2 migration。`embeddings` は Phase 4 まで空運用、`UNIQUE(entity_type, entity_id, model_id, model_version)` 制約 (ADR-0012) | PR #7 |
+| 8 | `feat(domain): task events` | `domain/events/{base,task}.py`。`DomainEvent` 抽象 + `TaskCreated` / `TaskActivated` / `TaskCompleted`、Pydantic `frozen=True` + discriminator + `schema_version` (ADR-0002) | PR #8 |
+| 9 | `feat(services): task service` | `services/task_service.py`。CLI / agent からの command を検証 → event を append → projector に通知。lock は Phase 2 で実装 (ADR-0004) | PR #9 |
+| 10 | `feat(projections): tasks projection + replay test` | `projections/{base,tasks,rebuild}.py`。冪等テスト (`projections rebuild` を 2 回 → 同一結果) を `tests/integration/` に (Principles §8) | PR #10 |
+| 11 | `feat(vectors): pluggable embedder/store protocols` | `vectors/{embedder,store}.py` の Protocol 定義のみ (Phase 4 用、実装ゼロ)。interface freeze 用 unit test 併設 (ADR-0012) | PR #11 |
+| 12 | `feat(config): settings for storage/workspace/embedding` | Pydantic Settings 拡張。`[storage]` (db path / cache path) + `[workspace]` (workspace root) + `[embedding]` (backend = "disabled" デフォルト) の 3 section (ADR-0012) | PR #12 |
+| 13 | `feat(cli): bootstrap commands (init, db migrate)` | `opshub init` (first-time setup: dir 作成、config 初期化、migration 適用)、`opshub db migrate` (apply pending)。Typer lazy import 規約に従う (ADR-0001) | PR #13 |
+| 14 | `feat(cli): task commands (create, list)` | `opshub task create` / `task list`。`--format md` 等の出力オプションを Phase 1 で確定 | PR #14 |
+| 15 | `feat(cli): ops commands (projections, embeddings)` | `opshub projections rebuild`、`opshub embeddings status` (backend=disabled / 件数 0 を表示) | PR #15 |
+| 16 | `feat(markdown): task list rendering to workspace` | `markdown/{render,tasks}.py` + `opshub workspace generate`。Jinja2 template、冪等テスト (Principles §8) | PR #16 |
+| 17 | `test: end-to-end lifecycle + docs: readme quickstart` | `tests/integration/test_lifecycle.py` (create → list → generate)、README に Quickstart、cold-start 観測 (`time opshub version`: 上限 300ms / 目標 120ms) | PR #17 |
 
 **論理グルーピング** (milestone 候補):
 
-- **Foundation** (PR #2-#4 / step 5-7): core utilities + db engine + 初回 migration
-- **Event Sourcing Core** (PR #5-#7 / step 8-10): domain events + service + projections
-- **Interfaces** (PR #8-#9 / step 11-12): Phase 4 用 Protocol + 設定
-- **CLI** (PR #10-#12 / step 13-15): 3 種類の CLI command 群
-- **Output & Verification** (PR #13-#14 / step 16-17): markdown 生成 + E2E
+- **Foundation** (PR #5-#7 / step 5-7): core utilities + db engine + 初回 migration
+- **Event Sourcing Core** (PR #8-#10 / step 8-10): domain events + service + projections
+- **Interfaces** (PR #11-#12 / step 11-12): Phase 4 用 Protocol + 設定
+- **CLI** (PR #13-#15 / step 13-15): 3 種類の CLI command 群
+- **Output & Verification** (PR #16-#17 / step 16-17): markdown 生成 + E2E
 
 各 PR は前 PR を base に main から作成。これで CI が毎回最新の main で走り、変化を最小化できる。
 
@@ -79,7 +79,7 @@ bootstrap 部分は 7 TODO を 4 commit に集約し PR #1 で squash merge 済�
 2. `pyproject.toml` の `[project.optional-dependencies]` が ADR-0001 設計どおりに揃い、`uv tool install --from . opshub` (core only) が ML 依存なしで完了する
 3. CI で `uv sync --locked` → `ruff check` → `ruff format --check` → `pyright` → `mypy src tests` → `pytest` が緑
 4. `lefthook run pre-commit --all-files` がエラーなしで通る
-5. cold start 観測: `time opshub version` が ~300ms 以下 (lazy import 規約の検証、ADR-0001 Negative §1)
+5. cold start 観測: `time opshub version` が **上限 300ms 以下** (ストレッチ目標 120ms、ADR-0001 Negative §1)。lazy import 規約の徹底で達成
 
 ### ドキュメント DoD
 
@@ -136,11 +136,11 @@ GitHub Milestones を使う場合、§2.2 の 5 group を milestone 化:
 
 | Milestone | PR | step |
 |---|---|---|
-| Phase 1: Foundation | PR #2-#4 | 5-7 |
-| Phase 1: Event Sourcing Core | PR #5-#7 | 8-10 |
-| Phase 1: Interfaces | PR #8-#9 | 11-12 |
-| Phase 1: CLI | PR #10-#12 | 13-15 |
-| Phase 1: Output & Verification | PR #13-#14 | 16-17 |
+| Phase 1: Foundation | PR #5-#7 | 5-7 |
+| Phase 1: Event Sourcing Core | PR #8-#10 | 8-10 |
+| Phase 1: Interfaces | PR #11-#12 | 11-12 |
+| Phase 1: CLI | PR #13-#15 | 13-15 |
+| Phase 1: Output & Verification | PR #16-#17 | 16-17 |
 
 milestone は optional。tracking issue のチェックリストで十分なら省略可。
 
