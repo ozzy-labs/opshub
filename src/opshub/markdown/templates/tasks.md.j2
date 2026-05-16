@@ -1,0 +1,18 @@
+# {{ task.title }}
+
+- **ID:** `{{ task.id }}`
+- **State:** {{ task.state }}
+- **Created:** {{ task.created_at.isoformat() }}
+- **Updated:** {{ task.updated_at.isoformat() }}
+{% if task.body %}
+
+## Body
+
+{{ task.body }}
+{% endif %}
+{% if task.result_note %}
+
+## Result note
+
+{{ task.result_note }}
+{% endif %}

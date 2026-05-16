@@ -1,0 +1,11 @@
+# Tasks
+
+{% if tasks %}
+| ID | State | Title | Updated |
+| --- | --- | --- | --- |
+{% for t in tasks %}
+| [`{{ t.id[:8] }}`](./{{ t.id }}.md) | {{ t.state }} | {{ t.title }} | {{ t.updated_at.date().isoformat() }} |
+{% endfor %}
+{% else %}
+_No tasks yet. Use `opshub task create "..."` to add one._
+{% endif %}
