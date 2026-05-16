@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from opshub.projections.base import Projection
 from opshub.projections.inbox import InboxProjection
+from opshub.projections.locks import LocksProjection
 from opshub.projections.tasks import TasksProjection
 
 __all__ = ["all_projections"]
@@ -30,4 +31,4 @@ def all_projections() -> list[Projection]:
     The list itself is fresh too — callers may append to / sort it
     without affecting other consumers.
     """
-    return [TasksProjection(), InboxProjection()]
+    return [TasksProjection(), InboxProjection(), LocksProjection()]
