@@ -29,21 +29,19 @@ if TYPE_CHECKING:
 
     from opshub.domain.events import DomainEvent
     from opshub.projections import Projection
-    from opshub.services import InboxService, TaskService
+    from opshub.services import InboxService, LockService, TaskService
 
 
-__all__ = ["build_engine", "build_inbox_service", "build_task_service"]
+__all__ = [
+    "build_engine",
+    "build_inbox_service",
+    "build_lock_service",
+    "build_task_service",
+]
 
 
 def build_engine() -> Engine:
-    """Construct the OpsHub SQLAlchemy ``Engine`` for CLI subcommands.
-
-    Resolves :class:`OpsHubSettings` from the environment, builds the
-    SQLite engine via :func:`create_engine_for_sqlite`, and asserts the
-    schema has been initialised. Subcommands call this exactly once per
-    invocation.
-    """
-    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    """Construct the OpsHub SQLAlchemy ``Engine`` for CLI subcommands."""
     from opshub.core.config import OpsHubSettings
     from opshub.db import create_engine_for_sqlite
 
@@ -54,14 +52,7 @@ def build_engine() -> Engine:
 
 
 def _require_initialised(engine: Engine) -> None:
-    """Raise :class:`ConfigError` when the OpsHub schema is missing.
-
-    Detection key: the ``events`` table is provisioned by migration
-    ``0001_create_events_table`` and is required by every subcommand
-    that reads or replays the event log. Absence of that table is a
-    reliable proxy for "user has not run ``opshub init`` yet".
-    """
-    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    """Raise :class:`ConfigError` when the OpsHub schema is missing."""
     from sqlalchemy import inspect
 
     from opshub.core.errors import ConfigError
@@ -71,17 +62,7 @@ def _require_initialised(engine: Engine) -> None:
 
 
 def build_task_service(actor: str) -> TaskService:
-    """Wire a :class:`TaskService` against the configured database.
-
-    The returned service appends events to the SQLite-backed
-    :class:`~opshub.db.SqlAlchemyEventStore` *and* projects them inline
-    through a :class:`_PersistingProjector` that writes to every
-    registered :class:`~opshub.projections.Projection` in the same
-    database. Both writes share a single transaction opened via
-    ``engine.begin()`` — a failure in either rolls back both, so the
-    event log and the projections can never disagree.
-    """
-    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    """Wire a :class:`TaskService` against the configured database."""
     from opshub.db import SqlAlchemyEventStore
     from opshub.services import TaskService
 
@@ -90,24 +71,12 @@ def build_task_service(actor: str) -> TaskService:
         store=SqlAlchemyEventStore(engine),
         projector=_PersistingProjector(),
         actor=actor,
-        # ``engine.begin()`` returns a context manager that yields the
-        # active ``Connection`` and commits on clean exit / rolls back
-        # on exception — exactly the contract :class:`TaskService`
-        # expects from ``uow_factory``.
         uow_factory=engine.begin,
     )
 
 
 def build_inbox_service(actor: str) -> InboxService:
-    """Wire an :class:`InboxService` against the configured database.
-
-    Parallel to :func:`build_task_service`: same SQLAlchemy event store,
-    same :class:`_PersistingProjector` fan-out, same
-    ``engine.begin()`` UoW. The service appends ``inbox.*`` events
-    (plus a ``TaskCreated`` event in the ``triage --to-task`` path) and
-    every registered projection consumes them on the shared connection.
-    """
-    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    """Wire an :class:`InboxService` against the configured database."""
     from opshub.db import SqlAlchemyEventStore
     from opshub.services import InboxService
 
@@ -120,35 +89,37 @@ def build_inbox_service(actor: str) -> InboxService:
     )
 
 
-class _PersistingProjector:
-    """Apply events to every registered projection on a shared connection.
+def build_lock_service(actor: str) -> LockService:
+    """Wire a :class:`LockService` against the configured database.
 
-    The projector reads the projection list from
-    :func:`opshub.projections.all_projections` so the CLI wiring and the
-    ``projections rebuild`` driver always see the same set of
-    projections — no second hard-coded list to drift.
-
-    Each call fans the event out to every projection on the connection
-    supplied by the service. The service opens a single transaction via
-    its ``uow_factory`` and threads that connection in, so all
-    projections (and the underlying event row) participate in the same
-    Unit of Work.
+    Mirrors :func:`build_task_service`: a SQLite-backed
+    :class:`~opshub.db.SqlAlchemyEventStore` for appends, a
+    :class:`_PersistingProjector` that writes every registered
+    projection on the same connection, and ``engine.begin`` as the
+    ``uow_factory`` so the active-lock pre-check, the event append, and
+    the ``locks`` projection update all share a single transaction.
     """
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import LockService
+
+    engine = build_engine()
+    return LockService(
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(),
+        uow_factory=engine.begin,
+        actor=actor,
+    )
+
+
+class _PersistingProjector:
+    """Apply events to every registered projection on a shared connection."""
 
     def __init__(self) -> None:
-        # Lazy import: keep CLI cold start fast (ADR-0001).
         from opshub.projections import all_projections
 
         self._projections: list[Projection] = all_projections()
 
     def apply(self, event: DomainEvent, connection: Connection | None = None) -> None:
-        """Apply ``event`` to every registered projection on ``connection``.
-
-        ``connection`` is required in the CLI wiring path — the service
-        threads in the UoW connection so all projection writes share
-        the event-append transaction. Falling back to ``None`` would
-        silently undo the atomicity guarantee, so we raise instead.
-        """
         if connection is None:
             raise RuntimeError(
                 "_PersistingProjector requires a Connection from the service's"
