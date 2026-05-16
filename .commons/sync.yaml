@@ -1,0 +1,25 @@
+# Auto-updated by commons sync.sh
+# 'pinned' is user-editable — add or remove paths freely
+commit: f628f1f046786fc08775e4691d6840f0710123fc
+synced_at: 2026-05-16T12:08:47Z
+
+# Files excluded from commons sync (Python project overrides).
+# OpsHub is Python-based (ADR-0001), so Node-oriented commons defaults
+# are pinned here to prevent re-introduction during weekly sync.
+pinned:
+  - biome.json
+  - .mise.toml
+  - .vscode/extensions.json
+  - .vscode/settings.json
+  - .devcontainer/Dockerfile
+  - lefthook.yaml
+
+# Skills sync (opt-in). Add adapter ids to skills_adapters and a SHA
+# to skills_commit. The skills repo's main HEAD SHA can be obtained via:
+#   gh api repos/ozzy-labs/skills/commits/main --jq .sha
+skills_commit: b8ae1c14aebc71c851d4f4781c6b0f76f7402574
+skills_adapters:
+  - claude-code
+  - codex-cli
+  - gemini-cli
+  - copilot

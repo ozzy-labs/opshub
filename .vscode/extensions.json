@@ -1,0 +1,15 @@
+{
+  "recommendations": [
+    "charliermarsh.ruff",
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.mypy-type-checker",
+    "DavidAnson.vscode-markdownlint",
+    "EditorConfig.EditorConfig",
+    "foxundermoon.shell-format",
+    "github.vscode-github-actions",
+    "redhat.vscode-yaml",
+    "tamasfe.even-better-toml",
+    "timonwong.shellcheck"
+  ]
+}
