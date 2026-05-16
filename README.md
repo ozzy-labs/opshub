@@ -25,6 +25,49 @@ OpsHub は以下では「ない」。
 - ドキュメント保管庫
 - 単独の workflow オーケストレータ
 
+## Quickstart
+
+OpsHub is distributed as a Python CLI. Install via `uv` (recommended) or `pip`:
+
+```bash
+# Recommended: isolated tool install via uv
+uv tool install --from . opshub
+
+# Or in a project venv
+uv pip install -e .
+```
+
+First-time setup:
+
+```bash
+opshub init
+```
+
+This creates `~/.config/opshub/config.toml`, `~/.local/share/opshub/`, the
+workspace at `~/opshub/workspace/`, and applies the database migrations.
+
+Daily use:
+
+```bash
+# Capture a task
+opshub task create "draft phase 2 plan"
+
+# List tasks (formats: table / md / json)
+opshub task list --format md
+
+# Regenerate the markdown workspace from the projection
+opshub workspace generate
+
+# Rebuild projections from the event store (idempotent)
+opshub projections rebuild
+
+# Inspect embedding backend status (Phase 4)
+opshub embeddings status
+```
+
+All state lives under XDG directories; override via `OPSHUB_*` env vars (e.g.
+`OPSHUB_STORAGE__DB_PATH=/custom/path.sqlite`).
+
 ## ドキュメント
 
 - [Principles (基本方針)](docs/principles.md)
