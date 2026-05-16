@@ -29,10 +29,10 @@ if TYPE_CHECKING:
 
     from opshub.domain.events import DomainEvent
     from opshub.projections import Projection
-    from opshub.services import TaskService
+    from opshub.services import InboxService, TaskService
 
 
-__all__ = ["build_engine", "build_task_service"]
+__all__ = ["build_engine", "build_inbox_service", "build_task_service"]
 
 
 def build_engine() -> Engine:
@@ -95,6 +95,28 @@ def build_task_service(actor: str) -> TaskService:
         # on exception — exactly the contract :class:`TaskService`
         # expects from ``uow_factory``.
         uow_factory=engine.begin,
+    )
+
+
+def build_inbox_service(actor: str) -> InboxService:
+    """Wire an :class:`InboxService` against the configured database.
+
+    Parallel to :func:`build_task_service`: same SQLAlchemy event store,
+    same :class:`_PersistingProjector` fan-out, same
+    ``engine.begin()`` UoW. The service appends ``inbox.*`` events
+    (plus a ``TaskCreated`` event in the ``triage --to-task`` path) and
+    every registered projection consumes them on the shared connection.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import InboxService
+
+    engine = build_engine()
+    return InboxService(
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(),
+        uow_factory=engine.begin,
+        actor=actor,
     )
 
 

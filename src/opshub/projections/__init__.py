@@ -26,7 +26,7 @@ from opshub.projections.agent_runs import agent_runs_table
 from opshub.projections.base import Projection
 from opshub.projections.decisions import decisions_table
 from opshub.projections.handoffs import handoffs_table
-from opshub.projections.inbox import inbox_items_table
+from opshub.projections.inbox import InboxProjection, inbox_items_table
 from opshub.projections.locks import locks_table
 from opshub.projections.rebuild import rebuild_all
 from opshub.projections.registry import all_projections
@@ -34,6 +34,7 @@ from opshub.projections.tasks import TasksProjection, tasks_table
 from opshub.projections.work_sessions import work_sessions_table
 
 __all__ = [
+    "InboxProjection",
     "Projection",
     "TasksProjection",
     "agent_runs_table",
