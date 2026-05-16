@@ -20,12 +20,14 @@ from __future__ import annotations
 import typer
 
 from opshub import __version__
+from opshub.cli.agent import agent_app
 from opshub.cli.decision import decision_app
 from opshub.cli.embeddings import embeddings_app
 from opshub.cli.handoff import handoff_app
 from opshub.cli.inbox import inbox_app
 from opshub.cli.lock import lock_app
 from opshub.cli.projections import projections_app
+from opshub.cli.session import session_app
 from opshub.cli.task import task_app
 from opshub.cli.workspace import workspace_app
 
@@ -48,6 +50,8 @@ app.add_typer(inbox_app)
 app.add_typer(decision_app)
 app.add_typer(lock_app)
 app.add_typer(handoff_app)
+app.add_typer(session_app)
+app.add_typer(agent_app)
 app.add_typer(workspace_app)
 
 

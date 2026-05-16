@@ -15,12 +15,14 @@ Centralising the list here keeps the contract honest: every consumer of
 
 from __future__ import annotations
 
+from opshub.projections.agent_runs import AgentRunsProjection
 from opshub.projections.base import Projection
 from opshub.projections.decisions import DecisionsProjection
 from opshub.projections.handoffs import HandoffsProjection
 from opshub.projections.inbox import InboxProjection
 from opshub.projections.locks import LocksProjection
 from opshub.projections.tasks import TasksProjection
+from opshub.projections.work_sessions import WorkSessionsProjection
 
 __all__ = ["all_projections"]
 
@@ -33,4 +35,6 @@ def all_projections() -> list[Projection]:
         DecisionsProjection(),
         LocksProjection(),
         HandoffsProjection(),
+        WorkSessionsProjection(),
+        AgentRunsProjection(),
     ]

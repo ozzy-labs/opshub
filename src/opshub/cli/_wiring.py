@@ -30,20 +30,24 @@ if TYPE_CHECKING:
     from opshub.domain.events import DomainEvent
     from opshub.projections import Projection
     from opshub.services import (
+        AgentRunService,
         DecisionService,
         HandoffService,
         InboxService,
         LockService,
         TaskService,
+        WorkSessionService,
     )
 
 
 __all__ = [
+    "build_agent_run_service",
     "build_decision_service",
     "build_engine",
     "build_handoff_service",
     "build_inbox_service",
     "build_lock_service",
+    "build_session_service",
     "build_task_service",
 ]
 
@@ -122,6 +126,48 @@ def build_decision_service(actor: str) -> DecisionService:
         projector=_PersistingProjector(),
         actor=actor,
         uow_factory=engine.begin,
+    )
+
+
+def build_session_service(actor: str) -> WorkSessionService:
+    """Wire a :class:`WorkSessionService` against the configured database.
+
+    Parallels :func:`build_handoff_service`: a single transaction wraps
+    event append and projection apply via ``engine.begin``, and the
+    engine is also stashed on the service so :meth:`list_active` can
+    read the ``work_sessions`` projection through the same connection
+    pool.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import WorkSessionService
+
+    engine = build_engine()
+    return WorkSessionService(
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(),
+        uow_factory=engine.begin,
+        actor=actor,
+        engine=engine,
+    )
+
+
+def build_agent_run_service(actor: str) -> AgentRunService:
+    """Wire an :class:`AgentRunService` against the configured database.
+
+    Mirrors :func:`build_session_service`.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import AgentRunService
+
+    engine = build_engine()
+    return AgentRunService(
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(),
+        uow_factory=engine.begin,
+        actor=actor,
+        engine=engine,
     )
 
 

@@ -11,6 +11,7 @@ plugs in via the :class:`EventStore` Protocol in a later step (ADR-0004
 dependency direction).
 """
 
+from opshub.services.agent_run_service import AgentRunRow, AgentRunService
 from opshub.services.decision_service import DecisionService
 from opshub.services.event_store import EventStore, InMemoryEventStore
 from opshub.services.handoff_service import HandoffRow, HandoffService
@@ -18,8 +19,11 @@ from opshub.services.inbox_service import InboxService
 from opshub.services.lock_service import LockRow, LockService
 from opshub.services.projector import NoOpProjector, Projector
 from opshub.services.task_service import TaskService
+from opshub.services.work_session_service import WorkSessionRow, WorkSessionService
 
 __all__ = [
+    "AgentRunRow",
+    "AgentRunService",
     "DecisionService",
     "EventStore",
     "HandoffRow",
@@ -31,4 +35,6 @@ __all__ = [
     "NoOpProjector",
     "Projector",
     "TaskService",
+    "WorkSessionRow",
+    "WorkSessionService",
 ]
