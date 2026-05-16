@@ -14,6 +14,7 @@ import typer
 from opshub import __version__
 from opshub.cli.embeddings import embeddings_app
 from opshub.cli.projections import projections_app
+from opshub.cli.task import task_app
 from opshub.cli.workspace import workspace_app
 
 app = typer.Typer(
@@ -30,6 +31,7 @@ db_app = typer.Typer(
 app.add_typer(db_app)
 app.add_typer(projections_app)
 app.add_typer(embeddings_app)
+app.add_typer(task_app)
 app.add_typer(workspace_app)
 
 
