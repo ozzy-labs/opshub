@@ -1,0 +1,25 @@
+# Handoffs
+
+## Open
+
+{% if open_handoffs %}
+| ID | From | To | Topic | Opened |
+| --- | --- | --- | --- | --- |
+{% for h in open_handoffs %}
+| [`{{ h.id[:8] }}`](./{{ h.id }}.md) | {{ h.from_actor }} | {{ h.to_actor }} | {{ h.topic }} | {{ h.opened_at.date().isoformat() }} |
+{% endfor %}
+{% else %}
+_No open handoffs._
+{% endif %}
+
+## Closed
+
+{% if closed_handoffs %}
+| ID | From | To | Topic | Opened | Closed |
+| --- | --- | --- | --- | --- | --- |
+{% for h in closed_handoffs %}
+| [`{{ h.id[:8] }}`](./{{ h.id }}.md) | {{ h.from_actor }} | {{ h.to_actor }} | {{ h.topic }} | {{ h.opened_at.date().isoformat() }} | {{ h.closed_at.date().isoformat() }} |
+{% endfor %}
+{% else %}
+_No closed handoffs._
+{% endif %}

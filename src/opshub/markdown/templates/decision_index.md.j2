@@ -1,0 +1,11 @@
+# Decisions
+
+{% if decisions %}
+| ID | Recorded | Actor | Decision |
+| --- | --- | --- | --- |
+{% for d in decisions %}
+| [`{{ d.id[:8] }}`](./{{ d.id }}.md) | {{ d.recorded_at.date().isoformat() }} | {{ d.actor }} | {{ d.text.splitlines()[0] }} |
+{% endfor %}
+{% else %}
+_No decisions recorded yet._
+{% endif %}

@@ -1,8 +1,18 @@
 """Render ``tasks`` projection rows into markdown files.
 
-The public surface is :func:`render_tasks_markdown`, which takes a list of
-:class:`TaskRow` values and returns a ``{filename: content}`` mapping
-suitable for handing to :func:`opshub.markdown.workspace.generate_workspace`.
+Two layers live here:
+
+* :func:`render_tasks_markdown` is the pure renderer — it takes a list of
+  :class:`TaskRow` view-models and returns a ``{filename: content}``
+  mapping. Unit tests exercise this function directly against
+  hand-crafted rows without spinning up a database.
+* :class:`TasksRenderer` is the :class:`~opshub.markdown.workspace.WorkspaceRenderer`
+  Protocol implementation. It reads from the ``tasks`` projection table
+  via a SQLAlchemy :class:`~sqlalchemy.engine.Engine`, adapts each row
+  into a :class:`TaskRow`, and delegates the rendering to
+  :func:`render_tasks_markdown`. The workspace driver
+  (:func:`opshub.markdown.workspace.generate_workspace`) iterates a list
+  of renderers and dispatches through this Protocol.
 
 :class:`TaskRow` is a slim, presentation-only dataclass that mirrors the
 columns of :data:`opshub.projections.tasks.tasks_table`. We deliberately
@@ -25,9 +35,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from opshub.markdown.render import env
+from sqlalchemy import select
+from sqlalchemy.engine import Engine
 
-__all__ = ["INDEX_FILENAME", "TaskRow", "render_tasks_markdown"]
+from opshub.markdown.render import env
+from opshub.projections import tasks_table
+
+__all__ = ["INDEX_FILENAME", "TaskRow", "TasksRenderer", "render_tasks_markdown"]
 
 
 INDEX_FILENAME = "index.md"
@@ -79,3 +93,60 @@ def render_tasks_markdown(tasks: list[TaskRow]) -> dict[str, str]:
     for task in tasks:
         result[f"{task.id}.md"] = task_template.render(task=task)
     return result
+
+
+class TasksRenderer:
+    """:class:`~opshub.markdown.workspace.WorkspaceRenderer` for ``tasks``.
+
+    Reads the ``tasks`` projection, adapts each row into a
+    :class:`TaskRow`, and delegates to :func:`render_tasks_markdown`.
+    Writes into ``workspace_root / "generated" / "tasks" /``.
+    """
+
+    subdir: tuple[str, ...] = ("generated", "tasks")
+
+    def read_and_render(self, engine: Engine) -> dict[str, str]:
+        """Load every ``tasks`` row and render them to markdown."""
+        rows = self._read_rows(engine)
+        return render_tasks_markdown(rows)
+
+    @staticmethod
+    def _read_rows(engine: Engine) -> list[TaskRow]:
+        """Load every ``tasks`` row and adapt it into the markdown view-model.
+
+        Datetime columns come back tz-naive on the stdlib sqlite3 driver
+        (their components reflect UTC; see
+        ``tests/integration/test_projections_rebuild`` for the canonical
+        note). The markdown layer doesn't care about tzinfo — templates
+        only call ``isoformat()`` and ``date()`` — so we pass the values
+        through unchanged.
+        """
+        stmt = select(tasks_table)
+        with engine.connect() as conn:
+            result = conn.execute(stmt).mappings().all()
+        return [
+            TaskRow(
+                id=row["id"],
+                title=row["title"],
+                body=row["body"],
+                state=row["state"],
+                result_note=row["result_note"],
+                created_at=_as_datetime(row["created_at"]),
+                updated_at=_as_datetime(row["updated_at"]),
+            )
+            for row in result
+        ]
+
+
+def _as_datetime(value: object) -> datetime:
+    """Narrow a SQLAlchemy column value to :class:`datetime`.
+
+    The ``tasks`` table declares ``DateTime(timezone=True)`` columns and
+    the SQLite driver returns ``datetime`` instances. We assert that
+    contract here so a future schema regression (column type drift)
+    surfaces with a useful error rather than a confusing template
+    failure.
+    """
+    if not isinstance(value, datetime):  # pragma: no cover - defensive
+        raise TypeError(f"expected datetime from tasks projection, got {type(value).__name__}")
+    return value

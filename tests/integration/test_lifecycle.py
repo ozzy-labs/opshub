@@ -168,7 +168,11 @@ def test_full_phase1_lifecycle_via_cli(
     # ---- 5. opshub workspace generate --------------------------------------
     generate_result = runner.invoke(app, ["workspace", "generate"])
     assert generate_result.exit_code == 0, generate_result.stdout
-    assert "wrote 3 file(s)" in generate_result.stdout
+    # 6 files = tasks index + 2 per-task .md + 3 empty indexes (inbox /
+    # decisions / handoffs). Phase 2 step 8 adds three renderers, each
+    # of which always emits its own ``index.md`` even when its
+    # projection is empty.
+    assert "wrote 6 file(s)" in generate_result.stdout
 
     generated_dir = paths["workspace_root"] / "generated" / "tasks"
     assert (generated_dir / INDEX_FILENAME).is_file()

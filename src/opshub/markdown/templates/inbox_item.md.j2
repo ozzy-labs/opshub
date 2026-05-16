@@ -1,0 +1,19 @@
+# Inbox item `{{ item.id[:8] }}`
+
+- **ID:** `{{ item.id }}`
+- **State:** {{ item.state }}
+- **Summary:** {{ item.summary }}
+{% if item.source_ref %}
+- **Source:** {{ item.source_ref }}
+{% endif %}
+{% if item.disposition %}
+- **Disposition:** {{ item.disposition }}
+{% endif %}
+{% if item.target_id %}
+- **Target:** `{{ item.target_id }}`
+{% endif %}
+{% if item.reason %}
+- **Reason:** {{ item.reason }}
+{% endif %}
+- **Created:** {{ item.created_at.isoformat() }}
+- **Updated:** {{ item.updated_at.isoformat() }}

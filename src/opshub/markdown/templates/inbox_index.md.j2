@@ -1,0 +1,16 @@
+# Inbox
+
+{% for state in states %}
+## {{ state }}
+
+{% if grouped[state] %}
+| ID | Summary | Updated |
+| --- | --- | --- |
+{% for item in grouped[state] %}
+| [`{{ item.id[:8] }}`](./{{ item.id }}.md) | {{ item.summary }} | {{ item.updated_at.date().isoformat() }} |
+{% endfor %}
+{% else %}
+_No items in this state._
+{% endif %}
+
+{% endfor %}
