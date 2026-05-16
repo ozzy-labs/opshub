@@ -4,7 +4,7 @@
 
 *人間と AI エージェントのための、ローカルファーストな Operational Memory 兼 実行ハブ。*
 
-> Status: **Phase 1 (foundation) complete (2026-05-17)**. Phase 2 (coordination layer) is planned — see [docs/phase-2-plan.md](docs/phase-2-plan.md). `docs/` 配下のドキュメントは現状の方針を反映しつつ、議論を踏まえて更新されます。
+> Status: **Phase 1 (foundation) + Phase 2 (coordination) complete (2026-05-17)**. Phase 3 (connectors) と Phase 4 (semantic layer) は引き続き設計中。`docs/` 配下のドキュメントは現状の方針を反映しつつ、議論を踏まえて更新されます。
 
 ## 概要
 
@@ -55,7 +55,31 @@ opshub task create "draft phase 2 plan"
 # List tasks (formats: table / md / json)
 opshub task list --format md
 
-# Regenerate the markdown workspace from the projection
+# Capture / triage / list an inbox item
+opshub inbox add "triage the failing nightly build"
+opshub inbox triage <id> --to-task "fix nightly build"
+opshub inbox list --format md
+
+# Record / list a decision
+opshub decision record "adopt sqlite-vec for Phase 4"
+opshub decision list
+
+# Acquire / release / list a coordination lock (ADR-0013)
+opshub lock acquire task:<task-ulid>
+opshub lock release <lock-id>
+opshub lock list
+
+# Bracket a work session (auto-injected into agent runs)
+opshub session start --scope "phase-3 design"
+opshub agent run begin claude
+opshub agent run end <run-id> --summary "drafted ADR-0017"
+opshub session end --summary "EOD wrap"
+
+# Open / close a handoff between actors
+opshub handoff open --from agent:claude --to ozzy --topic "review"
+opshub handoff close <handoff-id> --note "merged"
+
+# Regenerate the markdown workspace from the projections
 opshub workspace generate
 
 # Rebuild projections from the event store (idempotent)
@@ -77,12 +101,12 @@ All state lives under XDG directories; override via `OPSHUB_*` env vars (e.g.
 
 ## ステータス
 
-Phase 1 (foundation) を 2026-05-17 に完了しました。`opshub init` / `opshub task create` / `opshub task list` / `opshub workspace generate` / `opshub projections rebuild` が動作し、event store + tasks projection + markdown 生成 + tests + CI が green の状態です。次は Phase 2 (coordination layer) の実装に着手します。
+Phase 1 (foundation) と Phase 2 (coordination) を 2026-05-17 に完了しました。`opshub init` / `task` / `inbox` / `decision` / `lock` / `session` / `agent run` / `handoff` / `workspace generate` / `projections rebuild` が動作し、event store + 全 projection + markdown 生成 + tests + CI が green の状態です。次は Phase 3 (connectors) の設計に着手します。
 
 Phase ロードマップ:
 
 1. **Phase 1**: Event store + tasks + CLI + markdown 生成 (foundation) — ✅ Complete (2026-05-17)
-2. **Phase 2**: Inbox triage / decisions / locks / handoffs (coordination) — Planned (see [docs/phase-2-plan.md](docs/phase-2-plan.md))
+2. **Phase 2**: Inbox triage / decisions / locks / work sessions / agent runs / handoffs (coordination) — ✅ Complete (2026-05-17)
 3. **Phase 3**: GitHub / Slack / Microsoft 365 / Box connectors — Planned
 4. **Phase 4**: Vector recall / semantic search / briefing 自動生成 (semantic layer) — Planned
 

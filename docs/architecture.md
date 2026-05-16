@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Phase 1 (foundation) shipped 2026-05-17 (event store + tasks projection + CLI + markdown 生成). Phase 2-4 sections remain in active design.
+> Status: Phase 1 (foundation) + Phase 2 (coordination) shipped 2026-05-17. Phase 3-4 sections remain in active design.
 
 OpsHub の高レベルアーキテクチャ・データフロー・データモデル・用語を記述する。具体的な決定の根拠は対応 ADR を参照。
 
@@ -119,12 +119,12 @@ agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換�
 | `events` | authoritative | Phase 1 (✅ 実装済) | append-only domain event log |
 | `tasks` | projection | Phase 1 (✅ 実装済) | current task state |
 | `embeddings` | projection | Phase 1 (✅ schema 実装済) / Phase 4 (具象 backend) | 派生 semantic 索引メタ (sqlite-vec binding は Phase 4) |
-| `inbox_items` | projection | Phase 2 (phase-2-plan §2 step 2 で追加) | 未 triage queue |
-| `decisions` | projection | Phase 2 (phase-2-plan §2 step 2 で追加) | 決定記録 |
-| `work_sessions` | projection | Phase 2 (phase-2-plan §2 step 2 で追加) | 人間 / agent の execution session |
-| `agent_runs` | projection | Phase 2 (phase-2-plan §2 step 2 で追加) | agent 実行記録 |
-| `locks` | projection | Phase 2 (phase-2-plan §2 step 2 で追加) | coordination lock |
-| `handoffs` | projection | Phase 2 (phase-2-plan §2 step 2 で追加) | agent 間 / 人 - agent 間の引き継ぎ記録 |
+| `inbox_items` | projection | Phase 1+2 (✅ 実装済) | 未 triage queue |
+| `decisions` | projection | Phase 1+2 (✅ 実装済) | 決定記録 |
+| `work_sessions` | projection | Phase 1+2 (✅ 実装済) | 人間 / agent の execution session |
+| `agent_runs` | projection | Phase 1+2 (✅ 実装済) | agent 実行記録 |
+| `locks` | projection | Phase 1+2 (✅ 実装済) | coordination lock |
+| `handoffs` | projection | Phase 1+2 (✅ 実装済) | agent 間 / 人 - agent 間の引き継ぎ記録 |
 | `sources` | projection | Phase 3+ | external item の現在状態 |
 | `connector_cursors` | projection | Phase 3+ | 差分同期チェックポイント |
 | `links` | projection | Phase 3+ | entity 間 graph 関係 |
