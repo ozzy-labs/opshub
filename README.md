@@ -4,7 +4,7 @@
 
 *人間と AI エージェントのための、ローカルファーストな Operational Memory 兼 実行ハブ。*
 
-> Status: **Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP = framework + GitHub) + Phase 4 (semantic recall layer、MVP = Pluggable Embedder + sqlite-vec + recall + 重複検出) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) + Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + CLI)) + Phase 7 (connectors wave 2、MVP = Slack + Microsoft 365 + Box connectors) complete (2026-05-17)**. `llama.cpp` direct binding / briefing cache + narrow scope / `links` projection 本実装 / multi-machine sync は Phase 6.x / 7.x 以降で扱う。Phase 8 (Knowledge graph、epic #128) は planned。`docs/` 配下のドキュメントは現状の方針を反映しつつ、議論を踏まえて更新されます。
+> Status: **Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP = framework + GitHub) + Phase 4 (semantic recall layer、MVP = Pluggable Embedder + sqlite-vec + recall + 重複検出) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) + Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + CLI)) + Phase 7 (connectors wave 2、MVP = Slack + Microsoft 365 + Box connectors) + Phase 8 (knowledge graph layer、MVP = ADR-0017 + `links` projection + 4 自動抽出経路 + manual link CRUD + graph traversal + `--expand-graph` integration) complete (2026-05-17)**. `llama.cpp` direct binding / briefing cache + narrow scope / multi-machine sync は Phase 6.x / 7.x / 9 以降で扱う。`docs/` 配下のドキュメントは現状の方針を反映しつつ、議論を踏まえて更新されます。
 
 ## 概要
 
@@ -122,6 +122,16 @@ opshub propose list                                        # recent proposals (m
 opshub propose list --state pending --limit 10             # filter by candidate state (pending / applied / rejected)
 opshub propose apply <proposal-id> <candidate-index>       # operator approval → creates task / decision via existing services
 opshub propose reject <proposal-id> <candidate-index> --reason "out of scope"
+
+# Knowledge graph layer (Phase 8, ADR-0017)
+opshub link add task:<task-id> source:<src-id> --type references  # manual link (emits LinkCreated)
+opshub link list --from task:<task-id>                            # list outgoing links, filter by --from/--to/--type
+opshub link remove <link-id> --reason "wrong source"              # remove a manual link (emits LinkDeleted, hard delete)
+opshub graph related task:<task-id> --direction both              # 1-hop neighbours (md / json / dot)
+opshub graph trace task:<task-id> --depth 3                       # backward provenance walk (default 3, max 10)
+opshub graph expand task:<task-id> --depth 2 --format dot         # bidirectional N-hop subset (default 2, max 5)
+opshub brief "phase 8 review" --expand-graph                      # widen LLM context via 1-hop graph expansion
+opshub propose generate "next steps" --expand-graph               # symmetric for proposal generation
 ```
 
 All state lives under XDG directories; override via `OPSHUB_*` env vars (e.g.
@@ -136,7 +146,7 @@ All state lives under XDG directories; override via `OPSHUB_*` env vars (e.g.
 
 ## ステータス
 
-Phase 1 (foundation)・Phase 2 (coordination)・Phase 3 (connectors + workspace ingest、MVP = framework + GitHub)・Phase 4 (semantic recall layer、MVP = Pluggable Embedder + sqlite-vec + recall + 重複検出)・Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM + `opshub brief` + event-driven auto-embed 補助)・Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain)・Phase 7 (connectors wave 2、MVP = Slack + Microsoft 365 + Box connectors) を 2026-05-17 に完了しました。`opshub init` / `task` / `inbox` / `decision` / `lock` / `session` / `agent run` / `handoff` / `connector` (`auth set` / `sync` (`github` / `slack` / `ms365` / `box`) / `list`) / `workspace ingest` / `workspace generate` / `projections rebuild` / `embeddings` (`rebuild` / `drain` / `status` / `find-duplicates`) / `recall` / `brief` / `propose` (`generate` / `list` / `apply` / `reject`) が動作し、event store + 全 projection (`briefings` / `proposals` 含む) + markdown 生成 + 4 connector (GitHub + Slack + Microsoft 365 + Box) + workspace inbox file ingest + semantic recall + Pluggable LLM (Anthropic / OpenAI / Ollama) + structured output + Proposal domain + tests + CI が green の状態です。`llama.cpp` direct binding / briefing cache + narrow scope / `links` projection 本実装 / multi-machine sync は Phase 6.x / 7.x 以降。Phase 8 (Knowledge graph、epic #128) は planned。
+Phase 1 (foundation)・Phase 2 (coordination)・Phase 3 (connectors + workspace ingest、MVP = framework + GitHub)・Phase 4 (semantic recall layer、MVP = Pluggable Embedder + sqlite-vec + recall + 重複検出)・Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM + `opshub brief` + event-driven auto-embed 補助)・Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain)・Phase 7 (connectors wave 2、MVP = Slack + Microsoft 365 + Box connectors)・Phase 8 (knowledge graph layer、MVP = ADR-0017 + `links` projection + 4 自動抽出経路 + manual link CRUD + graph traversal + `--expand-graph` integration) を 2026-05-17 に完了しました。`opshub init` / `task` / `inbox` / `decision` / `lock` / `session` / `agent run` / `handoff` / `connector` (`auth set` / `sync` (`github` / `slack` / `ms365` / `box`) / `list`) / `workspace ingest` / `workspace generate` / `projections rebuild` / `embeddings` (`rebuild` / `drain` / `status` / `find-duplicates`) / `recall` / `brief` (`--expand-graph` 対応) / `propose` (`generate` / `list` / `apply` / `reject`、`--expand-graph` 対応) / `link` (`add` / `remove` / `list`) / `graph` (`related` / `trace` / `expand`) が動作し、event store + 全 projection (`briefings` / `proposals` / `links` 含む) + markdown 生成 + 4 connector (GitHub + Slack + Microsoft 365 + Box) + workspace inbox file ingest + semantic recall + Pluggable LLM (Anthropic / OpenAI / Ollama) + structured output + Proposal domain + Knowledge graph layer + tests + CI が green の状態です。`llama.cpp` direct binding / briefing cache + narrow scope / multi-machine sync は Phase 6.x / 9 以降。
 
 Phase ロードマップ:
 
@@ -147,7 +157,7 @@ Phase ロードマップ:
 5. **Phase 5**: Briefing layer (ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) — ✅ Complete (2026-05-17)
 6. **Phase 6**: Action loop layer (ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI)) — ✅ Complete (2026-05-17) (`llama.cpp` direct binding / proposal scoring は Phase 6.x で)
 7. **Phase 7**: Connectors Wave 2 (Slack + Microsoft 365 + Box) — ✅ Complete (2026-05-17) (Phase 3 framework + ADR-0010 + ADR-0014 + ADR-0005 を再利用、epic #113)
-8. **Phase 8**: Knowledge graph (epic #128) — Planned
+8. **Phase 8**: Knowledge graph layer (ADR-0017 + `links` projection + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、epic #128) — ✅ Complete (2026-05-17) (connector-side automatic `SourceReferenced` 発行 / graph visualisation web UI は Phase 8.x で)
 
 詳細は [Principles 項 9 (Phased Delivery)](docs/principles.md) と各 ADR を参照。
 

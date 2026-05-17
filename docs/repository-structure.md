@@ -79,7 +79,7 @@ opshub/
 
 ## 2. Python パッケージ構成 (src/opshub/)
 
-各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P6]` / `[P6.x]` / `[P7]` / `[P7.x]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで、`[P7]` は Phase 7 (Connectors Wave 2、Slack + Microsoft 365 + Box) までで merge 済 (2026-05-17)。`[P6.x]` は Phase 6 完了後の継続作業 (`llama.cpp` direct binding / proposal scoring / `links` projection 本実装 / multi-machine sync 等)、`[P7.x]` は Phase 7 完了後の継続作業 (additional connectors / common OAuth helper refactor / connector observability 等)、`[future]` は Phase 8 (Knowledge graph、epic #128) 以降。
+各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P5+8]` / `[P6]` / `[P6+8]` / `[P6.x]` / `[P7]` / `[P7.x]` / `[P8]` / `[P8.x]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで、`[P7]` は Phase 7 (Connectors Wave 2、Slack + Microsoft 365 + Box) で、`[P8]` は Phase 8 (Knowledge graph layer、ADR-0017 + `links` projection + 4 自動抽出 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration) で merge 済 (2026-05-17)。複合 tag (例: `[P5+8]` / `[P6+8]`) は当該 Phase で初出 + Phase 8 で `--expand-graph` 拡張等が入った module を示す。`[P6.x]` は Phase 6 完了後の継続作業 (`llama.cpp` direct binding / proposal scoring 等)、`[P7.x]` は Phase 7 完了後の継続作業 (additional connectors / common OAuth helper refactor / connector observability 等)、`[P8.x]` は Phase 8 完了後の継続作業 (connector-side automatic `SourceReferenced` 発行 / graph visualisation web UI / soft-delete 検討 等)、`[future]` は Phase 9 (multi-machine sync 等) 以降。
 
 ```text
 src/opshub/
@@ -94,12 +94,14 @@ src/opshub/
 │   ├── projections.py              # rebuild [P1]
 │   ├── embeddings.py               # rebuild / drain / status / find-duplicates [P1+2+3+4+5]
 │   ├── recall.py                   # semantic search [P1+2+3+4]
-│   ├── brief.py                    # LLM-backed briefing CLI [P5]
-│   ├── propose.py                  # LLM-backed proposal CLI (generate / list / apply / reject) [P6]
-│   ├── _wiring.py                  # 内部 helper: service/projection の組み立て (briefing / proposal / auto-embed hook 含む) [P1+2+5+6]
+│   ├── brief.py                    # LLM-backed briefing CLI (`--expand-graph` Phase 8 で追加) [P5+8]
+│   ├── propose.py                  # LLM-backed proposal CLI (generate / list / apply / reject、`--expand-graph` Phase 8 で追加) [P6+8]
+│   ├── link.py                     # Manual link CRUD (add / remove / list) [P8]
+│   ├── graph.py                    # Graph traversal queries (related / trace / expand、--format md/json/dot) [P8]
+│   ├── _wiring.py                  # 内部 helper: service/projection の組み立て (briefing / proposal / auto-embed hook / link service 含む) [P1+2+5+6+8]
 │   ├── _task_list.py               # 内部 helper: task list 共通フォーマッタ [P1]
 │   ├── _actor.py                   # 内部 helper: actor / work_session_id 解決 [P1+2]
-│   ├── _render.py                  # 内部 helper: 汎用 table/json/md renderer + briefing / proposal renderer [P1+2+5+6]
+│   ├── _render.py                  # 内部 helper: 汎用 table/json/md renderer + briefing / proposal / link list / link paths / graph subset renderer (md / json / dot) [P1+2+5+6+8]
 │   ├── _inbox_list.py              # 内部 helper: inbox list 共通フォーマッタ [P1+2]
 │   ├── _decision_list.py           # 内部 helper: decision list 共通フォーマッタ [P1+2]
 │   ├── _handoff_render.py          # 内部 helper: handoff list 共通フォーマッタ [P1+2]
@@ -135,7 +137,8 @@ src/opshub/
 │   │   ├── decision.py             # [P1+2]
 │   │   ├── coordination.py         # work_session / agent_run / lock [P1+2]
 │   │   ├── handoff.py              # [P1+2]
-│   │   ├── source.py               # SourceObserved / SourceReferenced [P1+2+3]
+│   │   ├── source.py               # SourceObserved / SourceReferenced (Phase 8 で `SourceReferenced` consumer 第一級化) [P1+2+3+8]
+│   │   ├── link.py                 # LinkCreated / LinkDeleted (Phase8Event、manual link CRUD) [P8]
 │   │   ├── connector.py            # ConnectorSyncStarted / Completed / Failed [P1+2+3]
 │   │   ├── file_ingest.py          # FileIngested [P1+2+3]
 │   │   ├── embedding.py            # TextEmbedded / EmbeddingRebuildRequested / EmbeddingFailed [P1+2+3+4]
@@ -160,14 +163,17 @@ src/opshub/
 │   ├── embedding_service.py        # CLI-driven embed pending entities + `embed_one_if_pending` (P5 で sanitise extract + auto-embed hook 用 single-row API 追加) [P1+2+3+4+5]
 │   ├── recall_service.py           # vector + SQL filter hybrid search [P1+2+3+4]
 │   ├── duplicate_service.py        # offline near-duplicate scan [P1+2+3+4]
-│   ├── briefings/                  # BriefingService + prompts (ADR-0015) [P5]
+│   ├── briefings/                  # BriefingService + prompts (ADR-0015、Phase 8 で `--expand-graph` 拡張) [P5+8]
 │   │   ├── __init__.py             # [P5]
 │   │   ├── prompts.py              # SYSTEM_PROMPT / USER_PROMPT_TEMPLATE / render_user_prompt [P5]
-│   │   └── service.py              # BriefingService.generate(topic, ...) [P5]
-│   ├── proposals/                  # ProposalService + prompts (ADR-0016) [P6]
+│   │   └── service.py              # BriefingService.generate(topic, ...) (Phase 8 で `expand_graph: bool = False` parameter 追加) [P5+8]
+│   ├── proposals/                  # ProposalService + prompts (ADR-0016、Phase 8 で `--expand-graph` 拡張) [P6+8]
 │   │   ├── __init__.py             # [P6]
 │   │   ├── prompts.py              # SYSTEM_PROMPT / render_user_prompt (briefing-seed + delimiter wrap) [P6]
-│   │   └── service.py              # ProposalService.generate / apply / reject [P6]
+│   │   └── service.py              # ProposalService.generate / apply / reject (Phase 8 で `expand_graph: bool = False` parameter 追加) [P6+8]
+│   ├── links/                      # LinkService + traversal (related / trace / expand) + writer (create / delete) (ADR-0017) [P8]
+│   │   ├── __init__.py             # [P8]
+│   │   └── service.py              # LinkService: read-only traversal + manual link CRUD writer methods [P8]
 │   ├── auto_embed_hook.py          # post-commit projector hook for opt-in auto-embed [P5]
 │   └── event_hook.py               # EventHook Protocol (post-commit fan-out) [P5]
 ├── projections/                    # event → projection reducer
@@ -186,7 +192,7 @@ src/opshub/
 │   ├── ingested_files.py           # workspace file ingest の content_hash 追跡 [P1+2+3]
 │   ├── briefings.py                # LLM briefing 結果 (markdown + source_refs + cost trace、Phase 5 で実装済) [P5]
 │   ├── proposals.py                # LLM proposal candidates + per-candidate state (pending/applied/rejected、ADR-0016) [P6]
-│   └── links.py                    # entity 間 graph 関係 [P6.x]
+│   └── links.py                    # entity 間 graph 関係 (LinksProjector / `links_table` / `LINK_TYPES_MVP`、migration 0016、ADR-0017) [P8]
 ├── connectors/                     # [P1+2+3]
 │   ├── __init__.py                 # discover_connectors / register_connector [P1+2+3]
 │   ├── base.py                     # Connector Protocol + SyncResult [P1+2+3]
@@ -242,9 +248,9 @@ src/opshub/
 │   ├── openai_client.py            # OpenAILLMClient (gpt-4o-mini default、Phase 6 で tools= structured output 拡張) [P5+6]
 │   ├── ollama_client.py            # OllamaLLMClient (local daemon、OpenAI 互換 endpoint、ADR-0016 §決定 (h)) [P6]
 │   └── factory.py                  # build_llm_client + NoOpLLMClient (Phase 6 で `ollama` branch + NoOp.complete_structured 追加) [P5+6]
-├── graph/                          # entity 間 link [Phase 4 以降で検討]
-│   ├── links.py
-│   └── queries.py
+# graph/ サブパッケージは新設せず、Phase 8 では `projections/links.py` + `services/links/`
+# + `cli/link.py` + `cli/graph.py` の組み合わせで Knowledge graph layer を提供する。
+# ADR-0017 §決定 (a) の単一 `links` table + LinkService traversal で完結。
 ├── runtime/                        # 現時点で計画なし (将来検討、`services/` に統合する案あり)
 │   ├── locks.py
 │   ├── work_session.py

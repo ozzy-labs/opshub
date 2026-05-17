@@ -84,7 +84,7 @@ CI でこの不変条件を検証する。
 | 5 | Briefing layer: ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed (補助) | ✅ Complete (2026-05-17) |
 | 6 | Action loop layer: ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須) | ✅ Complete (2026-05-17) |
 | 7 | Connectors Wave 2: Slack + Microsoft 365 + Box (3 SaaS connector を Phase 3 framework + ADR-0010 + ADR-0014 + ADR-0005 上で実装、epic #113) | ✅ Complete (2026-05-17) |
-| 8 | Knowledge graph (epic #128、planned) | Planned |
+| 8 | Knowledge graph layer: ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 (`ProposalApplied` / `BriefingGenerated.source_refs` / `ProposalRequested.briefing_id` / `SourceReferenced`) + manual link CRUD (`LinkCreated` / `LinkDeleted` events) + `LinkService` traversal (`related` / `trace` / `expand`) + `opshub link` + `opshub graph` CLI + `--expand-graph` integration (epic #128) | ✅ Complete (2026-05-17) |
 
 各 phase で価値検証してから次へ進む。Phase をスキップしない。
 
@@ -96,7 +96,7 @@ Python 3.13+ / uv / Typer / SQLAlchemy Core / Pydantic v2 を採用。ただし 
 
 ## Open Questions
 
-> Phase 7 完了時点で残る Open Question は §5 (Multi-machine sync) のみ — Phase 8 (Knowledge graph、epic #128) 後の Phase 9 候補。
+> Phase 8 完了時点で残る Open Question は §5 (Multi-machine sync) のみ — Phase 9 候補で着手予定。
 > ADR-0015 §決定 (a) (Local LLM deferred) は Phase 6 A4 (Ollama) で closeout され、ADR-0016 §決定 (h) として記録された。
 
 検討中の項目 (本ドキュメントの今後の更新対象、番号は旧 Open Q list を継承):
