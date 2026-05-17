@@ -52,7 +52,6 @@ PR #66 local) NEVER include the API key in their exception messages.
 
 from __future__ import annotations
 
-import re
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -60,6 +59,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import Table, select, text
 
 from opshub.core.ids import new_ulid
+from opshub.core.sanitise import sanitise_error_message
 from opshub.core.time import now_utc
 from opshub.domain.events.embedding import (
     EmbeddingFailed,
@@ -93,13 +93,6 @@ _DEFAULT_ACTOR = "cli:embeddings_rebuild"
 # :class:`EmbeddingFailed` event. The event's Pydantic ``Field`` caps at
 # 2000; we truncate first so a giant traceback never trips validation.
 _MAX_ERROR_MESSAGE_LENGTH = 2000
-
-
-# Token-shape regexes used by :meth:`EmbeddingService._sanitise_error`.
-# Kept module-level so they compile once.
-_SK_KEY_RE = re.compile(r"sk-[A-Za-z0-9]{20,}")
-_GHP_KEY_RE = re.compile(r"ghp_[A-Za-z0-9]{30,}")
-_BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9._~+/-]{20,}=*")
 
 
 @dataclass(frozen=True, slots=True)
@@ -491,17 +484,17 @@ class EmbeddingService:
         API key in its exception messages (PR #65 / #66 honour this).
         This pass is a coarse net for the common shapes (``sk-...``,
         ``ghp_...``, ``Bearer ...``) and not a comprehensive PII
-        scrubber.
+        scrubber. The redaction logic itself lives in
+        :func:`opshub.core.sanitise.sanitise_error_message` so the
+        Phase 5 :class:`~opshub.services.briefing_service.BriefingService`
+        (step B3) can share the exact same regex set.
 
         Truncation happens **before** the regex pass so a giant log
         body cannot trip the :class:`EmbeddingFailed.error_message`
         2000-char :class:`pydantic.Field` cap before redaction runs.
         """
         truncated = message[:_MAX_ERROR_MESSAGE_LENGTH]
-        truncated = _SK_KEY_RE.sub("sk-***", truncated)
-        truncated = _GHP_KEY_RE.sub("ghp_***", truncated)
-        truncated = _BEARER_RE.sub("Bearer ***", truncated)
-        return truncated
+        return sanitise_error_message(truncated)
 
     @contextmanager
     def _open_uow(self) -> Generator[Connection | None]:
