@@ -1,0 +1,128 @@
+# Tag-triggered PyPI release via Trusted Publishers (OIDC).
+#
+# This workflow publishes the ``opshub`` package to PyPI whenever a
+# SemVer tag matching ``v*.*.*`` is pushed. Authentication uses the
+# PyPI Trusted Publishers flow (OIDC) -- no static ``PYPI_TOKEN`` /
+# ``TWINE_PASSWORD`` lives anywhere in this repository. This matches
+# the project's npm Trusted Publishers stance (CLAUDE.md): static
+# long-lived registry tokens are legacy / forbidden for new releases.
+#
+# Prerequisites (one-time, outside this workflow):
+#
+#   1. A Trusted Publisher must be registered on PyPI for the
+#      ``opshub`` project at
+#      https://pypi.org/manage/project/opshub/settings/publishing/
+#      with these fields:
+#        - Owner: ozzy-labs
+#        - Repository: opshub
+#        - Workflow filename: release.yaml
+#        - Environment name: pypi
+#      See ``docs/RELEASE_RUNBOOK.md`` (sibling PR) for the click-path.
+#
+#   2. A GitHub Environment named ``pypi`` must exist in repo Settings
+#      -> Environments. The environment name in this workflow's
+#      ``publish`` job must match exactly -- PyPI uses it as part of
+#      the Trusted Publisher matching key.
+#
+#   3. The git tag must match ``__version__`` in ``src/opshub/__init__.py``
+#      exactly (with the leading ``v`` stripped). The ``build`` job
+#      enforces this and fails fast on mismatch so a typo cannot reach
+#      the publish step.
+#
+# References:
+#   - https://docs.pypi.org/trusted-publishers/
+#   - knowledge MCP: standards/npm-trusted-publishers (equivalent npm shape)
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# Default to read-only for the workflow; the publish job re-grants
+# ``id-token: write`` at job scope (least privilege per the OIDC docs).
+permissions:
+  contents: read
+
+concurrency:
+  # Releases are tag-scoped; serialize per-tag to keep PyPI uploads
+  # idempotent if a tag is force-pushed (rare but possible).
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Full history so changelog / version-derivation tools can
+          # walk back to the previous tag if needed.
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          # Pin to the version in .mise.toml so local dev and CI share
+          # the exact uv used to resolve uv.lock (mirrors ci.yaml).
+          version: "0.11.10"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install project (locked)
+        # ``--no-dev`` keeps the build env minimal; we only need the
+        # core package importable so the version-vs-tag check can read
+        # ``opshub.__version__``.
+        run: uv sync --locked --no-dev
+
+      - name: Verify tag matches package version
+        # Fail fast: a typo in the tag (e.g. ``v0.1.0`` vs package
+        # ``0.1.1``) must not produce a published artifact whose
+        # filename disagrees with the tag.
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(uv run python -c 'from opshub import __version__; print(__version__)')"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::tag v${tag_version} does not match package version ${pkg_version}"
+            exit 1
+          fi
+          echo "Tag ${GITHUB_REF_NAME} matches package version ${pkg_version}."
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/opshub/
+    permissions:
+      # OIDC token issuance for PyPI Trusted Publishers. Without this
+      # the ``pypa/gh-action-pypi-publish`` step has no way to
+      # authenticate -- there is intentionally no fallback token here.
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        # OIDC auth is implicit when ``id-token: write`` is set and the
+        # job's environment name matches the PyPI Trusted Publisher
+        # configuration. No ``password:`` / ``user:`` inputs --
+        # supplying them would silently fall back to legacy token auth.
+        uses: pypa/gh-action-pypi-publish@release/v1
