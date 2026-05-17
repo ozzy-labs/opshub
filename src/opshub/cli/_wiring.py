@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         HandoffService,
         InboxService,
         LockService,
+        SourceService,
         TaskService,
         WorkSessionService,
     )
@@ -48,6 +49,7 @@ __all__ = [
     "build_inbox_service",
     "build_lock_service",
     "build_session_service",
+    "build_source_service",
     "build_task_service",
 ]
 
@@ -165,6 +167,40 @@ def build_agent_run_service(actor: str) -> AgentRunService:
     return AgentRunService(
         store=SqlAlchemyEventStore(engine),
         projector=_PersistingProjector(),
+        uow_factory=engine.begin,
+        actor=actor,
+        engine=engine,
+    )
+
+
+def build_source_service(actor: str = "connector:source") -> SourceService:
+    """Wire a :class:`SourceService` against the configured database.
+
+    The :class:`InboxService` shares the same engine, projector
+    instance class, and ``uow_factory`` so :class:`SourceObserved` and
+    :class:`ItemEnqueued` commit in a single transaction (see
+    :mod:`opshub.services.source_service` module docstring for the
+    atomic shape rationale). The same ``actor`` is threaded into both
+    services so source-driven inbox rows carry connector provenance
+    identical to the source event.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import InboxService, SourceService
+
+    engine = build_engine()
+    store = SqlAlchemyEventStore(engine)
+    projector = _PersistingProjector()
+    inbox = InboxService(
+        store=store,
+        projector=projector,
+        uow_factory=engine.begin,
+        actor=actor,
+    )
+    return SourceService(
+        store=store,
+        projector=projector,
+        inbox_service=inbox,
         uow_factory=engine.begin,
         actor=actor,
         engine=engine,

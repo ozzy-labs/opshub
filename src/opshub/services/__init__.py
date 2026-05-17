@@ -18,6 +18,7 @@ from opshub.services.handoff_service import HandoffRow, HandoffService
 from opshub.services.inbox_service import InboxService
 from opshub.services.lock_service import LockRow, LockService
 from opshub.services.projector import NoOpProjector, Projector
+from opshub.services.source_service import SourceService
 from opshub.services.task_service import TaskService
 from opshub.services.work_session_service import WorkSessionRow, WorkSessionService
 
@@ -34,6 +35,7 @@ __all__ = [
     "LockService",
     "NoOpProjector",
     "Projector",
+    "SourceService",
     "TaskService",
     "WorkSessionRow",
     "WorkSessionService",
