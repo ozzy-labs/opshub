@@ -36,6 +36,7 @@ from opshub.projections.ingested_files import (
     IngestedFilesProjection,
     ingested_files_table,
 )
+from opshub.projections.links import LINK_TYPES_MVP, LinksProjector, links_table
 from opshub.projections.locks import LocksProjection, locks_table
 from opshub.projections.proposals import ProposalsProjection, proposals_table
 from opshub.projections.rebuild import rebuild_all
@@ -45,6 +46,7 @@ from opshub.projections.tasks import TasksProjection, tasks_table
 from opshub.projections.work_sessions import WorkSessionsProjection, work_sessions_table
 
 __all__ = [
+    "LINK_TYPES_MVP",
     "AgentRunsProjection",
     "BriefingsProjection",
     "ConnectorCursorsProjection",
@@ -52,6 +54,7 @@ __all__ = [
     "HandoffsProjection",
     "InboxProjection",
     "IngestedFilesProjection",
+    "LinksProjector",
     "LocksProjection",
     "Projection",
     "ProposalsProjection",
@@ -66,6 +69,7 @@ __all__ = [
     "handoffs_table",
     "inbox_items_table",
     "ingested_files_table",
+    "links_table",
     "locks_table",
     "proposals_table",
     "rebuild_all",
