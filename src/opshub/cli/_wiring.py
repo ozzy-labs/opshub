@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from opshub.services import (
         AgentRunService,
         DecisionService,
+        EmbeddingService,
         FileIngestService,
         HandoffService,
         InboxService,
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
 __all__ = [
     "build_agent_run_service",
     "build_decision_service",
+    "build_embedding_service",
     "build_engine",
     "build_file_ingest_service",
     "build_handoff_service",
@@ -243,6 +245,39 @@ def build_file_ingest_service(actor: str = "cli:workspace_ingest") -> FileIngest
         store=store,
         projector=projector,
         inbox_service=inbox,
+        engine=engine,
+        uow_factory=engine.begin,
+        actor=actor,
+    )
+
+
+def build_embedding_service(actor: str = "cli:embeddings_rebuild") -> EmbeddingService:
+    """Wire an :class:`EmbeddingService` for the configured engine + backend.
+
+    Resolves the active :class:`~opshub.vectors.embedder.Embedder` +
+    :class:`~opshub.vectors.store.VectorStore` via the Phase 4 factory
+    (PR #68), then constructs the service with the shared engine +
+    ``engine.begin`` UoW. The caller is the
+    ``opshub embeddings rebuild`` CLI subcommand (PR B3); resolving the
+    embedder lazily here means config changes (backend switch) take
+    effect on the next invocation without restarting any long-lived
+    process.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001). The factory
+    # itself defers the heavy embedder import to the branch the
+    # operator selected (see :mod:`opshub.vectors.factory`).
+    from opshub.core.config import OpsHubSettings
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import EmbeddingService
+    from opshub.vectors.factory import build_embedder, build_vector_store
+
+    settings = OpsHubSettings()
+    engine = build_engine()
+    return EmbeddingService(
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(),
+        embedder=build_embedder(settings),
+        vector_store=build_vector_store(settings, engine),
         engine=engine,
         uow_factory=engine.begin,
         actor=actor,
