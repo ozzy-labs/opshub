@@ -122,7 +122,14 @@ def test_events_table_columns(tmp_path: Path) -> None:
 
 
 def test_embeddings_unique_constraint(tmp_path: Path) -> None:
-    """Inserting two rows with the same (entity, model) tuple raises IntegrityError."""
+    """Inserting two rows with the same (entity, model) tuple raises IntegrityError.
+
+    Note: Phase 4 migration 0013 drops the ``vector BLOB`` column from
+    ``embeddings`` (vectors moved into ``embeddings_vec_<backend>`` vec0
+    virtual tables). The UNIQUE constraint on
+    ``(entity_type, entity_id, model_id, model_version)`` is unchanged
+    so we still drive the same scenario, just without the BLOB column.
+    """
     db_path = tmp_path / "embeddings.sqlite"
     cfg = _make_alembic_config(db_path)
     command.upgrade(cfg, "head")
@@ -136,15 +143,14 @@ def test_embeddings_unique_constraint(tmp_path: Path) -> None:
                 text(
                     "INSERT INTO embeddings "
                     "(entity_type, entity_id, model_id, model_version, "
-                    " vector, dim, created_at) "
-                    "VALUES (:et, :eid, :mid, :mv, :v, :d, :ts)"
+                    " dim, created_at) "
+                    "VALUES (:et, :eid, :mid, :mv, :d, :ts)"
                 ),
                 {
                     "et": "task",
                     "eid": "01H000000000000000000000A",
                     "mid": "all-MiniLM-L6-v2",
                     "mv": "1.0",
-                    "v": b"\x00\x00\x00\x00",
                     "d": 1,
                     "ts": now,
                 },
@@ -158,15 +164,14 @@ def test_embeddings_unique_constraint(tmp_path: Path) -> None:
                     text(
                         "INSERT INTO embeddings "
                         "(entity_type, entity_id, model_id, model_version, "
-                        " vector, dim, created_at) "
-                        "VALUES (:et, :eid, :mid, :mv, :v, :d, :ts)"
+                        " dim, created_at) "
+                        "VALUES (:et, :eid, :mid, :mv, :d, :ts)"
                     ),
                     {
                         "et": "task",
                         "eid": "01H000000000000000000000A",
                         "mid": "all-MiniLM-L6-v2",
                         "mv": "1.0",
-                        "v": b"\x11\x11\x11\x11",
                         "d": 1,
                         "ts": now,
                     },

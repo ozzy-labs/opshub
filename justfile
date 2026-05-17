@@ -55,8 +55,13 @@ opshub *args:
 # by ``opshub.connectors.github.api`` (Phase 3 step B2). The cold-start
 # guard test still asserts that ``httpx`` does NOT leak onto the
 # ``opshub --help`` path (see ``tests/integration/test_cli_imports.py``).
+#
+# ``vector`` is included so Phase 4 migration 0013 (CREATE VIRTUAL TABLE
+# ... USING vec0) can run during the migration integration tests. The
+# extras pulls in ``sqlite-vec`` + ``numpy``; the engine's connect
+# listener (``opshub.db.engine``) loads sqlite-vec automatically.
 ci:
-    uv sync --locked --extra dev --extra connectors-github
+    uv sync --locked --extra dev --extra connectors-github --extra vector
     uv run ruff check
     uv run ruff format --check
     uv run pyright

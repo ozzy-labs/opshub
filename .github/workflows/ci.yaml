@@ -37,7 +37,13 @@ jobs:
         # cold-start guard (``tests/integration/test_cli_imports.py``)
         # still asserts that connector code never reaches the
         # ``opshub --help`` path.
-        run: uv sync --locked --extra dev --extra connectors-github
+        #
+        # ``vector`` is included so Phase 4 migration 0013 (CREATE
+        # VIRTUAL TABLE ... USING vec0) can run inside the migration
+        # integration tests — sqlite-vec must be importable at runtime
+        # for ``opshub.db.engine``'s connect listener to load the
+        # extension before the migration issues the DDL.
+        run: uv sync --locked --extra dev --extra connectors-github --extra vector
 
       - name: Ruff (lint)
         run: uv run ruff check
