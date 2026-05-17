@@ -180,3 +180,75 @@ def embeddings_status(
         Column("pending", lambda r: r["pending"], md_align="right"),
     ]
     typer.echo(dispatch(fmt, columns, rows))
+
+
+@embeddings_app.command("find-duplicates")
+def embeddings_find_duplicates(
+    threshold: float = typer.Option(
+        0.92,
+        "--threshold",
+        "-t",
+        help="Minimum cosine similarity (0..1) to emit as a duplicate pair.",
+    ),
+    entity_type: str = typer.Option(
+        "source",
+        "--entity-type",
+        "-e",
+        help="Entity family to scan: task / decision / inbox_item / source.",
+    ),
+    limit: int = typer.Option(
+        100,
+        "--limit",
+        "-n",
+        help="Cap on returned pairs (sorted highest-similarity first).",
+    ),
+    fmt: str = typer.Option(
+        "table",
+        "--format",
+        "-f",
+        help="Output format: table / json / md.",
+    ),
+) -> None:
+    """Find near-duplicate pairs above the similarity threshold (Phase 4 step C3).
+
+    Scans the active backend's embeddings for entity pairs whose
+    cosine similarity exceeds ``--threshold``. Self-matches and
+    reverse-pairs are de-duplicated; results are sorted highest
+    similarity first. See :class:`opshub.services.DuplicateService`
+    for the conversion from sqlite-vec L2 distance to cosine
+    similarity (the formula assumes unit-normalised vectors, which
+    every supported backend produces — ADR-0012 §1).
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.cli._render import Column, dispatch, id_prefix, truncate
+    from opshub.cli._wiring import build_duplicate_service
+
+    service = build_duplicate_service()
+    pairs = service.find_duplicates(
+        entity_type=entity_type,
+        threshold=threshold,
+        limit=limit,
+    )
+    if not pairs:
+        typer.echo(f"no duplicates above {threshold:.2f} (entity_type={entity_type})")
+        return
+
+    columns = [
+        Column(
+            "Entity A",
+            lambda p: f"{id_prefix(p.entity_id_a)}: {truncate(p.text_a, 40)}",
+            width=52,
+        ),
+        Column(
+            "Entity B",
+            lambda p: f"{id_prefix(p.entity_id_b)}: {truncate(p.text_b, 40)}",
+            width=52,
+        ),
+        Column(
+            "Similarity",
+            lambda p: f"{p.similarity:.3f}",
+            width=10,
+            md_align="right",
+        ),
+    ]
+    typer.echo(dispatch(fmt, columns, pairs))
