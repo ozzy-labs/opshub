@@ -37,6 +37,7 @@ if TYPE_CHECKING:
         HandoffService,
         InboxService,
         LockService,
+        RecallService,
         SourceService,
         TaskService,
         WorkSessionService,
@@ -52,6 +53,7 @@ __all__ = [
     "build_handoff_service",
     "build_inbox_service",
     "build_lock_service",
+    "build_recall_service",
     "build_session_service",
     "build_source_service",
     "build_task_service",
@@ -281,6 +283,36 @@ def build_embedding_service(actor: str = "cli:embeddings_rebuild") -> EmbeddingS
         engine=engine,
         uow_factory=engine.begin,
         actor=actor,
+    )
+
+
+def build_recall_service() -> RecallService:
+    """Wire a :class:`RecallService` for the active backend.
+
+    Resolves the :class:`~opshub.vectors.embedder.Embedder` +
+    :class:`~opshub.vectors.store.VectorStore` via the Phase 4 factory
+    (PR #68), then constructs the service with the shared engine. No
+    ``actor`` parameter — recall is a read-only query path, no events
+    are appended.
+
+    Mirrors :func:`build_embedding_service` for backend resolution so
+    a config change (backend switch) takes effect on the next
+    ``opshub recall`` invocation without restarting any long-lived
+    process.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001). The factory
+    # itself defers the heavy embedder import to the branch the
+    # operator selected (see :mod:`opshub.vectors.factory`).
+    from opshub.core.config import OpsHubSettings
+    from opshub.services import RecallService
+    from opshub.vectors.factory import build_embedder, build_vector_store
+
+    settings = OpsHubSettings()
+    engine = build_engine()
+    return RecallService(
+        embedder=build_embedder(settings),
+        vector_store=build_vector_store(settings, engine),
+        engine=engine,
     )
 
 
