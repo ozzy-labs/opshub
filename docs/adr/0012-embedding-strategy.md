@@ -22,27 +22,9 @@ OpsHub の embedding 層を **Pluggable Embedder + Pluggable VectorStore** と�
 
 ### 1. 抽象境界 (Phase 1 で定義)
 
-```python
-# src/opshub/vectors/embedder.py
-from typing import Protocol
-import numpy as np
+`Embedder` / `VectorStore` Protocol を `src/opshub/vectors/embedder.py` / `src/opshub/vectors/store.py` に定義する。Canonical signature は `tests/unit/vectors/test_protocol_freeze.py` で pin される (Phase 4 で freeze、Phase 4.x の `recall_by_rowid` 追加で再 freeze)。Protocol 自体は stdlib 型 (`tuple[float, ...]`, `dataclass`) のみで構成し、numpy / sqlite-vec 等の具体依存は Protocol 境界に出さない (具象実装内に閉じる)。
 
-class Embedder(Protocol):
-    model_id: str          # 例: "bge-m3" / "openai:text-embedding-3-small"
-    model_version: str     # 例: "v1" / "2024-10-01"
-    dimensions: int
-
-    def embed(self, texts: list[str]) -> np.ndarray: ...
-    # 戻り値 shape: (len(texts), dimensions), dtype: float32
-
-# src/opshub/vectors/store.py
-class VectorStore(Protocol):
-    def upsert(self, entity_type: str, entity_id: str,
-               vector: np.ndarray, model_id: str, model_version: str) -> None: ...
-    def query(self, entity_type: str, vector: np.ndarray,
-              k: int, filter_sql: str | None = None) -> list[tuple[str, float]]: ...
-    def delete(self, entity_type: str, entity_id: str) -> None: ...
-```
+実装ファイルが `Embedder.embed` / `Embedder.dim` / `VectorStore.upsert` / `VectorStore.recall` / `VectorStore.recall_by_rowid` 等の正確な signature を保つため、本 ADR では illustrative code block を載せず canonical 実装側を参照する方針とする (ADR が API reference 化して drift するのを避ける)。
 
 具象実装の想定 (Phase 4):
 
@@ -274,6 +256,10 @@ Phase 4 sub-issue A-D (PR #63-#74) で 3 backend (local sentence-transformers, O
 - Backend ごと dim 別 vec0 table (`embeddings_vec_local` 1024 / `embeddings_vec_openai` 1536 / `embeddings_vec_voyage` 1024) で複数 backend 並列保持の余地を schema レベルで確保 (Phase 5+ で実 routing 配線)
 
 Event-driven 自動 embed (projector hook) / briefing 自動生成 (LLM 呼び出し) / `links` projection 本実装は Phase 5 以降の outlook (`docs/phase-4-plan.md` §6)。
+
+### Phase 4.x follow-up (PR #75) validation
+
+Phase 4 MVP の `recall(query, *, k, entity_types=None)` だけでは「rowid を起点にした類似検索」が表現できず、Phase 5+ の duplicate detection / 関連 entity 推薦で必要になることが判明。PR #75 で `VectorStore` Protocol に `recall_by_rowid(rowid: int, *, k: int, entity_types: tuple[str, ...] | None = None) -> list[tuple[int, float]]` を追加し、`tests/unit/vectors/test_protocol_freeze.py` で再 freeze。`SqliteVecStore` の具象実装と `services/embedding_service.py::find_duplicates` 経路が同 method を経由することを `tests/integration/test_phase4_lifecycle.py::test_find_duplicates_e2e` で pin。Protocol 拡張のみで signature 変更は発生せず、本 ADR §1 (抽象境界) と整合。
 
 ## 関連
 
