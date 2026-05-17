@@ -33,8 +33,24 @@ from opshub.core.errors import OpsHubError
 from opshub.db.engine import create_engine_for_sqlite
 from opshub.db.event_store import SqlAlchemyEventStore
 from opshub.db.schema import events_table
-from opshub.domain.events import TaskActivated, TaskCompleted, TaskCreated
-from opshub.projections import TasksProjection, rebuild_all, tasks_table
+from opshub.domain.events import (
+    ConnectorSyncCompleted,
+    ConnectorSyncFailed,
+    ConnectorSyncStarted,
+    SourceObserved,
+    SourceReferenced,
+    TaskActivated,
+    TaskCompleted,
+    TaskCreated,
+)
+from opshub.projections import (
+    TasksProjection,
+    connector_cursors_table,
+    rebuild_all,
+    sources_table,
+    tasks_table,
+)
+from opshub.projections.registry import all_projections
 from opshub.services.projector import NoOpProjector
 from opshub.services.task_service import TaskService
 
@@ -353,3 +369,228 @@ def test_rebuild_all_aborts_and_rolls_back_on_unknown_event_type(
         "rebuild_all must rollback its transaction on unknown event_type; "
         "projection state diverged from the pre-rebuild snapshot"
     )
+
+
+# ---- Phase 3 projections end-to-end ---------------------------------------
+
+
+def test_rebuild_all_replays_phase_3_source_and_connector_events(
+    migrated_engine: Engine,
+) -> None:
+    """Phase 3 source + connector events flow through ``rebuild_all``.
+
+    This pins two things at once:
+
+    1. The :func:`all_projections` registry actually wires
+       :class:`SourcesProjection` + :class:`ConnectorCursorsProjection`
+       in — if either is missing from the registry, the corresponding
+       table is empty after the rebuild.
+    2. The reducers' upsert semantics survive a full rewind+replay:
+       re-observation of the same ``(connector_name, external_id)``
+       still collapses to a single row, and the started/completed
+       bracket still leaves ``last_synced_at`` pinned to the start.
+
+    We bypass the service layer (no source / connector service exists
+    yet — those land in steps A4 / A5) and append events directly via
+    :class:`SqlAlchemyEventStore`.
+    """
+    store = SqlAlchemyEventStore(migrated_engine)
+
+    # Two observations of the same external item — second observation
+    # must update the row in place.
+    source_id = "01HA0SRC0000000000000000AA"
+    t_obs1 = datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC)
+    t_obs2 = t_obs1 + timedelta(hours=1)
+    obs1 = SourceObserved(
+        aggregate_id=source_id,
+        occurred_at=t_obs1,
+        recorded_at=t_obs1,
+        actor="connector:github",
+        connector_name="github",
+        external_id="owner/repo#1",
+        source_type="issue",
+        title="original title",
+        url="https://example.com/v1",
+        summary="v1",
+    )
+    obs2 = SourceObserved(
+        aggregate_id="01HA0SRC0000000000000000BB",
+        occurred_at=t_obs2,
+        recorded_at=t_obs2,
+        actor="connector:github",
+        connector_name="github",
+        external_id="owner/repo#1",
+        source_type="issue",
+        title="updated title",
+        url="https://example.com/v2",
+        summary="v2",
+    )
+
+    # A SourceReferenced event must be a no-op for SourcesProjection
+    # (the row count for owner/repo#1 stays at one regardless).
+    referenced = SourceReferenced(
+        aggregate_id=source_id,
+        occurred_at=t_obs2,
+        recorded_at=t_obs2,
+        actor="test",
+        entity_type="task",
+        entity_id="01HA0TASKREFERENCING000001",
+    )
+
+    # A sync run for the github connector: started → completed.
+    t_start = datetime(2026, 5, 17, 10, 0, 0, tzinfo=UTC)
+    t_end = t_start + timedelta(minutes=10)
+    started = ConnectorSyncStarted(
+        aggregate_id="01HA0SYNC0000000000000000A",
+        occurred_at=t_start,
+        recorded_at=t_start,
+        actor="connector:github",
+        connector_name="github",
+        cursor_value="2026-05-17T08:00:00Z",
+    )
+    completed = ConnectorSyncCompleted(
+        aggregate_id=started.aggregate_id,
+        occurred_at=t_end,
+        recorded_at=t_end,
+        actor="connector:github",
+        connector_name="github",
+        cursor_value="2026-05-17T09:59:59Z",
+        observed_count=2,
+    )
+
+    # A failed sync run for a *different* connector must NOT create a
+    # cursor row (no preceding started event for slack).
+    t_fail = t_end + timedelta(minutes=5)
+    failed_slack = ConnectorSyncFailed(
+        aggregate_id="01HA0SYNC0000000000000000B",
+        occurred_at=t_fail,
+        recorded_at=t_fail,
+        actor="connector:slack",
+        connector_name="slack",
+        error_message="auth expired",
+    )
+
+    for event in (obs1, obs2, referenced, started, completed, failed_slack):
+        store.append(event)
+
+    rebuild_all(migrated_engine, store, all_projections())
+
+    # SourcesProjection: one row for owner/repo#1, with first-observation
+    # id + observed_at, latest title / updated_at.
+    with migrated_engine.connect() as conn:
+        source_rows = conn.execute(select(sources_table)).mappings().all()
+    assert len(source_rows) == 1
+    source_row = source_rows[0]
+    assert source_row["id"] == source_id
+    assert source_row["connector_name"] == "github"
+    assert source_row["external_id"] == "owner/repo#1"
+    assert source_row["title"] == "updated title"
+    assert source_row["url"] == "https://example.com/v2"
+    assert source_row["summary"] == "v2"
+    assert source_row["observed_at"] == t_obs1.replace(tzinfo=None)
+    assert source_row["updated_at"] == t_obs2.replace(tzinfo=None)
+
+    # ConnectorCursorsProjection: one row for github, none for slack
+    # (the failed sync did not synthesise a row).
+    with migrated_engine.connect() as conn:
+        cursor_rows = conn.execute(select(connector_cursors_table)).mappings().all()
+    assert len(cursor_rows) == 1
+    cursor_row = cursor_rows[0]
+    assert cursor_row["connector_name"] == "github"
+    # cursor_value advanced to the post-completion token …
+    assert cursor_row["cursor_value"] == "2026-05-17T09:59:59Z"
+    # … updated_at refreshed to completion …
+    assert cursor_row["updated_at"] == t_end.replace(tzinfo=None)
+    # … but last_synced_at stayed pinned to the start of the sync run.
+    assert cursor_row["last_synced_at"] == t_start.replace(tzinfo=None)
+
+
+def test_rebuild_all_phase_3_projections_are_idempotent(
+    migrated_engine: Engine,
+) -> None:
+    """Two consecutive ``rebuild_all`` calls produce the same Phase 3 rows.
+
+    Mirrors the Phase 1 idempotency test, but exercises the new
+    projections. Without :meth:`reset` clearing the upserted rows the
+    second rebuild's ``ON CONFLICT`` clause would still succeed — but
+    ``observed_at`` would shift to the second-call timestamps because
+    ``reset`` is the only thing that purges the prior row identity.
+    """
+    store = SqlAlchemyEventStore(migrated_engine)
+
+    t_obs = datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC)
+    t_start = datetime(2026, 5, 17, 10, 0, 0, tzinfo=UTC)
+    t_end = t_start + timedelta(minutes=10)
+    store.append(
+        SourceObserved(
+            aggregate_id="01HA0SRC0000000000000000CC",
+            occurred_at=t_obs,
+            recorded_at=t_obs,
+            actor="connector:github",
+            connector_name="github",
+            external_id="owner/repo#2",
+            source_type="issue",
+            title="idempotent",
+        )
+    )
+    store.append(
+        ConnectorSyncStarted(
+            aggregate_id="01HA0SYNC0000000000000000C",
+            occurred_at=t_start,
+            recorded_at=t_start,
+            actor="connector:github",
+            connector_name="github",
+            cursor_value=None,
+        )
+    )
+    store.append(
+        ConnectorSyncCompleted(
+            aggregate_id="01HA0SYNC0000000000000000C",
+            occurred_at=t_end,
+            recorded_at=t_end,
+            actor="connector:github",
+            connector_name="github",
+            cursor_value="2026-05-17T09:59:59Z",
+            observed_count=1,
+        )
+    )
+
+    rebuild_all(migrated_engine, store, all_projections())
+    with migrated_engine.connect() as conn:
+        sources_first = [
+            dict(r)
+            for r in conn.execute(select(sources_table).order_by(sources_table.c.id))
+            .mappings()
+            .all()
+        ]
+        cursors_first = [
+            dict(r)
+            for r in conn.execute(
+                select(connector_cursors_table).order_by(connector_cursors_table.c.connector_name)
+            )
+            .mappings()
+            .all()
+        ]
+
+    rebuild_all(migrated_engine, store, all_projections())
+    with migrated_engine.connect() as conn:
+        sources_second = [
+            dict(r)
+            for r in conn.execute(select(sources_table).order_by(sources_table.c.id))
+            .mappings()
+            .all()
+        ]
+        cursors_second = [
+            dict(r)
+            for r in conn.execute(
+                select(connector_cursors_table).order_by(connector_cursors_table.c.connector_name)
+            )
+            .mappings()
+            .all()
+        ]
+
+    assert sources_second == sources_first
+    assert cursors_second == cursors_first
+    # Sanity: each table has exactly one row from the seeded events.
+    assert len(sources_first) == 1
+    assert len(cursors_first) == 1

@@ -24,24 +24,29 @@ one-way dependency rule in ADR-0004).
 
 from opshub.projections.agent_runs import AgentRunsProjection, agent_runs_table
 from opshub.projections.base import Projection
-from opshub.projections.connector_cursors import connector_cursors_table
+from opshub.projections.connector_cursors import (
+    ConnectorCursorsProjection,
+    connector_cursors_table,
+)
 from opshub.projections.decisions import DecisionsProjection, decisions_table
 from opshub.projections.handoffs import HandoffsProjection, handoffs_table
 from opshub.projections.inbox import InboxProjection, inbox_items_table
 from opshub.projections.locks import LocksProjection, locks_table
 from opshub.projections.rebuild import rebuild_all
 from opshub.projections.registry import all_projections
-from opshub.projections.sources import sources_table
+from opshub.projections.sources import SourcesProjection, sources_table
 from opshub.projections.tasks import TasksProjection, tasks_table
 from opshub.projections.work_sessions import WorkSessionsProjection, work_sessions_table
 
 __all__ = [
     "AgentRunsProjection",
+    "ConnectorCursorsProjection",
     "DecisionsProjection",
     "HandoffsProjection",
     "InboxProjection",
     "LocksProjection",
     "Projection",
+    "SourcesProjection",
     "TasksProjection",
     "WorkSessionsProjection",
     "agent_runs_table",
