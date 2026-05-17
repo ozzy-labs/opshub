@@ -66,8 +66,14 @@ opshub *args:
 # the ``anthropic`` SDK and run mocked round-trips. No real API call
 # leaves CI — every SDK touchpoint is patched (see ADR-0015 §決定 + the
 # Phase 4 OpenAI embedder precedent).
+#
+# ``llm-openai`` is included so Phase 5 step A4 tests
+# (``tests/unit/llm/test_openai_client.py``) can import the ``openai``
+# SDK; the tests still mock every network call (``openai.OpenAI`` is
+# patched per-test) so no real chat-completion request leaves the
+# process.
 ci:
-    uv sync --locked --extra dev --extra connectors-github --extra vector --extra llm-anthropic
+    uv sync --locked --extra dev --extra connectors-github --extra vector --extra llm-anthropic --extra llm-openai
     uv run ruff check
     uv run ruff format --check
     uv run pyright

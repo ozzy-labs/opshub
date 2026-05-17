@@ -1881,6 +1881,9 @@ dev = [
 llm-anthropic = [
     { name = "anthropic" },
 ]
+llm-openai = [
+    { name = "openai" },
+]
 local-embedding = [
     { name = "sentence-transformers" },
 ]
@@ -1904,6 +1907,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "numpy", marker = "extra == 'vector'", specifier = ">=2.0" },
     { name = "openai", marker = "extra == 'api-embedding-openai'", specifier = ">=1.40" },
+    { name = "openai", marker = "extra == 'llm-openai'", specifier = ">=1.50" },
     { name = "opshub", extras = ["vector", "local-embedding", "api-embedding-openai", "connectors-github", "connectors-slack", "secrets"], marker = "extra == 'all'" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },
@@ -1922,7 +1926,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "voyageai", marker = "extra == 'api-embedding-voyage'", specifier = ">=0.2" },
 ]
-provides-extras = ["vector", "local-embedding", "api-embedding-openai", "api-embedding-voyage", "llm-anthropic", "connectors-github", "connectors-slack", "connectors-msgraph", "connectors-box", "secrets", "dev", "all"]
+provides-extras = ["vector", "local-embedding", "api-embedding-openai", "api-embedding-voyage", "llm-anthropic", "llm-openai", "connectors-github", "connectors-slack", "connectors-msgraph", "connectors-box", "secrets", "dev", "all"]
 
 [[package]]
 name = "orjson"
