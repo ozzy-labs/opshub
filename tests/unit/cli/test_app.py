@@ -17,7 +17,9 @@ from collections.abc import Generator
 from typing import Any
 
 import pytest
+from typer.testing import CliRunner
 
+from opshub import __version__
 from opshub.cli import app as app_module
 from opshub.core.errors import ConfigError, ConflictError, ValidationError
 
@@ -153,3 +155,75 @@ def test_main_typer_argument_error_still_exits_nonzero(
     """
     code, _, _ = _run_main(monkeypatch, capsys, ["task", "create"])
     assert code == 2
+
+
+# ---------------------------------------------------------------------------
+# Root ``--version`` flag (eager callback wired on ``_root``).
+#
+# Two surface paths produce the version string today:
+#
+#   * ``opshub --version`` — the eager callback added alongside the root
+#     callback. Should fire BEFORE any subcommand parsing and exit 0.
+#   * ``opshub version`` — the original subcommand. Kept for backwards
+#     compatibility; must continue to produce identical output so users
+#     can rely on either form interchangeably.
+#
+# The tests below use :class:`typer.testing.CliRunner` rather than
+# ``main()`` because the flag short-circuits Typer's command dispatch
+# via ``typer.Exit`` and we want to assert on the exit code Typer
+# surfaces directly, not the ``SystemExit`` translation done by
+# ``main()``.
+# ---------------------------------------------------------------------------
+
+
+def test_version_flag_outputs_package_version() -> None:
+    """``opshub --version`` prints ``opshub <__version__>`` and exits 0."""
+    runner = CliRunner()
+    result = runner.invoke(app_module.app, ["--version"])
+    assert result.exit_code == 0
+    assert result.stdout == f"opshub {__version__}\n"
+
+
+def test_version_flag_matches_version_subcommand() -> None:
+    """``--version`` flag and ``version`` subcommand emit identical output.
+
+    Keeps the two surfaces in lock-step so docs / users can rely on
+    either form returning the same string.
+    """
+    runner = CliRunner()
+    flag_result = runner.invoke(app_module.app, ["--version"])
+    sub_result = runner.invoke(app_module.app, ["version"])
+    assert flag_result.exit_code == 0
+    assert sub_result.exit_code == 0
+    assert flag_result.stdout == sub_result.stdout
+
+
+def test_version_flag_is_eager() -> None:
+    """``--version`` fires before ``--help`` thanks to ``is_eager=True``.
+
+    Without eager evaluation, Click would parse ``--help`` first and
+    print the help screen instead of the version. The assertion checks
+    we get the version string back, not the help banner.
+    """
+    runner = CliRunner()
+    result = runner.invoke(app_module.app, ["--version", "--help"])
+    assert result.exit_code == 0
+    assert result.stdout == f"opshub {__version__}\n"
+
+
+def test_root_callback_without_subcommand_shows_help() -> None:
+    """Invoking ``opshub`` with no args shows the help banner (exit 2).
+
+    ``no_args_is_help=True`` on the root Typer instance means a bare
+    invocation prints help and exits with Click's "usage error" code 2.
+    Asserting this guards against an accidental ``invoke_without_command=True``
+    regression that would silently swallow the no-args case.
+    """
+    runner = CliRunner()
+    result = runner.invoke(app_module.app, [])
+    # Click returns 2 for the "show help, no command given" path.
+    assert result.exit_code == 2
+    # The help banner mentions the app name and the version subcommand,
+    # so we use those as cheap structural assertions without coupling
+    # to Click's exact wording.
+    assert "opshub" in result.stdout.lower() or "opshub" in (result.stderr or "").lower()
