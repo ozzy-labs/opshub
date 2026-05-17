@@ -100,7 +100,7 @@ env var override は ADR-0014 と同じく **keyring より優先**。CI / docke
 
 ### (e) Prompt 管理: inline Python 定数 (Phase 5 MVP)
 
-Briefing の system / user prompt は `src/opshub/briefings/prompts.py` の Python 定数として管理する。
+Briefing の system / user prompt は `src/opshub/services/briefings/prompts.py` の Python 定数として管理する。
 
 ```python
 # briefings/prompts.py (Phase 5 MVP scope)
@@ -247,9 +247,9 @@ Phase 5 内で確定しなかった項目 (Phase 5.x / 6 持ち越し):
 2. **追加の prompt injection 対策レイヤー** — delimiter wrap 以外の防御 (出力 filter / subagent 分離 / 別 LLM による検査) を Phase 5.x で追加するか。実コストと脅威モデルの再評価が必要
 3. **Auto retry / backoff** — Rate limit / 一時的 network failure 時の自動 retry (指数 backoff) を Phase 5.x で追加するか。`opshub brief --retry-on-rate-limit` flag で opt-in する案が有力
 4. **Backend fallback policy** — operator が opt-in で「Anthropic 失敗時に OpenAI 切替」を選べるオプションを追加するか。cost / 再現性のトレードオフが大きいため Phase 5.x で議論
-5. **Local LLM backend の Protocol 適合** — Phase 5.x で `OllamaLLMClient` / `LlamaCppLLMClient` を追加する際、現在の `LLMClient` Protocol で signature が十分か (tool_use, streaming, multimodal の signature 拡張が必要になる可能性)
+5. **Local LLM backend の Protocol 適合 (一部 closeout)** — `OllamaLLMClient` は Phase 6 step A4 (PR #105) で実装済、`complete_structured` (tool_use 相当の structured output) は Phase 6 step A2 (PR #102、ADR-0016 §決定 (a)+(b)) で Protocol に追加済のため、Ollama 経路 + 単発 tool_use の signature 妥当性は実装で validate された。残課題は (a) `LlamaCppLLMClient` (`llama.cpp` direct binding、Phase 6.x deferred) の Protocol 適合、(b) streaming response の Protocol 拡張、(c) multimodal (画像 / 音声) input の signature 拡張。これらは Phase 6.x / 7+ で需要が立ってから検討する
 6. **Prompt versioning** — `briefings` projection に `prompt_id` / `prompt_version` 列を追加して過去 briefing と prompt の対応を保つか (Phase 5 plan §4 Open Question #2 と同件)
-7. **Multi-turn / tool_use 拡張** — 現在の `complete(messages) -> LLMResponse` は single-shot。将来 OpsHub が「LLM に SQL を提案させて execute する」「extracted action items から task add を proposal させる」等の対話 / tool_use を必要とする場合の Protocol 拡張方針
+7. **Multi-turn / streaming 拡張 (一部 closeout)** — 単発 tool_use 相当 (caller が JSON schema を渡し、LLM が schema 準拠の structured output を返す) は Phase 6 step A2 (PR #102) で `complete_structured(messages, *, response_schema, max_tokens, ...)` を Protocol に追加して closeout (ADR-0016 §決定 (a)+(b) 参照)。残課題は (a) **multi-turn 対話** (前 turn の `LLMResponse` を次 turn の `messages` に折り返す pattern、`opshub propose` の clarification / repair loop 等で必要になる可能性)、(b) **streaming response** (token by token の partial output、briefing の interactive 表示で必要になる可能性)。これらは Phase 6.x / 7+ で需要が立ってから Protocol 拡張方針を検討する
 
 ## Alternatives Considered
 
@@ -323,7 +323,7 @@ Phase 5 内で確定しなかった項目 (Phase 5.x / 6 持ち越し):
 
 ## 関連
 
-- [Principles 1 (Local-first)](../principles.md) — Local LLM 不在のトレードオフ、Phase 5.x で緩和
+- [Principles 1 (Local-first)](../principles.md) — Local LLM 不在のトレードオフ、Phase 6 で緩和 (Ollama backend、PR #105)
 - [Principles 5 (Multi-Agent Neutral)](../principles.md) — vendor neutrality を LLM 側にも継承
 - [Principles 6 (External Content Minimization)](../principles.md) — LLM への外部 body 露出範囲は delimiter wrap + summary 経由で制約
 - [Principles 9 (Phased Delivery)](../principles.md) — Phase 5 MVP scope の絞り込み根拠

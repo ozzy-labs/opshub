@@ -70,6 +70,31 @@ Phase 3 で SaaS connector (GitHub をはじめ、Phase 3.x で Slack / MS365 / 
 
 却下: agent runtime (Phase 4 以降の MCP server 化等) で non-interactive 実行が必要、prompt は CLI 一回起動には許容できても sync ループには不向き
 
+## Validation
+
+### Phase 3 (Initial) validation
+
+Phase 3 sub-issue B (GitHub connector、PR #51-55) で本 ADR の `core/secrets` + keyring + env var override 規約を初実装し、以下を end-to-end で確認した:
+
+- `core/secrets.get_secret("connector:github:pat")` / `set_secret` / `delete_secret` の薄いラッパー (`src/opshub/core/secrets.py`)
+- 規約 `f"connector:{name}:pat"` (keyring key) と `OPSHUB_CONNECTOR_GITHUB_PAT` (env var override) の優先順位 (env > keyring) を `tests/unit/connectors/github/test_auth.py` で pin
+- `secrets` extras (`keyring>=24`) で core install から隔離 (`pyproject.toml [project.optional-dependencies]`)
+- CLI `opshub connector auth set github` で keyring への書き込み (Phase 3 D2 で確定、`src/opshub/cli/connector.py`)
+
+### Phase 7 (Connectors Wave 2) validation
+
+Phase 7 (epic #113) で Slack / Microsoft 365 / Box の 3 新規 connector を追加した際、本 ADR の token storage 契約をそのまま拡張して以下を pin:
+
+- **4 keyring keys (1 per connector)** — `connector:github:pat` / `connector:slack:bot_token` / `connector:ms365:refresh_token` / `connector:box:refresh_token`。secret kind (`pat` / `bot_token` / `refresh_token`) は connector 側の OAuth 仕様に合わせて選択し、key 文字列はそのまま `core/secrets` の lookup key になる (`src/opshub/connectors/{github,slack,ms365,box}/auth.py` の `*_SECRET_KEY` 定数)
+- **4 env var overrides** — `OPSHUB_CONNECTOR_GITHUB_PAT` / `OPSHUB_CONNECTOR_SLACK_BOT_TOKEN` / `OPSHUB_CONNECTOR_MS365_REFRESH_TOKEN` / `OPSHUB_CONNECTOR_BOX_REFRESH_TOKEN` の 4 系統。`OPSHUB_CONNECTOR_<NAME>_<PURPOSE>` パターンは Phase 3 で確立した変換規則 (`src/opshub/core/secrets.py::_env_var_for_key`) をそのまま再利用 (`"connector:slack:bot_token"` → `"OPSHUB_CONNECTOR_SLACK_BOT_TOKEN"`)
+- **OAuth refresh token rotation の永続化** — MS365 (Microsoft Identity) と Box (Box SDK) は access token 取得 / refresh のたびに refresh_token を rotate する。両 connector とも `store_tokens` / acquire-by-refresh コールバックを実装し、rotate された refresh_token が即 keyring (または env var override 経路) に書き戻されることを保証。pin test:
+  - MS365: `tests/unit/connectors/ms365/test_auth.py::test_get_access_token_persists_rotated_refresh_token`
+  - Box: `tests/unit/connectors/box/test_auth.py::test_get_access_token_persists_rotated_refresh_token` (および `test_get_access_token_refreshes_when_cache_expired_by_time` で `BOX_REFRESH_TOKEN_SECRET_KEY` 経路を二重 pin)
+- **Paste-code OAuth flow** — MS365 / Box は OAuth authorization code flow を採用するため、`opshub connector auth set connector:ms365` / `opshub connector auth set connector:box` の interactive CLI に「ブラウザで URL を開き、redirect された code を貼り付け」する paste-code 経路を実装 (`src/opshub/cli/connector.py`)。GitHub PAT / Slack bot token の「token 文字列を直接貼り付け」とは別経路だが、storage の終着点は同じ keyring service `"opshub"` に揃う
+- **`connector:slack` CLI alias** — Phase 7 follow-up PR #133 (`fix(cli): accept connector:slack as alias for slack`) で、`opshub connector auth set slack` (legacy bare form) と `opshub connector auth set connector:slack` (Phase 7 plan で揃えた `connector:<name>` 形) の両方を accept。`src/opshub/cli/connector.py` line 261 で `name in ("slack", "connector:slack")` の分岐。keyring key 自体は常に `connector:slack:bot_token` に正規化される
+
+本 ADR の Decision (薄ラッパー + 規約ベースの key 命名 + env var override + `secrets` extras 隔離) は Phase 7 の 3 倍規模の connector 追加でも破綻なく機能した。Phase 3 で確定した signature 変更は本 phase で発生せず (ADR-0010 Phase 7 Validation と同じ整合性)、ADR-0014 は Phase 7 で touch せず Phase 7.x 以降の Additional connectors / common OAuth helper 抽出 (`src/opshub/connectors/_oauth_paste.py` 仮) のタイミングで再評価する。
+
 ## 関連
 
 - ADR-0001 (Python Stack、`secrets` extras 設計)
