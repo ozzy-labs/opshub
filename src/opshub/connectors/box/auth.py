@@ -290,7 +290,69 @@ class BoxAuth:
         )
         return access_str
 
+    def build_authenticated_client(self) -> Any:
+        """Return a ``boxsdk.Client`` configured with a fresh access token.
+
+        Convenience seam for the fetcher / future Box API callers: hides
+        the OAuth2-instance plumbing (boxsdk requires the client to be
+        constructed with an :class:`OAuth2` instance that owns the
+        rotating refresh token + ``store_tokens`` callback) and ensures
+        every call goes through :meth:`get_access_token` so token-refresh
+        and rotation stay routed through one place.
+
+        Callers must NOT cache the returned ``Client`` longer than the
+        access-token TTL (~1 hour). Build a fresh one per sync run.
+
+        Returns ``boxsdk.Client`` typed as ``Any`` because boxsdk does
+        not ship strict type stubs (every public symbol is ``Any`` to
+        pyright) — the runtime contract is the one the SDK documents.
+        """
+        access_token = self.get_access_token()
+        # Lazy import: keep ``boxsdk.Client`` off the cold path even for
+        # callers that hold a :class:`BoxAuth` instance but never make
+        # an API call (e.g. discovery / introspection).
+        try:
+            from boxsdk.client.client import Client
+        except ImportError as exc:
+            raise ConfigError(
+                "Box support requires the [connectors-box] extras. "
+                "Install with: uv sync --extra connectors-box"
+            ) from exc
+        # Reuse the same OAuth2 wrapper the auth helper builds so the
+        # ``store_tokens`` callback fires on SDK-initiated refreshes too
+        # (some Box SDK code paths refresh internally on 401).
+        oauth = self._build_oauth_with_access_token(access_token)
+        return Client(oauth)
+
+    def invalidate_cached_token(self) -> None:
+        """Drop the in-memory access-token cache.
+
+        Used by the fetcher when an upstream 401 indicates the cached
+        access token has been revoked / rotated server-side — the next
+        :meth:`get_access_token` will refresh via the stored refresh
+        token. This is the documented seam (rather than mutating the
+        private ``_token`` attribute directly) so the contract stays
+        explicit.
+        """
+        self._token = None
+
     # ----- helpers ------------------------------------------------------
+
+    def _build_oauth_with_access_token(self, access_token: str) -> Any:
+        """Construct an OAuth2 instance carrying the current access token.
+
+        Distinct from :meth:`_build_oauth` which is the refresh-side
+        builder (``access_token=None``); the client-construction path
+        needs the access token wired in so boxsdk does not immediately
+        refresh on the first API call.
+        """
+        return self._OAuth2_class(
+            client_id=self._client_id,
+            client_secret=self._client_secret,
+            access_token=access_token,
+            refresh_token=None,
+            store_tokens=self._store_tokens,
+        )
 
     def _build_oauth(self, *, refresh_token: str | None = None) -> Any:
         """Construct a fresh ``boxsdk.OAuth2`` instance.
