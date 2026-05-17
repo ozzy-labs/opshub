@@ -39,13 +39,18 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from opshub.services.briefings import Briefing
 
 __all__ = [
     "Column",
     "dispatch",
     "format_date",
     "id_prefix",
+    "render_briefing_json",
+    "render_briefing_md",
     "render_json",
     "render_md",
     "render_table",
@@ -287,3 +292,69 @@ def _escape_md(value: str) -> str:
     corrupting the rendered output.
     """
     return value.replace("|", "\\|")
+
+
+# ---- briefing renderers (Phase 5 step B4) ---------------------------------
+#
+# Briefings are single-record outputs (one :class:`Briefing` instance per
+# ``opshub brief`` invocation), not tabular lists, so they don't fit the
+# :class:`Column` / :func:`dispatch` shape. We expose two dedicated
+# helpers — :func:`render_briefing_md` (raw markdown for the eyeball
+# path) and :func:`render_briefing_json` (full record dump for
+# pipe-into-tooling) — keeping the brief CLI body slim and the JSON
+# schema centralised here for future ``opshub brief history``
+# regression tests.
+
+
+def render_briefing_md(briefing: Briefing) -> str:
+    """Render a :class:`Briefing` for stdout output.
+
+    The :class:`Briefing.markdown` field already carries the
+    LLM-generated body (per ADR-0015 the model is instructed to emit
+    Markdown). Returning the field unchanged keeps the CLI honest —
+    operators can pipe ``opshub brief "topic" > out.md`` and get a
+    clean Markdown file with no extra framing.
+    """
+    return briefing.markdown
+
+
+def render_briefing_json(briefing: Briefing) -> str:
+    """Render a :class:`Briefing` as a JSON document.
+
+    Surfaces the full record (id, topic, scope, model identifiers,
+    token usage, source refs, markdown body, generated timestamp) so
+    callers piping into ``jq`` can introspect the cost trace or pluck
+    individual source refs. The shape mirrors
+    :class:`opshub.domain.events.briefing.BriefingGenerated` so a
+    follow-up Phase 5.x ``opshub brief history --format json`` can
+    emit the same keys.
+
+    ``source_refs`` is emitted as a list of
+    ``{"entity_type": ..., "entity_id": ...}`` objects rather than a
+    flat tuple-of-tuples, which is friendlier to most JSON consumers
+    (Python is the unusual one in allowing heterogeneous tuples in
+    its serialisers).
+
+    ``ensure_ascii=False`` so a topic that survives non-ASCII content
+    (e.g. CJK characters in a quoted source body) stays human-readable
+    in the output.
+    """
+    return json.dumps(
+        {
+            "briefing_id": briefing.briefing_id,
+            "topic": briefing.topic,
+            "scope": briefing.scope,
+            "model_id": briefing.model_id,
+            "model_version": briefing.model_version,
+            "tokens_in": briefing.tokens_in,
+            "tokens_out": briefing.tokens_out,
+            "source_refs": [
+                {"entity_type": entity_type, "entity_id": entity_id}
+                for entity_type, entity_id in briefing.source_refs
+            ],
+            "markdown": briefing.markdown,
+            "generated_at": briefing.generated_at.isoformat(),
+        },
+        indent=2,
+        ensure_ascii=False,
+    )

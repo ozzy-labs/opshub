@@ -21,6 +21,7 @@ import typer
 
 from opshub import __version__
 from opshub.cli.agent import agent_app
+from opshub.cli.brief import register as register_brief
 from opshub.cli.connector import connector_app
 from opshub.cli.decision import decision_app
 from opshub.cli.embeddings import embeddings_app
@@ -57,6 +58,7 @@ app.add_typer(agent_app)
 app.add_typer(workspace_app)
 app.add_typer(connector_app)
 register_recall(app)
+register_brief(app)
 
 
 @app.callback()
