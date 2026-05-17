@@ -35,6 +35,18 @@ connector_app = typer.Typer(
     no_args_is_help=True,
 )
 
+# ``auth`` is a nested Typer sub-app so the surface remains
+# ``opshub connector auth set <name>`` (mirrors gh / aws CLI patterns).
+# Constructing the sub-app at module level is cheap — it is just a Typer
+# instance, no heavy imports — so the ADR-0001 cold-start budget is
+# preserved (the ``test_cli_imports`` static check covers this file).
+auth_app = typer.Typer(
+    name="auth",
+    help="Connector authentication.",
+    no_args_is_help=True,
+)
+connector_app.add_typer(auth_app)
+
 
 @connector_app.command("list")
 def connector_list() -> None:
@@ -124,6 +136,63 @@ def connector_sync(name: str) -> None:
 
     source.cursor_set(name, result.new_cursor, sync_started=False)
     typer.echo(f"synced {name}: {result.observed_count} item(s) observed")
+
+
+@auth_app.command("set")
+def auth_set(
+    name: str = typer.Argument(..., help="Connector name (e.g. 'github')."),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        help="Token value. If omitted, read securely from stdin (hidden input).",
+    ),
+) -> None:
+    """Store a credential token for a connector in the OS keychain.
+
+    Per ADR-0014, tokens are stored via ``keyring`` (OS-backed: macOS
+    Keychain / Linux Secret Service / Windows Credential Locker). Use
+    the ``OPSHUB_CONNECTOR_<NAME>_PAT`` env var to override at runtime
+    without touching the keychain (useful for CI / containers).
+
+    Currently supported names: ``github``. Other connectors (Slack /
+    MS365 / Box) land in Phase 3.x.
+
+    Security: there is intentionally no ``auth get`` command — we never
+    echo tokens to stdout. The env-var override is the documented
+    escape hatch for testing / debugging.
+    """
+    # Lazy imports keep CLI cold start fast (ADR-0001) and keep this
+    # module compatible with ``tests/integration/test_cli_imports``.
+    from opshub.core.secrets import set_secret
+
+    if name == "github":
+        from opshub.connectors.github.auth import GITHUB_PAT_SECRET_KEY
+
+        key = GITHUB_PAT_SECRET_KEY
+    else:
+        typer.echo(
+            f"unknown connector {name!r}; currently supported: github",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    if token is None:
+        # Securely prompt without echoing the token to the terminal.
+        # ``typer.prompt`` returns ``str`` for the default ``type=str``
+        # case but its public signature is loosely typed (``Any``); we
+        # bind the result to a freshly-named ``str`` to keep pyright /
+        # mypy happy without an outright cast.
+        raw: str = typer.prompt("Token", hide_input=True)
+    else:
+        raw = token
+
+    stripped = raw.strip()
+    if not stripped:
+        typer.echo("token must be non-empty", err=True)
+        raise typer.Exit(code=2)
+
+    set_secret(key, stripped)
+    typer.echo(f"stored token for connector {name!r}")
 
 
 def _build_source_service(*, actor: str) -> object:
