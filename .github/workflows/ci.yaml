@@ -43,7 +43,14 @@ jobs:
         # integration tests — sqlite-vec must be importable at runtime
         # for ``opshub.db.engine``'s connect listener to load the
         # extension before the migration issues the DDL.
-        run: uv sync --locked --extra dev --extra connectors-github --extra vector
+        #
+        # ``llm-anthropic`` is included so Phase 5 step A3 unit tests
+        # (``tests/unit/llm/test_anthropic_client.py``) can
+        # ``importorskip`` the ``anthropic`` SDK and run mocked
+        # round-trips. No real API call leaves CI — every SDK touchpoint
+        # is patched (ADR-0015 §決定 + the Phase 4 OpenAI embedder
+        # precedent).
+        run: uv sync --locked --extra dev --extra connectors-github --extra vector --extra llm-anthropic
 
       - name: Ruff (lint)
         run: uv run ruff check
