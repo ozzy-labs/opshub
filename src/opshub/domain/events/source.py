@@ -47,6 +47,20 @@ class SourceObserved(DomainEvent):
     ``title`` is the human-readable label. ``url`` and ``summary`` are
     optional, both bounded; ``summary`` is intentionally short — full
     bodies belong outside OpsHub (ADR-0005).
+
+    ``summary`` carries a schema-level ``max_length=200`` cap that
+    matches the per-connector operational cap (Phase 7 mappers ship
+    ``SUMMARY_MAX_CHARS = 200`` and the Phase 3 GitHub mapper enforces
+    the same — see :mod:`opshub.connectors.slack.mapper`,
+    :mod:`opshub.connectors.ms365.mapper`,
+    :mod:`opshub.connectors.box.mapper`, and
+    :mod:`opshub.connectors.github.api`). Pinning the cap on the event
+    schema makes ADR-0005 a hard contract: any connector that ever
+    forgets to truncate fails fast with a Pydantic ``ValidationError``
+    rather than silently inflating the event log. ADR-0010 Phase 7
+    Validation §3 calls this rule out explicitly ("全 connector で
+    summary ≤ 200 chars enforce") and this constraint is the
+    schema-layer half of that contract.
     """
 
     event_type: Literal["source.observed"] = "source.observed"  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -56,7 +70,7 @@ class SourceObserved(DomainEvent):
     source_type: str = Field(min_length=1, max_length=50)
     title: str = Field(min_length=1, max_length=500)
     url: str | None = None
-    summary: str | None = None
+    summary: str | None = Field(default=None, max_length=200)
 
 
 class SourceReferenced(DomainEvent):
