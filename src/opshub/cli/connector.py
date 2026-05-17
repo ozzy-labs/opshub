@@ -1,0 +1,150 @@
+"""``opshub connector ...`` subcommands.
+
+Phase 3 step A5 ships two connector commands:
+
+* ``opshub connector list`` — prints every connector currently in the
+  registry, one name per line. With no concrete connectors registered
+  (the Phase 3 MVP state before sub-issue B lands), prints
+  ``no connectors registered`` and exits 0 — a healthy "framework is
+  wired, no connectors yet" report.
+* ``opshub connector sync <name>`` — resolves ``<name>`` from the
+  registry, loads the cursor, opens a sync run bracket via
+  :meth:`SourceService.cursor_set` with ``sync_started=True``, invokes
+  the connector, persists the returned cursor, and prints a one-line
+  summary. Failures are sanitised (only the exception type name is
+  surfaced) to avoid leaking secrets / PII into the event log.
+
+Module-level imports are restricted to ``__future__`` and ``typer`` so
+``opshub --help`` cold start stays under the ~300ms budget set by
+ADR-0001; everything heavy (the connectors package, ``_wiring``,
+``core.logging``, :class:`ConnectorContext`) is imported lazily inside
+each command callback. The static check in
+``tests/integration/test_cli_imports.py`` enforces this whitelist on
+every CI run.
+"""
+
+from __future__ import annotations
+
+import typer
+
+# Heavy imports happen inside command bodies (ADR-0001 lazy-import rule).
+
+connector_app = typer.Typer(
+    name="connector",
+    help="External SaaS connectors.",
+    no_args_is_help=True,
+)
+
+
+@connector_app.command("list")
+def connector_list() -> None:
+    """List every registered connector, one name per line.
+
+    Empty registry is the normal Phase 3 MVP state before sub-issue B
+    lands; prints ``no connectors registered`` and exits 0.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.connectors import discover_connectors
+
+    connectors = discover_connectors()
+    if not connectors:
+        typer.echo("no connectors registered")
+        return
+    for connector in connectors:
+        typer.echo(connector.name)
+
+
+@connector_app.command("sync")
+def connector_sync(name: str) -> None:
+    """Run sync for the named connector.
+
+    Resolves ``name`` from :func:`discover_connectors`, loads the
+    cursor from the ``connector_cursors`` projection, opens a sync run
+    bracket (``cursor_set(sync_started=True)``), invokes
+    :meth:`Connector.sync`, persists the returned cursor
+    (``cursor_set(sync_started=False, value=result.new_cursor)``), and
+    prints a one-line summary.
+
+    On exception:
+
+    * ``SourceService.record_sync_failure`` records a
+      ``ConnectorSyncFailed`` event with the exception **type name only**
+      — never the message — so secrets / PII never reach the event log.
+    * The CLI exits with code 1.
+
+    Unknown connector → exit code 2 with a list of available names
+    (mirrors Typer's convention for usage errors).
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001) and satisfy the
+    # ``test_cli_imports`` static check.
+    from typing import Any
+
+    from opshub.connectors import discover_connectors
+    from opshub.connectors.context import ConnectorContext
+    from opshub.core.logging import get_logger
+
+    connectors = {c.name: c for c in discover_connectors()}
+    connector = connectors.get(name)
+    if connector is None:
+        available = ", ".join(connectors) or "(none)"
+        typer.echo(
+            f"unknown connector {name!r}; available: {available}",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    # NOTE: ``build_source_service`` lands in step A4 (running in parallel
+    # with this PR). Until A4 merges, this lazy import fails at runtime —
+    # which is fine because the only path that reaches it requires a
+    # registered concrete connector (added by sub-issue B). The list-only
+    # and unknown-connector tests never execute past the early return
+    # above. pyright cannot see A4's wiring yet, so the source service is
+    # typed as :class:`~typing.Any` to keep this module typecheck-clean
+    # while A4/A5/A6 race; the public ``SourceService`` type binds when
+    # A4 merges.
+    source: Any = _build_source_service(actor=f"connector:{name}")
+    logger = get_logger().bind(connector=name)
+    cursor = source.cursor_get(name)
+    # Open the sync run bracket so observers see ConnectorSyncStarted.
+    source.cursor_set(name, cursor, sync_started=True)
+    context = ConnectorContext(
+        source_service=source,
+        cursor_value=cursor,
+        secrets=None,  # refined in B1 once core.secrets lands
+        logger=logger,
+    )
+    try:
+        result = connector.sync(context)
+    except Exception as exc:
+        # Sanitise: surface only the exception type name, never the
+        # message, so tokens / PII never reach the event log.
+        source.record_sync_failure(name, error_message=type(exc).__name__)
+        typer.echo(f"sync failed: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    source.cursor_set(name, result.new_cursor, sync_started=False)
+    typer.echo(f"synced {name}: {result.observed_count} item(s) observed")
+
+
+def _build_source_service(*, actor: str) -> object:
+    """Indirection for the step-A4 ``build_source_service`` helper.
+
+    Phase 3 step A4 adds ``opshub.cli._wiring.build_source_service``;
+    until that PR merges, importing it eagerly inside :func:`connector_sync`
+    would force pyright to flag the unknown attribute on every CI run.
+    Hiding the lookup behind this private helper (returning ``object``
+    so the caller can cast to ``Any`` for the still-unknown
+    :class:`SourceService` interface) keeps the type checker green
+    during the A4/A5/A6 race; when A4 lands the indirection can be
+    inlined.
+    """
+    from opshub.cli import _wiring  # local import preserves cold-start budget
+
+    builder = getattr(_wiring, "build_source_service", None)
+    if builder is None:
+        raise RuntimeError(
+            "opshub.cli._wiring.build_source_service is not available; "
+            "Phase 3 step A4 must merge before `opshub connector sync` "
+            "can run."
+        )
+    return builder(actor=actor)
