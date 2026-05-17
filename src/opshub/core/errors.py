@@ -28,6 +28,20 @@ class ConflictError(OpsHubError):
     """An operation conflicts with current state (e.g. lock already held)."""
 
 
+class ConnectorFailedError(OpsHubError):
+    """A connector sync step failed against the upstream SaaS API.
+
+    Raised by connector fetcher / mapper code when retries are
+    exhausted or a non-recoverable upstream response is returned (e.g.
+    repeated 401 after a forced token refresh, persistent 429 after
+    backoff). The CLI driver catches it and emits ``ConnectorSyncFailed``
+    with a sanitised message — connector code is therefore free to put
+    upstream context (status codes, retry counts) in the message
+    without worrying about leaking secrets, but MUST NOT include tokens
+    or request bodies in the message text.
+    """
+
+
 class OwnershipError(OpsHubError):
     """An actor attempted to mutate state owned by a different owner.
 
