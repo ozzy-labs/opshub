@@ -11,8 +11,10 @@ by name without dragging ``anthropic`` / ``openai`` into core install
 Design notes:
 
 - Messages travel across the boundary as plain ``LLMMessage`` dataclasses
-  (``role`` + ``content``). Tool-use / multimodal blocks are deferred to
-  Phase 5.x; the briefing MVP only needs text-in / text-out.
+  (``role`` + ``content``). Phase 6 step A2 added ``complete_structured`` so
+  the Protocol now covers both text-in / text-out (Phase 5 MVP) and
+  structured JSON output (Phase 6 Proposal domain); tool-use / multimodal
+  blocks remain out of scope.
 - Token counts are surfaced on ``LLMResponse`` / ``StructuredResponse`` so
   BriefingService / ProposalService can persist per-call cost on the
   ``BriefingGenerated`` / ``ProposalGenerated`` event (ADR-0015 §決定 (g),
