@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from opshub.services.briefings import Briefing
+    from opshub.services.links import Link, LinkPath
     from opshub.services.proposals import Proposal
 
 __all__ = [
@@ -54,6 +55,12 @@ __all__ = [
     "render_briefing_json",
     "render_briefing_md",
     "render_json",
+    "render_link_list_json",
+    "render_link_list_md",
+    "render_link_paths_dot",
+    "render_link_paths_json",
+    "render_link_paths_md",
+    "render_links_dot",
     "render_md",
     "render_proposal_json",
     "render_proposal_list_json",
@@ -619,3 +626,276 @@ def _candidate_state_counts(states: list[str]) -> dict[str, int]:
         if state in counts:
             counts[state] += 1
     return counts
+
+
+# ---- link renderers (Phase 8 step D1) -------------------------------------
+#
+# The link CLI surface (``opshub link list``, ``opshub graph related /
+# trace``) emits three shapes:
+#
+# * Flat link list — one :class:`Link` per row, rendered as a Markdown
+#   table, JSON array, or Graphviz DOT digraph.
+# * Path list — :class:`LinkPath` chains from :meth:`LinkService.trace`,
+#   rendered as a Markdown bullet list of ``A -> B -> C (type)``
+#   chains, a JSON array of path objects, or a DOT digraph that
+#   unions every edge across every path.
+#
+# DOT escaping: entity ids and types are surrounded with double quotes
+# and any embedded quote / backslash is escaped per the Graphviz DOT
+# spec so a malformed-but-not-malicious id (e.g. an early connector
+# that emits a quote in its id string) still produces a parseable
+# document.
+
+
+_LINK_ID_SHORT_LEN = 8
+
+
+def _format_link_endpoint(entity_type: str, entity_id: str) -> str:
+    """Return ``"<type>:<id>"`` for human-readable link rendering."""
+    return f"{entity_type}:{entity_id}"
+
+
+def _escape_dot(value: str) -> str:
+    """Escape a string for inclusion as a DOT node id or label.
+
+    Graphviz DOT uses double-quoted strings for node ids; inside that
+    string a literal ``"`` must be backslash-escaped and a literal
+    ``\\`` doubled. Newlines collapse to ``\\n`` so a label that
+    accidentally contains one does not break the digraph file. The
+    output does NOT include the surrounding quotes — callers add
+    those so the same helper handles both node ids and edge labels.
+    """
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def _quote_dot(value: str) -> str:
+    """Return ``value`` wrapped in DOT-safe double quotes."""
+    return f'"{_escape_dot(value)}"'
+
+
+def render_link_list_md(links: Sequence[Link]) -> str:
+    """Render a list of :class:`Link` rows as a GitHub-flavoured Markdown table.
+
+    Columns: short id prefix (8 chars), from endpoint, to endpoint,
+    link_type, created_at date. The header is always rendered so a
+    user piping into ``head`` sees the labels even when the result
+    set is empty.
+    """
+    columns = [
+        Column(
+            header="ID",
+            accessor=lambda row: id_prefix(row.id, _LINK_ID_SHORT_LEN),
+            width=_LINK_ID_SHORT_LEN,
+            json_key="id",
+        ),
+        Column(
+            header="From",
+            accessor=lambda row: _format_link_endpoint(row.from_entity_type, row.from_entity_id),
+            json_key="from",
+        ),
+        Column(
+            header="To",
+            accessor=lambda row: _format_link_endpoint(row.to_entity_type, row.to_entity_id),
+            json_key="to",
+        ),
+        Column(
+            header="Type",
+            accessor=lambda row: row.link_type,
+            json_key="link_type",
+        ),
+        Column(
+            header="Created",
+            accessor=lambda row: format_date(row.created_at),
+            width=10,
+            json_key="created_at",
+        ),
+    ]
+    return dispatch("md", columns, list(links))
+
+
+def render_link_list_json(links: Sequence[Link]) -> str:
+    """Render a list of :class:`Link` rows as a JSON array.
+
+    Each entry surfaces the full link record (id, from + to endpoints,
+    link_type, created_at ISO timestamp, source_event_id, metadata
+    dict). The shape mirrors the :class:`Link` dataclass so a
+    follow-up ``opshub link list --format json`` regression test can
+    pin the keys.
+    """
+    payload: list[dict[str, Any]] = []
+    for link in links:
+        payload.append(
+            {
+                "id": link.id,
+                "from_entity_type": link.from_entity_type,
+                "from_entity_id": link.from_entity_id,
+                "to_entity_type": link.to_entity_type,
+                "to_entity_id": link.to_entity_id,
+                "link_type": link.link_type,
+                "created_at": link.created_at.isoformat(),
+                "source_event_id": link.source_event_id,
+                "metadata": link.metadata,
+            }
+        )
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def render_links_dot(
+    links: Sequence[Link],
+    *,
+    focus: tuple[str, str] | None = None,
+) -> str:
+    """Render a list of :class:`Link` rows as a Graphviz DOT digraph.
+
+    ``focus`` (optional) identifies the central entity of the query
+    so the renderer can place a ``[shape=box]`` style hint on that
+    node — useful when piping into ``dot -Tpng`` for a quick visual
+    check of who is connected to the queried entity. When ``focus``
+    is omitted (or the focused entity has no edges), the digraph is
+    just the union of every edge in ``links``.
+
+    Each edge carries a ``label="<link_type>"`` attribute so the
+    rendered image shows the relationship verb. Endpoint ids are
+    DOT-escaped (see :func:`_escape_dot`) so arbitrary ULIDs /
+    connector ids survive the format unchanged.
+    """
+    lines: list[str] = ["digraph opshub_graph {"]
+    lines.append('  node [shape="ellipse"];')
+
+    seen_nodes: set[str] = set()
+
+    def _emit_node(entity_type: str, entity_id: str) -> str:
+        key = _format_link_endpoint(entity_type, entity_id)
+        if key not in seen_nodes:
+            seen_nodes.add(key)
+            shape = ""
+            if focus is not None and (entity_type, entity_id) == focus:
+                shape = ' [shape="box"]'
+            lines.append(f"  {_quote_dot(key)}{shape};")
+        return key
+
+    for link in links:
+        from_node = _emit_node(link.from_entity_type, link.from_entity_id)
+        to_node = _emit_node(link.to_entity_type, link.to_entity_id)
+        lines.append(
+            f"  {_quote_dot(from_node)} -> {_quote_dot(to_node)}"
+            f" [label={_quote_dot(link.link_type)}];"
+        )
+
+    # Always emit the focus node when supplied, even if it has no
+    # incident edges in ``links`` — gives the operator a visible
+    # confirmation that the query targeted the right entity.
+    if focus is not None:
+        _emit_node(focus[0], focus[1])
+
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def render_link_paths_md(
+    paths: Sequence[LinkPath],
+    *,
+    focus: tuple[str, str] | None = None,
+) -> str:
+    """Render :class:`LinkPath` chains as a Markdown bullet list.
+
+    Each path is shown as a chain ``A -> B -> C (type1, type2)`` so
+    the operator can scan provenance at a glance. ``focus`` (the
+    query root) appears as the right-most node since :meth:`trace`
+    returns paths ordered nearest-to-root → farthest. When ``paths``
+    is empty, the renderer emits a single informational line so the
+    operator sees that the query ran (not silent stdout).
+    """
+    if not paths:
+        focus_repr = _format_link_endpoint(focus[0], focus[1]) if focus is not None else "<entity>"
+        return f"No incoming links found for {focus_repr}."
+
+    lines: list[str] = []
+    if focus is not None:
+        lines.append(f"# Trace for {_format_link_endpoint(focus[0], focus[1])}")
+        lines.append("")
+    for index, path in enumerate(paths):
+        # Walk the path nearest-root → farthest, so the root is the
+        # right-hand endpoint in our rendered chain.
+        if focus is not None:
+            current_endpoint = _format_link_endpoint(focus[0], focus[1])
+        else:
+            # Fallback: derive the root from the first link's ``to_*``.
+            first = path.links[0]
+            current_endpoint = _format_link_endpoint(first.to_entity_type, first.to_entity_id)
+        chain_segments: list[str] = [current_endpoint]
+        type_segments: list[str] = []
+        for link in path.links:
+            upstream = _format_link_endpoint(link.from_entity_type, link.from_entity_id)
+            chain_segments.append(upstream)
+            type_segments.append(link.link_type)
+        # Render upstream → ... → root for natural reading order.
+        chain = " <- ".join(chain_segments)
+        types = ", ".join(type_segments)
+        lines.append(f"- [{index}] depth={path.depth}: {chain} ({types})")
+    return "\n".join(lines)
+
+
+def render_link_paths_json(paths: Sequence[LinkPath]) -> str:
+    """Render :class:`LinkPath` chains as a JSON array.
+
+    Each path becomes an object with ``depth`` plus an ordered
+    ``links`` list of link records (same shape as
+    :func:`render_link_list_json`). The renderer preserves the
+    nearest-root → farthest order from :meth:`LinkService.trace`.
+    """
+    payload: list[dict[str, Any]] = []
+    for path in paths:
+        link_payloads: list[dict[str, Any]] = []
+        for link in path.links:
+            link_payloads.append(
+                {
+                    "id": link.id,
+                    "from_entity_type": link.from_entity_type,
+                    "from_entity_id": link.from_entity_id,
+                    "to_entity_type": link.to_entity_type,
+                    "to_entity_id": link.to_entity_id,
+                    "link_type": link.link_type,
+                    "created_at": link.created_at.isoformat(),
+                    "source_event_id": link.source_event_id,
+                    "metadata": link.metadata,
+                }
+            )
+        payload.append({"depth": path.depth, "links": link_payloads})
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def render_link_paths_dot(
+    paths: Sequence[LinkPath],
+    *,
+    focus: tuple[str, str] | None = None,
+) -> str:
+    """Render :class:`LinkPath` chains as a Graphviz DOT digraph.
+
+    The renderer unions every edge across every path into a single
+    digraph; duplicate ``(from, to, link_type)`` triples collapse to
+    one edge so a diamond graph does not double-render its shared
+    sub-edges. ``focus`` is highlighted via :func:`render_links_dot`'s
+    convention (``shape="box"`` on the query root).
+    """
+    # Flatten paths into a unique-edge list and reuse the link-list
+    # DOT renderer so the two graph paths share one codebase. Edge
+    # deduplication keys on ``(from, to, link_type)`` because two
+    # paths through the same node pair via the same link_type are
+    # visually indistinguishable.
+    seen: set[tuple[str, str, str, str, str]] = set()
+    flattened: list[Link] = []
+    for path in paths:
+        for link in path.links:
+            key = (
+                link.from_entity_type,
+                link.from_entity_id,
+                link.to_entity_type,
+                link.to_entity_id,
+                link.link_type,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            flattened.append(link)
+    return render_links_dot(flattened, focus=focus)

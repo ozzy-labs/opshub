@@ -1,17 +1,41 @@
-"""LinkService traversal queries (Phase 8 step C1, ADR-0017).
+"""LinkService traversal queries (Phase 8 step C1 + D1, ADR-0017).
 
-Read-only service over the ``links`` projection. Two core operations:
+Read-only service over the ``links`` projection. Three traversal
+operations:
 
 * :meth:`LinkService.related` — 1-hop neighbours, optionally
   direction-filtered (outgoing / incoming / both)
 * :meth:`LinkService.trace` — recursive backward (incoming) traversal
   for provenance queries; returns chains of links
+* :meth:`LinkService.list_links` — projection table scan with optional
+  ``from`` / ``to`` / ``link_type`` filters (Phase 8 D1)
 
-Both methods include cycle detection (visited set) and depth limits
-per ADR-0017 §決定 (e). :meth:`LinkService.find_link_id` lookup helper
-is provided for the manual ``opshub link remove`` CLI path (Phase 8
-PR D1) when the operator wants to remove by natural-key tuple rather
-than by id.
+All three methods include cycle detection (visited set) and depth
+limits per ADR-0017 §決定 (e). :meth:`LinkService.find_link_id`
+lookup helper is provided for the manual ``opshub link remove`` CLI
+path (Phase 8 D1) when the operator wants to remove by natural-key
+tuple rather than by id.
+
+Writer-side methods (Phase 8 step D1)
+-------------------------------------
+
+In addition to the read-only traversal API, the service grew two
+writer-side methods to back the ``opshub link add`` / ``opshub link
+remove`` CLI subcommands per Phase 8 plan §3 Sub-issue D DoD:
+
+* :meth:`LinkService.create_link` — mints a fresh ULID, emits
+  :class:`LinkCreated`, and applies the :class:`LinksProjector` in one
+  UoW. Returns the new link id.
+* :meth:`LinkService.delete_link` — emits :class:`LinkDeleted` and
+  applies the projector (hard-DELETE) in one UoW. Returns ``True`` if
+  a row was actually deleted, ``False`` for a no-op (id not found).
+
+The constructor accepts these writer dependencies as keyword-only
+``store`` / ``projector`` / ``uow_factory`` / ``actor`` arguments with
+default ``None``. When ``None``, the writer methods raise
+:class:`ConfigError` so a read-only wiring (``LinkService(engine)``)
+remains valid for Phase 8 C1's traversal-only callers; the existing
+C1 unit tests construct the service this way and continue to pass.
 
 Cold-start guard
 ----------------
@@ -26,12 +50,15 @@ graph expansion path (Phase 8 D2 ``--expand-graph``) materialises.
 Engine binding pattern
 ----------------------
 
-The service follows the same engine-bound, read-only pattern as
+The service follows the same engine-bound pattern as
 :class:`~opshub.services.recall_service.RecallService` and
-:class:`~opshub.services.duplicate_service.DuplicateService`: a single
-:class:`~sqlalchemy.engine.Engine` is wired at construction time and
-every traversal opens a short-lived ``engine.connect()``. There is no
-UoW (no event appends), so the constructor takes no ``uow_factory``.
+:class:`~opshub.services.duplicate_service.DuplicateService` for the
+read path: a single :class:`~sqlalchemy.engine.Engine` is wired at
+construction time and every traversal opens a short-lived
+``engine.connect()``. The writer methods (added in Phase 8 D1) use
+the optional ``uow_factory`` to share a single transaction between
+``store.append`` and ``projector.apply`` — same shape as
+:class:`~opshub.services.task_service.TaskService` and friends.
 """
 
 from __future__ import annotations
@@ -39,16 +66,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.sql.elements import ColumnElement
 
 from opshub.core.errors import ConfigError
 from opshub.projections.links import links_table
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from contextlib import AbstractContextManager
     from datetime import datetime
 
-    from sqlalchemy.engine import Engine, Row
+    from sqlalchemy.engine import Connection, Engine, Row
+
+    from opshub.services.event_store import EventStore
+    from opshub.services.projector import Projector
 
 
 __all__ = ["GraphSubset", "Link", "LinkPath", "LinkService"]
@@ -184,13 +216,33 @@ class LinkService:
     The service is stateless beyond the :class:`Engine` reference;
     every public method opens its own short-lived connection.
 
+    Writer dependencies (``store`` / ``projector`` / ``uow_factory`` /
+    ``actor``) are optional. When ``None`` (the C1 read-only default),
+    :meth:`create_link` / :meth:`delete_link` raise
+    :class:`ConfigError` — keeping the existing C1 traversal-only
+    callers / tests intact. The Phase 8 D1 wiring in
+    :mod:`opshub.cli._wiring` passes all four arguments so the CLI
+    surface can mutate state through a single UoW.
+
     See module docstring for the engine-binding rationale and the
     cycle-detection / depth-limit contract pinned by ADR-0017
     §決定 (e).
     """
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        *,
+        store: EventStore | None = None,
+        projector: Projector | None = None,
+        uow_factory: Callable[[], AbstractContextManager[Connection]] | None = None,
+        actor: str = "service:links",
+    ) -> None:
         self._engine = engine
+        self._store = store
+        self._projector = projector
+        self._uow_factory = uow_factory
+        self._actor = actor
 
     # ------------------------------------------------------------------ commands
 
@@ -483,7 +535,201 @@ class LinkService:
             return None
         return str(row[0])
 
+    def list_links(
+        self,
+        *,
+        from_entity_type: str | None = None,
+        from_entity_id: str | None = None,
+        to_entity_type: str | None = None,
+        to_entity_id: str | None = None,
+        link_type: str | None = None,
+        limit: int = 50,
+    ) -> list[Link]:
+        """Return links matching the supplied filters (Phase 8 D1).
+
+        Used by ``opshub link list``. All filters are optional; an
+        unfiltered call returns the ``limit`` most-recently-created
+        links. The result is sorted by ``created_at`` ascending so
+        operators see provenance order (oldest-first) — matches the
+        :meth:`related` / :meth:`trace` convention.
+
+        ``from_entity_type`` / ``from_entity_id`` filter the source
+        side. ``to_entity_type`` / ``to_entity_id`` filter the target
+        side. ``link_type`` is an equality filter (single value, not a
+        list — the CLI exposes one ``--type`` flag per invocation; the
+        traversal-side helpers take a list because they assemble
+        multi-type criteria internally).
+        """
+        conditions: list[ColumnElement[bool]] = []
+        if from_entity_type is not None:
+            conditions.append(links_table.c.from_entity_type == from_entity_type)
+        if from_entity_id is not None:
+            conditions.append(links_table.c.from_entity_id == from_entity_id)
+        if to_entity_type is not None:
+            conditions.append(links_table.c.to_entity_type == to_entity_type)
+        if to_entity_id is not None:
+            conditions.append(links_table.c.to_entity_id == to_entity_id)
+        if link_type is not None:
+            conditions.append(links_table.c.link_type == link_type)
+
+        stmt = select(links_table)
+        if conditions:
+            stmt = stmt.where(and_(*conditions))
+        stmt = stmt.order_by(links_table.c.created_at).limit(limit)
+
+        with self._engine.connect() as conn:
+            rows = conn.execute(stmt).all()
+        return [_row_to_link(row) for row in rows]
+
+    # ------------------------------------------------------------------ commands (writer)
+
+    def create_link(
+        self,
+        *,
+        from_entity_type: str,
+        from_entity_id: str,
+        to_entity_type: str,
+        to_entity_id: str,
+        link_type: str = "manual",
+        metadata: dict[str, str] | None = None,
+    ) -> str:
+        """Emit :class:`LinkCreated` and apply the projector in one UoW.
+
+        Mints a fresh ULID for the link ``aggregate_id``; the projector
+        UPSERTs the row through :func:`_upsert_link` so a manual
+        ``LinkCreated`` over an auto-extracted natural-key tuple
+        collapses onto the existing row (the first-seen ``id`` wins —
+        see :mod:`opshub.projections.links` module docstring for the
+        collision contract).
+
+        Raises
+        ------
+        ConfigError
+            When the service was constructed without writer
+            dependencies (``store`` / ``projector`` / ``uow_factory``).
+            Used by the CLI wiring to fail loud if a future refactor
+            forgets to thread the dependencies through
+            :func:`opshub.cli._wiring.build_link_service`.
+        """
+        self._require_writer_deps()
+        # Lazy imports keep the module-level cold-start surface intact
+        # — see module docstring's cold-start guard section. The
+        # writer path is rarely hit (manual CRUD only) so paying the
+        # import on first call is acceptable.
+        from opshub.core.ids import new_ulid
+        from opshub.domain.events import LinkCreated
+
+        link_id = new_ulid()
+        event = LinkCreated(
+            aggregate_id=link_id,
+            actor=self._actor,
+            from_entity_type=from_entity_type,
+            from_entity_id=from_entity_id,
+            to_entity_type=to_entity_type,
+            to_entity_id=to_entity_id,
+            link_type=link_type,
+            metadata=metadata,
+            created_by=self._actor,
+        )
+        self._commit(event)
+        return link_id
+
+    def delete_link(
+        self,
+        link_id: str,
+        *,
+        reason: str | None = None,
+    ) -> bool:
+        """Emit :class:`LinkDeleted` and apply the projector in one UoW.
+
+        Returns ``True`` when a row was actually deleted, ``False``
+        when ``link_id`` did not exist (no-op). The event is appended
+        either way — ADR-0017 §決定 (h) keeps the audit trail of
+        delete attempts even when the row is already gone.
+
+        ``reason`` is sanitised via
+        :func:`opshub.core.sanitise.sanitise_error_message` before
+        being stamped on the event (ADR-0017 §決定 (d) / Phase 5 B1
+        contract — events are pure value objects so the service
+        layer owns the scrub).
+
+        Raises
+        ------
+        ConfigError
+            When the service was constructed without writer
+            dependencies.
+        """
+        self._require_writer_deps()
+        from opshub.core.sanitise import sanitise_error_message
+        from opshub.domain.events import LinkDeleted
+
+        # Pre-flight existence check so the CLI can show "no-op"
+        # message when the id doesn't match a row. The event is still
+        # appended afterwards — operators expect the audit trail even
+        # for a missed delete attempt.
+        existed = self._link_exists(link_id)
+
+        sanitised_reason = None if reason is None else sanitise_error_message(reason)
+        event = LinkDeleted(
+            aggregate_id=link_id,
+            actor=self._actor,
+            deleted_by=self._actor,
+            reason=sanitised_reason,
+        )
+        self._commit(event)
+        return existed
+
     # ------------------------------------------------------------------ helpers
+
+    def _require_writer_deps(self) -> None:
+        """Guard the writer methods against a read-only construction.
+
+        Phase 8 C1 ships a read-only :class:`LinkService` constructed
+        as ``LinkService(engine)``. Phase 8 D1 adds writer methods
+        that require ``store`` + ``projector`` + ``uow_factory`` to
+        also be set. If a future caller hits the writer path with the
+        old shape, we raise :class:`ConfigError` rather than silently
+        :class:`AttributeError`-ing on ``self._store.append(...)``.
+        """
+        if self._store is None or self._projector is None or self._uow_factory is None:
+            raise ConfigError(
+                "LinkService writer methods require store + projector + uow_factory"
+                " — construct via opshub.cli._wiring.build_link_service or pass the"
+                " dependencies explicitly."
+            )
+
+    def _link_exists(self, link_id: str) -> bool:
+        """Return True iff a ``links`` row with ``id == link_id`` exists.
+
+        Run inside a fresh connection (separate from the writer UoW)
+        so we can tell the operator whether their ``link remove``
+        addressed a real row. The follow-up :class:`LinkDeleted`
+        event + projector apply happens in a fresh UoW; the small
+        race window between this read and the write is acceptable for
+        a single-process CLI (no other writers in scope per ADR-0017).
+        """
+        stmt = select(links_table.c.id).where(links_table.c.id == link_id).limit(1)
+        with self._engine.connect() as conn:
+            return conn.execute(stmt).first() is not None
+
+    def _commit(self, event: Any) -> None:
+        """Append + project ``event`` in one UoW.
+
+        Mirrors :meth:`opshub.services.task_service.TaskService._commit`
+        — the writer path is identical in shape (store.append +
+        projector.apply on the same connection inside the UoW context
+        manager). The factory is mandatory for the writer methods so
+        :meth:`_require_writer_deps` is called first.
+        """
+        # ``cast`` is unnecessary here because _require_writer_deps
+        # narrows None away; pyright still wants a runtime assertion
+        # to track the narrow through the method body.
+        assert self._uow_factory is not None
+        assert self._store is not None
+        assert self._projector is not None
+        with self._uow_factory() as connection:
+            self._store.append(event, connection)
+            self._projector.apply(event, connection)
 
     def _trace_recurse(
         self,
