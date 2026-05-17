@@ -79,7 +79,7 @@ opshub/
 
 ## 2. Python パッケージ構成 (src/opshub/)
 
-各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P6]` / `[P6.x]` / `[P7]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで merge 済 (2026-05-17)。`[P3.x]` は Phase 3 完了後の継続作業 (Slack / Microsoft 365 / Box connector は Phase 7 / epic #113)、`[P6.x]` は Phase 6 完了後の継続作業 (`llama.cpp` direct binding / proposal scoring / `links` projection 本実装 / multi-machine sync 等)、`[P7]` は Phase 7 (Connectors Wave 2)。
+各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P6]` / `[P6.x]` / `[P7]` / `[P7.x]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで、`[P7]` は Phase 7 (Connectors Wave 2、Slack + Microsoft 365 + Box) までで merge 済 (2026-05-17)。`[P6.x]` は Phase 6 完了後の継続作業 (`llama.cpp` direct binding / proposal scoring / `links` projection 本実装 / multi-machine sync 等)、`[P7.x]` は Phase 7 完了後の継続作業 (additional connectors / common OAuth helper refactor / connector observability 等)、`[future]` は Phase 8 (Knowledge graph、epic #128) 以降。
 
 ```text
 src/opshub/
@@ -197,9 +197,24 @@ src/opshub/
 │   │   ├── auth.py                 # PAT 解決 (env / keyring) [P1+2+3]
 │   │   ├── api.py                  # httpx fetch primitives [P1+2+3]
 │   │   └── connector.py            # GitHubConnector(sync) [P1+2+3]
-│   ├── slack/                      # [P3.x]
-│   ├── msgraph/                    # [P3.x]
-│   └── box/                        # [P3.x]
+│   ├── slack/                      # Slack connector (Phase 7 A1-A3) [P7]
+│   │   ├── __init__.py             # register_connector(SlackConnector()) side effect [P7]
+│   │   ├── auth.py                 # bot token 解決 (env / keyring) [P7]
+│   │   ├── fetcher.py              # slack_sdk WebClient + cursor pagination [P7]
+│   │   ├── mapper.py               # RawSlackMessage → SourceObserved (source_type=slack_message) [P7]
+│   │   └── connector.py            # SlackConnector(sync) [P7]
+│   ├── ms365/                      # Microsoft 365 connector (Phase 7 B1-B3) [P7]
+│   │   ├── __init__.py             # register_connector(MS365Connector()) side effect [P7]
+│   │   ├── auth.py                 # msal paste-code OAuth + refresh-token keyring 保管 [P7]
+│   │   ├── fetcher.py              # httpx Graph client + 3 endpoint cursors (calendar / onedrive / outlook) [P7]
+│   │   ├── mapper.py               # 3 source_type mappers (ms365_calendar / ms365_onedrive / ms365_outlook) [P7]
+│   │   └── connector.py            # MS365Connector(sync) with per-endpoint isolation [P7]
+│   └── box/                        # Box connector (Phase 7 C1-C3) [P7]
+│       ├── __init__.py             # register_connector(BoxConnector()) side effect [P7]
+│       ├── auth.py                 # boxsdk OAuth2 + refresh-token keyring 保管 [P7]
+│       ├── fetcher.py              # Box Events API + stream_position cursor [P7]
+│       ├── mapper.py               # RawBoxEvent → SourceObserved (source_type=box_event) [P7]
+│       └── connector.py            # BoxConnector(sync) [P7]
 ├── markdown/                       # workspace surface 生成 + ingest parser
 │   ├── render/                     # Jinja2 テンプレート [P1]
 │   ├── templates/                  # Jinja2 ファイル (per-renderer) [P1+2]

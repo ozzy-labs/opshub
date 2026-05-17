@@ -117,7 +117,18 @@ Phase 3 sub-issue B (PR #51-55) で GitHub connector を本 contract に沿っ�
 - ADR-0005 整合 (summary / external_id / url のみ保持、full body は保持しない)
 - 失敗時は `ConnectorSyncFailed` を append して fail-fast、token / PII を event log に漏らさない
 
-Slack / Microsoft 365 / Box は Phase 3.x で同 contract に従って追加する。
+### Phase 7 (Connectors Wave 2) validation
+
+Phase 3 で導入した Connector Contract は Phase 7 で 3 新規 connector (Slack / Microsoft 365 / Box) の実装を経て validated:
+
+- **Auth + token storage** — 3 connector とも `core/secrets` + keyring 経路を再利用 (ADR-0014 contract、`tests/unit/connectors/<name>/test_auth.py`)
+- **Fetcher + cursor** — 3 connector とも `connector_cursors` projection で cursor 管理 (MS365 は 3 cursor key、Slack は per-channel JSON、Box は単一 stream_position)
+- **Mapper + source_type** — 各 connector が distinct な `source_type` で `sources` projection に persist (`slack_message` / `ms365_calendar` / `ms365_onedrive` / `ms365_outlook` / `box_event`)
+- **ADR-0005 (External Content Min)** — 全 connector で `summary` ≤ 200 chars enforce (test pin: `tests/integration/test_phase7_lifecycle.py` および per-connector unit test)
+- **Rate-limit handling** — exponential backoff 1s/2s/4s max 3 retries、最終失敗で `ConnectorSyncFailed` event (test pin per connector: `tests/integration/test_phase7_connector_atomicity.py`)
+- **CI mock 規律** — 全 connector test は SDK / HTTP fully mocked、実 API 非接続
+
+Contract の signature 変更は本 phase で発生せず (Phase 3 で確定済の `Connector` Protocol が 3 つの新 connector で適合)、ADR-0010 は Phase 7 で touch せず Phase 7.x 以降の Additional connectors / common OAuth helper refactor で再評価する。
 
 ## 関連
 

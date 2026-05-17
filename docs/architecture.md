@@ -134,11 +134,29 @@ CLI: `opshub propose generate / list / apply / reject` 4 subcommands。
 
 詳細は [ADR-0016: Action Loop and Structured Output](adr/0016-action-loop-and-structured-output.md) を参照。
 
-### 2.9 Workspace Generation Layer
+### 2.9 Connectors Wave 2 layer (Phase 7)
+
+Phase 3 で確立した connector framework (ADR-0010 + ADR-0014 + ADR-0005) を再利用し、Slack / Microsoft 365 / Box の 3 SaaS connector を追加した。各 connector は `connectors/<name>/` package で auth + fetcher + mapper の 3 module を持ち、`connectors/registry.py` で動的登録され `opshub connector sync <name>` が dispatch する。
+
+| Connector | 取得対象 | source_type | OAuth flow | Extras |
+|---|---|---|---|---|
+| Slack | channel messages | `slack_message` | Bot token (`xoxb-`) | `[connectors-slack]` (slack-sdk) |
+| Microsoft 365 | Calendar / OneDrive / Outlook | `ms365_calendar` / `ms365_onedrive` / `ms365_outlook` | OAuth 2.0 paste-code (msal) | `[connectors-ms365]` (msal + httpx) |
+| Box | file/folder events | `box_event` | OAuth 2.0 paste-code (boxsdk) | `[connectors-box]` (boxsdk) |
+
+各 connector は ADR-0005 (External Content Min) を遵守: body 全文を取り込まず metadata + summary 200 chars 以内のみ persist。token は `core/secrets` + keyring + env var override (`OPSHUB_CONNECTOR_<NAME>_<PURPOSE>`)。rate-limit は exponential backoff (1s/2s/4s, max 3 retries) → 最終失敗で `ConnectorSyncFailed` event。
+
+各 connector の sync は cursor-based (`connector_cursors` projection を再利用)。MS365 は 3 endpoint × 3 cursor key (`ms365:calendar` / `ms365:onedrive` / `ms365:outlook`) を独立管理し、1 endpoint failure が他の endpoint sync を blocking しない。
+
+CLI: `opshub connector auth set connector:<slack|ms365|box>` でクレデンシャル保存、`opshub connector sync <name>` で取り込み。Phase 5 brief / Phase 6 propose は新 source_type を automatic に活用 (RecallService が `sources` projection 横断 query する設計のため)。
+
+connector-side automatic `SourceReferenced` 発行 (Slack message URL parse / GitHub issue link parse 等) は Phase 8 (Knowledge graph) の文脈で扱う。
+
+### 2.10 Workspace Generation Layer
 
 projection を読み、markdown (tasks / briefings / reviews / handoffs / dashboards) を生成。read-only。Jinja2 で template 化。
 
-### 2.10 Agent Runtime Boundary
+### 2.11 Agent Runtime Boundary
 
 agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換え / event bypass は禁止。lefthook / CI で検出する。
 
@@ -283,11 +301,12 @@ Agent は以下を行わない。
 |---|---|---|
 | 1 | event store, tasks projection, CLI 骨格, markdown 生成, tests, CI | connector, vector, lock, triage |
 | 2 | inbox triage, decisions, work sessions, locks, handoffs | connector, vector |
-| 3 | Connector framework + GitHub connector + workspace inbox file ingest (✅ 2026-05-17 完了)。Slack / Microsoft 365 / Box は Phase 7 (Connectors Wave 2、epic #113) | vector recall |
+| 3 | Connector framework + GitHub connector + workspace inbox file ingest (✅ 2026-05-17 完了) | vector recall |
 | 4 | vector recall, semantic search, duplicate detection (Pluggable Embedder + sqlite-vec、✅ 2026-05-17 完了) | briefing 自動生成 / event 駆動自動 embed (Phase 5) |
 | 5 | Briefing layer (ADR-0015 + Pluggable LLM Anthropic / OpenAI + `opshub brief` + event-driven auto-embed 補助、✅ 2026-05-17 完了) | Local LLM backend / `links` projection 本実装 (Phase 6 / Phase 6.x) |
 | 6 | Action loop layer (ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain + `opshub propose` CLI、human-in-the-loop apply 必須、✅ 2026-05-17 完了) | `llama.cpp` direct binding / proposal scoring / multi-step plans (Phase 6.x) |
-| 7 | Connectors Wave 2 (Slack / Microsoft 365 / Box、epic #113) | — |
+| 7 | Connectors Wave 2 (Slack + Microsoft 365 + Box、ADR-0010 + ADR-0014 + ADR-0005 を再利用、✅ 2026-05-17 完了、epic #113) | additional connectors (Notion / Linear / Jira 等) / common OAuth helper refactor (Phase 7.x) / Knowledge graph (Phase 8) |
+| 8 | Knowledge graph (epic #128) | Planned |
 
 詳細は [Principles 9 (Phased Delivery)](principles.md) 参照。
 
@@ -296,4 +315,4 @@ Agent は以下を行わない。
 1. 4.x で扱う `embeddings` テーブルのスキーマ (sqlite-vec への bind 方法を含む)
 2. `Decision` テーブルと `Task` テーブルの関係 (Decision は Task の親か別 entity か)
 3. `events` の partitioning / archive 戦略 (long-term 運用時)
-4. multi-machine 利用 (将来 sync を許す場合の競合解決) — principles.md §Open Q #5 と同件、Phase 7+ で別 plan
+4. multi-machine 利用 (将来 sync を許す場合の競合解決) — principles.md §Open Q #5 と同件、Phase 9+ で別 plan (Phase 8 = Knowledge graph、epic #128 を先行)
