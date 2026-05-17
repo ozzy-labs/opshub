@@ -1,31 +1,42 @@
-# Tag-triggered release build + (future) PyPI publish.
+# Tag-triggered PyPI release via Trusted Publishers (OIDC).
 #
 # This workflow runs on every SemVer tag (``v*.*.*``) and:
 #
 #   1. Validates that ``__version__`` matches the tag (fails fast on typo)
 #   2. Builds the sdist + wheel via ``uv build``
-#   3. Uploads the artifacts to the workflow run (90-day retention) for
-#      inspection or optional manual attachment to a GitHub Release
+#   3. Publishes to PyPI under the distribution name ``ozzylabs-opshub`` via
+#      Trusted Publishers (OIDC) — no static ``PYPI_TOKEN`` / ``TWINE_PASSWORD``
+#      lives anywhere in this repository
 #
-# In the v0.1.x line, **PyPI publishing is deferred** — see
-# `docs/RELEASE_RUNBOOK.md §Future: PyPI migration` and ADR-0001 §Updates
-# for the rationale. The primary distribution path is git source:
+# Prerequisites (one-time, outside this workflow):
 #
-#     uv tool install git+https://github.com/ozzy-labs/opshub.git@v0.1.0
+#   1. A Trusted Publisher must be registered on PyPI for the
+#      ``ozzylabs-opshub`` project at
+#      https://pypi.org/manage/account/publishing/ (or the project page once
+#      the first upload lands). Required fields:
+#        - PyPI Project Name: ``ozzylabs-opshub``
+#        - Owner: ``ozzy-labs`` (the GitHub org)
+#        - Repository: ``opshub``
+#        - Workflow filename: ``release.yaml``
+#        - Environment name: ``pypi``
+#      See ``docs/RELEASE_RUNBOOK.md §One-time setup`` for the click-path.
 #
-# The ``publish`` job below is preserved as commented-out scaffolding so the
-# migration to PyPI is a small, mostly-mechanical change:
+#   2. A GitHub Environment named ``pypi`` must exist in repo Settings
+#      → Environments. The name must match step 1 exactly — PyPI uses
+#      it as part of the Trusted Publisher matching key.
 #
-#   1. Register a Trusted Publisher on PyPI (Owner ``ozzy-labs`` /
-#      Repository ``opshub`` / Workflow ``release.yaml`` / Environment ``pypi``)
-#   2. Create the ``pypi`` GitHub Environment in repo Settings → Environments
-#   3. Uncomment the ``publish`` job below
-#   4. Update README + CHANGELOG to advertise ``uv tool install opshub``
+#   3. The git tag must match ``__version__`` in ``src/opshub/__init__.py``
+#      exactly (with the leading ``v`` stripped). The ``build`` job
+#      enforces this and fails fast on mismatch.
 #
-# Trusted Publishers (OIDC) replace static ``PYPI_TOKEN`` / ``TWINE_PASSWORD`` —
-# no long-lived registry tokens live in this repository. This matches the
-# project's npm Trusted Publishers stance (CLAUDE.md). See
-# https://docs.pypi.org/trusted-publishers/ for the full PyPI-side flow.
+# Note: the PyPI distribution name (``ozzylabs-opshub``) differs from the
+# Python import name (``opshub``) and the CLI command name (``opshub``).
+# The bare ``opshub`` name was unavailable on PyPI; PEP 423 prefers an
+# ``<owner>-<package>`` form for owned packages. See ADR-0001 §Updates.
+#
+# References:
+#   - https://docs.pypi.org/trusted-publishers/
+#   - knowledge MCP: ``standards/npm-trusted-publishers`` (equivalent npm shape)
 name: Release
 
 on:
@@ -100,36 +111,28 @@ jobs:
           # public-repo artifacts.
           retention-days: 90
 
-  # TODO(pypi): re-enable when migrating from git-source distribution to PyPI.
-  # The job below is intentionally commented out for the v0.1.x line so
-  # tagged releases produce verified artifacts without publishing to PyPI.
-  # See docs/RELEASE_RUNBOOK.md §Future: PyPI migration for the click-path
-  # to re-enable. The shape below is correct as of 2026-05-18; review the
-  # PyPI Trusted Publishers docs at https://docs.pypi.org/trusted-publishers/
-  # before un-commenting in case the action API has moved on.
-  #
-  # publish:
-  #   name: Publish to PyPI
-  #   needs: build
-  #   runs-on: ubuntu-24.04
-  #   environment:
-  #     name: pypi
-  #     url: https://pypi.org/project/opshub/
-  #   permissions:
-  #     # OIDC token issuance for PyPI Trusted Publishers. Without this
-  #     # the ``pypa/gh-action-pypi-publish`` step has no way to
-  #     # authenticate -- there is intentionally no fallback token here.
-  #     id-token: write
-  #   steps:
-  #     - name: Download build artifacts
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: dist
-  #         path: dist/
-  #
-  #     - name: Publish to PyPI
-  #       # OIDC auth is implicit when ``id-token: write`` is set and the
-  #       # job's environment name matches the PyPI Trusted Publisher
-  #       # configuration. No ``password:`` / ``user:`` inputs --
-  #       # supplying them would silently fall back to legacy token auth.
-  #       uses: pypa/gh-action-pypi-publish@release/v1
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ozzylabs-opshub/
+    permissions:
+      # OIDC token issuance for PyPI Trusted Publishers. Without this
+      # the ``pypa/gh-action-pypi-publish`` step has no way to
+      # authenticate -- there is intentionally no fallback token here.
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        # OIDC auth is implicit when ``id-token: write`` is set and the
+        # job's environment name matches the PyPI Trusted Publisher
+        # configuration. No ``password:`` / ``user:`` inputs --
+        # supplying them would silently fall back to legacy token auth.
+        uses: pypa/gh-action-pypi-publish@release/v1

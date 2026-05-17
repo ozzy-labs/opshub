@@ -1,6 +1,6 @@
 # OpsHub
 
-[![Release](https://img.shields.io/github/v/release/ozzy-labs/opshub?sort=semver)](https://github.com/ozzy-labs/opshub/releases)
+[![PyPI](https://img.shields.io/pypi/v/ozzylabs-opshub.svg)](https://pypi.org/project/ozzylabs-opshub/)
 [![CI](https://github.com/ozzy-labs/opshub/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/ozzy-labs/opshub/actions/workflows/ci.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
@@ -16,26 +16,35 @@ shipping state to a cloud service.
 
 ## Install
 
-OpsHub is distributed directly from this GitHub repository (PyPI publishing is
-deferred; see [ADR-0001 §Updates](docs/adr/0001-python-stack.md#updates)).
-Install via `uv`:
+OpsHub is distributed on PyPI under the name **`ozzylabs-opshub`** (PyPI has no
+namespace concept, so we follow the PEP 423 `<owner>-<package>` convention).
+The CLI command stays `opshub`.
 
 ```bash
-# Latest release (recommended)
-uv tool install git+https://github.com/ozzy-labs/opshub.git@v0.1.0
-
-# Or HEAD of main (bleeding edge)
-uv tool install git+https://github.com/ozzy-labs/opshub.git
+uv tool install ozzylabs-opshub
+# or
+pipx install ozzylabs-opshub
 ```
 
 Optional extras (pulled only if needed):
 
 ```bash
-uv tool install "opshub[llm-anthropic,connectors-github] @ git+https://github.com/ozzy-labs/opshub.git@v0.1.0"
+uv tool install "ozzylabs-opshub[llm-anthropic,connectors-github]"
 ```
 
 See [Optional dependencies](#optional-dependencies) below for the full extras
-matrix. `pipx install` works the same way (`pipx install git+https://...`).
+matrix.
+
+### Alternative: install directly from GitHub
+
+You can also install from a tagged git ref (no PyPI involvement):
+
+```bash
+uv tool install git+https://github.com/ozzy-labs/opshub.git@v0.1.0
+```
+
+This is useful for pre-release tags, unreleased fixes on `main`, or air-gapped
+environments where PyPI isn't reachable.
 
 ## Quickstart
 
