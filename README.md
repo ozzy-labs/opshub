@@ -175,6 +175,8 @@ opshub graph expand task:<task-id> --depth 2 --format dot
 - [`docs/architecture.md`](docs/architecture.md) — layered architecture overview
 - [`docs/adr/`](docs/adr/README.md) — Architecture Decision Records
 - [`docs/upgrading.md`](docs/upgrading.md) — version migration notes (when applicable)
+- [`docs/release-notes-v0.1.0.md`](docs/release-notes-v0.1.0.md) — v0.1.0 narrative release notes
+- [`docs/RELEASE_RUNBOOK.md`](docs/RELEASE_RUNBOOK.md) — how to cut a release (maintainers)
 - [`CHANGELOG.md`](CHANGELOG.md) — release history
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution guidelines
 - [`SECURITY.md`](SECURITY.md) — vulnerability disclosure
