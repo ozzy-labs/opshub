@@ -107,21 +107,28 @@ context to 1-hop neighbours of the topic without manual citation curation.
 
 ## Install
 
-v0.1.x is distributed directly from this repository (PyPI publishing is
-deferred — see [ADR-0001 §Updates](../docs/adr/0001-python-stack.md#updates)
-for the rationale and migration path).
+v0.1.0 ships on PyPI under the distribution name **`ozzylabs-opshub`** (PyPI
+has no namespace concept; we use the PEP 423 `<owner>-<package>` form
+because the bare `opshub` name was unavailable). The CLI command stays
+`opshub`.
 
 ```bash
-uv tool install git+https://github.com/ozzy-labs/opshub.git@v0.1.0
+uv tool install ozzylabs-opshub
 # or
-pipx install "git+https://github.com/ozzy-labs/opshub.git@v0.1.0"
+pipx install ozzylabs-opshub
 ```
 
 For LLM features:
 
 ```bash
-uv tool install "opshub[llm-anthropic] @ git+https://github.com/ozzy-labs/opshub.git@v0.1.0"
+uv tool install "ozzylabs-opshub[llm-anthropic]"
 opshub connector auth set llm:anthropic
+```
+
+Alternative — install directly from a tagged git ref (no PyPI involvement):
+
+```bash
+uv tool install git+https://github.com/ozzy-labs/opshub.git@v0.1.0
 ```
 
 The optional extras matrix is in the [README](https://github.com/ozzy-labs/opshub#optional-dependencies)

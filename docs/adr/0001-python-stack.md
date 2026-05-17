@@ -246,50 +246,58 @@ This change is also why this ADR's §"配布チャネル" table no longer mentio
 `[vector]` as a Phase-3-end prerequisite — sqlite-vec is now available out of
 the box.
 
-### v0.1.0 — Git-source distribution (defer PyPI) (2026-05-18)
+### v0.1.0 — PyPI distribution under `ozzylabs-opshub` (2026-05-18)
 
-v0.1.0 ships via **git source `uv tool install`** rather than the PyPI
-Trusted Publishers flow originally documented in §"配布チャネル". The release
-workflow (`.github/workflows/release.yaml`) still validates the build on every
-tag push, but the PyPI publish job is intentionally dormant.
+v0.1.0 ships on **PyPI under the distribution name `ozzylabs-opshub`** — not
+the bare `opshub` originally planned. The CLI command, Python import name,
+and source directory all stay `opshub`; only the PyPI-side distribution
+name has the prefix.
 
-**Why defer**:
+**Why the prefix**:
 
-- v0.1.0 audience is AI-agent developers / personal users / a small set of
-  early adopters who can paste a `uv tool install git+...` URL without
-  friction
-- PyPI account + Trusted Publisher setup + 2FA + name reservation is ~15 min
-  of Web-UI work that is not load-bearing for the initial release
-- `uv tool install git+https://github.com/ozzy-labs/opshub.git@v0.1.0`
-  resolves correctly against a public repo with zero additional config; the
-  rest of the `uv` lifecycle (`upgrade` / `uninstall`) works the same way as
-  for PyPI-sourced installs
-- Renovate / Dependabot for downstream consumers can detect tag updates via
-  the `github-tags` datasource without PyPI; the syntax is well-supported
+- The bare `opshub` was rejected by PyPI's Pending-Publisher pre-registration
+  (likely a typosquat-prevention reservation — the public index
+  (`/simple/opshub/`) returns 404, but the Web UI refused to register the
+  name)
+- PyPI does **not** support npm-style `@scope/package` namespacing (PEP 708
+  is in discussion but not landed); the de facto convention for
+  organisation-owned packages is PEP 423's `<owner>-<package>` form
+- `ozzylabs-opshub` makes the ownership relationship visible on `pypi.org`
+  in the same way `@ozzylabs/foo` does on `npmjs.com`, and is the natural
+  prefix if future ozzy-labs Python packages need PyPI distribution
 
-**What's preserved**:
+**Implementation footprint**:
 
-- The release workflow's `build` job (tag-vs-`__version__` verification +
-  `uv build`) — produces sdist + wheel as workflow artifacts (90-day
-  retention) for inspection / optional GitHub-Release attachment
-- A `# TODO(pypi):` commented `publish` job inside `release.yaml`, ready to
-  re-enable when migrating to PyPI
-- The original PyPI Trusted Publisher runbook content under
-  `docs/RELEASE_RUNBOOK.md §Future: PyPI migration` — re-enabling is a ~5
-  line YAML edit plus the one-time PyPI Web UI registrations
+- `pyproject.toml [project] name = "ozzylabs-opshub"` — the only "rename"
+  touch point
+- Wheel filename becomes `ozzylabs_opshub-0.1.0-py3-none-any.whl` (PyPI
+  normalises `-` → `_` in distribution filenames)
+- Python import: `import opshub` — unchanged
+- CLI command: `opshub --version` — unchanged
+- README + RUNBOOK + release-notes + CHANGELOG: install command shows
+  `uv tool install ozzylabs-opshub`, with `git+https://...@vX.Y.Z` as an
+  Alternative install path for unreleased / air-gapped scenarios
+- PyPI Trusted Publisher must register with **PyPI Project Name =
+  `ozzylabs-opshub`** (not `opshub`); the GitHub org / repo / workflow /
+  environment values are unchanged
 
-**Trade-offs accepted**:
+**Earlier exploration (superseded)**:
 
-- Install command is longer:
-  `uv tool install git+https://github.com/ozzy-labs/opshub.git@v0.1.0` vs.
-  the eventual `uv tool install opshub`
-- Auto-pinning for downstream consumers is via `github-tags` datasource,
-  not the simpler PyPI version pin
-- `pypi.org` discoverability is absent until migration
+A short-lived decision (~30 minutes between PR #157 and this one) was to
+ship v0.1.0 via `uv tool install git+https://github.com/...@v0.1.0` and
+defer PyPI entirely. That was reverted once the maintainer registered the
+PyPI account (`ozzylabs`) and discovered the bare-name block — at which
+point PyPI distribution under a prefixed name became cheaper than
+maintaining the git-source-only path. PR #157 is preserved in git history
+for the rationale + the install-from-git fallback documentation.
 
-These costs are smaller than the PyPI setup activation energy for v0.1.x.
-Migrate to PyPI when the user base outgrows the current friction (heuristic:
-when the install instructions in the README become a support burden).
+**Renovate / Dependabot**:
+
+Downstream consumers using Renovate / Dependabot can pin
+`ozzylabs-opshub` via the standard `pypi` datasource — no special config
+required. The `git+https://` Alternative install path is also supported
+(via `github-releases` / `github-tags` datasource) for users who prefer
+not to depend on PyPI.
 
 ## 関連
 

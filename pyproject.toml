@@ -1,5 +1,16 @@
 [project]
-name = "opshub"
+# PyPI distribution name. PEP 423 ``<owner>-<package>`` form because PyPI
+# does not support npm-style ``@scope`` namespacing — the bare ``opshub``
+# name was rejected by PyPI's Pending-Publisher pre-registration (likely a
+# typosquat-prevention reservation), so v0.1.0 ships under the
+# owner-prefixed form.
+#
+# Note: this is the *distribution* name only. The Python import name
+# stays ``opshub`` (see ``src/opshub/``), and the CLI command stays
+# ``opshub`` (see ``[project.scripts]`` below). Users install with
+# ``uv tool install ozzylabs-opshub`` and run ``opshub --version`` —
+# same pattern as ripgrep on PyPI (dist ``ripgrep`` / binary ``rg``).
+name = "ozzylabs-opshub"
 version = "0.1.0"
 description = "Local-first operational memory and execution hub for humans and AI agents"
 readme = "README.md"
@@ -99,8 +110,10 @@ dev = [
   "pyright>=1.1.380",
 ]
 # Convenience: install everything a Phase 4 user typically wants.
+# The self-reference must use the *distribution* name (``ozzylabs-opshub``),
+# not the Python import name (``opshub``) — uv resolves this against PyPI.
 all = [
-  "opshub[vector,local-embedding,api-embedding-openai,connectors-github,connectors-slack,secrets]",
+  "ozzylabs-opshub[vector,local-embedding,api-embedding-openai,connectors-github,connectors-slack,secrets]",
 ]
 
 [project.scripts]
