@@ -107,22 +107,27 @@ context to 1-hop neighbours of the topic without manual citation curation.
 
 ## Install
 
+v0.1.x is distributed directly from this repository (PyPI publishing is
+deferred — see [ADR-0001 §Updates](../docs/adr/0001-python-stack.md#updates)
+for the rationale and migration path).
+
 ```bash
-uv tool install opshub
+uv tool install git+https://github.com/ozzy-labs/opshub.git@v0.1.0
 # or
-pipx install opshub
+pipx install "git+https://github.com/ozzy-labs/opshub.git@v0.1.0"
 ```
 
 For LLM features:
 
 ```bash
-uv tool install "opshub[vector,llm-anthropic]"
+uv tool install "opshub[llm-anthropic] @ git+https://github.com/ozzy-labs/opshub.git@v0.1.0"
 opshub connector auth set llm:anthropic
 ```
 
 The optional extras matrix is in the [README](https://github.com/ozzy-labs/opshub#optional-dependencies)
 — each extras group is small and pulls in only what its name implies. The
-default install is ~5MB; the local-embedding extras pulls ~500MB of model
+default install is ~5 MB (including the base `sqlite-vec` extension promoted
+from extras in Phase 8.x); the `local-embedding` extras pulls ~500 MB of model
 weights and is opt-in.
 
 ## Quickstart

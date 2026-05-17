@@ -1,6 +1,6 @@
 # OpsHub
 
-[![PyPI](https://img.shields.io/pypi/v/opshub.svg)](https://pypi.org/project/opshub/)
+[![Release](https://img.shields.io/github/v/release/ozzy-labs/opshub?sort=semver)](https://github.com/ozzy-labs/opshub/releases)
 [![CI](https://github.com/ozzy-labs/opshub/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/ozzy-labs/opshub/actions/workflows/ci.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
@@ -16,19 +16,26 @@ shipping state to a cloud service.
 
 ## Install
 
+OpsHub is distributed directly from this GitHub repository (PyPI publishing is
+deferred; see [ADR-0001 §Updates](docs/adr/0001-python-stack.md#updates)).
+Install via `uv`:
+
 ```bash
-uv tool install opshub
-# or
-pipx install opshub
+# Latest release (recommended)
+uv tool install git+https://github.com/ozzy-labs/opshub.git@v0.1.0
+
+# Or HEAD of main (bleeding edge)
+uv tool install git+https://github.com/ozzy-labs/opshub.git
 ```
 
 Optional extras (pulled only if needed):
 
 ```bash
-uv tool install "opshub[vector,llm-anthropic,connectors-github]"
+uv tool install "opshub[llm-anthropic,connectors-github] @ git+https://github.com/ozzy-labs/opshub.git@v0.1.0"
 ```
 
-See [Optional dependencies](#optional-dependencies) below for the full extras matrix.
+See [Optional dependencies](#optional-dependencies) below for the full extras
+matrix. `pipx install` works the same way (`pipx install git+https://...`).
 
 ## Quickstart
 
