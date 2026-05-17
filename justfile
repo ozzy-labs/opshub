@@ -80,8 +80,15 @@ opshub *args:
 # CI. ``httpx`` is already pulled by ``connectors-github`` so the
 # additional ``--extra`` flag is informational — it pins the dependency
 # even if the GitHub connector extras shift in the future.
+#
+# ``connectors-slack`` is included so Phase 7 step A1 unit tests
+# (``tests/unit/connectors/slack/test_auth.py``) can ``importorskip``
+# the ``slack_sdk`` SDK and exercise mocked ``auth.test`` round-trips.
+# Every Slack API call is patched at the ``slack_sdk.WebClient``
+# boundary so no real request leaves CI (mirrors the Phase 3 GitHub
+# / Phase 5 OpenAI / Phase 6 Ollama mocking precedents).
 ci:
-    uv sync --locked --extra dev --extra connectors-github --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
+    uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
     uv run ruff check
     uv run ruff format --check
     uv run pyright

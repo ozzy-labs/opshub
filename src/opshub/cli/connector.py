@@ -162,12 +162,11 @@ def auth_set(
     the ``OPSHUB_CONNECTOR_<NAME>_PAT`` env var to override at runtime
     without touching the keychain (useful for CI / containers).
 
-    Currently supported names: ``github``, ``embedder:openai``,
+    Currently supported names: ``github``, ``slack``, ``embedder:openai``,
     ``embedder:voyage``, ``llm:anthropic``, ``llm:openai``. Other
-    connectors (Slack / MS365 / Box) land in Phase 3.x; additional LLM
-    / embedder backends would extend this switch alongside their
-    factory branch in :mod:`opshub.llm.factory` /
-    :mod:`opshub.vectors.factory`.
+    connectors (MS365 / Box) land later in Phase 7; additional LLM /
+    embedder backends would extend this switch alongside their factory
+    branch in :mod:`opshub.llm.factory` / :mod:`opshub.vectors.factory`.
 
     Security: there is intentionally no ``auth get`` command — we never
     echo tokens to stdout. The env-var override is the documented
@@ -181,6 +180,16 @@ def auth_set(
         from opshub.connectors.github.auth import GITHUB_PAT_SECRET_KEY
 
         key = GITHUB_PAT_SECRET_KEY
+    elif name == "slack":
+        # Phase 7 step A1: the Slack bot token is stored under
+        # ``connector:slack:bot_token`` so the CLI writer + SlackAuth
+        # reader cannot drift (mirrors the GitHub PAT precedent).
+        # Lazy-imported per-branch so the ``slack_sdk`` import path
+        # (deferred inside ``SlackAuth.test_token``) stays off the
+        # cold-start path entirely when the operator never uses Slack.
+        from opshub.connectors.slack.auth import SLACK_BOT_TOKEN_SECRET_KEY
+
+        key = SLACK_BOT_TOKEN_SECRET_KEY
     elif name == "embedder:openai":
         # The embedder modules export the keyring key as a module
         # constant so the CLI writer + embedder reader cannot drift.
@@ -210,7 +219,7 @@ def auth_set(
     else:
         typer.echo(
             f"unknown auth target {name!r}; currently supported: "
-            "github, embedder:openai, embedder:voyage, "
+            "github, slack, embedder:openai, embedder:voyage, "
             "llm:anthropic, llm:openai",
             err=True,
         )
