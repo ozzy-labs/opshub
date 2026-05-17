@@ -5,9 +5,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/)
 
-**Local-first operational memory + execution hub for humans and AI agents.**
+English | [日本語](README.ja.md)
 
-*人間と AI エージェントのための、ローカルファーストな Operational Memory 兼 実行ハブ。*
+**Local-first operational memory + execution hub for humans and AI agents.**
 
 OpsHub stores work state — tasks, decisions, briefings, embeddings, links — in
 a single SQLite event log under your home directory. AI agents read and write
@@ -144,7 +144,7 @@ opshub embeddings rebuild                             # bulk-embed task/decision
 opshub embeddings status                              # show backend + per-entity-type embedded vs pending
 opshub embeddings drain                               # retry pending embeddings (auto-embed hook backup)
 opshub embeddings find-duplicates -t 0.92             # offline near-duplicate scan
-opshub recall "認証の最近の決定"                       # semantic search across all entities
+opshub recall "recent decisions about authentication" # semantic search across all entities
 
 # Briefing (Phase 5, ADR-0015)
 opshub connector auth set llm:anthropic               # store Anthropic API key in OS keychain
