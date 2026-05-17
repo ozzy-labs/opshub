@@ -60,7 +60,7 @@ EmbeddingBackend = Literal["disabled", "local", "openai", "voyage"]
 #: default per ADR-0015 §決定 (b) — opting into a real backend always
 #: requires an explicit config change so a fresh ``uv tool install``
 #: never silently hits a billed API on first run.
-LLMBackend = Literal["disabled", "anthropic", "openai"]
+LLMBackend = Literal["disabled", "anthropic", "openai", "ollama"]
 
 
 class StorageSettings(BaseModel):
@@ -161,23 +161,51 @@ class OpenAILLMSettings(BaseModel):
     model_version: str = "2026-05-01"
 
 
+class OllamaLLMSettings(BaseModel):
+    """Ollama local LLM backend tuning (see ADR-0016 §決定 (h)).
+
+    Defaults target the Phase 6 推奨 local model (``llama3.2:3b`` — 2 GB,
+    CPU-friendly) talking to the default Ollama daemon location
+    (``http://localhost:11434``). No API key is needed (local daemon).
+
+    Operators can override every field via the ``opshub.toml``
+    ``[llm.ollama]`` section or env vars
+    (``OPSHUB_LLM__OLLAMA__MODEL_ID`` / ``OPSHUB_LLM__OLLAMA__HOST`` /
+    ``OPSHUB_LLM__OLLAMA__TIMEOUT_SECONDS``).
+
+    ``timeout_seconds`` is exposed because local model latency varies
+    wildly with hardware — a 3 B model can answer in <5 s on a recent
+    Apple Silicon but easily exceeds 30 s on a CPU-only laptop. The
+    Anthropic / OpenAI clients delegate timeouts to the SDK defaults
+    (~600 s), so an explicit knob is only needed for the Ollama path.
+    """
+
+    model_id: str = "llama3.2:3b"
+    model_version: str = "ollama"
+    host: str = "http://localhost:11434"
+    timeout_seconds: float = 60.0
+
+
 class LLMSettings(BaseModel):
-    """LLM backend selection (see ADR-0015).
+    """LLM backend selection (see ADR-0015 + ADR-0016 §決定 (h)).
 
     ``backend = "disabled"`` is the Phase 5 default per ADR-0015 §決定 (b)
-    — opting into ``anthropic`` / ``openai`` always requires an explicit
-    config / env change so a fresh ``uv tool install`` does not silently
-    bill the operator on first run.
+    — opting into ``anthropic`` / ``openai`` / ``ollama`` always requires
+    an explicit config / env change so a fresh ``uv tool install`` does
+    not silently bill the operator (API backends) or fail-fast on a
+    missing local daemon (Ollama) on first run.
 
-    Per-backend nested sections (``anthropic`` / ``openai``) carry the
-    model_id / model_version defaults that :mod:`opshub.llm.factory`
-    forwards to the concrete client. The shape mirrors
-    :class:`EmbeddingSettings` so operators keep one mental model.
+    Per-backend nested sections (``anthropic`` / ``openai`` / ``ollama``)
+    carry the model_id / model_version defaults (plus host / timeout for
+    Ollama) that :mod:`opshub.llm.factory` forwards to the concrete
+    client. The shape mirrors :class:`EmbeddingSettings` so operators
+    keep one mental model.
     """
 
     backend: LLMBackend = "disabled"
     anthropic: AnthropicLLMSettings = Field(default_factory=AnthropicLLMSettings)
     openai: OpenAILLMSettings = Field(default_factory=OpenAILLMSettings)
+    ollama: OllamaLLMSettings = Field(default_factory=OllamaLLMSettings)
 
 
 class OpsHubSettings(BaseSettings):

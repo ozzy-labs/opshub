@@ -72,8 +72,16 @@ opshub *args:
 # SDK; the tests still mock every network call (``openai.OpenAI`` is
 # patched per-test) so no real chat-completion request leaves the
 # process.
+#
+# ``llm-ollama`` is included so Phase 6 step A4 tests
+# (``tests/unit/llm/test_ollama_client.py``) can import ``httpx`` and
+# exercise the Ollama OpenAI-compatible client; every HTTP request is
+# routed through ``httpx.MockTransport`` so no real daemon call leaves
+# CI. ``httpx`` is already pulled by ``connectors-github`` so the
+# additional ``--extra`` flag is informational — it pins the dependency
+# even if the GitHub connector extras shift in the future.
 ci:
-    uv sync --locked --extra dev --extra connectors-github --extra vector --extra llm-anthropic --extra llm-openai
+    uv sync --locked --extra dev --extra connectors-github --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
     uv run ruff check
     uv run ruff format --check
     uv run pyright

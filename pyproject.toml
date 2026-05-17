@@ -46,6 +46,11 @@ api-embedding-voyage = ["voyageai>=0.2"]
 # overlapping extras additively.
 llm-anthropic = ["anthropic>=0.40"]
 llm-openai = ["openai>=1.50"]
+# Local LLM backend (Phase 6, ADR-0016 §決定 (h)). Ollama daemon's
+# OpenAI-compatible endpoint is consumed via ``httpx``. ``httpx`` is also
+# pulled by ``connectors-github``; we re-pin it here so opting into
+# ``llm-ollama`` alone (without GitHub) still resolves the dependency.
+llm-ollama = ["httpx>=0.27"]
 # Connectors (Phase 3).
 connectors-github = ["httpx>=0.27", "PyGithub>=2.3"]
 connectors-slack = ["slack-sdk>=3.30"]

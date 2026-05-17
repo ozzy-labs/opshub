@@ -50,7 +50,19 @@ jobs:
         # round-trips. No real API call leaves CI — every SDK touchpoint
         # is patched (ADR-0015 §決定 + the Phase 4 OpenAI embedder
         # precedent).
-        run: uv sync --locked --extra dev --extra connectors-github --extra vector --extra llm-anthropic
+        #
+        # ``llm-openai`` is included so Phase 5 step A4 unit tests
+        # (``tests/unit/llm/test_openai_client.py``) can import the
+        # ``openai`` SDK; every chat-completion call is patched at the
+        # ``openai.OpenAI`` boundary so no real request leaves CI.
+        #
+        # ``llm-ollama`` is included so Phase 6 step A4 unit tests
+        # (``tests/unit/llm/test_ollama_client.py``) can ``importorskip``
+        # ``httpx`` and exercise the Ollama OpenAI-compatible client.
+        # Every request is routed through ``httpx.MockTransport`` so no
+        # real daemon call leaves CI (ADR-0016 §決定 (h) + the Phase 3
+        # GitHub connector mocking precedent).
+        run: uv sync --locked --extra dev --extra connectors-github --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
 
       - name: Ruff (lint)
         run: uv run ruff check

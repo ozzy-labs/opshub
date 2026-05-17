@@ -126,6 +126,7 @@ def test_build_llm_client_unknown_backend_raises(
     assert "disabled" in message
     assert "anthropic" in message
     assert "openai" in message
+    assert "ollama" in message
 
 
 # ---- factory module is lazy --------------------------------------------
@@ -148,7 +149,7 @@ def test_factory_module_does_not_import_heavy_deps() -> None:
     import opshub.llm.factory as factory_module
 
     factory_globals = set(vars(factory_module).keys())
-    for heavy_name in ("anthropic", "openai"):
+    for heavy_name in ("anthropic", "openai", "httpx"):
         assert heavy_name not in factory_globals, (
             f"factory module exposes {heavy_name!r}; lazy import discipline broken"
         )
