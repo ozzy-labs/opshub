@@ -208,6 +208,37 @@ class LLMSettings(BaseModel):
     ollama: OllamaLLMSettings = Field(default_factory=OllamaLLMSettings)
 
 
+class BoxConnectorSettings(BaseModel):
+    """Box connector configuration (Phase 7 step C1).
+
+    Holds the **non-sensitive** Box app metadata. The accompanying
+    secrets (``client_secret`` and rotating ``refresh_token``) live in
+    the OS keyring under ``connector:box:client_secret`` /
+    ``connector:box:refresh_token`` per ADR-0014 — they never appear
+    in ``opshub.toml``.
+
+    Per phase-7-plan §1 #2, the connector defaults to ``enabled = false``
+    so a fresh install never tries to talk to Box without an explicit
+    opt-in. Operators set ``enabled = true`` after running
+    ``opshub connector auth set connector:box``.
+    """
+
+    enabled: bool = False
+    client_id: str = ""
+
+
+class ConnectorsSettings(BaseModel):
+    """Top-level connectors namespace (Phase 7).
+
+    Each SaaS connector gets its own nested section. The grouping
+    matches the keyring key prefix (``connector:<name>:...``) so
+    operators see the same name in both their config file and any
+    error message pointing at a missing credential.
+    """
+
+    box: BoxConnectorSettings = Field(default_factory=BoxConnectorSettings)
+
+
 class OpsHubSettings(BaseSettings):
     """Root settings.
 
@@ -235,6 +266,7 @@ class OpsHubSettings(BaseSettings):
     workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    connectors: ConnectorsSettings = Field(default_factory=ConnectorsSettings)
 
     @model_validator(mode="after")
     def _apply_llm_backend_env_shortcut(self) -> OpsHubSettings:

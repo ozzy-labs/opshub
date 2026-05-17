@@ -80,8 +80,16 @@ opshub *args:
 # CI. ``httpx`` is already pulled by ``connectors-github`` so the
 # additional ``--extra`` flag is informational — it pins the dependency
 # even if the GitHub connector extras shift in the future.
+#
+# ``connectors-box`` is included so Phase 7 step C1 unit tests
+# (``tests/unit/connectors/box/test_auth.py``) can ``importorskip``
+# the ``boxsdk`` SDK and exercise the OAuth paste-code flow. Every
+# OAuth call is patched at the ``boxsdk.OAuth2`` boundary so no real
+# Box API request leaves CI (Phase 7 plan §1 #6 + the Phase 3 GitHub
+# connector mocking precedent). The cold-start guard still asserts
+# ``boxsdk`` never leaks onto the ``opshub --help`` path.
 ci:
-    uv sync --locked --extra dev --extra connectors-github --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
+    uv sync --locked --extra dev --extra connectors-github --extra connectors-box --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
     uv run ruff check
     uv run ruff format --check
     uv run pyright

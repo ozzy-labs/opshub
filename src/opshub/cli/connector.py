@@ -163,10 +163,11 @@ def auth_set(
     without touching the keychain (useful for CI / containers).
 
     Currently supported names: ``github``, ``embedder:openai``,
-    ``embedder:voyage``, ``llm:anthropic``, ``llm:openai``. Other
-    connectors (Slack / MS365 / Box) land in Phase 3.x; additional LLM
-    / embedder backends would extend this switch alongside their
-    factory branch in :mod:`opshub.llm.factory` /
+    ``embedder:voyage``, ``llm:anthropic``, ``llm:openai``,
+    ``connector:box`` (interactive OAuth paste-code flow). Other
+    connectors (Slack / MS365) land in subsequent Phase 7 PRs;
+    additional LLM / embedder backends would extend this switch
+    alongside their factory branch in :mod:`opshub.llm.factory` /
     :mod:`opshub.vectors.factory`.
 
     Security: there is intentionally no ``auth get`` command — we never
@@ -176,6 +177,14 @@ def auth_set(
     # Lazy imports keep CLI cold start fast (ADR-0001) and keep this
     # module compatible with ``tests/integration/test_cli_imports``.
     from opshub.core.secrets import set_secret
+
+    # ``connector:box`` runs a multi-step OAuth paste-code flow instead
+    # of storing a single token — branch out before the generic
+    # single-key path. The helper lives at module bottom so this body
+    # stays focussed on the simple ``--token``-style targets.
+    if name == "connector:box":
+        _auth_set_box(token=token)
+        return
 
     if name == "github":
         from opshub.connectors.github.auth import GITHUB_PAT_SECRET_KEY
@@ -211,7 +220,7 @@ def auth_set(
         typer.echo(
             f"unknown auth target {name!r}; currently supported: "
             "github, embedder:openai, embedder:voyage, "
-            "llm:anthropic, llm:openai",
+            "llm:anthropic, llm:openai, connector:box",
             err=True,
         )
         raise typer.Exit(code=2)
@@ -257,3 +266,77 @@ def _build_source_service(*, actor: str) -> object:
             "can run."
         )
     return builder(actor=actor)
+
+
+def _auth_set_box(*, token: str | None) -> None:
+    """Run the interactive Box OAuth paste-code flow (Phase 7 step C1).
+
+    Steps:
+
+    1. Resolve ``client_id`` from ``[connectors.box] client_id`` in the
+       operator's ``opshub.toml`` config. The client id is non-sensitive
+       so it lives in plaintext config; the matching client_secret is
+       prompted for and stored in the keyring.
+    2. Prompt for ``client_secret`` with ``hide_input=True`` (or accept
+       ``--token`` for headless / CI use), then persist it under
+       :data:`opshub.connectors.box.BOX_CLIENT_SECRET_SECRET_KEY`.
+    3. Call :meth:`BoxAuth.start_auth_flow`, print the resulting URL,
+       and prompt the operator to paste back either the redirect URL
+       or the raw ``code`` parameter.
+    4. Call :meth:`BoxAuth.complete_auth_flow` which persists the
+       refresh token via boxsdk's ``store_tokens`` callback.
+
+    The function never echoes the secret or the auth code to stdout —
+    everything sensitive flows through hidden-input prompts.
+
+    Heavy imports (:class:`BoxAuth`, the boxsdk SDK it pulls,
+    ``opshub.core.config``) stay inside this function body so the
+    ``opshub --help`` cold-start path never pays for them
+    (ADR-0001 + ``test_cli_imports`` guard).
+    """
+    # Lazy imports — keep heavy deps off the cold-start path.
+    from opshub.connectors.box import BOX_CLIENT_SECRET_SECRET_KEY, BoxAuth
+    from opshub.core.config import OpsHubSettings
+    from opshub.core.secrets import set_secret
+
+    settings = OpsHubSettings()
+    client_id = settings.connectors.box.client_id
+    if not client_id:
+        typer.echo(
+            "Box client_id is not configured. Add the following to your "
+            "opshub.toml (or set OPSHUB_CONNECTORS__BOX__CLIENT_ID):\n\n"
+            "  [connectors.box]\n"
+            '  client_id = "<your Box developer app client id>"\n',
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    if token is None:
+        # ``hide_input=True`` keeps the secret off the terminal.
+        raw_secret: str = typer.prompt("Box client_secret", hide_input=True)
+    else:
+        raw_secret = token
+    client_secret = raw_secret.strip()
+    if not client_secret:
+        typer.echo("client_secret must be non-empty", err=True)
+        raise typer.Exit(code=2)
+
+    # Persist the secret BEFORE constructing BoxAuth so the auth helper
+    # could equally resolve it from the keyring on a subsequent run.
+    # We pass it explicitly here so this single CLI invocation does not
+    # depend on the keyring round-trip succeeding (testing seam).
+    set_secret(BOX_CLIENT_SECRET_SECRET_KEY, client_secret)
+
+    auth = BoxAuth(client_id=client_id, client_secret=client_secret)
+    auth_url = auth.start_auth_flow()
+
+    typer.echo(
+        "\n1. Open this URL in a browser and authorise the opshub Box app:\n"
+        f"\n   {auth_url}\n"
+        "\n2. After Box redirects, copy the full redirect URL (or just the "
+        "'code' query parameter) and paste it below.\n"
+    )
+    # ``hide_input=True`` so the code does not linger in terminal scrollback.
+    pasted: str = typer.prompt("Paste redirect URL or code", hide_input=True)
+    auth.complete_auth_flow(pasted)
+    typer.echo("Box OAuth flow complete; refresh token stored in keyring.")
