@@ -122,7 +122,7 @@ Produce a markdown briefing.
 
 - briefing 1 flow のみ → prompt drift のリスクが低い
 - inline 定数なら mypy / pyright で参照を追跡可能
-- 外部化すると packaging (uv tool install 後の prompt 配置) を解決する必要があり scope crepp
+- 外部化すると packaging (uv tool install 後の prompt 配置) を解決する必要があり scope creep
 - prompt versioning は Phase 5.x で `briefings` projection に `prompt_id` / `prompt_version` 列を追加する形で増分対応 (Phase 5 plan §4 Open Question #2)
 
 ### (f) Prompt injection mitigation: delimiter wrap + do-not-follow preamble
@@ -271,7 +271,7 @@ Phase 5 内で確定しなかった項目 (Phase 5.x / 6 持ち越し):
 
 却下理由:
 
-- Phase 5 MVP は briefing 1 flow のみ。1 flow の prompt 差し替えのために packaging (uv tool install 後の prompt file 配置) と template loader を実装するのは scope crepp
+- Phase 5 MVP は briefing 1 flow のみ。1 flow の prompt 差し替えのために packaging (uv tool install 後の prompt file 配置) と template loader を実装するのは scope creep
 - inline 定数のままでも Phase 5.x で external override を後付け可能 (loader 経路を追加するだけ、inline 定数は fallback default として残せる)
 - Phase 4 で同じ問題に embedding service が直面しなかった (model 名は config 値、prompt は存在しない) ため、過剰一般化を避ける
 
