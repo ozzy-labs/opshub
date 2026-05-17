@@ -85,6 +85,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import Table, select
 
+from opshub.core.errors import ConfigError
 from opshub.core.ids import new_ulid
 from opshub.core.sanitise import sanitise_error_message
 from opshub.core.time import now_utc
@@ -109,6 +110,7 @@ if TYPE_CHECKING:
     from opshub.llm.client import LLMClient
     from opshub.projections.briefings import BriefingsProjection
     from opshub.services.event_store import EventStore
+    from opshub.services.links import LinkService
     from opshub.services.recall_service import RecallHit, RecallService
 
 
@@ -123,6 +125,24 @@ _DEFAULT_ACTOR = "service:briefings"
 # 2000; we truncate first so a giant traceback (e.g. a verbose retry
 # chain) never trips validation before the sanitiser runs.
 _MAX_ERROR_MESSAGE_LENGTH = 2000
+
+
+# Link types consulted by :meth:`BriefingService.generate` when
+# ``expand_graph=True`` (Phase 8 D2). The set mirrors the Phase 8 plan
+# §2.4 D2 specification — every link type that meaningfully connects a
+# briefing-source recall hit to additional operational context worth
+# feeding to the LLM. Manual / lifecycle-only link types
+# (``manual`` / ``applied_to`` from a proposal back to a task etc. are
+# kept; ``generated_from_briefing`` is excluded because a recall hit
+# being a briefing itself is an edge case the prompt would rather
+# avoid materialising twice).
+_GRAPH_EXPAND_LINK_TYPES = ["referenced_in_briefing", "references", "applied_to"]
+
+# Per-recall-hit limit when expanding via :meth:`LinkService.related`.
+# Each hit contributes at most :data:`_GRAPH_EXPAND_PER_HIT_LIMIT`
+# neighbours so the prompt size stays bounded even when an
+# operationally important entity is heavily cross-linked.
+_GRAPH_EXPAND_PER_HIT_LIMIT = 3
 
 
 # Per-entity text-column mapping. Duplicated from
@@ -216,6 +236,16 @@ class BriefingService:
         :class:`~opshub.llm.LLMClient` Protocol does not accept an
         external connection and a network round-trip must never hold
         an SQLite write lock).
+    link_service:
+        Optional :class:`~opshub.services.links.LinkService` reference.
+        Required when callers pass ``expand_graph=True`` to
+        :meth:`generate` (Phase 8 step D2): the service walks the
+        knowledge graph 1-hop from every recall hit to materialise
+        additional ``<source>`` blocks for the LLM prompt. The
+        ``None`` default keeps the Phase 5 wiring contract intact —
+        an ``expand_graph=True`` call without the dependency raises
+        :class:`ConfigError` so wiring mistakes fail loud rather than
+        silently degrading the prompt.
     """
 
     def __init__(
@@ -228,6 +258,7 @@ class BriefingService:
         *,
         actor: str = _DEFAULT_ACTOR,
         uow_factory: Callable[[], AbstractContextManager[Connection]] | None = None,
+        link_service: LinkService | None = None,
     ) -> None:
         self._recall_service = recall_service
         self._llm_client = llm_client
@@ -236,6 +267,7 @@ class BriefingService:
         self._engine = engine
         self._actor = actor
         self._uow_factory = uow_factory
+        self._link_service = link_service
 
     # ------------------------------------------------------------------ commands
 
@@ -246,6 +278,7 @@ class BriefingService:
         scope: str = "all",
         max_sources: int = 20,
         max_tokens: int = 1500,
+        expand_graph: bool = False,
     ) -> Briefing:
         """Generate a briefing for ``topic``.
 
@@ -257,12 +290,16 @@ class BriefingService:
         3. Use :class:`RecallService` to find up to ``max_sources``
            related entities; load each one's embedded body via the
            per-entity projection table.
-        4. Build the prompt with the do-not-follow-instructions
+        4. (Phase 8 D2, optional) When ``expand_graph=True``, walk the
+           knowledge graph 1-hop from each recall hit via
+           :meth:`LinkService.related` and append up to
+           :data:`_GRAPH_EXPAND_PER_HIT_LIMIT` additional source blocks.
+        5. Build the prompt with the do-not-follow-instructions
            preamble and per-source delimiters.
-        5. Call :meth:`LLMClient.complete`.
-        6. On success: append :class:`BriefingGenerated` + apply
+        6. Call :meth:`LLMClient.complete`.
+        7. On success: append :class:`BriefingGenerated` + apply
            projection (one UoW); return :class:`Briefing`.
-        7. On failure: append :class:`BriefingFailed` (one UoW) with
+        8. On failure: append :class:`BriefingFailed` (one UoW) with
            a sanitised ``error_message``; re-raise the original
            exception so the CLI can map it to an exit code.
 
@@ -283,6 +320,20 @@ class BriefingService:
             Per ADR-0015 §決定 (h), the caller is responsible for
             cost control. Surfaced to :meth:`LLMClient.complete`
             verbatim.
+        expand_graph:
+            Phase 8 step D2 (ADR-0017 §決定 (e)+(f)). When ``True``,
+            for each :class:`RecallHit` returned by recall the
+            service calls :meth:`LinkService.related` with
+            ``direction="both"``,
+            ``link_types=_GRAPH_EXPAND_LINK_TYPES``, and
+            ``limit=_GRAPH_EXPAND_PER_HIT_LIMIT`` to fetch
+            graph-adjacent entities, then materialises their text
+            via the same projection-table mapping. Each
+            ``(entity_type, entity_id)`` tuple appears in the prompt
+            **once**, with original recall hits taking precedence
+            over graph-expanded duplicates (Phase 8 plan §2.4 D2).
+            Defaults to ``False`` so the Phase 5 contract (recall
+            hits only) stays the documented baseline.
 
         Returns
         -------
@@ -291,6 +342,11 @@ class BriefingService:
 
         Raises
         ------
+        ConfigError
+            When ``expand_graph=True`` was requested but the service
+            was constructed without a :class:`LinkService` reference
+            — a wiring mistake that should fail loud, not silently
+            degrade to the recall-only prompt.
         Exception
             Whatever :meth:`LLMClient.complete` raised
             (:class:`~opshub.core.errors.ConfigError` for the
@@ -298,6 +354,17 @@ class BriefingService:
             :class:`BriefingFailed` is always appended before the
             re-raise so the audit trail records the attempt.
         """
+        if expand_graph and self._link_service is None:
+            # Fail loud rather than silently degrading: the operator
+            # explicitly asked for graph expansion and the wiring did
+            # not supply the dependency, so we raise before doing any
+            # work (no BriefingRequested event appended either —
+            # there's no attempt to audit yet).
+            raise ConfigError(
+                "expand_graph=True requires LinkService; check"
+                " opshub.cli._wiring.build_briefing_service composition"
+            )
+
         briefing_id = new_ulid()
         self._record_requested(briefing_id=briefing_id, topic=topic, scope=scope)
 
@@ -308,6 +375,15 @@ class BriefingService:
         # simply has fewer sources).
         hits = self._collect_sources(topic=topic, max_sources=max_sources)
         source_payload = self._load_source_texts(hits)
+        if expand_graph:
+            # ``_load_source_texts`` already filtered orphans / empty
+            # bodies, so the dedupe-set is keyed against the actual
+            # entities that made it into the prompt. The expansion
+            # appends to ``source_payload`` in place; the LLM prompt
+            # construction below applies the same delimiter + escape
+            # treatment uniformly so graph-expanded sources inherit
+            # the Phase 5 D1 prompt-injection-mitigation contract.
+            self._extend_with_graph_neighbours(source_payload, hits)
         source_refs: list[tuple[str, str]] = [
             (entity_type, entity_id) for entity_type, entity_id, _ in source_payload
         ]
@@ -369,23 +445,81 @@ class BriefingService:
         result: list[tuple[str, str, str]] = []
         with self._engine.connect() as conn:
             for hit in hits:
-                lookup = _ENTITY_TEXT_COLUMNS.get(hit.entity_type)
-                if lookup is None:
-                    # Unknown entity_type — skip silently. The Phase 4
-                    # recall service only ever returns the supported
-                    # families, so this branch is defensive only.
+                text = _load_entity_text(conn, hit.entity_type, hit.entity_id)
+                if text is None:
                     continue
-                table, text_column = lookup
-                row = conn.execute(
-                    select(table.c[text_column]).where(table.c["id"] == hit.entity_id)
-                ).first()
-                if row is None:
-                    continue  # orphan between recall and read.
-                value = row[0]
-                if value is None or not str(value).strip():
-                    continue
-                result.append((hit.entity_type, hit.entity_id, str(value)))
+                result.append((hit.entity_type, hit.entity_id, text))
         return result
+
+    def _extend_with_graph_neighbours(
+        self,
+        source_payload: list[tuple[str, str, str]],
+        hits: list[RecallHit],
+    ) -> None:
+        """Append 1-hop graph neighbours of ``hits`` to ``source_payload``.
+
+        Phase 8 step D2 graph-expansion path. For each recall hit, the
+        method calls :meth:`LinkService.related` with the project's
+        graph-expansion link-type whitelist
+        (:data:`_GRAPH_EXPAND_LINK_TYPES`) and a per-hit cap of
+        :data:`_GRAPH_EXPAND_PER_HIT_LIMIT`. Every discovered
+        neighbour ``(entity_type, entity_id)`` is materialised through
+        the same :func:`_load_entity_text` path as the recall hits so
+        the LLM prompt sees the embedded body for graph-expanded
+        entities (matching the Phase 5 source-loading contract).
+
+        Dedupe contract: a neighbour is appended only when its
+        ``(entity_type, entity_id)`` tuple is not already present in
+        ``source_payload``. Original recall hits therefore take
+        precedence (the loader runs first); subsequent expansions
+        also dedupe against each other so two recall hits linking to
+        the same downstream entity emit it only once.
+
+        The method mutates ``source_payload`` in place rather than
+        returning a new list so the caller's ``source_refs`` accumulator
+        stays a thin projection of the final mutated list.
+
+        ``self._link_service`` is asserted non-None by the
+        ``ConfigError`` guard at the top of :meth:`generate` — pyright
+        wants the runtime assert here to narrow the type through the
+        method body.
+        """
+        assert self._link_service is not None
+        seen: set[tuple[str, str]] = {
+            (entity_type, entity_id) for entity_type, entity_id, _ in source_payload
+        }
+        with self._engine.connect() as conn:
+            for hit in hits:
+                neighbours = self._link_service.related(
+                    hit.entity_type,
+                    hit.entity_id,
+                    direction="both",
+                    link_types=_GRAPH_EXPAND_LINK_TYPES,
+                    limit=_GRAPH_EXPAND_PER_HIT_LIMIT,
+                )
+                for link in neighbours:
+                    # ``related`` returns both directions in one list;
+                    # the "other side" is whichever endpoint is not
+                    # the recall hit. Self-loops (rare; same entity on
+                    # both sides) collapse to the same key and are
+                    # filtered by the seen-set guard.
+                    if (link.from_entity_type, link.from_entity_id) == (
+                        hit.entity_type,
+                        hit.entity_id,
+                    ):
+                        other = (link.to_entity_type, link.to_entity_id)
+                    else:
+                        other = (link.from_entity_type, link.from_entity_id)
+                    if other in seen:
+                        continue
+                    text = _load_entity_text(conn, other[0], other[1])
+                    if text is None:
+                        # Orphan / empty body — leave it out of the
+                        # prompt rather than emit an empty <source>
+                        # block. Mirrors the recall-side contract.
+                        continue
+                    seen.add(other)
+                    source_payload.append((other[0], other[1], text))
 
     def _build_messages(
         self,
@@ -536,3 +670,36 @@ class BriefingService:
             return
         with self._uow_factory() as connection:
             yield connection
+
+
+def _load_entity_text(conn: Connection, entity_type: str, entity_id: str) -> str | None:
+    """Look up the embedded body text for an entity tuple.
+
+    Shared between :meth:`BriefingService._load_source_texts` (recall
+    hits) and :meth:`BriefingService._extend_with_graph_neighbours`
+    (Phase 8 D2 graph expansion). Returns ``None`` when:
+
+    * the entity_type is outside :data:`_ENTITY_TEXT_COLUMNS` (an
+      ``inbox_item`` / ``source`` etc. is fine; anything else — e.g. a
+      ``briefing`` link target — has no embedded body to surface);
+    * the row went missing between the upstream query (recall result
+      / link list) and this lookup (orphan);
+    * the text column is ``None`` or whitespace-only (empty <source>
+      block would not help the LLM).
+
+    Hoisted to module level so the graph-expansion helper can reuse
+    it without holding a reference back to the service; matches the
+    Phase 5 contract that the LLM prompt only sees the same column
+    the embedder embedded.
+    """
+    lookup = _ENTITY_TEXT_COLUMNS.get(entity_type)
+    if lookup is None:
+        return None
+    table, text_column = lookup
+    row = conn.execute(select(table.c[text_column]).where(table.c["id"] == entity_id)).first()
+    if row is None:
+        return None
+    value = row[0]
+    if value is None or not str(value).strip():
+        return None
+    return str(value)

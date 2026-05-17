@@ -16,13 +16,13 @@ can be piped into ``dot -Tpng`` / ``dot -Tsvg`` for rendering; the
 escaper handles quote / backslash characters in entity ids so
 arbitrary ULIDs / connector ids stay quoteable.
 
-``graph expand`` depends on the C2 ``LinkService.expand`` writer
-(Wave 4 in the Phase 8 plan). Until C2 lands, this CLI surfaces a
-``ConfigError`` from the subcommand body and exits with code 2 so the
-operator sees a clean ``feature not yet available`` message instead
-of an ``AttributeError`` from the missing service method. The CLI
-wiring stays in place so re-introducing the implementation in a
-follow-up PR is a single-file change.
+``graph expand`` is fully wired in Phase 8 step D2: it calls
+:meth:`LinkService.expand` to materialise a bidirectional N-hop
+:class:`~opshub.services.links.GraphSubset` rooted at the supplied
+entity and renders it via :func:`opshub.cli._render.render_graph_subset_md`
+/ :func:`render_graph_subset_json` / :func:`render_graph_subset_dot`.
+The depth ceiling pinned by ADR-0017 §決定 (e) (max 5) is enforced
+inside the service and surfaces as :class:`ConfigError` here.
 
 Cold-start guard
 ----------------
@@ -40,9 +40,9 @@ Exit-code contract
 * ``1`` — :class:`~opshub.core.errors.OpsHubError` raised by the
   service.
 * ``2`` — :class:`~opshub.core.errors.ConfigError` (depth ceiling
-  exceeded, DB not initialised, or — temporarily — ``graph expand``
-  being unavailable until C2 merges) or :class:`typer.BadParameter`
-  (malformed entity argument / unknown direction / unknown format).
+  exceeded, depth negative, or DB not initialised) or
+  :class:`typer.BadParameter` (malformed entity argument / unknown
+  direction / unknown format).
 """
 
 from __future__ import annotations
@@ -299,26 +299,48 @@ def graph_expand(
         ),
     ] = "md",
 ) -> None:
-    """Return a connected subgraph around ``ENTITY`` (Phase 8 C2 pending).
+    """Return a connected subgraph around ``ENTITY`` (Phase 8 step D2).
 
-    The :meth:`LinkService.expand` writer ships in Phase 8 step C2
-    (Wave 4, parallel with D1). Until C2 merges, this CLI surfaces a
-    :class:`ConfigError` so the operator sees a clean ``feature not
-    yet available`` message; the CLI shape is fixed now so the
-    follow-up PR landing C2 only needs to wire the call. The
-    ``--depth`` / ``--type`` / ``--format`` flags are parsed (and
-    ``--format`` is validated) so a future enablement does not break
-    operator muscle memory.
+    Materialises a bidirectional N-hop
+    :class:`~opshub.services.links.GraphSubset` via
+    :meth:`LinkService.expand` and renders it in the requested format.
+    The depth ceiling (ADR-0017 §決定 (e): max 5) is enforced inside
+    the service and surfaces as :class:`ConfigError` here (exit 2).
     """
     # Lazy imports: keep CLI cold start fast (ADR-0001).
-    _validate_format(output_format)
-    _parse_entity_arg(entity_arg, param_name="ENTITY")
-    _ = depth
-    _ = type_filter
-
-    typer.echo(
-        "Error: 'opshub graph expand' is unavailable until LinkService.expand"
-        " (Phase 8 step C2) lands. See docs/phase-8-plan.md §2.4 C2 row.",
-        err=True,
+    from opshub.cli._render import (
+        render_graph_subset_dot,
+        render_graph_subset_json,
+        render_graph_subset_md,
     )
-    raise typer.Exit(code=2)
+    from opshub.cli._wiring import build_link_service
+    from opshub.core.errors import ConfigError, OpsHubError
+
+    _validate_format(output_format)
+    entity_type, entity_id = _parse_entity_arg(entity_arg, param_name="ENTITY")
+
+    service = build_link_service(actor="cli:graph_expand")
+    try:
+        subset = service.expand(
+            entity_type,
+            entity_id,
+            depth=depth,
+            link_types=type_filter,
+        )
+    except ConfigError as exc:
+        # Depth ceiling (ADR-0017 §決定 (e): max 5, must be >= 0) or
+        # uninitialised DB. Mirrors the ``graph trace`` mapping so the
+        # operator sees consistent exit codes across the two recursive
+        # traversals.
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    except OpsHubError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if output_format == "json":
+        typer.echo(render_graph_subset_json(subset))
+    elif output_format == "dot":
+        typer.echo(render_graph_subset_dot(subset))
+    else:
+        typer.echo(render_graph_subset_md(subset))

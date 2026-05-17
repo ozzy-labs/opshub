@@ -71,6 +71,7 @@ class _StubBriefingService:
         scope: str = "all",
         max_sources: int = 20,
         max_tokens: int = 1500,
+        expand_graph: bool = False,
     ) -> Briefing:
         self.calls.append(
             {
@@ -78,6 +79,7 @@ class _StubBriefingService:
                 "scope": scope,
                 "max_sources": max_sources,
                 "max_tokens": max_tokens,
+                "expand_graph": expand_graph,
             }
         )
         if self._raises is not None:
@@ -338,6 +340,8 @@ def test_brief_passes_max_sources_and_max_tokens(
     assert call["scope"] == "all"
     assert call["max_sources"] == 5
     assert call["max_tokens"] == 800
+    # ``--expand-graph`` left off → default False propagates to the service.
+    assert call["expand_graph"] is False
 
 
 # ---- slug behaviour ------------------------------------------------------
@@ -401,3 +405,44 @@ def test_brief_save_creates_briefings_directory(
 
     assert result.exit_code == 0, result.stdout
     assert (workspace_root / "briefings").is_dir()
+
+
+# ---- --expand-graph flag (Phase 8 D2) -------------------------------------
+
+
+def test_brief_passes_expand_graph_flag_to_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--expand-graph`` reaches ``BriefingService.generate(expand_graph=True)``."""
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_LLM_BACKEND", "anthropic")
+    stub = _StubBriefingService(briefing=_make_briefing())
+    _install_stub_service(monkeypatch, stub)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["brief", "phase 8", "--expand-graph"])
+
+    assert result.exit_code == 0, result.stdout
+    assert len(stub.calls) == 1
+    assert stub.calls[0]["expand_graph"] is True
+
+
+def test_brief_expand_graph_defaults_to_false(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without ``--expand-graph``, ``expand_graph=False`` is forwarded.
+
+    Pin the Phase 5 backward-compat contract at the CLI layer so a
+    regression flipping the default surfaces here.
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_LLM_BACKEND", "anthropic")
+    stub = _StubBriefingService(briefing=_make_briefing())
+    _install_stub_service(monkeypatch, stub)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["brief", "phase 8"])
+
+    assert result.exit_code == 0, result.stdout
+    assert len(stub.calls) == 1
+    assert stub.calls[0]["expand_graph"] is False

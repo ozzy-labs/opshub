@@ -39,7 +39,7 @@ from pydantic import BaseModel, TypeAdapter
 from sqlalchemy import insert, select
 from sqlalchemy.engine import Engine
 
-from opshub.core.errors import OpsHubError
+from opshub.core.errors import ConfigError, OpsHubError
 from opshub.db.engine import create_engine_for_sqlite
 from opshub.db.event_store import SqlAlchemyEventStore
 from opshub.db.schema import events_table
@@ -64,6 +64,7 @@ from opshub.projections.decisions import decisions_table
 from opshub.projections.proposals import ProposalsProjection, proposals_table
 from opshub.projections.tasks import tasks_table
 from opshub.services.decision_service import DecisionService
+from opshub.services.links import Link, LinkService
 from opshub.services.proposals import (
     Proposal,
     ProposalCandidatesSchema,
@@ -355,8 +356,16 @@ def _make_service(
     projector: ProposalsProjection | _FailingProposalsProjector | None = None,
     task_service: TaskService | None = None,
     decision_service: DecisionService | None = None,
+    link_service: LinkService | None = None,
 ) -> ProposalService:
-    """Build a :class:`ProposalService` against the migrated engine."""
+    """Build a :class:`ProposalService` against the migrated engine.
+
+    ``link_service`` is the Phase 8 D2 dependency; default ``None``
+    preserves the Phase 6 wiring shape so existing tests construct
+    the service without it (backward-compat). Tests exercising
+    ``expand_graph=True`` pass a stub :class:`LinkService` whose
+    ``related`` method returns canned :class:`Link` rows.
+    """
     return ProposalService(
         recall_service=recall_service,  # type: ignore[arg-type]
         llm_client=llm_client,
@@ -369,6 +378,7 @@ def _make_service(
         engine=engine,
         actor="test:proposals",
         uow_factory=engine.begin,
+        link_service=link_service,
     )
 
 
@@ -869,3 +879,241 @@ def test_apply_path_uses_existing_task_service(migrated_engine: Engine) -> None:
     service.apply(proposal.proposal_id, 0)
 
     assert recording.calls == [("Forwarded title", "Forwarded body")]
+
+
+# ---- expand_graph (Phase 8 D2) --------------------------------------------
+
+
+class _StubLinkService:
+    """LinkService stub that returns canned :class:`Link` lists per call.
+
+    Symmetric with the briefing-service stub. Records every
+    :meth:`related` invocation so tests can assert the
+    ProposalService dispatched with the right
+    ``(entity_type, entity_id)`` + the project's graph-expansion
+    link-type whitelist.
+    """
+
+    def __init__(self, returns: dict[tuple[str, str], list[Link]] | None = None) -> None:
+        self._returns = returns if returns is not None else {}
+        self.calls: list[tuple[str, str, list[str] | None, int]] = []
+
+    def related(
+        self,
+        entity_type: str,
+        entity_id: str,
+        *,
+        direction: str = "both",
+        link_types: list[str] | None = None,
+        limit: int = 100,
+    ) -> list[Link]:
+        del direction
+        self.calls.append((entity_type, entity_id, link_types, limit))
+        return list(self._returns.get((entity_type, entity_id), []))
+
+
+def _make_link(
+    *,
+    link_id: str,
+    from_entity_type: str,
+    from_entity_id: str,
+    to_entity_type: str,
+    to_entity_id: str,
+    link_type: str = "applied_to",
+) -> Link:
+    """Build a :class:`Link` with safe defaults for the test stubs."""
+    from opshub.core.time import now_utc
+
+    return Link(
+        id=link_id,
+        from_entity_type=from_entity_type,
+        from_entity_id=from_entity_id,
+        to_entity_type=to_entity_type,
+        to_entity_id=to_entity_id,
+        link_type=link_type,
+        created_at=now_utc(),
+        source_event_id=None,
+        metadata=None,
+    )
+
+
+def test_generate_with_expand_graph_false_does_not_call_link_service(
+    migrated_engine: Engine,
+) -> None:
+    """Phase 6 backward-compat pin: default ``expand_graph=False`` skips graph traversal."""
+    task_id = _seed_task(migrated_engine, title="alpha body")
+    recall = _StubRecallService([_make_recall_hit("task", task_id, "alpha body")])
+    llm = _StubLLMClient()
+    link_stub = _StubLinkService()
+    service = _make_service(
+        migrated_engine,
+        recall_service=recall,
+        llm_client=llm,
+        link_service=link_stub,  # type: ignore[arg-type]
+    )
+
+    service.generate("phase 6 baseline")
+
+    assert link_stub.calls == []
+
+
+def test_generate_with_expand_graph_true_expands_via_link_service(
+    migrated_engine: Engine,
+) -> None:
+    """``expand_graph=True`` materialises graph neighbours into the prompt."""
+    task_a = _seed_task(migrated_engine, title="alpha body")
+    task_b = _seed_task(migrated_engine, title="beta body")
+    task_c = _seed_task(migrated_engine, title="gamma body")
+    recall = _StubRecallService([_make_recall_hit("task", task_a, "alpha body")])
+    link_stub = _StubLinkService(
+        returns={
+            ("task", task_a): [
+                _make_link(
+                    link_id="01J6EXP00000000000000001",
+                    from_entity_type="task",
+                    from_entity_id=task_a,
+                    to_entity_type="task",
+                    to_entity_id=task_b,
+                ),
+                _make_link(
+                    link_id="01J6EXP00000000000000002",
+                    from_entity_type="task",
+                    from_entity_id=task_a,
+                    to_entity_type="task",
+                    to_entity_id=task_c,
+                ),
+            ]
+        }
+    )
+    llm = _StubLLMClient(parsed_candidates=[TaskCandidatePayload(title="reuse expanded context")])
+    service = _make_service(
+        migrated_engine,
+        recall_service=recall,
+        llm_client=llm,
+        link_service=link_stub,  # type: ignore[arg-type]
+    )
+
+    service.generate("graph expansion", expand_graph=True)
+
+    assert len(link_stub.calls) == 1
+    call_entity_type, call_entity_id, call_link_types, call_limit = link_stub.calls[0]
+    assert (call_entity_type, call_entity_id) == ("task", task_a)
+    assert call_link_types == ["referenced_in_briefing", "references", "applied_to"]
+    assert call_limit == 3
+
+    # Inspect the prompt: all three tasks appear as <source> blocks.
+    messages, _, _ = llm.structured_calls[0]
+    user_content = messages[1].content
+    assert f'<source id="{task_a}" type="task">' in user_content
+    assert f'<source id="{task_b}" type="task">' in user_content
+    assert f'<source id="{task_c}" type="task">' in user_content
+
+
+def test_generate_with_expand_graph_true_dedupes_against_original_hits(
+    migrated_engine: Engine,
+) -> None:
+    """Graph-expansion neighbour matching an original recall hit appears once."""
+    task_x = _seed_task(migrated_engine, title="x body")
+    task_y = _seed_task(migrated_engine, title="y body")
+    recall = _StubRecallService([_make_recall_hit("task", task_x, "x body")])
+    link_stub = _StubLinkService(
+        returns={
+            ("task", task_x): [
+                _make_link(
+                    link_id="01J6EXP00000000000000010",
+                    from_entity_type="task",
+                    from_entity_id=task_x,
+                    to_entity_type="task",
+                    to_entity_id=task_y,
+                ),
+                # Self-link back to X — should dedupe.
+                _make_link(
+                    link_id="01J6EXP00000000000000011",
+                    from_entity_type="task",
+                    from_entity_id=task_y,
+                    to_entity_type="task",
+                    to_entity_id=task_x,
+                ),
+            ]
+        }
+    )
+    llm = _StubLLMClient(parsed_candidates=[TaskCandidatePayload(title="dedupe check")])
+    service = _make_service(
+        migrated_engine,
+        recall_service=recall,
+        llm_client=llm,
+        link_service=link_stub,  # type: ignore[arg-type]
+    )
+
+    service.generate("dedupe vs original", expand_graph=True)
+
+    messages, _, _ = llm.structured_calls[0]
+    user_content = messages[1].content
+    assert user_content.count(f'<source id="{task_x}" type="task">') == 1
+    assert user_content.count(f'<source id="{task_y}" type="task">') == 1
+
+
+def test_generate_with_expand_graph_true_dedupes_across_recall_hits(
+    migrated_engine: Engine,
+) -> None:
+    """Two recall hits sharing the same graph neighbour Z emit Z exactly once."""
+    task_a = _seed_task(migrated_engine, title="alpha body")
+    task_b = _seed_task(migrated_engine, title="beta body")
+    task_z = _seed_task(migrated_engine, title="zeta body")
+    recall = _StubRecallService(
+        [
+            _make_recall_hit("task", task_a, "alpha body"),
+            _make_recall_hit("task", task_b, "beta body"),
+        ]
+    )
+    link_stub = _StubLinkService(
+        returns={
+            ("task", task_a): [
+                _make_link(
+                    link_id="01J6EXP00000000000000020",
+                    from_entity_type="task",
+                    from_entity_id=task_a,
+                    to_entity_type="task",
+                    to_entity_id=task_z,
+                ),
+            ],
+            ("task", task_b): [
+                _make_link(
+                    link_id="01J6EXP00000000000000021",
+                    from_entity_type="task",
+                    from_entity_id=task_b,
+                    to_entity_type="task",
+                    to_entity_id=task_z,
+                ),
+            ],
+        }
+    )
+    llm = _StubLLMClient(parsed_candidates=[TaskCandidatePayload(title="dedupe across check")])
+    service = _make_service(
+        migrated_engine,
+        recall_service=recall,
+        llm_client=llm,
+        link_service=link_stub,  # type: ignore[arg-type]
+    )
+
+    service.generate("dedupe across hits", expand_graph=True)
+
+    messages, _, _ = llm.structured_calls[0]
+    user_content = messages[1].content
+    assert user_content.count(f'<source id="{task_z}" type="task">') == 1
+
+
+def test_generate_with_expand_graph_true_without_link_service_raises_config_error(
+    migrated_engine: Engine,
+) -> None:
+    """``expand_graph=True`` + missing LinkService → :class:`ConfigError`."""
+    recall = _StubRecallService([])
+    llm = _StubLLMClient()
+    # link_service=None (default) — Phase 6 backward-compat shape.
+    service = _make_service(migrated_engine, recall_service=recall, llm_client=llm)
+
+    with pytest.raises(ConfigError, match="expand_graph"):
+        service.generate("expand without dep", expand_graph=True)
+
+    requested = _events_of_type(migrated_engine, "proposal.requested")
+    assert requested == []

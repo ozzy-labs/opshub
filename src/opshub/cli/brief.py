@@ -100,6 +100,18 @@ def brief_command(
             help="Output format: md | json. Defaults to md.",
         ),
     ] = "md",
+    expand_graph: Annotated[
+        bool,
+        typer.Option(
+            "--expand-graph",
+            help=(
+                "Expand context via the knowledge graph: each recall hit's "
+                "1-hop neighbours (referenced_in_briefing / references / "
+                "applied_to links) are appended as additional sources "
+                "(Phase 8, ADR-0017)."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Generate a briefing for ``topic`` and render it to stdout.
 
@@ -149,6 +161,7 @@ def brief_command(
             scope=scope,
             max_sources=max_sources,
             max_tokens=max_tokens,
+            expand_graph=expand_graph,
         )
     except ConfigError as exc:
         # Defensive: when an operator forces the env var but the wiring

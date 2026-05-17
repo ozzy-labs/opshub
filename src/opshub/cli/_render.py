@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from opshub.services.briefings import Briefing
-    from opshub.services.links import Link, LinkPath
+    from opshub.services.links import GraphSubset, Link, LinkPath
     from opshub.services.proposals import Proposal
 
 __all__ = [
@@ -54,6 +54,9 @@ __all__ = [
     "id_prefix",
     "render_briefing_json",
     "render_briefing_md",
+    "render_graph_subset_dot",
+    "render_graph_subset_json",
+    "render_graph_subset_md",
     "render_json",
     "render_link_list_json",
     "render_link_list_md",
@@ -899,3 +902,141 @@ def render_link_paths_dot(
             seen.add(key)
             flattened.append(link)
     return render_links_dot(flattened, focus=focus)
+
+
+# ---- graph subset renderers (Phase 8 step D2) ----------------------------
+#
+# :meth:`LinkService.expand` returns a :class:`GraphSubset` carrying
+# the root entity, a frozenset of reachable nodes, the tuple of
+# deduplicated edges between those nodes, and the applied depth limit.
+# ``opshub graph expand`` ships three rendering formats; each helper
+# below is shaped to match the equivalent ``graph related`` / ``graph
+# trace`` renderer so operators see consistent output across the three
+# verbs.
+
+
+def render_graph_subset_md(subset: GraphSubset) -> str:
+    """Render a :class:`GraphSubset` as Markdown: nodes table + edges list.
+
+    The output is two sections: a "Nodes" Markdown table (one row per
+    reachable entity, columns ``Type`` / ``Id`` / ``Role`` where
+    ``Role`` flags the root with ``"root"``) and an "Edges" bullet
+    list (one bullet per :class:`Link`, formatted as
+    ``from -> to (link_type)``). When ``subset.edges`` is empty, the
+    Edges section is replaced with a single informational line so the
+    operator sees that the query ran even when the root has no links.
+
+    The nodes table sorts by ``(entity_type, entity_id)`` so the
+    output is deterministic across runs — :class:`GraphSubset.nodes`
+    is a frozenset whose iteration order is hash-dependent and would
+    otherwise flap between invocations.
+    """
+    root_type, root_id = subset.root
+    sorted_nodes = sorted(subset.nodes)
+
+    root_endpoint = _format_link_endpoint(root_type, root_id)
+    header = f"# Graph expansion of {root_endpoint} (depth={subset.depth})"
+    nodes_lines: list[str] = [
+        header,
+        "",
+        "## Nodes",
+        "",
+        "| Type | Id | Role |",
+        "| --- | --- | --- |",
+    ]
+    for entity_type, entity_id in sorted_nodes:
+        role = "root" if (entity_type, entity_id) == subset.root else ""
+        nodes_lines.append(f"| {entity_type} | {entity_id} | {role} |")
+
+    edges_lines: list[str] = ["", "## Edges", ""]
+    if not subset.edges:
+        edges_lines.append("_No edges in the expansion._")
+    else:
+        for link in subset.edges:
+            from_endpoint = _format_link_endpoint(link.from_entity_type, link.from_entity_id)
+            to_endpoint = _format_link_endpoint(link.to_entity_type, link.to_entity_id)
+            edges_lines.append(f"- {from_endpoint} -> {to_endpoint} ({link.link_type})")
+
+    return "\n".join([*nodes_lines, *edges_lines])
+
+
+def render_graph_subset_json(subset: GraphSubset) -> str:
+    """Render a :class:`GraphSubset` as a JSON document.
+
+    Surfaces the root tuple, sorted nodes list, edge list (full link
+    records — same shape as :func:`render_link_list_json`), and the
+    applied depth. Nodes are sorted by ``(entity_type, entity_id)``
+    so the JSON payload is deterministic across runs (matching the
+    Markdown renderer's ordering contract).
+
+    ``ensure_ascii=False`` so non-ASCII entity ids (rare, but possible
+    for ``inbox_item`` / ``source`` ids derived from connector data)
+    survive the round-trip readably.
+    """
+    sorted_nodes = sorted(subset.nodes)
+    edges_payload: list[dict[str, Any]] = []
+    for link in subset.edges:
+        edges_payload.append(
+            {
+                "id": link.id,
+                "from_entity_type": link.from_entity_type,
+                "from_entity_id": link.from_entity_id,
+                "to_entity_type": link.to_entity_type,
+                "to_entity_id": link.to_entity_id,
+                "link_type": link.link_type,
+                "created_at": link.created_at.isoformat(),
+                "source_event_id": link.source_event_id,
+                "metadata": link.metadata,
+            }
+        )
+    payload = {
+        "root": {"entity_type": subset.root[0], "entity_id": subset.root[1]},
+        "depth": subset.depth,
+        "nodes": [
+            {"entity_type": entity_type, "entity_id": entity_id}
+            for entity_type, entity_id in sorted_nodes
+        ],
+        "edges": edges_payload,
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def render_graph_subset_dot(subset: GraphSubset) -> str:
+    """Render a :class:`GraphSubset` as a Graphviz DOT digraph.
+
+    Reuses the :func:`render_links_dot` helper for edge / node
+    rendering so the DOT shape (``shape="ellipse"`` nodes,
+    ``shape="box"`` for the root, ``label="<link_type>"`` on each
+    edge, backslash-escaped quoted ids) stays consistent with
+    ``graph related`` / ``graph trace``. Any node reachable from the
+    root that has no incident edge in ``subset.edges`` is still
+    emitted as a bare node so the operator sees the full reachable
+    set in the rendered graph.
+    """
+    rendered = render_links_dot(list(subset.edges), focus=subset.root)
+    # Inject any isolated nodes (reachable but no incident edge in
+    # the expansion result). ``render_links_dot`` only emits nodes it
+    # sees on an edge endpoint, so we walk the subset nodes set and
+    # add bare-node lines before the closing brace for any node not
+    # already present in the rendered output.
+    emitted_nodes: set[tuple[str, str]] = set()
+    for link in subset.edges:
+        emitted_nodes.add((link.from_entity_type, link.from_entity_id))
+        emitted_nodes.add((link.to_entity_type, link.to_entity_id))
+    # The root is always added by ``render_links_dot(focus=...)`` so
+    # we don't need to re-emit it here even when ``edges`` is empty.
+    emitted_nodes.add(subset.root)
+
+    missing = sorted(subset.nodes - emitted_nodes)
+    if not missing:
+        return rendered
+
+    # Splice the missing-node lines just before the closing brace so
+    # the DOT file stays well-formed.
+    lines = rendered.split("\n")
+    assert lines[-1] == "}"
+    extra_lines: list[str] = []
+    for entity_type, entity_id in missing:
+        key = _format_link_endpoint(entity_type, entity_id)
+        extra_lines.append(f"  {_quote_dot(key)};")
+    return "\n".join([*lines[:-1], *extra_lines, lines[-1]])

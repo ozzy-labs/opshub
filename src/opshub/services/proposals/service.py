@@ -62,7 +62,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field, TypeAdapter
 from sqlalchemy import Table, select
 
-from opshub.core.errors import OpsHubError
+from opshub.core.errors import ConfigError, OpsHubError
 from opshub.core.ids import new_ulid
 from opshub.core.sanitise import sanitise_error_message
 from opshub.core.time import now_utc
@@ -95,6 +95,7 @@ if TYPE_CHECKING:
     from opshub.projections.proposals import ProposalsProjection
     from opshub.services.decision_service import DecisionService
     from opshub.services.event_store import EventStore
+    from opshub.services.links import LinkService
     from opshub.services.recall_service import RecallHit, RecallService
     from opshub.services.task_service import TaskService
 
@@ -118,6 +119,20 @@ _MAX_ERROR_MESSAGE_LENGTH = 2000
 _STATE_PENDING = "pending"
 _STATE_APPLIED = "applied"
 _STATE_REJECTED = "rejected"
+
+
+# Link types consulted by :meth:`ProposalService.generate` when
+# ``expand_graph=True`` (Phase 8 D2). Symmetric with
+# :data:`opshub.services.briefings.service._GRAPH_EXPAND_LINK_TYPES`;
+# kept as a separate constant so the two services can diverge in
+# Phase 8.x if proposal-side expansion ends up wanting different
+# link types (e.g. ``generated_from_briefing`` for proposal context).
+_GRAPH_EXPAND_LINK_TYPES = ["referenced_in_briefing", "references", "applied_to"]
+
+# Per-recall-hit limit when expanding via :meth:`LinkService.related`.
+# Matches the BriefingService cap so prompt sizes scale identically
+# under ``--expand-graph`` across both verbs.
+_GRAPH_EXPAND_PER_HIT_LIMIT = 3
 
 
 # Per-entity text-column mapping. Mirrors
@@ -257,6 +272,15 @@ class ProposalService:
         :class:`~opshub.llm.LLMClient` Protocol does not accept an
         external connection and a network round-trip must never hold
         an SQLite write lock).
+    link_service:
+        Optional :class:`~opshub.services.links.LinkService` reference
+        — required when callers pass ``expand_graph=True`` to
+        :meth:`generate` (Phase 8 step D2). The service walks the
+        knowledge graph 1-hop from every recall hit to materialise
+        additional ``<source>`` blocks for the LLM prompt. The
+        ``None`` default keeps the Phase 6 wiring contract intact;
+        an ``expand_graph=True`` call without the dependency raises
+        :class:`ConfigError` (mirrors the BriefingService contract).
     """
 
     def __init__(
@@ -271,6 +295,7 @@ class ProposalService:
         *,
         actor: str = _DEFAULT_ACTOR,
         uow_factory: Callable[[], AbstractContextManager[Connection]] | None = None,
+        link_service: LinkService | None = None,
     ) -> None:
         self._recall_service = recall_service
         self._llm_client = llm_client
@@ -281,6 +306,7 @@ class ProposalService:
         self._engine = engine
         self._actor = actor
         self._uow_factory = uow_factory
+        self._link_service = link_service
 
     # ------------------------------------------------------------------ generate
 
@@ -292,6 +318,7 @@ class ProposalService:
         from_briefing_id: str | None = None,
         max_candidates: int = 5,
         max_tokens: int = 2000,
+        expand_graph: bool = False,
     ) -> Proposal:
         """Generate a proposal for ``topic``.
 
@@ -343,6 +370,18 @@ class ProposalService:
             Per ADR-0015 §決定 (h), the caller is responsible for
             cost control. Surfaced to
             :meth:`LLMClient.complete_structured` verbatim.
+        expand_graph:
+            Phase 8 step D2 (ADR-0017 §決定 (e)+(f)). Symmetric with
+            :meth:`BriefingService.generate`: when ``True``, the
+            service walks 1-hop from each recall hit via
+            :meth:`LinkService.related` (link types
+            :data:`_GRAPH_EXPAND_LINK_TYPES`, per-hit cap
+            :data:`_GRAPH_EXPAND_PER_HIT_LIMIT`) and appends the
+            neighbouring entities as additional ``<source>`` blocks.
+            Dedupe by ``(entity_type, entity_id)`` keeps the prompt
+            free of duplicates; original recall hits take precedence.
+            Defaults to ``False`` so the Phase 6 contract stays the
+            documented baseline.
 
         Returns
         -------
@@ -352,6 +391,11 @@ class ProposalService:
 
         Raises
         ------
+        ConfigError
+            When ``expand_graph=True`` was requested but the service
+            was constructed without a :class:`LinkService` reference
+            (wiring mistake — fails loud rather than silently
+            degrading).
         Exception
             Whatever :meth:`LLMClient.complete_structured` raised
             (:class:`~opshub.core.errors.ConfigError` for the
@@ -359,6 +403,15 @@ class ProposalService:
             :class:`ProposalFailed` is always appended before the
             re-raise so the audit trail records the attempt.
         """
+        if expand_graph and self._link_service is None:
+            # Fail loud (no ProposalRequested appended yet — there is
+            # no attempt to audit when the wiring is broken before
+            # any work starts). Mirrors BriefingService contract.
+            raise ConfigError(
+                "expand_graph=True requires LinkService; check"
+                " opshub.cli._wiring.build_proposal_service composition"
+            )
+
         proposal_id = new_ulid()
         self._record_requested(
             proposal_id=proposal_id,
@@ -379,6 +432,14 @@ class ProposalService:
         # context beyond the candidate count cap.
         hits = self._collect_sources(topic=topic, max_sources=max_candidates * 3)
         source_payload = self._load_source_texts(hits)
+        if expand_graph:
+            # ``_load_source_texts`` already filtered orphans / empty
+            # bodies, so the dedupe-set is keyed against the prompt's
+            # actual contents. The expansion appends in place and
+            # inherits the Phase 5 D1 prompt-injection-mitigation
+            # contract (delimiter wrap + html.escape) via
+            # :func:`render_user_prompt`.
+            self._extend_with_graph_neighbours(source_payload, hits)
 
         user_prompt = render_user_prompt(
             topic=topic,
@@ -603,23 +664,66 @@ class ProposalService:
         result: list[tuple[str, str, str]] = []
         with self._engine.connect() as conn:
             for hit in hits:
-                lookup = _ENTITY_TEXT_COLUMNS.get(hit.entity_type)
-                if lookup is None:
-                    # Unknown entity_type — skip silently. Defensive
-                    # only; the Phase 4 recall service only returns
-                    # supported families.
+                text = _load_entity_text(conn, hit.entity_type, hit.entity_id)
+                if text is None:
                     continue
-                table, text_column = lookup
-                row = conn.execute(
-                    select(table.c[text_column]).where(table.c["id"] == hit.entity_id)
-                ).first()
-                if row is None:
-                    continue  # orphan between recall and read.
-                value = row[0]
-                if value is None or not str(value).strip():
-                    continue
-                result.append((hit.entity_type, hit.entity_id, str(value)))
+                result.append((hit.entity_type, hit.entity_id, text))
         return result
+
+    def _extend_with_graph_neighbours(
+        self,
+        source_payload: list[tuple[str, str, str]],
+        hits: list[RecallHit],
+    ) -> None:
+        """Append 1-hop graph neighbours of ``hits`` to ``source_payload``.
+
+        Symmetric with
+        :meth:`opshub.services.briefings.service.BriefingService._extend_with_graph_neighbours`.
+        For each recall hit the service calls
+        :meth:`LinkService.related` with
+        :data:`_GRAPH_EXPAND_LINK_TYPES` and a per-hit cap of
+        :data:`_GRAPH_EXPAND_PER_HIT_LIMIT`, then materialises the
+        neighbour text via :func:`_load_entity_text` so the LLM
+        prompt sees the embedded body (matching the Phase 6 source-
+        loading contract).
+
+        Dedupe contract: a neighbour is appended only when its
+        ``(entity_type, entity_id)`` tuple is not already present in
+        ``source_payload``. Original recall hits take precedence;
+        graph-expanded entities discovered through multiple recall
+        hits emit once.
+
+        Mutates ``source_payload`` in place — the caller does not
+        need a separate accumulator for graph-expanded sources.
+        """
+        assert self._link_service is not None
+        seen: set[tuple[str, str]] = {
+            (entity_type, entity_id) for entity_type, entity_id, _ in source_payload
+        }
+        with self._engine.connect() as conn:
+            for hit in hits:
+                neighbours = self._link_service.related(
+                    hit.entity_type,
+                    hit.entity_id,
+                    direction="both",
+                    link_types=_GRAPH_EXPAND_LINK_TYPES,
+                    limit=_GRAPH_EXPAND_PER_HIT_LIMIT,
+                )
+                for link in neighbours:
+                    if (link.from_entity_type, link.from_entity_id) == (
+                        hit.entity_type,
+                        hit.entity_id,
+                    ):
+                        other = (link.to_entity_type, link.to_entity_id)
+                    else:
+                        other = (link.from_entity_type, link.from_entity_id)
+                    if other in seen:
+                        continue
+                    text = _load_entity_text(conn, other[0], other[1])
+                    if text is None:
+                        continue
+                    seen.add(other)
+                    source_payload.append((other[0], other[1], text))
 
     def _load_briefing_markdown(self, briefing_id: str) -> str | None:
         """Read the ``briefings`` projection row by ULID.
@@ -823,3 +927,32 @@ class ProposalService:
             return
         with self._uow_factory() as connection:
             yield connection
+
+
+def _load_entity_text(conn: Connection, entity_type: str, entity_id: str) -> str | None:
+    """Look up the embedded body text for an entity tuple.
+
+    Symmetric with the helper in
+    :mod:`opshub.services.briefings.service`. Shared between
+    :meth:`ProposalService._load_source_texts` (recall hits) and
+    :meth:`ProposalService._extend_with_graph_neighbours` (Phase 8 D2
+    graph expansion). Returns ``None`` for unknown entity types,
+    orphaned rows, or empty / whitespace-only text columns — the
+    caller drops those entities from the prompt rather than emitting
+    an empty ``<source>`` block.
+
+    Hoisted to module level (rather than a static method) so the
+    graph-expansion helper can call it without holding a reference
+    back to the service instance.
+    """
+    lookup = _ENTITY_TEXT_COLUMNS.get(entity_type)
+    if lookup is None:
+        return None
+    table, text_column = lookup
+    row = conn.execute(select(table.c[text_column]).where(table.c["id"] == entity_id)).first()
+    if row is None:
+        return None
+    value = row[0]
+    if value is None or not str(value).strip():
+        return None
+    return str(value)
