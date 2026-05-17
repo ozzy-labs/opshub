@@ -146,6 +146,31 @@ def test_auth_set_slack_with_token_flag_stores_to_keyring(
     assert get_secret(SLACK_BOT_TOKEN_SECRET_KEY) == "xoxb-test"
 
 
+def test_auth_set_connector_slack_alias_writes_to_same_key(
+    in_memory_keyring: _InMemoryKeyring,
+) -> None:
+    """``connector:slack`` is the Phase 7 plan namespace; ``slack`` is the
+    legacy alias retained for backward compat (A1 shipped with the bare
+    form before MS365 / Box established the ``connector:<name>``
+    convention). Both forms must route to the same keyring slot —
+    otherwise operator scripts written against either form would
+    silently store under different keys and the SlackAuth reader would
+    see only one of them.
+    """
+    runner = CliRunner()
+    r_legacy = runner.invoke(app, ["connector", "auth", "set", "slack", "--token", "xoxb-legacy"])
+    r_namespaced = runner.invoke(
+        app, ["connector", "auth", "set", "connector:slack", "--token", "xoxb-namespaced"]
+    )
+
+    assert r_legacy.exit_code == 0, r_legacy.stdout
+    assert r_namespaced.exit_code == 0, r_namespaced.stdout
+    # Both writes target the same key, so the second write (via the
+    # namespaced form) overwrites the first — that's the pin: not
+    # "two distinct keys for two surfaces" but "one key, two aliases".
+    assert get_secret(SLACK_BOT_TOKEN_SECRET_KEY) == "xoxb-namespaced"
+
+
 def test_auth_set_slack_uses_distinct_key_from_github(
     in_memory_keyring: _InMemoryKeyring,
 ) -> None:

@@ -194,12 +194,16 @@ def auth_set(
     the ``OPSHUB_CONNECTOR_<NAME>_PAT`` env var to override at runtime
     without touching the keychain (useful for CI / containers).
 
-    Currently supported names: ``github``, ``slack``,
-    ``embedder:openai``, ``embedder:voyage``, ``llm:anthropic``,
-    ``llm:openai``, ``connector:ms365``, ``connector:box``. Additional
-    LLM / embedder backends would extend this switch alongside their
-    factory branch in :mod:`opshub.llm.factory` /
-    :mod:`opshub.vectors.factory`.
+    Currently supported names: ``github``, ``connector:slack`` (or
+    legacy ``slack``), ``embedder:openai``, ``embedder:voyage``,
+    ``llm:anthropic``, ``llm:openai``, ``connector:ms365``,
+    ``connector:box``. The recommended form for the Phase 7 connectors
+    is the ``connector:<name>`` namespace (matches keyring key prefix
+    ``connector:<name>:<purpose>`` and the Phase 7 plan §1 #4 contract);
+    the bare ``slack`` form is a backward-compat alias retained for
+    operator scripts written against the A1 surface. Additional LLM /
+    embedder backends would extend this switch alongside their factory
+    branch in :mod:`opshub.llm.factory` / :mod:`opshub.vectors.factory`.
 
     The ``connector:ms365`` and ``connector:box`` targets are
     special-cased: both credentials are OAuth refresh tokens rather
@@ -254,10 +258,18 @@ def auth_set(
         from opshub.connectors.github.auth import GITHUB_PAT_SECRET_KEY
 
         key = GITHUB_PAT_SECRET_KEY
-    elif name == "slack":
+    elif name in ("slack", "connector:slack"):
         # Phase 7 step A1: the Slack bot token is stored under
         # ``connector:slack:bot_token`` so the CLI writer + SlackAuth
         # reader cannot drift (mirrors the GitHub PAT precedent).
+        # Both ``slack`` (the original A1 form, kept for backward
+        # compatibility) and ``connector:slack`` (the Phase 7 plan
+        # §1 #4 namespace, matched by sibling MS365 / Box) route to
+        # the same keyring key — see the Phase 7 follow-up PR for the
+        # rationale (CLI namespace consistency across the 3 Phase 7
+        # connectors). The recommended form is ``connector:slack``;
+        # the bare ``slack`` alias is retained so any operator scripts
+        # written against the A1 surface continue to work.
         # Lazy-imported per-branch so the ``slack_sdk`` import path
         # (deferred inside ``SlackAuth.test_token``) stays off the
         # cold-start path entirely when the operator never uses Slack.
@@ -293,8 +305,9 @@ def auth_set(
     else:
         typer.echo(
             f"unknown auth target {name!r}; currently supported: "
-            "github, slack, embedder:openai, embedder:voyage, "
-            "llm:anthropic, llm:openai, connector:ms365, connector:box",
+            "github, connector:slack (or legacy slack), embedder:openai, "
+            "embedder:voyage, llm:anthropic, llm:openai, connector:ms365, "
+            "connector:box",
             err=True,
         )
         raise typer.Exit(code=2)
