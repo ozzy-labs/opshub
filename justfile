@@ -60,8 +60,13 @@ opshub *args:
 # ... USING vec0) can run during the migration integration tests. The
 # extras pulls in ``sqlite-vec`` + ``numpy``; the engine's connect
 # listener (``opshub.db.engine``) loads sqlite-vec automatically.
+#
+# ``llm-openai`` is included so Phase 5 step A4 tests can import the
+# ``openai`` SDK; the tests still mock every network call (``openai.OpenAI``
+# is patched per-test) so no real chat-completion request leaves the
+# process.
 ci:
-    uv sync --locked --extra dev --extra connectors-github --extra vector
+    uv sync --locked --extra dev --extra connectors-github --extra vector --extra llm-openai
     uv run ruff check
     uv run ruff format --check
     uv run pyright

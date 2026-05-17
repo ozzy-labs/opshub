@@ -36,6 +36,11 @@ local-embedding = ["sentence-transformers>=3.0"]
 # API embedding backends (Phase 4, ADR-0012).
 api-embedding-openai = ["openai>=1.40"]
 api-embedding-voyage = ["voyageai>=0.2"]
+# LLM backends (Phase 5, ADR-0015). Independent opt-in from the embedding
+# extras above: a user enabling OpenAI embedding should not be forced to
+# also enable OpenAI chat (and vice versa). Both extras pull the same
+# ``openai`` SDK; uv treats overlapping extras as additive.
+llm-openai = ["openai>=1.50"]
 # Connectors (Phase 3).
 connectors-github = ["httpx>=0.27", "PyGithub>=2.3"]
 connectors-slack = ["slack-sdk>=3.30"]
