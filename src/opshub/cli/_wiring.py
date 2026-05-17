@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from opshub.services import (
         AgentRunService,
         DecisionService,
+        FileIngestService,
         HandoffService,
         InboxService,
         LockService,
@@ -45,6 +46,7 @@ __all__ = [
     "build_agent_run_service",
     "build_decision_service",
     "build_engine",
+    "build_file_ingest_service",
     "build_handoff_service",
     "build_inbox_service",
     "build_lock_service",
@@ -204,6 +206,46 @@ def build_source_service(actor: str = "connector:source") -> SourceService:
         uow_factory=engine.begin,
         actor=actor,
         engine=engine,
+    )
+
+
+def build_file_ingest_service(actor: str = "cli:workspace_ingest") -> FileIngestService:
+    """Wire a :class:`FileIngestService` against the configured database.
+
+    Modelled on :func:`build_source_service`: the
+    :class:`InboxService` reference is held purely for composition
+    bookkeeping (the inbox-side :class:`ItemEnqueued` event is built
+    inline by :class:`FileIngestService` so the shared UoW stays
+    intact, mirroring :class:`SourceService.observe`). The same engine,
+    projector instance class, and ``uow_factory`` are threaded into
+    both services so any future cross-service refactor finds a
+    well-formed wiring graph already in place.
+
+    The engine is passed explicitly to :class:`FileIngestService` so
+    :meth:`FileIngestService.ingest_inbox_dir` can read the
+    ``ingested_files`` projection — the projection lookup is what
+    makes the workspace ingest path idempotent across runs.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import FileIngestService, InboxService
+
+    engine = build_engine()
+    store = SqlAlchemyEventStore(engine)
+    projector = _PersistingProjector()
+    inbox = InboxService(
+        store=store,
+        projector=projector,
+        uow_factory=engine.begin,
+        actor=actor,
+    )
+    return FileIngestService(
+        store=store,
+        projector=projector,
+        inbox_service=inbox,
+        engine=engine,
+        uow_factory=engine.begin,
+        actor=actor,
     )
 
 

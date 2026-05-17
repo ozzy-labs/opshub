@@ -201,13 +201,18 @@ def test_sources_unique_constraint_on_connector_and_external_id(
 
 
 def test_migrations_downgrade_phase3_tables(tmp_path: Path) -> None:
-    """Downgrading the two Phase 3 revisions removes only those tables.
+    """Downgrading the Phase 3 revisions removes only those tables.
 
-    Drives ``alembic upgrade head`` then ``downgrade -2``. After
-    downgrading two steps the chain should rest on
-    ``0009_create_handoffs_table``: ``sources`` and
-    ``connector_cursors`` must be gone, every prior projection table
-    must remain.
+    Drives ``alembic upgrade head`` then ``downgrade -3``. After
+    downgrading three steps the chain should rest on
+    ``0009_create_handoffs_table``: ``sources``,
+    ``connector_cursors`` and ``ingested_files`` must be gone, every
+    prior projection table must remain.
+
+    The step count tracks the number of Phase 3 migrations (currently
+    0010, 0011, 0012). When a future Phase 3 migration lands the count
+    has to bump accordingly — there is no "downgrade to revision
+    0009" shortcut that does not hard-code the prior PR's revision id.
     """
     db_path = tmp_path / "downgrade.sqlite"
     cfg = _make_alembic_config(db_path)
@@ -219,11 +224,12 @@ def test_migrations_downgrade_phase3_tables(tmp_path: Path) -> None:
         up_tables = set(insp_up.get_table_names())
         assert "sources" in up_tables
         assert "connector_cursors" in up_tables
+        assert "ingested_files" in up_tables
     finally:
         engine.dispose()
 
-    # Roll back the two Phase 3 revisions in one shot.
-    command.downgrade(cfg, "-2")
+    # Roll back all three Phase 3 revisions in one shot.
+    command.downgrade(cfg, "-3")
 
     engine = create_engine_for_sqlite(db_path)
     try:
@@ -231,6 +237,7 @@ def test_migrations_downgrade_phase3_tables(tmp_path: Path) -> None:
         down_tables = set(insp_down.get_table_names())
         assert "sources" not in down_tables
         assert "connector_cursors" not in down_tables
+        assert "ingested_files" not in down_tables
         # Prior projection tables must survive the partial downgrade.
         for prior in (
             "events",

@@ -25,6 +25,7 @@ from opshub.domain.events import (
     ConnectorSyncCompleted,
     ConnectorSyncFailed,
     ConnectorSyncStarted,
+    FileIngested,
     ItemEnqueued,
     Phase3Event,
     SourceObserved,
@@ -266,6 +267,75 @@ def test_connector_sync_failed_accepts_max_message() -> None:
     assert len(event.error_message) == 2000
 
 
+# ---- FileIngested ----------------------------------------------------------
+
+
+_VALID_HASH = "a" * 64  # 64-char SHA-256 hex stand-in.
+
+
+def test_file_ingested_minimal_fields() -> None:
+    event = FileIngested(
+        aggregate_id=_VALID_HASH,
+        actor="cli:workspace_ingest",
+        file_path="workspace/inbox/note.md",
+        content_hash=_VALID_HASH,
+        inbox_item_id=_agg(),
+    )
+    assert event.event_type == "workspace.file_ingested"
+    assert event.schema_version == 1
+    assert event.file_path == "workspace/inbox/note.md"
+    assert event.content_hash == _VALID_HASH
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("file_path", ""),
+        ("file_path", "x" * 2001),
+        ("content_hash", ""),
+        ("content_hash", "a" * 63),
+        ("content_hash", "a" * 65),
+    ],
+)
+def test_file_ingested_rejects_out_of_range_strings(field: str, value: str) -> None:
+    payload: dict[str, Any] = {
+        "aggregate_id": _VALID_HASH,
+        "actor": "cli:workspace_ingest",
+        "file_path": "workspace/inbox/note.md",
+        "content_hash": _VALID_HASH,
+        "inbox_item_id": _agg(),
+    }
+    payload[field] = value
+    with pytest.raises(PydanticValidationError):
+        FileIngested(**payload)
+
+
+@pytest.mark.parametrize(
+    "inbox_item_id",
+    ["", "x" * 25, "x" * 27],
+)
+def test_file_ingested_rejects_non_ulid_inbox_item_id(inbox_item_id: str) -> None:
+    with pytest.raises(PydanticValidationError):
+        FileIngested(
+            aggregate_id=_VALID_HASH,
+            actor="cli:workspace_ingest",
+            file_path="workspace/inbox/note.md",
+            content_hash=_VALID_HASH,
+            inbox_item_id=inbox_item_id,
+        )
+
+
+def test_file_ingested_accepts_max_length_file_path() -> None:
+    event = FileIngested(
+        aggregate_id=_VALID_HASH,
+        actor="cli:workspace_ingest",
+        file_path="x" * 2000,
+        content_hash=_VALID_HASH,
+        inbox_item_id=_agg(),
+    )
+    assert len(event.file_path) == 2000
+
+
 # ---- frozen / extra=forbid -------------------------------------------------
 
 
@@ -363,6 +433,16 @@ _PHASE3_FACTORIES: list[tuple[str, Any]] = [
             error_message="boom",
         ),
     ),
+    (
+        "workspace.file_ingested",
+        lambda: FileIngested(
+            aggregate_id=_VALID_HASH,
+            actor="cli:workspace_ingest",
+            file_path="workspace/inbox/note.md",
+            content_hash=_VALID_HASH,
+            inbox_item_id=_agg(),
+        ),
+    ),
 ]
 
 
@@ -447,6 +527,20 @@ def test_all_event_dispatches_to_phase3_event() -> None:
     }
     event = _AllEventAdapter.validate_python(payload)
     assert isinstance(event, SourceObserved)
+
+
+def test_all_event_dispatches_to_file_ingested() -> None:
+    """``AllEvent`` must decode the workspace.file_ingested family too."""
+    payload = {
+        "event_type": "workspace.file_ingested",
+        "aggregate_id": _VALID_HASH,
+        "actor": "cli:workspace_ingest",
+        "file_path": "workspace/inbox/note.md",
+        "content_hash": _VALID_HASH,
+        "inbox_item_id": _agg(),
+    }
+    event = _AllEventAdapter.validate_python(payload)
+    assert isinstance(event, FileIngested)
 
 
 def test_all_event_rejects_unknown_event_type() -> None:

@@ -37,6 +37,7 @@ from opshub.domain.events import (
     ConnectorSyncCompleted,
     ConnectorSyncFailed,
     ConnectorSyncStarted,
+    FileIngested,
     SourceObserved,
     SourceReferenced,
     TaskActivated,
@@ -46,6 +47,7 @@ from opshub.domain.events import (
 from opshub.projections import (
     TasksProjection,
     connector_cursors_table,
+    ingested_files_table,
     rebuild_all,
     sources_table,
     tasks_table,
@@ -470,7 +472,23 @@ def test_rebuild_all_replays_phase_3_source_and_connector_events(
         error_message="auth expired",
     )
 
-    for event in (obs1, obs2, referenced, started, completed, failed_slack):
+    # A workspace file ingest event must rebuild into the
+    # ``ingested_files`` projection — pins that the projection is wired
+    # into :func:`all_projections` registry alongside sources / cursors.
+    t_file = t_fail + timedelta(minutes=1)
+    file_hash = "f" * 64
+    inbox_item_id = "01HA0INBOX0000000000000001"
+    file_ingested = FileIngested(
+        aggregate_id=file_hash,
+        occurred_at=t_file,
+        recorded_at=t_file,
+        actor="cli:workspace_ingest",
+        file_path="workspace/inbox/note.md",
+        content_hash=file_hash,
+        inbox_item_id=inbox_item_id,
+    )
+
+    for event in (obs1, obs2, referenced, started, completed, failed_slack, file_ingested):
         store.append(event)
 
     rebuild_all(migrated_engine, store, all_projections())
@@ -503,6 +521,16 @@ def test_rebuild_all_replays_phase_3_source_and_connector_events(
     assert cursor_row["updated_at"] == t_end.replace(tzinfo=None)
     # … but last_synced_at stayed pinned to the start of the sync run.
     assert cursor_row["last_synced_at"] == t_start.replace(tzinfo=None)
+
+    # IngestedFilesProjection: one row for the workspace ingest event.
+    with migrated_engine.connect() as conn:
+        ingested_rows = conn.execute(select(ingested_files_table)).mappings().all()
+    assert len(ingested_rows) == 1
+    ingested_row = ingested_rows[0]
+    assert ingested_row["content_hash"] == file_hash
+    assert ingested_row["file_path"] == "workspace/inbox/note.md"
+    assert ingested_row["inbox_item_id"] == inbox_item_id
+    assert ingested_row["ingested_at"] == t_file.replace(tzinfo=None)
 
 
 def test_rebuild_all_phase_3_projections_are_idempotent(
@@ -554,6 +582,21 @@ def test_rebuild_all_phase_3_projections_are_idempotent(
             observed_count=1,
         )
     )
+    # Seed one workspace file ingest as well so the idempotency check
+    # spans every Phase 3 projection.
+    t_file = t_end + timedelta(minutes=1)
+    idem_hash = "c" * 64
+    store.append(
+        FileIngested(
+            aggregate_id=idem_hash,
+            occurred_at=t_file,
+            recorded_at=t_file,
+            actor="cli:workspace_ingest",
+            file_path="workspace/inbox/idem.md",
+            content_hash=idem_hash,
+            inbox_item_id="01HA0INBOX0000000000000002",
+        )
+    )
 
     rebuild_all(migrated_engine, store, all_projections())
     with migrated_engine.connect() as conn:
@@ -567,6 +610,14 @@ def test_rebuild_all_phase_3_projections_are_idempotent(
             dict(r)
             for r in conn.execute(
                 select(connector_cursors_table).order_by(connector_cursors_table.c.connector_name)
+            )
+            .mappings()
+            .all()
+        ]
+        ingested_first = [
+            dict(r)
+            for r in conn.execute(
+                select(ingested_files_table).order_by(ingested_files_table.c.content_hash)
             )
             .mappings()
             .all()
@@ -588,9 +639,19 @@ def test_rebuild_all_phase_3_projections_are_idempotent(
             .mappings()
             .all()
         ]
+        ingested_second = [
+            dict(r)
+            for r in conn.execute(
+                select(ingested_files_table).order_by(ingested_files_table.c.content_hash)
+            )
+            .mappings()
+            .all()
+        ]
 
     assert sources_second == sources_first
     assert cursors_second == cursors_first
+    assert ingested_second == ingested_first
     # Sanity: each table has exactly one row from the seeded events.
     assert len(sources_first) == 1
     assert len(cursors_first) == 1
+    assert len(ingested_first) == 1
