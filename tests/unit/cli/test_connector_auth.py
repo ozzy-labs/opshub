@@ -161,19 +161,22 @@ def test_auth_set_unknown_connector(
 
     Phase 4 step B3 extends the supported list to include the
     ``embedder:openai`` / ``embedder:voyage`` API-key targets alongside
-    ``github``. The error must enumerate every supported name so the
-    operator can copy-paste the right one.
+    ``github``. Phase 5 step A5 further adds ``llm:anthropic`` /
+    ``llm:openai`` (ADR-0015 §決定 (d)). The error must enumerate every
+    supported name so the operator can copy-paste the right one.
     """
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "auth", "set", "slack", "--token", "x"])
+    result = runner.invoke(app, ["connector", "auth", "set", "slack-team", "--token", "x"])
 
     assert result.exit_code == 2
     assert "unknown auth target" in result.stderr
-    assert "slack" in result.stderr
+    assert "slack-team" in result.stderr
     # All currently-supported names must appear in the hint.
     assert "github" in result.stderr
     assert "embedder:openai" in result.stderr
     assert "embedder:voyage" in result.stderr
+    assert "llm:anthropic" in result.stderr
+    assert "llm:openai" in result.stderr
 
 
 # ----- embedder API-key targets (Phase 4 step B3) -----------------------
@@ -210,6 +213,87 @@ def test_auth_set_embedder_voyage_with_token_flag(
     assert result.exit_code == 0, result.stdout
     assert "embedder:voyage" in result.stdout
     assert get_secret(VOYAGE_API_KEY_SECRET) == "pa-xxx"
+
+
+# ----- LLM API-key targets (Phase 5 step A5, ADR-0015 §決定 (d)) ---------
+
+
+def test_auth_set_llm_anthropic_with_token_flag(
+    in_memory_keyring: _InMemoryKeyring,
+) -> None:
+    """``llm:anthropic --token ...`` writes to the Anthropic keyring key.
+
+    The :class:`AnthropicLLMClient` reader (:mod:`opshub.llm.anthropic_client`)
+    consults the same ``ANTHROPIC_API_KEY_SECRET`` constant; pinning the
+    round-trip here keeps the CLI writer / client reader contract from
+    drifting (mirrors the Phase 4 ``embedder:openai`` test pattern).
+    """
+    anthropic_module: Any = pytest.importorskip(
+        "opshub.llm.anthropic_client",
+        reason="llm:anthropic auth path requires the 'llm-anthropic' extras",
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["connector", "auth", "set", "llm:anthropic", "--token", "sk-ant-xxx"]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "llm:anthropic" in result.stdout
+    assert get_secret(anthropic_module.ANTHROPIC_API_KEY_SECRET) == "sk-ant-xxx"
+
+
+def test_auth_set_llm_openai_with_token_flag(
+    in_memory_keyring: _InMemoryKeyring,
+) -> None:
+    """``llm:openai --token ...`` writes to the OpenAI LLM keyring key.
+
+    Distinct from the Phase 4 ``embedder:openai`` target: the LLM and
+    embedding paths each have their own keyring key so opting into one
+    feature does not implicitly grant the other (ADR-0015 §決定 (a)
+    — extras independence).
+    """
+    openai_module: Any = pytest.importorskip(
+        "opshub.llm.openai_client",
+        reason="llm:openai auth path requires the 'llm-openai' extras",
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["connector", "auth", "set", "llm:openai", "--token", "sk-proj-xxx"]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "llm:openai" in result.stdout
+    assert get_secret(openai_module.OPENAI_API_KEY_SECRET) == "sk-proj-xxx"
+
+
+def test_auth_set_llm_keys_are_distinct_from_embedder_keys(
+    in_memory_keyring: _InMemoryKeyring,
+) -> None:
+    """Writing ``llm:openai`` must NOT collide with ``embedder:openai``.
+
+    Both backends pull from OpenAI but they store credentials under
+    different keyring keys (``llm:openai:api_key`` vs
+    ``embedder:openai:api_key``) so an operator can run briefing on
+    OpenAI and embeddings on Voyage (or vice versa) without sharing one
+    API key. This test pins that separation.
+    """
+    pytest.importorskip(
+        "opshub.llm.openai_client",
+        reason="llm:openai auth path requires the 'llm-openai' extras",
+    )
+    runner = CliRunner()
+    # Write distinct values to each target.
+    r1 = runner.invoke(app, ["connector", "auth", "set", "llm:openai", "--token", "sk-llm-only"])
+    r2 = runner.invoke(
+        app, ["connector", "auth", "set", "embedder:openai", "--token", "sk-emb-only"]
+    )
+    assert r1.exit_code == 0
+    assert r2.exit_code == 0
+
+    from opshub.llm.openai_client import OPENAI_API_KEY_SECRET as LLM_KEY
+
+    assert get_secret(LLM_KEY) == "sk-llm-only"
+    assert get_secret(OPENAI_API_KEY_SECRET) == "sk-emb-only"
 
 
 def test_auth_does_not_expose_get_subcommand() -> None:

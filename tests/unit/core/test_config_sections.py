@@ -11,7 +11,10 @@ from pathlib import Path
 import pytest
 
 from opshub.core.config import (
+    AnthropicLLMSettings,
     EmbeddingSettings,
+    LLMSettings,
+    OpenAILLMSettings,
     OpsHubSettings,
     StorageSettings,
     WorkspaceSettings,
@@ -172,3 +175,105 @@ def test_embedding_invalid_backend_rejected() -> None:
 
     with pytest.raises(PydanticValidationError):
         EmbeddingSettings(backend="bogus")  # type: ignore[arg-type]
+
+
+# ---- LLM settings (Phase 5 step A5, ADR-0015) ---------------------------
+
+
+def test_llm_default_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-0015 §決定 (b): a fresh install must not silently hit a billed API."""
+    monkeypatch.delenv("OPSHUB_LLM_BACKEND", raising=False)
+    monkeypatch.delenv("OPSHUB_LLM__BACKEND", raising=False)
+    settings = LLMSettings()
+    assert settings.backend == "disabled"
+
+
+def test_llm_default_model_ids_match_adr_0015(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-0015 §決定 (c): pin the cost-effective Haiku / gpt-4o-mini defaults."""
+    monkeypatch.delenv("OPSHUB_LLM_BACKEND", raising=False)
+    settings = LLMSettings()
+    assert settings.anthropic.model_id == "claude-haiku-4-5-20251001"
+    assert settings.anthropic.model_version == "2026-05-01"
+    assert settings.openai.model_id == "gpt-4o-mini"
+    assert settings.openai.model_version == "2026-05-01"
+
+
+def test_opshub_settings_includes_llm_section(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPSHUB_LLM_BACKEND", raising=False)
+    settings = OpsHubSettings()
+    assert isinstance(settings.llm, LLMSettings)
+    assert isinstance(settings.llm.anthropic, AnthropicLLMSettings)
+    assert isinstance(settings.llm.openai, OpenAILLMSettings)
+    assert settings.llm.backend == "disabled"
+
+
+def test_llm_backend_env_shortcut_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``OPSHUB_LLM_BACKEND`` is the single-underscore convenience alias.
+
+    ADR-0015 §決定 (d) documents the env var pattern as the CI / headless
+    escape hatch; operators typically reach for the flat form first.
+    Pinning this here keeps the convenience alias from regressing into
+    the canonical nested-only form.
+    """
+    monkeypatch.setenv("OPSHUB_LLM_BACKEND", "anthropic")
+    settings = OpsHubSettings()
+    assert settings.llm.backend == "anthropic"
+
+
+def test_llm_backend_nested_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The canonical nested form ``OPSHUB_LLM__BACKEND`` also works.
+
+    ``pydantic_settings`` resolves nested fields via the configured
+    ``__`` delimiter regardless of the convenience alias above; keeping
+    both paths covered means operators following either docs style get
+    the same result.
+    """
+    monkeypatch.delenv("OPSHUB_LLM_BACKEND", raising=False)
+    monkeypatch.setenv("OPSHUB_LLM__BACKEND", "openai")
+    settings = OpsHubSettings()
+    assert settings.llm.backend == "openai"
+
+
+def test_llm_backend_env_shortcut_rejects_bogus_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bogus ``OPSHUB_LLM_BACKEND`` must fail at config-load time.
+
+    Letting ``grok`` etc. silently leak through to ``build_llm_client``
+    would surface as a confusing "unknown llm backend" error far from
+    the actual misconfiguration; we re-validate via ``LLMSettings`` so
+    the failure happens at ``OpsHubSettings()`` construction instead.
+    """
+    from pydantic import ValidationError as PydanticValidationError
+
+    monkeypatch.setenv("OPSHUB_LLM_BACKEND", "grok")
+    with pytest.raises(PydanticValidationError):
+        OpsHubSettings()
+
+
+def test_llm_anthropic_model_id_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Per-backend nested env overrides use the canonical ``__`` delimiter."""
+    monkeypatch.delenv("OPSHUB_LLM_BACKEND", raising=False)
+    monkeypatch.setenv("OPSHUB_LLM__ANTHROPIC__MODEL_ID", "claude-sonnet-4-5-20251001")
+    settings = OpsHubSettings()
+    assert settings.llm.anthropic.model_id == "claude-sonnet-4-5-20251001"
+
+
+def test_llm_default_factories_are_not_shared(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guard against the mutable-default footgun, same as Phase 1 step 12
+    coverage for storage / workspace / embedding."""
+    monkeypatch.delenv("OPSHUB_LLM_BACKEND", raising=False)
+    a = OpsHubSettings()
+    b = OpsHubSettings()
+    assert a.llm is not b.llm
+    assert a.llm.anthropic is not b.llm.anthropic
+    assert a.llm.openai is not b.llm.openai
+
+
+def test_llm_invalid_backend_rejected() -> None:
+    from pydantic import ValidationError as PydanticValidationError
+
+    with pytest.raises(PydanticValidationError):
+        LLMSettings(backend="bogus")  # type: ignore[arg-type]

@@ -163,9 +163,10 @@ def auth_set(
     without touching the keychain (useful for CI / containers).
 
     Currently supported names: ``github``, ``embedder:openai``,
-    ``embedder:voyage``. Other connectors (Slack / MS365 / Box) land
-    in Phase 3.x; additional embedder backends would extend this
-    switch alongside their factory branch in
+    ``embedder:voyage``, ``llm:anthropic``, ``llm:openai``. Other
+    connectors (Slack / MS365 / Box) land in Phase 3.x; additional LLM
+    / embedder backends would extend this switch alongside their
+    factory branch in :mod:`opshub.llm.factory` /
     :mod:`opshub.vectors.factory`.
 
     Security: there is intentionally no ``auth get`` command — we never
@@ -193,10 +194,24 @@ def auth_set(
         from opshub.vectors.voyage_embedder import VOYAGE_API_KEY_SECRET
 
         key = VOYAGE_API_KEY_SECRET
+    elif name == "llm:anthropic":
+        # Phase 5 step A5: LLM client modules export the keyring key as
+        # a module constant so the CLI writer + client reader cannot
+        # drift (mirrors the embedder pattern above). Lazy-imported so
+        # the ``anthropic`` SDK does not load on the ``opshub --help``
+        # cold-start path when the operator never uses LLM features.
+        from opshub.llm.anthropic_client import ANTHROPIC_API_KEY_SECRET
+
+        key = ANTHROPIC_API_KEY_SECRET
+    elif name == "llm:openai":
+        from opshub.llm.openai_client import OPENAI_API_KEY_SECRET as LLM_OPENAI_API_KEY_SECRET
+
+        key = LLM_OPENAI_API_KEY_SECRET
     else:
         typer.echo(
             f"unknown auth target {name!r}; currently supported: "
-            "github, embedder:openai, embedder:voyage",
+            "github, embedder:openai, embedder:voyage, "
+            "llm:anthropic, llm:openai",
             err=True,
         )
         raise typer.Exit(code=2)
