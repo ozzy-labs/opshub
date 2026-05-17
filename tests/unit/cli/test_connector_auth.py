@@ -27,6 +27,8 @@ from typer.testing import CliRunner
 from opshub.cli.app import app
 from opshub.connectors.github.auth import GITHUB_PAT_SECRET_KEY
 from opshub.core.secrets import get_secret
+from opshub.vectors.openai_embedder import OPENAI_API_KEY_SECRET
+from opshub.vectors.voyage_embedder import VOYAGE_API_KEY_SECRET
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -155,18 +157,59 @@ def test_auth_set_rejects_whitespace_only_token(
 def test_auth_set_unknown_connector(
     in_memory_keyring: _InMemoryKeyring,
 ) -> None:
-    """Unknown connector → exit 2 with the supported list on stderr.
+    """Unknown target → exit 2 with the supported list on stderr.
 
-    Phase 3 ships only ``github``; Slack / MS365 / Box land in Phase 3.x.
-    The error must say so explicitly instead of failing silently.
+    Phase 4 step B3 extends the supported list to include the
+    ``embedder:openai`` / ``embedder:voyage`` API-key targets alongside
+    ``github``. The error must enumerate every supported name so the
+    operator can copy-paste the right one.
     """
     runner = CliRunner()
     result = runner.invoke(app, ["connector", "auth", "set", "slack", "--token", "x"])
 
     assert result.exit_code == 2
-    assert "unknown connector" in result.stderr
+    assert "unknown auth target" in result.stderr
     assert "slack" in result.stderr
-    assert "github" in result.stderr  # the supported-list hint
+    # All currently-supported names must appear in the hint.
+    assert "github" in result.stderr
+    assert "embedder:openai" in result.stderr
+    assert "embedder:voyage" in result.stderr
+
+
+# ----- embedder API-key targets (Phase 4 step B3) -----------------------
+
+
+def test_auth_set_embedder_openai_with_token_flag(
+    in_memory_keyring: _InMemoryKeyring,
+) -> None:
+    """``embedder:openai --token sk-xxx`` writes to the OpenAI keyring key.
+
+    The :class:`OpenAIEmbedder` reader (:mod:`opshub.vectors.openai_embedder`)
+    consults the exact same constant; pinning the round-trip here keeps
+    the CLI writer / embedder reader contract from drifting.
+    """
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["connector", "auth", "set", "embedder:openai", "--token", "sk-xxx"]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "embedder:openai" in result.stdout
+    assert get_secret(OPENAI_API_KEY_SECRET) == "sk-xxx"
+
+
+def test_auth_set_embedder_voyage_with_token_flag(
+    in_memory_keyring: _InMemoryKeyring,
+) -> None:
+    """``embedder:voyage --token pa-xxx`` writes to the Voyage keyring key."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["connector", "auth", "set", "embedder:voyage", "--token", "pa-xxx"]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "embedder:voyage" in result.stdout
+    assert get_secret(VOYAGE_API_KEY_SECRET) == "pa-xxx"
 
 
 def test_auth_does_not_expose_get_subcommand() -> None:

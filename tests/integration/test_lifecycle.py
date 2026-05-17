@@ -17,8 +17,9 @@ The sequence covered:
 5. ``opshub workspace generate`` (twice) — disposable workspace
    contract (ADR-0003): first call writes ``index.md`` + per-task files,
    second call is a no-op.
-6. ``opshub embeddings status`` — Phase 1 stub, must report
-   ``backend=disabled`` and ``0 rows``.
+6. ``opshub embeddings status`` — Phase 4 step B3 implementation: with
+   the default ``backend=disabled`` it prints a one-line hint and exits
+   0 without scanning the DB.
 """
 
 from __future__ import annotations
@@ -187,5 +188,8 @@ def test_full_phase1_lifecycle_via_cli(
     # ---- 6. opshub embeddings status ---------------------------------------
     status_result = runner.invoke(app, ["embeddings", "status"])
     assert status_result.exit_code == 0, status_result.stdout
+    # Phase 4 step B3: disabled backend short-circuits with a hint
+    # (no DB scan, no row count). The active-backend path is covered by
+    # tests/unit/cli/test_embeddings.py.
     assert "backend=disabled" in status_result.stdout
-    assert "embeddings: 0 rows" in status_result.stdout
+    assert "embeddings rebuild" in status_result.stdout
