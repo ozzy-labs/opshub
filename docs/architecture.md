@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Phase 1 (foundation) + Phase 2 (coordination) shipped 2026-05-17. Phase 3-4 sections remain in active design.
+> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) shipped 2026-05-17. Phase 4 (semantic layer) section remains in active design. Slack / Microsoft 365 / Box connectors are deferred to Phase 3.x.
 
 OpsHub の高レベルアーキテクチャ・データフロー・データモデル・用語を記述する。具体的な決定の根拠は対応 ADR を参照。
 
@@ -11,13 +11,14 @@ OpsHub の高レベルアーキテクチャ・データフロー・データモ�
 │  External Systems                                          │
 │  GitHub  Slack  Microsoft 365  Box  Office Files  ...      │
 └─────────────────┬──────────────────────────────────────────┘
-                  │ (Phase 3+)
+                  │ (Phase 3 ✅ GitHub 実装済 / Slack・MS365・Box は 3.x)
                   ▼
 ┌────────────────────────────────────────────────────────────┐
 │  Connector Layer  (src/opshub/connectors/*)                │
 │  - external metadata → source entity                       │
 │  - cursor checkpointing                                    │
 │  - emits SourceObserved / SourceReferenced events          │
+│  ✅ Phase 3 実装済 (GitHub connector + 共通 framework)     │
 └─────────────────┬──────────────────────────────────────────┘
                   │ Service call (append event)
                   ▼
@@ -63,6 +64,8 @@ OpsHub の高レベルアーキテクチャ・データフロー・データモ�
 
 - 行うこと: 差分 fetch / cursor 保存 / normalization / event 発行依頼
 - 行わないこと: Task / Decision / Link の自動生成、projection 直書き、event の bypass
+
+Phase 3 実装状況: **GitHub connector が最初の具象実装** (`src/opshub/connectors/github/`、ADR-0010 で contract が検証され Accepted 昇格)。共通基盤 (`Connector` Protocol / `ConnectorContext` / `SourceService` / `connector_cursors` projection / `core.secrets` keychain backend) は完了。Slack / Microsoft 365 / Box は Phase 3.x で同じ contract に従って追加する。workspace 上の人手記述 `.md` は別経路 (`opshub workspace ingest` + `FileIngestService` + `ingested_files` projection、ADR-0005 整合) で event 化する。
 
 ### 2.2 Application Services
 
@@ -125,9 +128,10 @@ agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換�
 | `agent_runs` | projection | Phase 1+2 (✅ 実装済) | agent 実行記録 |
 | `locks` | projection | Phase 1+2 (✅ 実装済) | coordination lock |
 | `handoffs` | projection | Phase 1+2 (✅ 実装済) | agent 間 / 人 - agent 間の引き継ぎ記録 |
-| `sources` | projection | Phase 3+ | external item の現在状態 |
-| `connector_cursors` | projection | Phase 3+ | 差分同期チェックポイント |
-| `links` | projection | Phase 3+ | entity 間 graph 関係 |
+| `sources` | projection | Phase 1+2+3 (✅ 実装済) | external item の現在状態 |
+| `connector_cursors` | projection | Phase 1+2+3 (✅ 実装済) | 差分同期チェックポイント |
+| `ingested_files` | projection | Phase 1+2+3 (✅ 実装済) | workspace inbox file ingest の content-hash 追跡 |
+| `links` | projection | Phase 4+ | entity 間 graph 関係 (Phase 3 では `inbox_items.source_ref` 列で簡易 link) |
 | `projects` | projection | Phase 3+ | task / decision のグルーピング (lock scope は Phase 2 で予約のみ) |
 
 ### 4.2 Event 命名規約
@@ -235,7 +239,7 @@ Agent は以下を行わない。
 |---|---|---|
 | 1 | event store, tasks projection, CLI 骨格, markdown 生成, tests, CI | connector, vector, lock, triage |
 | 2 | inbox triage, decisions, work sessions, locks, handoffs | connector, vector |
-| 3 | GitHub / Slack / Microsoft 365 / Box connector | vector recall |
+| 3 | Connector framework + GitHub connector + workspace inbox file ingest (✅ 2026-05-17 完了)。Slack / Microsoft 365 / Box は Phase 3.x | vector recall |
 | 4 | vector recall, semantic search, duplicate detection, briefing 自動生成 | — |
 
 詳細は [Principles 9 (Phased Delivery)](principles.md) 参照。

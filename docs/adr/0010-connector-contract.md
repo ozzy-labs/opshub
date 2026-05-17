@@ -1,7 +1,7 @@
 # 0010. Connector Contract
 
-- Status: Proposed
-- Date: 2026-05-16
+- Status: Accepted
+- Date: 2026-05-17
 - Deciders: ozzy
 
 ## Context
@@ -107,6 +107,18 @@ triage を経て Task / Decision / Link が生成される流れ:
 - 異常時の rollback / lock 管理が困難
 - 採用案 (1 connector → 1 service 呼び出し / 1 event 単位) の方が atomic 性を保てる
 
+## Validation
+
+Phase 3 sub-issue B (PR #51-55) で GitHub connector を本 contract に沿って実装し、`Connector` Protocol + `ConnectorContext` + `SourceService` 経由の event 連鎖 + cursor 永続化 + fail-fast (`ConnectorSyncFailed`) までを end-to-end で検証した (`tests/integration/test_github_connector_lifecycle.py` および sub-issue D の `tests/integration/test_phase3_lifecycle.py::test_github_connector_to_inbox_e2e`)。具体的に確認できたのは以下:
+
+- Connector は Task / Decision / Link を一切生成しない (生成パスは `inbox triage` のみ)
+- Projection 更新は `SourceService.observe` 経由でのみ発生 (Connector は SQL を直接叩かない)
+- Event 名は `SourceObserved` / `ConnectorSyncStarted` / `ConnectorSyncCompleted` / `ConnectorSyncFailed` に集中管理され、vendor 固有 event は出現しない
+- ADR-0005 整合 (summary / external_id / url のみ保持、full body は保持しない)
+- 失敗時は `ConnectorSyncFailed` を append して fail-fast、token / PII を event log に漏らさない
+
+Slack / Microsoft 365 / Box は Phase 3.x で同 contract に従って追加する。
+
 ## 関連
 
 - [Principles 7 (Connector Contract)](../principles.md)
@@ -114,3 +126,4 @@ triage を経て Task / Decision / Link が生成される流れ:
 - [ADR-0002: Event-Sourced Architecture](0002-event-sourced-architecture.md)
 - [ADR-0004: Agent Runtime Boundary](0004-agent-runtime-boundary.md)
 - [ADR-0005: External Content Minimization](0005-external-content-minimization.md)
+- [ADR-0014: SaaS Token Storage](0014-saas-token-storage.md)
