@@ -246,6 +246,51 @@ This change is also why this ADR's §"配布チャネル" table no longer mentio
 `[vector]` as a Phase-3-end prerequisite — sqlite-vec is now available out of
 the box.
 
+### v0.1.0 — Git-source distribution (defer PyPI) (2026-05-18)
+
+v0.1.0 ships via **git source `uv tool install`** rather than the PyPI
+Trusted Publishers flow originally documented in §"配布チャネル". The release
+workflow (`.github/workflows/release.yaml`) still validates the build on every
+tag push, but the PyPI publish job is intentionally dormant.
+
+**Why defer**:
+
+- v0.1.0 audience is AI-agent developers / personal users / a small set of
+  early adopters who can paste a `uv tool install git+...` URL without
+  friction
+- PyPI account + Trusted Publisher setup + 2FA + name reservation is ~15 min
+  of Web-UI work that is not load-bearing for the initial release
+- `uv tool install git+https://github.com/ozzy-labs/opshub.git@v0.1.0`
+  resolves correctly against a public repo with zero additional config; the
+  rest of the `uv` lifecycle (`upgrade` / `uninstall`) works the same way as
+  for PyPI-sourced installs
+- Renovate / Dependabot for downstream consumers can detect tag updates via
+  the `github-tags` datasource without PyPI; the syntax is well-supported
+
+**What's preserved**:
+
+- The release workflow's `build` job (tag-vs-`__version__` verification +
+  `uv build`) — produces sdist + wheel as workflow artifacts (90-day
+  retention) for inspection / optional GitHub-Release attachment
+- A `# TODO(pypi):` commented `publish` job inside `release.yaml`, ready to
+  re-enable when migrating to PyPI
+- The original PyPI Trusted Publisher runbook content under
+  `docs/RELEASE_RUNBOOK.md §Future: PyPI migration` — re-enabling is a ~5
+  line YAML edit plus the one-time PyPI Web UI registrations
+
+**Trade-offs accepted**:
+
+- Install command is longer:
+  `uv tool install git+https://github.com/ozzy-labs/opshub.git@v0.1.0` vs.
+  the eventual `uv tool install opshub`
+- Auto-pinning for downstream consumers is via `github-tags` datasource,
+  not the simpler PyPI version pin
+- `pypi.org` discoverability is absent until migration
+
+These costs are smaller than the PyPI setup activation energy for v0.1.x.
+Migrate to PyPI when the user base outgrows the current friction (heuristic:
+when the install instructions in the README become a support burden).
+
 ## 関連
 
 - [Principles 10 (Pythonic but Vendor-Neutral)](../principles.md)

@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Initial public release. OpsHub is a local-first operational memory + execution
 hub for humans and AI agents.
 
+**Distribution**: v0.1.x is distributed directly from the GitHub repository
+via `uv tool install git+https://github.com/ozzy-labs/opshub.git@v0.1.0`.
+PyPI publishing is deferred — see
+[ADR-0001 §Updates](docs/adr/0001-python-stack.md#updates) for the rationale
+and the migration path documented in
+[`docs/RELEASE_RUNBOOK.md` §Future](docs/RELEASE_RUNBOOK.md#future-pypi-migration).
+
 ### Added
 
 #### Phase 1 — Foundation (event store + CLI + markdown)
