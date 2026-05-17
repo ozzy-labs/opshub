@@ -14,11 +14,12 @@ Phase 2 widened :data:`AllEvent` from ``TaskEvent`` to
 ``TaskEvent | Phase2Event`` by listing every Phase 2 event in
 :data:`Phase2Event`. Phase 3 extends it again with :data:`Phase3Event`
 (source + connector families). Phase 4 extends it once more with
-:data:`Phase4Event` (embedding lifecycle family). The four unions are
-concatenated into a single flat discriminated union (rather than
-nesting ``Annotated[..., Field(discriminator=...)]`` inside another)
-because pydantic builds the discriminator dispatch directly from the
-flat member list — nesting would force a runtime walk that we
+:data:`Phase4Event` (embedding lifecycle family). Phase 5 extends it
+again with :data:`Phase5Event` (briefing lifecycle family). The five
+unions are concatenated into a single flat discriminated union (rather
+than nesting ``Annotated[..., Field(discriminator=...)]`` inside
+another) because pydantic builds the discriminator dispatch directly
+from the flat member list — nesting would force a runtime walk that we
 deliberately avoid here.
 """
 
@@ -27,6 +28,11 @@ from typing import Annotated
 from pydantic import Field
 
 from opshub.domain.events.base import DomainEvent
+from opshub.domain.events.briefing import (
+    BriefingFailed,
+    BriefingGenerated,
+    BriefingRequested,
+)
 from opshub.domain.events.connector import (
     ConnectorSyncCompleted,
     ConnectorSyncFailed,
@@ -99,12 +105,22 @@ Phase4Event = Annotated[
     Field(discriminator="event_type"),
 ]
 
+# Phase 5's discriminated union. Briefing lifecycle family: request
+# (``BriefingRequested``), success (``BriefingGenerated``), and
+# per-call failure (``BriefingFailed``). ``TypeAdapter(Phase5Event)``
+# is the right tool for tests and migration scripts that want
+# phase-scoped deserialisation.
+Phase5Event = Annotated[
+    BriefingRequested | BriefingGenerated | BriefingFailed,
+    Field(discriminator="event_type"),
+]
+
 # ``AllEvent`` is the discriminated union across every event family the
-# binary can deserialise. Phase 4 extends the alias to include the 3
-# new embedding event types on top of Phase 1 + Phase 2 + Phase 3.
-# Persistence code reaches for ``AllEvent`` (never the per-family
-# unions) so the dispatch stays version-neutral — adding a new family
-# in Phase 5+ remains a one-line edit on this union (see
+# binary can deserialise. Phase 5 extends the alias to include the 3
+# new briefing event types on top of Phase 1 + Phase 2 + Phase 3 +
+# Phase 4. Persistence code reaches for ``AllEvent`` (never the
+# per-family unions) so the dispatch stays version-neutral — adding a
+# new family in Phase 6+ remains a one-line edit on this union (see
 # ``SqlAlchemyEventStore._decode``, which routes raw JSON through
 # ``TypeAdapter(AllEvent)`` and therefore picks up new families
 # automatically once they are listed here).
@@ -131,7 +147,10 @@ AllEvent = Annotated[
     | FileIngested
     | TextEmbedded
     | EmbeddingRebuildRequested
-    | EmbeddingFailed,
+    | EmbeddingFailed
+    | BriefingRequested
+    | BriefingGenerated
+    | BriefingFailed,
     Field(discriminator="event_type"),
 ]
 
@@ -139,6 +158,9 @@ __all__ = [
     "AgentRunEnded",
     "AgentRunStarted",
     "AllEvent",
+    "BriefingFailed",
+    "BriefingGenerated",
+    "BriefingRequested",
     "ConnectorSyncCompleted",
     "ConnectorSyncFailed",
     "ConnectorSyncStarted",
@@ -156,6 +178,7 @@ __all__ = [
     "Phase2Event",
     "Phase3Event",
     "Phase4Event",
+    "Phase5Event",
     "SourceObserved",
     "SourceReferenced",
     "TaskActivated",
