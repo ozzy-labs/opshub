@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from opshub.services.embedding_service import EmbeddingService
 
 
-__all__ = ["AutoEmbedHook"]
+__all__ = ["AUTO_EMBED_EVENT_TYPES", "AutoEmbedHook"]
 
 
 # Mapping from the event's ``event_type`` discriminator string to the
@@ -61,6 +61,15 @@ _EVENT_TYPE_TO_ENTITY_TYPE: dict[str, str] = {
     "inbox.enqueued": "inbox_item",
     "source.observed": "source",
 }
+
+# Public view of the event types the auto-embed hook reacts to.
+# Exposed as a ``frozenset`` so callers (notably the
+# ``opshub embeddings status`` diagnostic in Phase 5 step C2) can echo
+# the active event surface without having to import the private mapping
+# above. The set is derived from ``_EVENT_TYPE_TO_ENTITY_TYPE`` so the
+# two stay in lock-step: adding a key to the mapping automatically
+# updates the public set.
+AUTO_EMBED_EVENT_TYPES: frozenset[str] = frozenset(_EVENT_TYPE_TO_ENTITY_TYPE)
 
 
 class AutoEmbedHook:
