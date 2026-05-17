@@ -1,6 +1,6 @@
 # Repository and Package Structure
 
-> Status: Draft (in active design). Last reviewed: 2026-05-16.
+> Status: Draft (in active design). Last reviewed: 2026-05-17.
 
 OpsHub リポジトリのトップレベル構成と Python パッケージ (`src/opshub/`) の内部構造を記述する。実装着手時はこの構成から開始し、必要に応じて更新する。
 
@@ -79,7 +79,7 @@ opshub/
 
 ## 2. Python パッケージ構成 (src/opshub/)
 
-各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで merge 済 (2026-05-17)。`[P3.x]` は Phase 3 完了後の継続作業 (Slack / Microsoft 365 / Box connector 等)、`[P5]` は Phase 4 完了後の Phase 5 で着手予定 (briefing 自動生成 / event 駆動自動 embed / `links` projection 本実装 等)。
+各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで merge 済 (2026-05-17)。`[P3.x]` は Phase 3 完了後の継続作業 (Slack / Microsoft 365 / Box connector 等)、`[P5.x]` は Phase 5 完了後の継続作業 (Local LLM backend / briefing cache + narrow scope / `links` projection 本実装 等)。
 
 ```text
 src/opshub/
@@ -92,12 +92,13 @@ src/opshub/
 │   ├── db.py                       # migrate / status [P1]
 │   ├── task.py                     # create / list / status / archive [P1]
 │   ├── projections.py              # rebuild [P1]
-│   ├── embeddings.py               # rebuild / status / find-duplicates [P1+2+3+4]
+│   ├── embeddings.py               # rebuild / drain / status / find-duplicates [P1+2+3+4+5]
 │   ├── recall.py                   # semantic search [P1+2+3+4]
-│   ├── _wiring.py                  # 内部 helper: service/projection の組み立て [P1+2]
+│   ├── brief.py                    # LLM-backed briefing CLI [P5]
+│   ├── _wiring.py                  # 内部 helper: service/projection の組み立て (briefing / auto-embed hook 含む) [P1+2+5]
 │   ├── _task_list.py               # 内部 helper: task list 共通フォーマッタ [P1]
 │   ├── _actor.py                   # 内部 helper: actor / work_session_id 解決 [P1+2]
-│   ├── _render.py                  # 内部 helper: 汎用 table/json/md renderer [P1+2]
+│   ├── _render.py                  # 内部 helper: 汎用 table/json/md renderer + briefing renderer [P1+2+5]
 │   ├── _inbox_list.py              # 内部 helper: inbox list 共通フォーマッタ [P1+2]
 │   ├── _decision_list.py           # 内部 helper: decision list 共通フォーマッタ [P1+2]
 │   ├── _handoff_render.py          # 内部 helper: handoff list 共通フォーマッタ [P1+2]
@@ -110,13 +111,15 @@ src/opshub/
 │   ├── workspace.py                # generate / ingest [P1+2+3]
 │   ├── event.py                    # event append / list [future]
 │   ├── source.py                   # source add / list [future]
-│   └── connector.py                # list / sync / auth set [P1+2+3]
+│   └── connector.py                # list / sync / auth set (Phase 5 で `llm:<name>` 名前空間にも対応) [P1+2+3+5]
 ├── core/                           # 共通ユーティリティ [P1]
-│   ├── config.py                   # Pydantic Settings [P1]
+│   ├── config.py                   # Pydantic Settings (Phase 5 で LLMSettings 追加) [P1+2+3+4+5]
 │   ├── ids.py                      # ULID / UUID [P1]
 │   ├── time.py                     # tz-aware datetime helpers [P1]
 │   ├── logging.py                  # structlog [P1]
 │   ├── secrets.py                  # keyring-backed token storage (ADR-0014) [P1+2+3]
+│   ├── sanitise.py                 # API key / Bearer token 除去 (Phase 5 で extract) [P5]
+│   ├── slug.py                     # filename-safe slug for briefings/--save [P5]
 │   └── errors.py                   # [P1]
 ├── db/                             # 永続化レイヤ [P1]
 │   ├── engine.py                   # SQLAlchemy Engine / Session [P1]
@@ -135,6 +138,7 @@ src/opshub/
 │   │   ├── connector.py            # ConnectorSyncStarted / Completed / Failed [P1+2+3]
 │   │   ├── file_ingest.py          # FileIngested [P1+2+3]
 │   │   ├── embedding.py            # TextEmbedded / EmbeddingRebuildRequested / EmbeddingFailed [P1+2+3+4]
+│   │   ├── briefing.py             # BriefingRequested / BriefingGenerated / BriefingFailed [P5]
 │   │   └── agent.py                # [future]
 │   ├── ids.py                      # TaskId / SourceId など [P1]
 │   └── value_objects.py            # [P1]
@@ -151,9 +155,15 @@ src/opshub/
 │   ├── workspace_service.py        # [P2+]
 │   ├── source_service.py           # connector → source/inbox event chain [P1+2+3]
 │   ├── file_ingest_service.py      # workspace/inbox/*.md → event + ingested_files [P1+2+3]
-│   ├── embedding_service.py        # CLI-driven embed pending entities [P1+2+3+4]
+│   ├── embedding_service.py        # CLI-driven embed pending entities + `embed_one_if_pending` (P5 で sanitise extract + auto-embed hook 用 single-row API 追加) [P1+2+3+4+5]
 │   ├── recall_service.py           # vector + SQL filter hybrid search [P1+2+3+4]
-│   └── duplicate_service.py        # offline near-duplicate scan [P1+2+3+4]
+│   ├── duplicate_service.py        # offline near-duplicate scan [P1+2+3+4]
+│   ├── briefings/                  # BriefingService + prompts (ADR-0015) [P5]
+│   │   ├── __init__.py             # [P5]
+│   │   ├── prompts.py              # SYSTEM_PROMPT / USER_PROMPT_TEMPLATE / render_user_prompt [P5]
+│   │   └── service.py              # BriefingService.generate(topic, ...) [P5]
+│   ├── auto_embed_hook.py          # post-commit projector hook for opt-in auto-embed [P5]
+│   └── event_hook.py               # EventHook Protocol (post-commit fan-out) [P5]
 ├── projections/                    # event → projection reducer
 │   ├── base.py                     # [P1]
 │   ├── registry.py                 # 一元化された projection 一覧 [P1+2+3]
@@ -168,8 +178,8 @@ src/opshub/
 │   ├── sources.py                  # external source 現在状態 [P1+2+3]
 │   ├── connector_cursors.py        # connector 差分同期 cursor [P1+2+3]
 │   ├── ingested_files.py           # workspace file ingest の content_hash 追跡 [P1+2+3]
-│   ├── briefings.py                # LLM briefing 結果 (markdown + source_refs + cost trace) [P5]
-│   └── links.py                    # entity 間 graph 関係 [P5]
+│   ├── briefings.py                # LLM briefing 結果 (markdown + source_refs + cost trace、Phase 5 で実装済) [P5]
+│   └── links.py                    # entity 間 graph 関係 [P5.x]
 ├── connectors/                     # [P1+2+3]
 │   ├── __init__.py                 # discover_connectors / register_connector [P1+2+3]
 │   ├── base.py                     # Connector Protocol + SyncResult [P1+2+3]
@@ -202,6 +212,12 @@ src/opshub/
 │   ├── voyage_embedder.py          # VoyageEmbedder (voyage-3) [P1+2+3+4]
 │   ├── sqlite_vec_store.py         # SqliteVecStore (sqlite-vec backed VectorStore) [P1+2+3+4]
 │   └── factory.py                  # backend resolution (build_embedder / build_vector_store) [P1+2+3+4]
+├── llm/                            # LLM 抽象 + 具象 backend (ADR-0015) [P5]
+│   ├── __init__.py                 # [P5]
+│   ├── client.py                   # LLMMessage / LLMResponse / LLMClient Protocol (frozen) [P5]
+│   ├── anthropic_client.py         # AnthropicLLMClient (claude-haiku-4-5 default) [P5]
+│   ├── openai_client.py            # OpenAILLMClient (gpt-4o-mini default) [P5]
+│   └── factory.py                  # build_llm_client + NoOpLLMClient [P5]
 ├── graph/                          # entity 間 link [Phase 4 以降で検討]
 │   ├── links.py
 │   └── queries.py
