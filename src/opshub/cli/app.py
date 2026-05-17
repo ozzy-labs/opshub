@@ -29,6 +29,7 @@ from opshub.cli.handoff import handoff_app
 from opshub.cli.inbox import inbox_app
 from opshub.cli.lock import lock_app
 from opshub.cli.projections import projections_app
+from opshub.cli.propose import propose_app
 from opshub.cli.recall import register as register_recall
 from opshub.cli.session import session_app
 from opshub.cli.task import task_app
@@ -57,6 +58,7 @@ app.add_typer(session_app)
 app.add_typer(agent_app)
 app.add_typer(workspace_app)
 app.add_typer(connector_app)
+app.add_typer(propose_app)
 register_recall(app)
 register_brief(app)
 
