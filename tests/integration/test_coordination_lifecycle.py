@@ -302,16 +302,12 @@ def test_lock_lifecycle(isolated_env: _PathsDict) -> None:
     4. ``release`` populates ``released_at``; ``list --format json``
        reflects the now-empty active set.
 
-    NOTE on idempotent reacquire: ADR-0013 specifies that the same
-    ``(actor, work_session_id)`` reacquiring an existing lock is a
-    no-op (same ULID echoed). The lock service implements that branch
-    via :func:`opshub.services.lock_service._reconstruct_acquired`,
-    which reads ``acquired_at`` from the SQLite projection — that
-    column round-trips as a *naive* datetime, which trips
-    :func:`opshub.core.time.to_utc` inside the :class:`LockAcquired`
-    Pydantic constructor. The defect is unrelated to the integration
-    surface this test pins, so we skip the same-owner reacquire branch
-    here and leave it to a dedicated unit test on the service.
+    Step (1a) verifies idempotent reacquire (ADR-0013): the same
+    ``(actor, work_session_id)`` reacquiring an existing lock returns
+    the original ULID without appending a second event. The earlier
+    naive-datetime bug in :func:`_reconstruct_acquired` is fixed by
+    rehydrating SQLite-read datetimes at the :func:`_row_to_lock`
+    boundary.
     """
     db_path = isolated_env["db_path"]
 
@@ -340,6 +336,17 @@ def test_lock_lifecycle(isolated_env: _PathsDict) -> None:
         assert rows[0]["scope_type"] == "task"
         assert rows[0]["scope_id"] == task_ulid
         assert rows[0]["released_at"] is None
+    finally:
+        engine.dispose()
+
+    # ---- 1a. idempotent reacquire (ADR-0013): same owner → same ULID ----
+    code, out_again, _ = _invoke(["lock", "acquire", f"task:{task_ulid}", "--actor", "cli:alice"])
+    assert code == 0, out_again
+    assert out_again.strip() == lock_id, "same owner reacquire must echo the original lock ULID"
+    # No second row was inserted.
+    engine = create_engine_for_sqlite(db_path)
+    try:
+        assert _row_count(engine, "locks") == 1
     finally:
         engine.dispose()
 

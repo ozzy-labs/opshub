@@ -44,8 +44,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
-from datetime import datetime
-from typing import TYPE_CHECKING, TypedDict
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, TypedDict, cast
 
 from sqlalchemy import and_, select
 from sqlalchemy.exc import IntegrityError
@@ -467,15 +467,37 @@ def _row_to_lock(row: object) -> LockRow:
     """
     # ``row`` is a SQLAlchemy ``Row`` proxy; attribute access mirrors
     # the column names declared on ``locks_table``.
+    acquired_raw = cast(datetime, row.acquired_at)  # type: ignore[attr-defined]
+    released_raw = cast("datetime | None", row.released_at)  # type: ignore[attr-defined]
     return LockRow(
         id=row.id,  # type: ignore[attr-defined]
         scope_type=row.scope_type,  # type: ignore[attr-defined]
         scope_id=row.scope_id,  # type: ignore[attr-defined]
         actor=row.actor,  # type: ignore[attr-defined]
         work_session_id=row.work_session_id,  # type: ignore[attr-defined]
-        acquired_at=row.acquired_at,  # type: ignore[attr-defined]
-        released_at=row.released_at,  # type: ignore[attr-defined]
+        acquired_at=_rehydrate_utc(acquired_raw),
+        released_at=_rehydrate_utc(released_raw) if released_raw is not None else None,
     )
+
+
+def _rehydrate_utc(dt: datetime) -> datetime:
+    """Reattach UTC tzinfo to a datetime read from SQLite.
+
+    SQLAlchemy's stdlib sqlite3 driver returns ``DateTime(timezone=True)``
+    columns as **naive** datetimes whose components already reflect UTC.
+    The domain layer's ``UtcDatetime`` validator (an ``AfterValidator``
+    over ``opshub.core.time.to_utc``) rejects naive datetimes, so we
+    rehydrate at the SQL boundary. Existing tz-aware values pass through.
+
+    Without this fix, ``LockService.acquire`` cannot perform the
+    idempotent reacquire branch (ADR-0013 §Conflict semantics): the
+    branch calls :func:`_reconstruct_acquired` which constructs a
+    :class:`LockAcquired` from the projection row, and that constructor
+    rejects naive datetimes.
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
 
 
 def _reconstruct_acquired(row: LockRow, *, actor: str) -> LockAcquired:
