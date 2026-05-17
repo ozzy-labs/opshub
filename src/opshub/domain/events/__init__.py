@@ -13,12 +13,13 @@ scattered across the codebase.
 Phase 2 widened :data:`AllEvent` from ``TaskEvent`` to
 ``TaskEvent | Phase2Event`` by listing every Phase 2 event in
 :data:`Phase2Event`. Phase 3 extends it again with :data:`Phase3Event`
-(source + connector families). The three unions are concatenated into a
-single flat discriminated union (rather than nesting
-``Annotated[..., Field(discriminator=...)]`` inside another) because
-pydantic builds the discriminator dispatch directly from the flat
-member list — nesting would force a runtime walk that we deliberately
-avoid here.
+(source + connector families). Phase 4 extends it once more with
+:data:`Phase4Event` (embedding lifecycle family). The four unions are
+concatenated into a single flat discriminated union (rather than
+nesting ``Annotated[..., Field(discriminator=...)]`` inside another)
+because pydantic builds the discriminator dispatch directly from the
+flat member list — nesting would force a runtime walk that we
+deliberately avoid here.
 """
 
 from typing import Annotated
@@ -40,6 +41,11 @@ from opshub.domain.events.coordination import (
     WorkSessionStarted,
 )
 from opshub.domain.events.decision import DecisionRecorded
+from opshub.domain.events.embedding import (
+    EmbeddingFailed,
+    EmbeddingRebuildRequested,
+    TextEmbedded,
+)
 from opshub.domain.events.file_ingest import FileIngested
 from opshub.domain.events.handoff import HandoffClosed, HandoffOpened
 from opshub.domain.events.inbox import ItemEnqueued, ItemTriaged
@@ -83,14 +89,25 @@ Phase3Event = Annotated[
     Field(discriminator="event_type"),
 ]
 
+# Phase 4's discriminated union. Embedding lifecycle family: success
+# (``TextEmbedded``), bulk-rebuild bookmark (``EmbeddingRebuildRequested``),
+# and per-entity failure (``EmbeddingFailed``). ``TypeAdapter(Phase4Event)``
+# is the right tool for tests and migration scripts that want
+# phase-scoped deserialisation.
+Phase4Event = Annotated[
+    TextEmbedded | EmbeddingRebuildRequested | EmbeddingFailed,
+    Field(discriminator="event_type"),
+]
+
 # ``AllEvent`` is the discriminated union across every event family the
-# binary can deserialise. Phase 3 extends the alias to include the 5
-# new event types on top of Phase 1 + Phase 2. Persistence code reaches
-# for ``AllEvent`` (never the per-family unions) so the dispatch stays
-# version-neutral — adding a new family in Phase 4+ remains a one-line
-# edit on this union (see ``SqlAlchemyEventStore._decode``, which
-# routes raw JSON through ``TypeAdapter(AllEvent)`` and therefore picks
-# up new families automatically once they are listed here).
+# binary can deserialise. Phase 4 extends the alias to include the 3
+# new embedding event types on top of Phase 1 + Phase 2 + Phase 3.
+# Persistence code reaches for ``AllEvent`` (never the per-family
+# unions) so the dispatch stays version-neutral — adding a new family
+# in Phase 5+ remains a one-line edit on this union (see
+# ``SqlAlchemyEventStore._decode``, which routes raw JSON through
+# ``TypeAdapter(AllEvent)`` and therefore picks up new families
+# automatically once they are listed here).
 AllEvent = Annotated[
     TaskCreated
     | TaskActivated
@@ -111,7 +128,10 @@ AllEvent = Annotated[
     | ConnectorSyncStarted
     | ConnectorSyncCompleted
     | ConnectorSyncFailed
-    | FileIngested,
+    | FileIngested
+    | TextEmbedded
+    | EmbeddingRebuildRequested
+    | EmbeddingFailed,
     Field(discriminator="event_type"),
 ]
 
@@ -124,6 +144,8 @@ __all__ = [
     "ConnectorSyncStarted",
     "DecisionRecorded",
     "DomainEvent",
+    "EmbeddingFailed",
+    "EmbeddingRebuildRequested",
     "FileIngested",
     "HandoffClosed",
     "HandoffOpened",
@@ -133,12 +155,14 @@ __all__ = [
     "LockReleased",
     "Phase2Event",
     "Phase3Event",
+    "Phase4Event",
     "SourceObserved",
     "SourceReferenced",
     "TaskActivated",
     "TaskCompleted",
     "TaskCreated",
     "TaskEvent",
+    "TextEmbedded",
     "WorkSessionEnded",
     "WorkSessionStarted",
 ]
