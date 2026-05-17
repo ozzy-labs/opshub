@@ -87,7 +87,8 @@ briefings_table: Table = Table(
 entity_id)`` tuples the BriefingService passed to the LLM prompt.
 ``model_version`` is nullable to track the LLMResponse contract: some
 LLM backends do not return a version string distinct from
-``model_id`` (notably the future local-LLM backend in Phase 5.x).
+``model_id`` (notably the Ollama local-LLM backend shipped in
+Phase 6 step A4 / PR #105).
 ``generated_at`` mirrors :attr:`BriefingGenerated.occurred_at` — the
 business-time stamp at which the LLM response was produced.
 """
