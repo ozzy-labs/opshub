@@ -153,6 +153,25 @@ def test_source_referenced_requires_entity_id() -> None:
         )
 
 
+def test_source_referenced_docstring_mentions_phase8_promotion() -> None:
+    """Pin ADR-0017 closeout note on the docstring (Phase 8 step B1).
+
+    Phase 3 introduced :class:`SourceReferenced` as a placeholder but
+    no projector consumed it for the Phase 3-7 window. Phase 8
+    (Knowledge graph, ADR-0017 §決定 (c)) closes that gap via the
+    ``LinksProjector``. The docstring carries the first-class
+    promotion note so future readers grepping for the event type land
+    on the closeout context; this test asserts the note is present so
+    a future refactor that drops it gets caught in CI.
+    """
+    doc = SourceReferenced.__doc__ or ""
+    assert "Phase 8" in doc, "SourceReferenced docstring must mention Phase 8 closeout"
+    assert "ADR-0017" in doc, "SourceReferenced docstring must reference ADR-0017"
+    assert "LinksProjector" in doc, (
+        "SourceReferenced docstring must mention the consumer (LinksProjector)"
+    )
+
+
 # ---- ConnectorSyncStarted --------------------------------------------------
 
 

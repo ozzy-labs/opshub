@@ -17,12 +17,14 @@ Phase 2 widened :data:`AllEvent` from ``TaskEvent`` to
 :data:`Phase4Event` (embedding lifecycle family). Phase 5 extends it
 again with :data:`Phase5Event` (briefing lifecycle family). Phase 6
 extends it once more with :data:`Phase6Event` (proposal lifecycle
-family — Action loop per ADR-0016). The six unions are concatenated
-into a single flat discriminated union (rather than nesting
-``Annotated[..., Field(discriminator=...)]`` inside another) because
-pydantic builds the discriminator dispatch directly from the flat
-member list — nesting would force a runtime walk that we deliberately
-avoid here.
+family — Action loop per ADR-0016). Phase 7 was projection-only and
+adds no new events (no ``Phase7Event``). Phase 8 adds
+:data:`Phase8Event` (manual link CRUD per ADR-0017). The seven
+unions are concatenated into a single flat discriminated union
+(rather than nesting ``Annotated[..., Field(discriminator=...)]``
+inside another) because pydantic builds the discriminator dispatch
+directly from the flat member list — nesting would force a runtime
+walk that we deliberately avoid here.
 """
 
 from typing import Annotated
@@ -57,6 +59,7 @@ from opshub.domain.events.embedding import (
 from opshub.domain.events.file_ingest import FileIngested
 from opshub.domain.events.handoff import HandoffClosed, HandoffOpened
 from opshub.domain.events.inbox import ItemEnqueued, ItemTriaged
+from opshub.domain.events.link import LinkCreated, LinkDeleted
 from opshub.domain.events.proposal import (
     Candidate,
     DecisionCandidatePayload,
@@ -139,12 +142,26 @@ Phase6Event = Annotated[
     Field(discriminator="event_type"),
 ]
 
+# Phase 8's discriminated union. Manual link CRUD family (Knowledge
+# graph, ADR-0017): ``LinkCreated`` (``opshub link add``) and
+# ``LinkDeleted`` (``opshub link remove``). Auto-extracted links are
+# pure derived state and do NOT appear here (ADR-0017 §決定 (c)).
+# Phase 7 was projection-only and adds no new event family — there is
+# no ``Phase7Event``. ``TypeAdapter(Phase8Event)`` is the right tool
+# for tests and migration scripts that want phase-scoped
+# deserialisation.
+Phase8Event = Annotated[
+    LinkCreated | LinkDeleted,
+    Field(discriminator="event_type"),
+]
+
 # ``AllEvent`` is the discriminated union across every event family the
-# binary can deserialise. Phase 6 extends the alias to include the 5
-# new proposal event types on top of Phase 1 + Phase 2 + Phase 3 +
-# Phase 4 + Phase 5. Persistence code reaches for ``AllEvent`` (never
-# the per-family unions) so the dispatch stays version-neutral —
-# adding a new family in Phase 7+ remains a one-line edit on this
+# binary can deserialise. Phase 8 extends the alias to include the 2
+# new manual link CRUD event types on top of Phase 1 + Phase 2 + Phase
+# 3 + Phase 4 + Phase 5 + Phase 6 (Phase 7 was projection-only and
+# adds no new event family). Persistence code reaches for ``AllEvent``
+# (never the per-family unions) so the dispatch stays version-neutral
+# — adding a new family in Phase 9+ remains a one-line edit on this
 # union (see ``SqlAlchemyEventStore._decode``, which routes raw JSON
 # through ``TypeAdapter(AllEvent)`` and therefore picks up new
 # families automatically once they are listed here).
@@ -179,7 +196,9 @@ AllEvent = Annotated[
     | ProposalGenerated
     | ProposalApplied
     | ProposalRejected
-    | ProposalFailed,
+    | ProposalFailed
+    | LinkCreated
+    | LinkDeleted,
     Field(discriminator="event_type"),
 ]
 
@@ -204,6 +223,8 @@ __all__ = [
     "HandoffOpened",
     "ItemEnqueued",
     "ItemTriaged",
+    "LinkCreated",
+    "LinkDeleted",
     "LockAcquired",
     "LockReleased",
     "Phase2Event",
@@ -211,6 +232,7 @@ __all__ = [
     "Phase4Event",
     "Phase5Event",
     "Phase6Event",
+    "Phase8Event",
     "ProposalApplied",
     "ProposalFailed",
     "ProposalGenerated",

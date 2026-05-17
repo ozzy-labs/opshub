@@ -65,6 +65,29 @@ class SourceReferenced(DomainEvent):
     ``entity_type`` selects the referencing aggregate; ``entity_id`` is
     its ULID. ``aggregate_id`` is the source's ULID so the projector
     groups all references under the source row.
+
+    Phase 8 first-class promotion (ADR-0017 §決定 (c))
+    -------------------------------------------------
+    This event was introduced in Phase 3 as a *placeholder*: no
+    projector consumed it for the entire Phase 3-7 window. Phase 8
+    (Knowledge graph) closes that gap — the ``LinksProjector``
+    (``opshub.projections.links``) consumes :class:`SourceReferenced`
+    via the ``LinksExtractor`` derived-state path (ADR-0017 §決定 (c))
+    to materialise ``source → entity`` rows with
+    ``link_type="references"``. The event therefore stays in the
+    ``Phase3Event`` discriminated union (it is semantically a Phase 3
+    source-family fact); only its consumer side is new.
+
+    Connector-side automatic emission — where a connector parses the
+    body of an observed item (e.g. ``#task-id`` references in a GitHub
+    Issue, a permalink in a Slack message) and emits
+    :class:`SourceReferenced` automatically — is **deferred to Phase
+    8.x** per ADR-0017 §決定 (g). Phase 8 MVP only populates this
+    event via the manual ``opshub link add ... --type references``
+    path (the CLI service translates the manual link into the
+    corresponding :class:`SourceReferenced` semantics where
+    appropriate) and via any pre-existing events written before the
+    Phase 8 work.
     """
 
     event_type: Literal["source.referenced"] = "source.referenced"  # pyright: ignore[reportIncompatibleVariableOverride]
