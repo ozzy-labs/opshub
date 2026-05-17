@@ -79,7 +79,7 @@ opshub/
 
 ## 2. Python パッケージ構成 (src/opshub/)
 
-各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで merge 済 (2026-05-17)。`[P3.x]` は Phase 3 完了後の継続作業 (Slack / Microsoft 365 / Box connector 等)。
+各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで merge 済 (2026-05-17)。`[P3.x]` は Phase 3 完了後の継続作業 (Slack / Microsoft 365 / Box connector 等)、`[P5]` は Phase 4 完了後の Phase 5 で着手予定 (briefing 自動生成 / event 駆動自動 embed / `links` projection 本実装 等)。
 
 ```text
 src/opshub/
@@ -92,7 +92,8 @@ src/opshub/
 │   ├── db.py                       # migrate / status [P1]
 │   ├── task.py                     # create / list / status / archive [P1]
 │   ├── projections.py              # rebuild [P1]
-│   ├── embeddings.py               # status [P1] (Phase 4 で機能拡張)
+│   ├── embeddings.py               # rebuild / status / find-duplicates [P1+2+3+4]
+│   ├── recall.py                   # semantic search [P1+2+3+4]
 │   ├── _wiring.py                  # 内部 helper: service/projection の組み立て [P1+2]
 │   ├── _task_list.py               # 内部 helper: task list 共通フォーマッタ [P1]
 │   ├── _actor.py                   # 内部 helper: actor / work_session_id 解決 [P1+2]
@@ -133,6 +134,7 @@ src/opshub/
 │   │   ├── source.py               # SourceObserved / SourceReferenced [P1+2+3]
 │   │   ├── connector.py            # ConnectorSyncStarted / Completed / Failed [P1+2+3]
 │   │   ├── file_ingest.py          # FileIngested [P1+2+3]
+│   │   ├── embedding.py            # TextEmbedded / EmbeddingRebuildRequested / EmbeddingFailed [P1+2+3+4]
 │   │   └── agent.py                # [future]
 │   ├── ids.py                      # TaskId / SourceId など [P1]
 │   └── value_objects.py            # [P1]
@@ -148,7 +150,10 @@ src/opshub/
 │   ├── handoff_service.py          # [P1+2]
 │   ├── workspace_service.py        # [P2+]
 │   ├── source_service.py           # connector → source/inbox event chain [P1+2+3]
-│   └── file_ingest_service.py      # workspace/inbox/*.md → event + ingested_files [P1+2+3]
+│   ├── file_ingest_service.py      # workspace/inbox/*.md → event + ingested_files [P1+2+3]
+│   ├── embedding_service.py        # CLI-driven embed pending entities [P1+2+3+4]
+│   ├── recall_service.py           # vector + SQL filter hybrid search [P1+2+3+4]
+│   └── duplicate_service.py        # offline near-duplicate scan [P1+2+3+4]
 ├── projections/                    # event → projection reducer
 │   ├── base.py                     # [P1]
 │   ├── registry.py                 # 一元化された projection 一覧 [P1+2+3]
@@ -163,7 +168,7 @@ src/opshub/
 │   ├── sources.py                  # external source 現在状態 [P1+2+3]
 │   ├── connector_cursors.py        # connector 差分同期 cursor [P1+2+3]
 │   ├── ingested_files.py           # workspace file ingest の content_hash 追跡 [P1+2+3]
-│   └── links.py                    # [P4]
+│   └── links.py                    # entity 間 graph 関係 [P5]
 ├── connectors/                     # [P1+2+3]
 │   ├── __init__.py                 # discover_connectors / register_connector [P1+2+3]
 │   ├── base.py                     # Connector Protocol + SyncResult [P1+2+3]
@@ -183,15 +188,19 @@ src/opshub/
 │   ├── ingest.py                   # parse_inbox_file / compute_file_hash [P1+2+3]
 │   ├── tasks.py                    # [P1]
 │   ├── workspace.py                # workspace 全体生成 [P1+2]
-│   ├── briefings.py                # [P4]
-│   ├── reviews.py                  # [P4]
+│   ├── briefings.py                # [P5]
+│   ├── reviews.py                  # [P5]
 │   ├── inbox.py                    # [P1+2]
 │   ├── decisions.py                # [P1+2]
 │   └── handoffs.py                 # [P1+2]
-├── vectors/                        # 抽象 interface [P1] / 具象 backend [P4]
+├── vectors/                        # 抽象 interface [P1] + 具象 backend [P1+2+3+4]
 │   ├── embedder.py                 # Embedder Protocol [P1]
-│   ├── store.py                    # VectorStore Protocol [P1] / sqlite-vec backend [P4]
-│   └── recall.py                   # [P4]
+│   ├── store.py                    # VectorStore Protocol [P1]
+│   ├── local_embedder.py           # LocalSentenceTransformerEmbedder (bge-m3) [P1+2+3+4]
+│   ├── openai_embedder.py          # OpenAIEmbedder (text-embedding-3-small) [P1+2+3+4]
+│   ├── voyage_embedder.py          # VoyageEmbedder (voyage-3) [P1+2+3+4]
+│   ├── sqlite_vec_store.py         # SqliteVecStore (sqlite-vec backed VectorStore) [P1+2+3+4]
+│   └── factory.py                  # backend resolution (build_embedder / build_vector_store) [P1+2+3+4]
 ├── graph/                          # entity 間 link [Phase 4 以降で検討]
 │   ├── links.py
 │   └── queries.py

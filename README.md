@@ -4,7 +4,7 @@
 
 *人間と AI エージェントのための、ローカルファーストな Operational Memory 兼 実行ハブ。*
 
-> Status: **Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP = framework + GitHub) complete (2026-05-17)**. Phase 4 (semantic layer) は引き続き設計中。Slack / Microsoft 365 / Box の connector は Phase 3.x 以降で順次追加する。`docs/` 配下のドキュメントは現状の方針を反映しつつ、議論を踏まえて更新されます。
+> Status: **Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP = framework + GitHub) + Phase 4 (semantic recall layer、MVP = Pluggable Embedder + sqlite-vec + recall + 重複検出) complete (2026-05-17)**. Briefing 自動生成 / `links` projection 本実装 / event 駆動自動 embed は Phase 5+ で別途。Slack / Microsoft 365 / Box の connector は Phase 3.x 以降で順次追加する。`docs/` 配下のドキュメントは現状の方針を反映しつつ、議論を踏まえて更新されます。
 
 ## 概要
 
@@ -94,8 +94,12 @@ opshub workspace generate
 # Rebuild projections from the event store (idempotent)
 opshub projections rebuild
 
-# Inspect embedding backend status (Phase 4)
-opshub embeddings status
+# Semantic recall layer (Phase 4, ADR-0012)
+opshub connector auth set embedder:openai      # store OpenAI API key in OS keychain
+opshub embeddings rebuild                      # bulk-embed task/decision/inbox/source summaries
+opshub embeddings status                       # show backend + per-entity-type embedded vs pending
+opshub embeddings find-duplicates -t 0.92      # offline near-duplicate scan
+opshub recall "認証の最近の決定"               # semantic search across all entities
 ```
 
 All state lives under XDG directories; override via `OPSHUB_*` env vars (e.g.
@@ -110,14 +114,14 @@ All state lives under XDG directories; override via `OPSHUB_*` env vars (e.g.
 
 ## ステータス
 
-Phase 1 (foundation)・Phase 2 (coordination)・Phase 3 (connectors + workspace ingest、MVP = framework + GitHub) を 2026-05-17 に完了しました。`opshub init` / `task` / `inbox` / `decision` / `lock` / `session` / `agent run` / `handoff` / `connector` (`auth set` / `sync` / `list`) / `workspace ingest` / `workspace generate` / `projections rebuild` が動作し、event store + 全 projection + markdown 生成 + GitHub connector + workspace inbox file ingest + tests + CI が green の状態です。次は Phase 4 (semantic layer) の設計に着手します。Slack / Microsoft 365 / Box の connector は Phase 3.x 以降で順次追加します。
+Phase 1 (foundation)・Phase 2 (coordination)・Phase 3 (connectors + workspace ingest、MVP = framework + GitHub)・Phase 4 (semantic recall layer、MVP = Pluggable Embedder + sqlite-vec + recall + 重複検出) を 2026-05-17 に完了しました。`opshub init` / `task` / `inbox` / `decision` / `lock` / `session` / `agent run` / `handoff` / `connector` (`auth set` / `sync` / `list`) / `workspace ingest` / `workspace generate` / `projections rebuild` / `embeddings` (`rebuild` / `status` / `find-duplicates`) / `recall` が動作し、event store + 全 projection + markdown 生成 + GitHub connector + workspace inbox file ingest + semantic recall (local / OpenAI / Voyage 3 backend + sqlite-vec) + tests + CI が green の状態です。次は Phase 5 (briefing 自動生成 / `links` projection 本実装 / event 駆動自動 embed) の設計に着手します。Slack / Microsoft 365 / Box の connector は Phase 3.x 以降で順次追加します。
 
 Phase ロードマップ:
 
 1. **Phase 1**: Event store + tasks + CLI + markdown 生成 (foundation) — ✅ Complete (2026-05-17)
 2. **Phase 2**: Inbox triage / decisions / locks / work sessions / agent runs / handoffs (coordination) — ✅ Complete (2026-05-17)
 3. **Phase 3**: Connector framework + GitHub connector + workspace inbox file ingest — ✅ Complete (2026-05-17) (Slack / Microsoft 365 / Box は Phase 3.x で順次)
-4. **Phase 4**: Vector recall / semantic search / briefing 自動生成 (semantic layer) — Planned
+4. **Phase 4**: Vector recall / semantic search / 重複検出 (semantic layer、MVP = Pluggable Embedder + sqlite-vec) — ✅ Complete (2026-05-17) (briefing 自動生成 / event 駆動自動 embed は Phase 5 で)
 
 詳細は [Principles 項 9 (Phased Delivery)](docs/principles.md) と各 ADR を参照。
 

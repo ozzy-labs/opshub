@@ -80,7 +80,7 @@ CI でこの不変条件を検証する。
 | 1 | Foundation: event store + tasks + CLI + markdown 生成 + tests + CI | ✅ Complete (2026-05-17) |
 | 2 | Coordination: inbox triage / decisions / locks / handoffs / work sessions / agent runs | ✅ Complete (2026-05-17) |
 | 3 | Connectors: framework + GitHub (MVP) + workspace inbox file ingest。Slack / Microsoft 365 / Box は Phase 3.x で順次 | ✅ Complete (2026-05-17) |
-| 4 | Semantic Layer: vector recall / semantic search / duplicate detection / briefing 自動生成 | Planned |
+| 4 | Semantic Layer: vector recall / semantic search / duplicate detection (MVP = Pluggable Embedder + sqlite-vec; briefing 自動生成は Phase 5) | ✅ Complete (2026-05-17) |
 
 各 phase で価値検証してから次へ進む。Phase をスキップしない。
 

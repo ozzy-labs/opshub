@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) shipped 2026-05-17. Phase 4 (semantic layer) section remains in active design. Slack / Microsoft 365 / Box connectors are deferred to Phase 3.x.
+> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) shipped 2026-05-17. Briefing 自動生成 / `links` projection 本実装 / event 駆動自動 embed は Phase 5+ で別途。Slack / Microsoft 365 / Box connectors are deferred to Phase 3.x.
 
 OpsHub の高レベルアーキテクチャ・データフロー・データモデル・用語を記述する。具体的な決定の根拠は対応 ADR を参照。
 
@@ -43,7 +43,7 @@ OpsHub の高レベルアーキテクチャ・データフロー・データモ�
                 ┌────────────────┐     ┌────────────────┐    ┌────────────────┐
                 │ Graph Layer    │     │ Vector Layer   │    │ Workspace      │
                 │ links table    │     │ sqlite-vec     │    │ Generation     │
-                │ + queries      │     │ (Phase 4)      │    │ markdown out   │
+                │ + queries      │     │ ✅ Phase 4 実装済│    │ markdown out   │
                 └────────────────┘     └────────────────┘    └────────────────┘
                                                                       │
                           ┌───────────────────────────────────────────┘
@@ -83,15 +83,16 @@ current state の relational view。`tasks` / `sources` / `inbox_items` / `decis
 
 entity 間の関係性 (`task → source` / `decision → meeting` 等) を `links` テーブルで relational に持つ。専用 graph DB は採用しない (Phase 4 以降で再評価)。
 
-### 2.6 Vector Layer (interfaces in Phase 1, implementation in Phase 4)
+### 2.6 Vector Layer (interfaces in Phase 1, implementation shipped in Phase 4)
 
-semantic 索引層は **Pluggable Embedder + Pluggable VectorStore** として設計する (ADR-0012)。Phase 1 で抽象境界 (`Embedder` / `VectorStore` Protocol) と `embeddings` projection schema を確定し、具象実装 (local `sentence-transformers` / OpenAI / Voyage 等の embedder、sqlite-vec backed store) は Phase 4 で着手する。
+semantic 索引層は **Pluggable Embedder + Pluggable VectorStore** として設計する (ADR-0012)。Phase 1 で抽象境界 (`Embedder` / `VectorStore` Protocol) と `embeddings` projection schema を確定し、Phase 4 で 3 backend (local `sentence-transformers` / OpenAI / Voyage) + sqlite-vec backed `SqliteVecStore` を実装した (2026-05-17 完了)。
 
-- **Embed 対象**: task summary / decision text / inbox_item summary / source summary / briefing / extracted action items (ADR-0005 整合、full body は対象外)
-- **Storage**: sqlite-vec 仮想テーブル + `embeddings` projection (`entity_type`, `entity_id`, `model_id`, `model_version`, `dimensions`)
-- **Refresh**: event 駆動 (`TaskActivated` 等の projector hook) + `opshub embeddings rebuild` で bulk 再計算 + model version 変更時に増分 re-embed
-- **Backend 切替**: `~/.config/opshub/config.toml` の `[embedding]` セクションで `local` / `openai` / `voyage` / `disabled` を選択。Phase 1-3 デフォルトは `disabled`
-- **Recall**: vector + SQL filter の hybrid search を CLI から提供 (`opshub recall ...`、Phase 4)
+- **Embed 対象**: task title / decision text / inbox_item summary / source summary (ADR-0005 整合、full body は対象外)。briefing / extracted action items は Phase 5+ で追加
+- **Storage**: sqlite-vec 仮想テーブル (backend ごと dim 別: `embeddings_vec_local` 1024-dim / `embeddings_vec_openai` 1536-dim / `embeddings_vec_voyage` 1024-dim) + `embeddings` projection (`entity_type`, `entity_id`, `model_id`, `model_version`, `dim`, `created_at`) で rowid JOIN
+- **Refresh**: Phase 4 MVP は CLI-driven のみ — `opshub embeddings rebuild [--entity-type X] [--limit N]` で `(model_id, model_version)` 未 embed の行のみ処理 (冪等)。event 駆動自動 embed (projector hook + 背景 queue) は Phase 5
+- **Backend 切替**: `~/.config/opshub/config.toml` の `[embedding]` セクションで `local` / `openai` / `voyage` / `disabled` を選択。デフォルトは `disabled` (CI / 初回 install 体験を軽く保つため、ADR-0012 §決定の確定)。OpenAI / Voyage の API key は `opshub connector auth set embedder:openai` / `embedder:voyage` で OS keychain に保存 (ADR-0014 整合)
+- **Recall**: vector + SQL filter の hybrid search を CLI から提供 (`opshub recall "<query>" [--type X] [--state Y] [--format table|json|md]`)。backend 切替直後で `(model_id, model_version)` が ズレた場合は `ConfigError` + "rebuild required" 案内で fail-fast
+- **重複検出**: `opshub embeddings find-duplicates [--threshold 0.92] [--entity-type source]` で nearest-neighbor scan を offline 解析用に提供。connector sync 経路の auto-detect は Phase 5+
 
 詳細は [ADR-0012: Embedding Strategy](adr/0012-embedding-strategy.md) を参照。
 
@@ -121,7 +122,10 @@ agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換�
 |---|---|---|---|
 | `events` | authoritative | Phase 1 (✅ 実装済) | append-only domain event log |
 | `tasks` | projection | Phase 1 (✅ 実装済) | current task state |
-| `embeddings` | projection | Phase 1 (✅ schema 実装済) / Phase 4 (具象 backend) | 派生 semantic 索引メタ (sqlite-vec binding は Phase 4) |
+| `embeddings` | projection | Phase 1+2+3+4 (✅ 実装済) | 派生 semantic 索引メタ (`entity_type` / `entity_id` / `model_id` / `model_version` / `dim` / `created_at`)。実体 vector は `embeddings_vec_*` 仮想テーブル側に rowid で JOIN |
+| `embeddings_vec_local` | virtual (vec0) | Phase 4 (✅ 実装済) | local backend (bge-m3 1024-dim) + voyage backend (voyage-3 1024-dim) の vector 本体 |
+| `embeddings_vec_openai` | virtual (vec0) | Phase 4 (✅ 実装済) | OpenAI backend (text-embedding-3-small 1536-dim) の vector 本体 |
+| `embeddings_vec_voyage` | virtual (vec0) | Phase 4 (✅ 実装済) | Voyage backend 専用 vec0 (現状は 1024-dim、Phase 5+ で並列保持時に分離) |
 | `inbox_items` | projection | Phase 1+2 (✅ 実装済) | 未 triage queue |
 | `decisions` | projection | Phase 1+2 (✅ 実装済) | 決定記録 |
 | `work_sessions` | projection | Phase 1+2 (✅ 実装済) | 人間 / agent の execution session |
@@ -240,7 +244,7 @@ Agent は以下を行わない。
 | 1 | event store, tasks projection, CLI 骨格, markdown 生成, tests, CI | connector, vector, lock, triage |
 | 2 | inbox triage, decisions, work sessions, locks, handoffs | connector, vector |
 | 3 | Connector framework + GitHub connector + workspace inbox file ingest (✅ 2026-05-17 完了)。Slack / Microsoft 365 / Box は Phase 3.x | vector recall |
-| 4 | vector recall, semantic search, duplicate detection, briefing 自動生成 | — |
+| 4 | vector recall, semantic search, duplicate detection (Pluggable Embedder + sqlite-vec、✅ 2026-05-17 完了) | briefing 自動生成 / event 駆動自動 embed (Phase 5) |
 
 詳細は [Principles 9 (Phased Delivery)](principles.md) 参照。
 

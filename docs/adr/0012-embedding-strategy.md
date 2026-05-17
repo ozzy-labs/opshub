@@ -1,7 +1,7 @@
 # 0012. Embedding Strategy
 
 - Status: Accepted
-- Date: 2026-05-16
+- Date: 2026-05-17
 - Deciders: ozzy
 
 ## Context
@@ -240,16 +240,40 @@ projection と JOIN できる前提を活かし、**vector + SQL filter の hybr
 - 切り替えロジックが複雑
 - 代わりに本案 (Pluggable + 設定駆動) で十分柔軟
 
+## 決定の確定 (Phase 4 後追い)
+
+Phase 4 sub-issue A-D (PR #63-#74) の実装で本 ADR の Open Questions 1-2 を以下のとおり確定した:
+
+1. **Phase 4 default backend** (旧 Open Q 1) → **`disabled`** を維持。理由は `local` 採択時に `sentence-transformers` (~500MB-2GB の torch を内包) を pull する必要があり、CI / 初回 install 体験を軽く保つには opt-in が妥当との判断 (`docs/phase-4-plan.md` §1 #3)。operator が `~/.config/opshub/config.toml` の `[embedding] backend` を `local` / `openai` / `voyage` に切替えて初めて embedding が有効化される
+2. **推奨モデル** (旧 Open Q 2) → backend ごとに以下を default:
+    - `local` = `BAAI/bge-m3` (1024-dim、多言語; `LocalSentenceTransformerEmbedder` で `normalize_embeddings=True`)
+    - `openai` = `text-embedding-3-small` (1536-dim; `OpenAIEmbedder`)
+    - `voyage` = `voyage-3` (1024-dim; `VoyageEmbedder`)
+
+   `[embedding] model_id` と `[embedding] dimensions` を config で上書き可能。dim 切替時は `embeddings_vec_<backend>` 仮想テーブル (本 ADR §1 #5 で resolution 済) が dim 別に分かれているため、運用は backend を切替えて `opshub embeddings rebuild` を再走する手順 (Phase 4 plan §3 機能 #10、PR D1 の `test_phase4_lifecycle.py::test_backend_switch_requires_rebuild` で pinning)
+
 ## Open Questions
 
-1. **Phase 4 着手時の default backend** — `local` (BGE-M3 等) か `openai` (text-embedding-3-small 等) か。日本語 + 英語 mix の品質ベンチで決定する
-2. **デフォルトモデル** — `BAAI/bge-m3` / `intfloat/multilingual-e5-large` / `Qwen/Qwen3-Embedding-0.6B` / `openai:text-embedding-3-small` / `voyage-3` から選定
-3. **次元数 / 量子化** — 1024d float32 で開始予定。規模が伸びたら int8 / binary 量子化を導入する閾値を決める
-4. **長文 chunk 戦略** — 1 entity = 1 vector が default。`briefings` のように長文化しうる対象は chunk + max pooling を Phase 4 で評価
-5. **多言語専用 embedder か単一 embedder か** — multilingual モデル 1 本で押すか、言語別 embedder を持つか
-6. **re-embed throttling のパラメータ** — debounce 窓 (5 秒? 1 分?)、batch size、優先度キュー設計
-7. **Recall CLI の hybrid search 構文** — `opshub recall --filter` の SQL injection 防御方針、サポートする operator のスコープ
-8. **Embedding を CI で再現可能にするか** — API backend ではモデル更新で結果が変わる。test fixture をどう作るか
+Phase 4 内で確定しなかった項目 (Phase 5+ に持ち越し):
+
+1. **次元数 / 量子化** — 1024d / 1536d float32 で Phase 4 稼働中。規模が伸びたら int8 / binary 量子化を導入する閾値を決める
+2. **長文 chunk 戦略** — 1 entity = 1 vector が default。`briefings` のように長文化しうる対象は chunk + max pooling を Phase 5 で評価 (briefing 自動生成と合わせて確定)
+3. **多言語専用 embedder か単一 embedder か** — Phase 4 MVP は multilingual モデル 1 本 (bge-m3) で運用。言語別 embedder への分岐は需要が立ってから
+4. **re-embed throttling のパラメータ** — Phase 4 MVP は CLI-driven rebuild のみで throttling 不要。event 駆動自動 embed (Phase 5) で debounce 窓 / batch size / 優先度キューを確定
+5. **Recall CLI の hybrid search 構文** — `opshub recall --type X --state Y` は Phase 4 で確定。任意 SQL filter (`--filter ...`) は Phase 5+ で SQL injection 防御方針と合わせて検討
+6. **Embedding を CI で再現可能にするか** — Phase 4 では API embedder は network mock、local embedder は `pytest.importorskip` で skip して回避 (`tests/integration/test_phase4_lifecycle.py` は decimal-deterministic な stub Embedder を `monkeypatch` で注入)。長期的に test fixture をどう作るかは Phase 5+
+
+## Validation
+
+Phase 4 sub-issue A-D (PR #63-#74) で 3 backend (local sentence-transformers, OpenAI, Voyage) と sqlite-vec backed VectorStore を実装し、本 ADR の Pluggable Embedder + Pluggable VectorStore 設計が end-to-end で機能することを検証した。Phase 4 MVP では:
+
+- `opshub embeddings rebuild` で task / decision / inbox_item / source の summary を embed (`tests/integration/test_phase4_lifecycle.py::test_embeddings_rebuild_and_status_e2e`)
+- `opshub recall "<query>"` で hybrid semantic search (vector + SQL filter)、`--type` / `--state` / `--format json` の各 flag を pin (`test_recall_returns_semantic_hits_e2e`)
+- `opshub embeddings find-duplicates` で offline 近傍検索 (`test_find_duplicates_e2e`)
+- config の `[embedding] backend` 切替で具象 Embedder factory が自動で切替 (`vectors/factory.py::build_embedder`)、backend 切替直後の recall は `(model_id, model_version)` 不一致を検知して fail-fast (`test_backend_switch_requires_rebuild`)
+- Backend ごと dim 別 vec0 table (`embeddings_vec_local` 1024 / `embeddings_vec_openai` 1536 / `embeddings_vec_voyage` 1024) で複数 backend 並列保持の余地を schema レベルで確保 (Phase 5+ で実 routing 配線)
+
+Event-driven 自動 embed (projector hook) / briefing 自動生成 (LLM 呼び出し) / `links` projection 本実装は Phase 5 以降の outlook (`docs/phase-4-plan.md` §6)。
 
 ## 関連
 
