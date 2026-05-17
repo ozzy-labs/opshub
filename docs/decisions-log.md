@@ -4,6 +4,8 @@
 
 設計フェーズで検討したが採用しなかった案の索引。詳細理由は対応する ADR / docs に記載。本ドキュメントは「あの議論はどこで結論が出たか」の早見表として機能する。
 
+Phase 5 (briefing layer + Pluggable LLM + event-driven auto-embed 補助) は 2026-05-17 に完了。LLM 利用方針は §12 (ADR-0015) で closeout し、principles.md §Open Q #1 を §確定済み に移動した。Phase 5.x 候補 (Local LLM backend / briefing cache + narrow scope / `links` projection 本実装 / multi-machine sync) は principles.md §9 / phase-5-plan.md §5 を参照。
+
 ## 1. Repository / Product 命名
 
 | 却下案 | 採用案 | 理由 | 参照 |

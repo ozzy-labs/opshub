@@ -81,6 +81,7 @@ CI でこの不変条件を検証する。
 | 2 | Coordination: inbox triage / decisions / locks / handoffs / work sessions / agent runs | ✅ Complete (2026-05-17) |
 | 3 | Connectors: framework + GitHub (MVP) + workspace inbox file ingest。Slack / Microsoft 365 / Box は Phase 3.x で順次 | ✅ Complete (2026-05-17) |
 | 4 | Semantic Layer: vector recall / semantic search / duplicate detection (MVP = Pluggable Embedder + sqlite-vec; briefing 自動生成は Phase 5) | ✅ Complete (2026-05-17) |
+| 5 | Briefing layer: ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed (補助) | ✅ Complete (2026-05-17) |
 
 各 phase で価値検証してから次へ進む。Phase をスキップしない。
 
@@ -94,12 +95,13 @@ Python 3.13+ / uv / Typer / SQLAlchemy Core / Pydantic v2 を採用。ただし 
 
 検討中の項目 (本ドキュメントの今後の更新対象):
 
-1. **LLM 利用方針** — ADR-0004 で agent 委ねが原則だが、embedding API 呼び出し (ADR-0012) と triage / summary 用途で OpsHub 自身が API を呼ぶケースの運用線引きは未確定
+(現時点で確定待ちの項目はない。Phase 5 で LLM 利用方針が ADR-0015 として closeout されたため §確定済み に移動した。)
 
 ## 確定済み (旧 Open Question)
 
-> 旧 Open Q 番号 trace: 旧 Open Q #1 = LLM 利用方針 (現 §Open Questions #1 として残置)、旧 Open Q #2 = Lock 粒度 (本セクションで解決)、旧 Open Q #3 = SaaS token 保管方式 (本セクションで解決)。
+> 旧 Open Q 番号 trace: 旧 Open Q #1 = LLM 利用方針 (ADR-0015 で本セクションに移動)、旧 Open Q #2 = Lock 粒度 (本セクションで解決)、旧 Open Q #3 = SaaS token 保管方式 (本セクションで解決)。
 
+- **LLM 利用方針** (旧 Open Q #1) → ADR-0015 で Pluggable LLM Protocol + Anthropic / OpenAI 具象 + prompt injection mitigation + API key 保管 (ADR-0014 再利用) を採択 (Phase 5 step A1 で確定、D1 で Validation セクションを追加)
 - **Embedding モデル選定** → ADR-0012 で Pluggable Embedder 設計を採択。具体モデル選定は Phase 4 着手時 (ADR-0012 の Open Questions 1-2)
 - **Task runner** → `just` 採用 (ADR-0001)
 - **Lock の粒度設計** (旧 Open Q #2) → ADR-0013 で `task:<id>` / `project:<id>` / `global:` の 3 階層 + fail-fast conflict semantics を採択 (Phase 2 step 5 で実装)

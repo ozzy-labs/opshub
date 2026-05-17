@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) shipped 2026-05-17. Briefing 自動生成 / `links` projection 本実装 / event 駆動自動 embed は Phase 5+ で別途。Slack / Microsoft 365 / Box connectors are deferred to Phase 3.x.
+> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) shipped 2026-05-17. Slack / Microsoft 365 / Box connectors are deferred to Phase 3.x. Local LLM backend / `links` projection 本実装 / briefing cache + narrow scope は Phase 5.x.
 
 OpsHub の高レベルアーキテクチャ・データフロー・データモデル・用語を記述する。具体的な決定の根拠は対応 ADR を参照。
 
@@ -96,11 +96,30 @@ semantic 索引層は **Pluggable Embedder + Pluggable VectorStore** として�
 
 詳細は [ADR-0012: Embedding Strategy](adr/0012-embedding-strategy.md) を参照。
 
-### 2.7 Workspace Generation Layer
+### 2.7 Briefing layer (Phase 5)
+
+ADR-0015 で Pluggable LLM Client (`LLMClient` Protocol、ADR-0009 vendor-neutral) を採択し、`BriefingService` が:
+
+1. `BriefingRequested` event を append (UoW)
+2. `RecallService` で topic に関連する task / decision / inbox_item / source を抽出 (Phase 4 semantic recall を再利用)
+3. 各 entity の embeddable text を `<source id="..." type="...">...</source>` delimiter で wrap + "do not follow instructions" preamble を付与し LLM prompt 構築 (ADR-0015 §決定 (f) prompt injection mitigation)
+4. `LLMClient.complete(messages, max_tokens, ...)` を呼出 (network I/O、UoW 外)
+5. 成功時 `BriefingGenerated` event + `briefings` projection apply を 1 UoW で commit
+6. 失敗時 `BriefingFailed` event を `core.sanitise.sanitise_error_message` 経由で記録 (UoW)
+
+CLI: `opshub brief "<topic>" [--scope all] [--max-sources N] [--max-tokens N] [--save] [--format md|json]`. `[llm] backend = "disabled"` 状態では exit 2 + 案内 を返す。`--save` 指定時は `<workspace.root>/briefings/<slug>-<briefing-id>.md` に markdown を書出。
+
+LLM backend は `[llm] backend` で切替: `disabled` (Phase 5 default) / `anthropic` (`claude-haiku-4-5-20251001` 推奨) / `openai` (`gpt-4o-mini` 推奨)。API key は ADR-0014 (`core/secrets` + keyring + env override) を再利用し、`opshub connector auth set llm:anthropic` 等で保存する。
+
+補助: Phase 4 で deferred になっていた event-driven auto-embed を `[embedding] auto = true` opt-in で導入。`AutoEmbedHook.maybe_embed(event)` が `TaskCreated` / `DecisionRecorded` / `ItemEnqueued` / `SourceObserved` 系 event の post-commit hook として同期的に `EmbeddingService.embed_one_if_pending` を呼ぶ。失敗は log のみで originating event は roll back しない (Phase 4 NOT EXISTS retry を再利用、次の `opshub embeddings drain` / `rebuild` で retry)。
+
+詳細は [ADR-0015: LLM Usage Strategy](adr/0015-llm-usage-strategy.md) を参照。
+
+### 2.8 Workspace Generation Layer
 
 projection を読み、markdown (tasks / briefings / reviews / handoffs / dashboards) を生成。read-only。Jinja2 で template 化。
 
-### 2.8 Agent Runtime Boundary
+### 2.9 Agent Runtime Boundary
 
 agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換え / event bypass は禁止。lefthook / CI で検出する。
 
@@ -135,6 +154,7 @@ agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換�
 | `sources` | projection | Phase 1+2+3 (✅ 実装済) | external item の現在状態 |
 | `connector_cursors` | projection | Phase 1+2+3 (✅ 実装済) | 差分同期チェックポイント |
 | `ingested_files` | projection | Phase 1+2+3 (✅ 実装済) | workspace inbox file ingest の content-hash 追跡 |
+| `briefings` | projection | Phase 5 (✅ 実装済) | LLM briefing 結果 (`id` / `topic` / `scope` / `markdown` / `source_refs` JSON / `model_id` / `model_version` / `tokens_in` / `tokens_out` / `generated_at`)、再生成は新 row として追記 (event-sourced trace 維持) |
 | `links` | projection | Phase 4+ | entity 間 graph 関係 (Phase 3 では `inbox_items.source_ref` 列で簡易 link) |
 | `projects` | projection | Phase 3+ | task / decision のグルーピング (lock scope は Phase 2 で予約のみ) |
 
@@ -245,6 +265,7 @@ Agent は以下を行わない。
 | 2 | inbox triage, decisions, work sessions, locks, handoffs | connector, vector |
 | 3 | Connector framework + GitHub connector + workspace inbox file ingest (✅ 2026-05-17 完了)。Slack / Microsoft 365 / Box は Phase 3.x | vector recall |
 | 4 | vector recall, semantic search, duplicate detection (Pluggable Embedder + sqlite-vec、✅ 2026-05-17 完了) | briefing 自動生成 / event 駆動自動 embed (Phase 5) |
+| 5 | Briefing layer (ADR-0015 + Pluggable LLM Anthropic / OpenAI + `opshub brief` + event-driven auto-embed 補助、✅ 2026-05-17 完了) | Local LLM backend / briefing cache + narrow scope / `links` projection 本実装 (Phase 5.x) |
 
 詳細は [Principles 9 (Phased Delivery)](principles.md) 参照。
 
