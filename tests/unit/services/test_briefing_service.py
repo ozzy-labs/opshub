@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 import pytest
 from alembic import command
 from alembic.config import Config
+from pydantic import BaseModel
 from sqlalchemy import insert, select
 from sqlalchemy.engine import Engine
 
@@ -44,7 +45,7 @@ from opshub.domain.events import (
     BriefingRequested,
     DomainEvent,
 )
-from opshub.llm.client import LLMMessage, LLMResponse
+from opshub.llm.client import LLMMessage, LLMResponse, StructuredResponse
 from opshub.llm.factory import NoOpLLMClient
 from opshub.projections.briefings import BriefingsProjection, briefings_table
 from opshub.projections.tasks import tasks_table
@@ -167,6 +168,23 @@ class _StubLLMClient:
             model_version=self._model_version,
             tokens_in=self._tokens_in,
             tokens_out=self._tokens_out,
+        )
+
+    def complete_structured(
+        self,
+        messages: list[LLMMessage],
+        *,
+        schema: type[BaseModel],
+        max_tokens: int,
+        temperature: float = 0.2,
+    ) -> StructuredResponse[BaseModel]:
+        # BriefingService never calls structured output; the stub still
+        # has to satisfy the Phase 6 Protocol extension so callers
+        # passing this stub to ``BriefingService(llm_client=...)``
+        # remain type-compatible.
+        del messages, schema, max_tokens, temperature
+        raise NotImplementedError(
+            "_StubLLMClient.complete_structured is not used in BriefingService tests"
         )
 
 

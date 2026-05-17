@@ -34,7 +34,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from opshub.llm.client import LLMMessage, LLMResponse
+from pydantic import BaseModel
+
+from opshub.llm.client import LLMMessage, LLMResponse, StructuredResponse
 
 __all__ = ["OPENAI_API_KEY_SECRET", "OpenAILLMClient"]
 
@@ -153,6 +155,26 @@ class OpenAILLMClient:
             model_version=self._model_version_value,
             tokens_in=int(usage.prompt_tokens),
             tokens_out=int(usage.completion_tokens),
+        )
+
+    def complete_structured(
+        self,
+        messages: list[LLMMessage],
+        *,
+        schema: type[BaseModel],
+        max_tokens: int,
+        temperature: float = 0.2,
+    ) -> StructuredResponse[BaseModel]:
+        """Structured-output completion (Phase 6 step A2 Protocol stub).
+
+        The full OpenAI ``tools=`` function-calling round-trip is
+        implemented in Phase 6 step A3. This stub exists so
+        :class:`OpenAILLMClient` satisfies the extended
+        :class:`~opshub.llm.LLMClient` Protocol's ``runtime_checkable``
+        isinstance check at A2 merge time.
+        """
+        raise NotImplementedError(
+            "OpenAILLMClient.complete_structured is implemented in Phase 6 step A3"
         )
 
     def _ensure_client(self) -> Any:

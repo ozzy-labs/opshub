@@ -31,12 +31,13 @@ import pytest
 # Skip when sqlite-vec is not installed.
 pytest.importorskip("sqlite_vec")
 
+from pydantic import BaseModel
 from sqlalchemy import select, text
 from typer.testing import CliRunner
 
 from opshub.cli.app import app
 from opshub.db.engine import create_engine_for_sqlite
-from opshub.llm.client import LLMMessage, LLMResponse
+from opshub.llm.client import LLMMessage, LLMResponse, StructuredResponse
 from opshub.projections.briefings import briefings_table
 from opshub.vectors.embedder import EmbeddingResult
 
@@ -104,6 +105,19 @@ class _StubLLMClient:
             tokens_in=20,
             tokens_out=10,
         )
+
+    def complete_structured(
+        self,
+        messages: list[LLMMessage],
+        *,
+        schema: type[BaseModel],
+        max_tokens: int,
+        temperature: float = 0.2,
+    ) -> StructuredResponse[BaseModel]:
+        # Phase 5 tests never exercise structured output; the stub still
+        # has to satisfy the Phase 6 Protocol extension.
+        del messages, schema, max_tokens, temperature
+        raise NotImplementedError("_StubLLMClient.complete_structured is not used in Phase 5 tests")
 
 
 def _install_stub_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
