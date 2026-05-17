@@ -94,8 +94,16 @@ opshub *args:
 # touchpoint is patched at the ``msal.PublicClientApplication`` class
 # (mirrors Phase 3's GitHub connector mocking precedent) so no real
 # Microsoft endpoint is reached during CI.
+#
+# ``connectors-box`` is included so Phase 7 step C1 unit tests
+# (``tests/unit/connectors/box/test_auth.py``) can ``importorskip``
+# the ``boxsdk`` SDK and exercise the OAuth paste-code flow. Every
+# OAuth call is patched at the ``boxsdk.auth.oauth2.OAuth2`` boundary
+# so no real Box API request leaves CI (Phase 7 plan §1 #6). The
+# cold-start guard still asserts ``boxsdk`` never leaks onto the
+# ``opshub --help`` path.
 ci:
-    uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra connectors-ms365 --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
+    uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra connectors-ms365 --extra connectors-box --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
     uv run ruff check
     uv run ruff format --check
     uv run pyright
