@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from opshub.services import (
         AgentRunService,
         DecisionService,
+        DuplicateService,
         EmbeddingService,
         FileIngestService,
         HandoffService,
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
 __all__ = [
     "build_agent_run_service",
     "build_decision_service",
+    "build_duplicate_service",
     "build_embedding_service",
     "build_engine",
     "build_file_ingest_service",
@@ -310,6 +312,33 @@ def build_recall_service() -> RecallService:
     settings = OpsHubSettings()
     engine = build_engine()
     return RecallService(
+        embedder=build_embedder(settings),
+        vector_store=build_vector_store(settings, engine),
+        engine=engine,
+    )
+
+
+def build_duplicate_service() -> DuplicateService:
+    """Wire a :class:`DuplicateService` for the configured engine + backend.
+
+    Resolves the active :class:`~opshub.vectors.embedder.Embedder` +
+    :class:`~opshub.vectors.store.VectorStore` via the Phase 4 factory
+    (PR #68); the CLI ``opshub embeddings find-duplicates`` subcommand
+    is the only caller in Phase 4 MVP. Mirrors
+    :func:`build_embedding_service` so backend switches via config
+    take effect on the next invocation without restarting any
+    long-lived process.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001). The factory
+    # itself defers the heavy embedder import to the branch the
+    # operator selected (see :mod:`opshub.vectors.factory`).
+    from opshub.core.config import OpsHubSettings
+    from opshub.services import DuplicateService
+    from opshub.vectors.factory import build_embedder, build_vector_store
+
+    settings = OpsHubSettings()
+    engine = build_engine()
+    return DuplicateService(
         embedder=build_embedder(settings),
         vector_store=build_vector_store(settings, engine),
         engine=engine,
