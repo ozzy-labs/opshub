@@ -76,11 +76,17 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      - name: Install project (locked)
+      - name: Install project
         # ``--no-dev`` keeps the build env minimal; we only need the
         # core package importable so the version-vs-tag check can read
-        # ``opshub.__version__``.
-        run: uv sync --locked --no-dev
+        # ``opshub.__version__``. ``--locked`` is intentionally omitted
+        # so the publish path tolerates release-please-induced lockfile
+        # drift (release-please bumps ``pyproject.toml`` but not
+        # ``uv.lock``, leaving the self-version entry one revision
+        # behind at the tagged commit). ``uv build`` itself does not
+        # consume the lockfile, so re-resolution here is purely for
+        # the version-check import.
+        run: uv sync --no-dev
 
       - name: Verify tag matches package version
         # Fail fast: a typo in the tag (e.g. ``v0.1.0`` vs package
