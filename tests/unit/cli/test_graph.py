@@ -1,10 +1,12 @@
-"""Tests for ``opshub graph`` (Phase 8 step D1).
+"""Tests for ``opshub graph`` (Phase 8 step D1 + D2).
 
 Cover the operator-facing graph traversal queries:
 
 * ``graph related`` — 1-hop neighbours + direction filter + md/json/dot
 * ``graph trace`` — backward provenance chains + depth ceiling
-* ``graph expand`` — stub state (raises until Phase 8 step C2 lands)
+* ``graph expand`` — bidirectional N-hop expansion + depth ceiling +
+  type filter + md/json/dot rendering (D2 wires this to the
+  :meth:`LinkService.expand` writer)
 
 The tests use a migrated SQLite DB and seed ``links`` rows directly
 (bypassing the projector) so the CLI surface is exercised end-to-end
@@ -330,39 +332,188 @@ def test_graph_trace_rejects_malformed_entity_arg(initialised_env: Path) -> None
     assert result.exit_code == 2, result.stdout + result.stderr
 
 
-# ---- graph expand (stub until C2 lands) -----------------------------------
+# ---- graph expand (Phase 8 D2) --------------------------------------------
 
 
-def test_graph_expand_unavailable_until_c2(initialised_env: Path) -> None:
-    """``graph expand`` exits 2 with a message pointing to C2.
-
-    Phase 8 step D1 ships the CLI shape but the
-    :meth:`LinkService.expand` writer lands in C2 (Wave 4 parallel
-    PR). The CLI body raises :class:`typer.Exit(2)` with a clear
-    ``feature not yet available`` message so the operator does not
-    hit an AttributeError; the test pins that behaviour to flag
-    when the follow-up PR enables it.
-    """
+def test_graph_expand_renders_md(initialised_env: Path) -> None:
+    """``graph expand`` md format renders nodes + edges around the root."""
+    # task <- briefing -> proposal: a small 3-node subset that the
+    # 2-hop expansion from the briefing should reach in full.
+    _seed_link_row(
+        initialised_env,
+        link_id="01J6EX000000000000000001",
+        from_entity_type="briefing",
+        from_entity_id="01J6BRIEFEX000000000001",
+        to_entity_type="task",
+        to_entity_id="01J6TASKEX0000000000001",
+        link_type="referenced_in_briefing",
+    )
+    _seed_link_row(
+        initialised_env,
+        link_id="01J6EX000000000000000002",
+        from_entity_type="briefing",
+        from_entity_id="01J6BRIEFEX000000000001",
+        to_entity_type="proposal",
+        to_entity_id="01J6PROPEX0000000000001",
+        link_type="applied_to",
+    )
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["graph", "expand", "task:01J6TASKEX0000000000001"],
+        ["graph", "expand", "briefing:01J6BRIEFEX000000000001"],
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    # The Markdown output carries a Nodes table + Edges section; the
+    # root briefing + both neighbours should land in the Nodes table.
+    assert "briefing:01J6BRIEFEX000000000001" in result.stdout
+    assert "01J6TASKEX0000000000001" in result.stdout
+    assert "01J6PROPEX0000000000001" in result.stdout
+    assert "## Nodes" in result.stdout
+    assert "## Edges" in result.stdout
+
+
+def test_graph_expand_renders_json(initialised_env: Path) -> None:
+    """``graph expand --format json`` emits the GraphSubset payload."""
+    _seed_link_row(
+        initialised_env,
+        link_id="01J6EX000000000000000003",
+        from_entity_type="task",
+        from_entity_id="01J6TASKEX0000000000003",
+        to_entity_type="proposal",
+        to_entity_id="01J6PROPEX0000000000003",
+        link_type="applied_to",
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "graph",
+            "expand",
+            "task:01J6TASKEX0000000000003",
+            "--format",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = cast("dict[str, Any]", json.loads(result.stdout))
+    assert payload["root"] == {
+        "entity_type": "task",
+        "entity_id": "01J6TASKEX0000000000003",
+    }
+    assert payload["depth"] == 2
+    # Nodes include the root + the proposal neighbour
+    node_keys = {(entry["entity_type"], entry["entity_id"]) for entry in payload["nodes"]}
+    assert ("task", "01J6TASKEX0000000000003") in node_keys
+    assert ("proposal", "01J6PROPEX0000000000003") in node_keys
+    # One edge in the payload
+    assert len(payload["edges"]) == 1
+    assert payload["edges"][0]["link_type"] == "applied_to"
+
+
+def test_graph_expand_renders_dot(initialised_env: Path) -> None:
+    """``--format dot`` emits a valid Graphviz DOT digraph."""
+    _seed_link_row(
+        initialised_env,
+        link_id="01J6EX000000000000000004",
+        from_entity_type="task",
+        from_entity_id="01J6TASKEX0000000000004",
+        to_entity_type="proposal",
+        to_entity_id="01J6PROPEX0000000000004",
+        link_type="applied_to",
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "graph",
+            "expand",
+            "task:01J6TASKEX0000000000004",
+            "--format",
+            "dot",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    # The DOT body must be a digraph block; the focus root carries a
+    # ``[shape="box"]`` attribute via render_links_dot.
+    assert "digraph opshub_graph {" in result.stdout
+    assert result.stdout.rstrip().endswith("}")
+    assert '"task:01J6TASKEX0000000000004"' in result.stdout
+    assert 'label="applied_to"' in result.stdout
+
+
+def test_graph_expand_depth_exceeded_exits_2(initialised_env: Path) -> None:
+    """``--depth 6`` exceeds the ADR-0017 expand ceiling (5) and exits 2."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["graph", "expand", "task:01J6TASKEX0000000000099", "--depth", "6"],
     )
     assert result.exit_code == 2, result.stdout + result.stderr
-    output = result.stdout + result.stderr
-    assert "expand" in output.lower()
-    assert "c2" in output.lower()
+    assert "depth" in (result.stdout + result.stderr).lower()
+
+
+def test_graph_expand_negative_depth_exits_2(initialised_env: Path) -> None:
+    """``--depth -1`` violates the >= 0 floor and exits 2."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["graph", "expand", "task:01J6TASKEX00000000000FF", "--depth", "-1"],
+    )
+    assert result.exit_code == 2, result.stdout + result.stderr
+
+
+def test_graph_expand_respects_type_filter(initialised_env: Path) -> None:
+    """``--type applied_to`` restricts expansion to that link type only."""
+    # Two outgoing links from the root with different link_types.
+    _seed_link_row(
+        initialised_env,
+        link_id="01J6EX000000000000000010",
+        from_entity_type="task",
+        from_entity_id="01J6TASKEX00000000000A0",
+        to_entity_type="proposal",
+        to_entity_id="01J6PROPEX0000000000A01",
+        link_type="applied_to",
+    )
+    _seed_link_row(
+        initialised_env,
+        link_id="01J6EX000000000000000011",
+        from_entity_type="task",
+        from_entity_id="01J6TASKEX00000000000A0",
+        to_entity_type="briefing",
+        to_entity_id="01J6BRIEFEX00000000000A2",
+        link_type="referenced_in_briefing",
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "graph",
+            "expand",
+            "task:01J6TASKEX00000000000A0",
+            "--type",
+            "applied_to",
+            "--format",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout + result.stderr
+    payload = cast("dict[str, Any]", json.loads(result.stdout))
+    node_keys = {(entry["entity_type"], entry["entity_id"]) for entry in payload["nodes"]}
+    assert ("proposal", "01J6PROPEX0000000000A01") in node_keys
+    assert ("briefing", "01J6BRIEFEX00000000000A2") not in node_keys
+    edge_types = {edge["link_type"] for edge in payload["edges"]}
+    assert edge_types == {"applied_to"}
 
 
 def test_graph_expand_rejects_malformed_entity_arg(initialised_env: Path) -> None:
-    """``graph expand`` validates entity arg before failing with the stub message."""
+    """``graph expand`` validates the entity arg before reaching the service."""
     runner = CliRunner()
     result = runner.invoke(app, ["graph", "expand", "taskNOCOLON"])
     assert result.exit_code == 2, result.stdout + result.stderr
 
 
 def test_graph_expand_validates_format(initialised_env: Path) -> None:
-    """``graph expand --format yaml`` exits 2 before hitting the stub guard."""
+    """``graph expand --format yaml`` exits 2 with an invalid-format error."""
     runner = CliRunner()
     result = runner.invoke(
         app,

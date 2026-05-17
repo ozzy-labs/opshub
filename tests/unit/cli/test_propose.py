@@ -84,6 +84,7 @@ class _StubProposalService:
         from_briefing_id: str | None = None,
         max_candidates: int = 5,
         max_tokens: int = 2000,
+        expand_graph: bool = False,
     ) -> Proposal:
         self.generate_calls.append(
             {
@@ -92,6 +93,7 @@ class _StubProposalService:
                 "from_briefing_id": from_briefing_id,
                 "max_candidates": max_candidates,
                 "max_tokens": max_tokens,
+                "expand_graph": expand_graph,
             }
         )
         if self._generate_raises is not None:
@@ -342,6 +344,8 @@ def test_generate_passes_max_candidates_and_tokens(
     assert call["max_candidates"] == 3
     assert call["max_tokens"] == 800
     assert call["from_briefing_id"] is None
+    # ``--expand-graph`` left off → default False propagates to the service.
+    assert call["expand_graph"] is False
 
 
 def test_generate_passes_from_briefing_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -367,6 +371,46 @@ def test_generate_passes_from_briefing_id(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     assert result.exit_code == 0, result.stdout
     assert stub.generate_calls[0]["from_briefing_id"] == "01HF000000000000000000BRIE"
+
+
+def test_generate_passes_expand_graph_flag_to_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--expand-graph`` reaches ``ProposalService.generate(expand_graph=True)``."""
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_LLM_BACKEND", "anthropic")
+    stub = _StubProposalService(proposal=_make_proposal())
+    _install_stub_service(monkeypatch, stub)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["propose", "generate", "phase 8", "--expand-graph"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert len(stub.generate_calls) == 1
+    assert stub.generate_calls[0]["expand_graph"] is True
+
+
+def test_generate_expand_graph_defaults_to_false(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without ``--expand-graph``, ``expand_graph=False`` is forwarded.
+
+    Pin the Phase 6 backward-compat contract at the CLI layer.
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_LLM_BACKEND", "anthropic")
+    stub = _StubProposalService(proposal=_make_proposal())
+    _install_stub_service(monkeypatch, stub)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["propose", "generate", "phase 8"])
+
+    assert result.exit_code == 0, result.stdout
+    assert len(stub.generate_calls) == 1
+    assert stub.generate_calls[0]["expand_graph"] is False
 
 
 def test_generate_disabled_backend_exits_2(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

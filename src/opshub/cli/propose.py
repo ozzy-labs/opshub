@@ -109,6 +109,18 @@ def propose_generate(
             help="Output format: md | json. Defaults to md.",
         ),
     ] = "md",
+    expand_graph: Annotated[
+        bool,
+        typer.Option(
+            "--expand-graph",
+            help=(
+                "Expand context via the knowledge graph: each recall hit's "
+                "1-hop neighbours (referenced_in_briefing / references / "
+                "applied_to links) are appended as additional sources "
+                "(Phase 8, ADR-0017)."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Generate a proposal for ``topic`` and render it to stdout.
 
@@ -156,6 +168,7 @@ def propose_generate(
             from_briefing_id=from_briefing,
             max_candidates=max_candidates,
             max_tokens=max_tokens,
+            expand_graph=expand_graph,
         )
     except ConfigError as exc:
         # Defensive: env-var override bypassed the pre-check above.

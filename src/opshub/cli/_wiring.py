@@ -392,7 +392,7 @@ def build_briefing_service(actor: str = "cli:brief") -> BriefingService:
     from opshub.db import SqlAlchemyEventStore
     from opshub.llm.factory import build_llm_client
     from opshub.projections.briefings import BriefingsProjection
-    from opshub.services import BriefingService, RecallService
+    from opshub.services import BriefingService, LinkService, RecallService
     from opshub.vectors.factory import build_embedder, build_vector_store
 
     settings = OpsHubSettings()
@@ -404,6 +404,13 @@ def build_briefing_service(actor: str = "cli:brief") -> BriefingService:
         vector_store=vector_store,
         engine=engine,
     )
+    # Phase 8 D2: read-only LinkService for the optional
+    # ``--expand-graph`` path. We pass only the engine (writer deps
+    # left None) because :meth:`BriefingService.generate` only ever
+    # calls :meth:`LinkService.related` — no events emitted from the
+    # briefing path. The CLI ``link add`` / ``link remove`` paths
+    # still get a fully wired LinkService through
+    # :func:`build_link_service`.
     return BriefingService(
         recall_service=recall,
         llm_client=build_llm_client(settings),
@@ -412,6 +419,7 @@ def build_briefing_service(actor: str = "cli:brief") -> BriefingService:
         engine=engine,
         actor=actor,
         uow_factory=engine.begin,
+        link_service=LinkService(engine=engine),
     )
 
 
@@ -459,6 +467,7 @@ def build_proposal_service(actor: str = "cli:propose") -> ProposalService:
     from opshub.projections.proposals import ProposalsProjection
     from opshub.services import (
         DecisionService,
+        LinkService,
         ProposalService,
         RecallService,
         TaskService,
@@ -497,6 +506,10 @@ def build_proposal_service(actor: str = "cli:propose") -> ProposalService:
         vector_store=vector_store,
         engine=engine,
     )
+    # Phase 8 D2: read-only LinkService for ``--expand-graph`` (the
+    # proposal-side path symmetric to the briefing one). Writer deps
+    # left None because :meth:`ProposalService.generate` only calls
+    # :meth:`LinkService.related`.
     return ProposalService(
         recall_service=recall,
         llm_client=build_llm_client(settings),
@@ -507,6 +520,7 @@ def build_proposal_service(actor: str = "cli:propose") -> ProposalService:
         engine=engine,
         actor=actor,
         uow_factory=engine.begin,
+        link_service=LinkService(engine=engine),
     )
 
 
