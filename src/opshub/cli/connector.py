@@ -91,13 +91,15 @@ def connector_sync(name: str) -> None:
     # ``test_cli_imports`` static check.
     from typing import Any
 
-    # Importing the github subpackage triggers
-    # ``register_connector(GitHubConnector())`` as an import side
-    # effect (see ``opshub.connectors.github.__init__``). Phase 3.x
-    # will replace this with entry-points / scan-based discovery; for
-    # the MVP an explicit import per connector is honest and easy to
-    # audit, and other connectors (Slack / MS365 / Box) will add their
-    # own lines alongside.
+    # Importing each connector subpackage triggers its
+    # ``register_connector(<Connector>())`` side effect (see
+    # ``opshub.connectors.<name>.__init__``). Phase 3.x will replace
+    # this with entry-points / scan-based discovery; for the MVP an
+    # explicit import per connector is honest and easy to audit. The
+    # subpackages themselves only register a lightweight Connector
+    # instance at import — heavy SaaS SDKs (``boxsdk`` etc.) load
+    # lazily inside :meth:`Connector.sync`.
+    import opshub.connectors.box  # pyright: ignore[reportUnusedImport]
     import opshub.connectors.github  # noqa: F401  # pyright: ignore[reportUnusedImport]
     from opshub.connectors import discover_connectors
     from opshub.connectors.context import ConnectorContext
