@@ -56,6 +56,12 @@ def _default_workspace_root() -> Path:
 
 EmbeddingBackend = Literal["disabled", "local", "openai", "voyage"]
 
+#: Allowed values for ``[llm] backend``. ``"disabled"`` is the Phase 5
+#: default per ADR-0015 §決定 (b) — opting into a real backend always
+#: requires an explicit config change so a fresh ``uv tool install``
+#: never silently hits a billed API on first run.
+LLMBackend = Literal["disabled", "anthropic", "openai"]
+
 
 class StorageSettings(BaseModel):
     """SQLite / cache filesystem locations.
@@ -128,12 +134,65 @@ class EmbeddingSettings(BaseModel):
         return self
 
 
+class AnthropicLLMSettings(BaseModel):
+    """Anthropic LLM backend tuning (see ADR-0015 §決定 (c)).
+
+    Defaults are pinned to the Phase 5 推奨 model
+    (``claude-haiku-4-5-20251001``): cost-effective Haiku tier, briefing
+    does not need tool_use. Operators can override either field via the
+    ``opshub.toml`` ``[llm.anthropic]`` section or env vars
+    (``OPSHUB_LLM__ANTHROPIC__MODEL_ID`` etc.).
+    """
+
+    model_id: str = "claude-haiku-4-5-20251001"
+    model_version: str = "2026-05-01"
+
+
+class OpenAILLMSettings(BaseModel):
+    """OpenAI chat-completions LLM backend tuning (see ADR-0015 §決定 (c)).
+
+    Defaults track the cost-effective ``gpt-4o-mini`` tier; operators can
+    upgrade to ``gpt-4o`` / ``o1`` via the ``opshub.toml``
+    ``[llm.openai]`` section or env vars
+    (``OPSHUB_LLM__OPENAI__MODEL_ID`` etc.).
+    """
+
+    model_id: str = "gpt-4o-mini"
+    model_version: str = "2026-05-01"
+
+
+class LLMSettings(BaseModel):
+    """LLM backend selection (see ADR-0015).
+
+    ``backend = "disabled"`` is the Phase 5 default per ADR-0015 §決定 (b)
+    — opting into ``anthropic`` / ``openai`` always requires an explicit
+    config / env change so a fresh ``uv tool install`` does not silently
+    bill the operator on first run.
+
+    Per-backend nested sections (``anthropic`` / ``openai``) carry the
+    model_id / model_version defaults that :mod:`opshub.llm.factory`
+    forwards to the concrete client. The shape mirrors
+    :class:`EmbeddingSettings` so operators keep one mental model.
+    """
+
+    backend: LLMBackend = "disabled"
+    anthropic: AnthropicLLMSettings = Field(default_factory=AnthropicLLMSettings)
+    openai: OpenAILLMSettings = Field(default_factory=OpenAILLMSettings)
+
+
 class OpsHubSettings(BaseSettings):
     """Root settings.
 
     Env vars use the ``OPSHUB_`` prefix with ``__`` as the nested delimiter so
     that nested overrides such as ``OPSHUB_STORAGE__DB_PATH=...`` and
     ``OPSHUB_EMBEDDING__BACKEND=local`` work without code changes.
+
+    The ``llm`` section additionally honours the convenience env var
+    ``OPSHUB_LLM_BACKEND`` (single underscore — no nested delimiter) via
+    a small ``model_validator`` below, mirroring ADR-0015 §決定 (d)'s
+    "env var override is the documented CI / headless path" stance.
+    Per-backend overrides still use the canonical
+    ``OPSHUB_LLM__ANTHROPIC__MODEL_ID`` etc. form.
     """
 
     model_config = SettingsConfigDict(
@@ -147,3 +206,28 @@ class OpsHubSettings(BaseSettings):
     storage: StorageSettings = Field(default_factory=StorageSettings)
     workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
+    llm: LLMSettings = Field(default_factory=LLMSettings)
+
+    @model_validator(mode="after")
+    def _apply_llm_backend_env_shortcut(self) -> OpsHubSettings:
+        """Honour the single-underscore ``OPSHUB_LLM_BACKEND`` env shortcut.
+
+        ``pydantic_settings`` only resolves nested fields via the
+        configured delimiter (``OPSHUB_LLM__BACKEND``). Operators
+        following ADR-0015's documented env var pattern often reach for
+        ``OPSHUB_LLM_BACKEND`` first; we treat that as a convenience
+        alias for the backend selector specifically (not the per-backend
+        model_id fields, which stay nested-only to avoid ambiguity).
+        """
+        override = os.environ.get("OPSHUB_LLM_BACKEND")
+        if override is None:
+            return self
+        # Re-validate through the LLMSettings model so a bogus value
+        # like ``OPSHUB_LLM_BACKEND=grok`` fails at config-load time
+        # instead of leaking through to ``build_llm_client``.
+        self.llm = LLMSettings(
+            backend=override,  # type: ignore[arg-type]
+            anthropic=self.llm.anthropic,
+            openai=self.llm.openai,
+        )
+        return self
