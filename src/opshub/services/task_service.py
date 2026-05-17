@@ -48,10 +48,12 @@ from opshub.services.event_store import EventStore
 from opshub.services.projector import Projector
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Callable, Generator, Sequence
     from contextlib import AbstractContextManager
 
     from sqlalchemy.engine import Connection
+
+    from opshub.services.event_hook import EventHook
 
 _DEFAULT_ACTOR = "cli:default"
 
@@ -103,11 +105,17 @@ class TaskService:
         projector: Projector,
         actor: str = _DEFAULT_ACTOR,
         uow_factory: Callable[[], AbstractContextManager[Connection]] | None = None,
+        event_hooks: Sequence[EventHook] | None = None,
     ) -> None:
         self._store = store
         self._projector = projector
         self._actor = actor
         self._uow_factory = uow_factory
+        # Phase 5 step C1: post-commit hooks. Tuple to disallow
+        # accidental in-place mutation by callers.
+        self._event_hooks: tuple[EventHook, ...] = (
+            tuple(event_hooks) if event_hooks is not None else ()
+        )
 
     def create_task(self, title: str, body: str | None = None) -> TaskCreated:
         """Register a new task.
@@ -169,10 +177,36 @@ class TaskService:
 
         Without a factory: legacy path — append then apply on whatever
         transaction the store / projector open internally.
+
+        Post-commit hooks (Phase 5 step C1) run **after** the UoW
+        closes via :meth:`_run_event_hooks`. Hook failures cannot
+        unwind the originating event by design.
         """
         with self._open_uow() as connection:
             self._store.append(event, connection)
             self._projector.apply(event, connection)
+        self._run_event_hooks(event)
+
+    def _run_event_hooks(self, event: TaskCreated | TaskActivated | TaskCompleted) -> None:
+        """Invoke every configured :class:`EventHook` for ``event``.
+
+        Hooks run **after** the UoW commits — never inside — so a hook
+        exception cannot roll back the originating event. The hook
+        Protocol contract requires implementations to swallow their
+        own failures; we still wrap each call in ``try`` as a
+        defence-in-depth measure (a buggy third-party hook should not
+        crash the service).
+        """
+        if not self._event_hooks:
+            return
+        for hook in self._event_hooks:
+            try:
+                hook.maybe_embed(event)
+            except Exception:  # pragma: no cover - hooks must not raise
+                # Hooks are contracted to never raise; treat any
+                # leakage as a no-op so the originating command
+                # remains successful from the caller's perspective.
+                continue
 
     @contextmanager
     def _open_uow(self) -> Generator[Connection | None]:

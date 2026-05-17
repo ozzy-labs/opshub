@@ -100,6 +100,15 @@ class EmbeddingSettings(BaseModel):
     model_version: str | None = None
     api_base_url: str | None = None
     dimensions: int | None = None
+    # Phase 5 step C1: opt-in projector hook that embeds new entities
+    # immediately after their originating event commits. Default MUST
+    # remain ``False`` so Phase 4 behaviour is unchanged (existing
+    # users rely on the CLI-driven ``opshub embeddings rebuild`` /
+    # ``opshub embeddings drain`` flow). Setting ``auto = true`` only
+    # takes effect when ``backend != "disabled"``: the composition
+    # root in :mod:`opshub.cli._wiring` refuses to wire the hook when
+    # there is no embedder to call.
+    auto: bool = False
 
     @model_validator(mode="after")
     def _check_disabled_has_no_descriptors(self) -> EmbeddingSettings:
