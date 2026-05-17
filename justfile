@@ -87,8 +87,15 @@ opshub *args:
 # Every Slack API call is patched at the ``slack_sdk.WebClient``
 # boundary so no real request leaves CI (mirrors the Phase 3 GitHub
 # / Phase 5 OpenAI / Phase 6 Ollama mocking precedents).
+#
+# ``connectors-ms365`` is included so Phase 7 step B1 unit tests
+# (``tests/unit/connectors/ms365/test_auth.py``) can ``importorskip``
+# the ``msal`` SDK and exercise the OAuth paste-code flow. Every MSAL
+# touchpoint is patched at the ``msal.PublicClientApplication`` class
+# (mirrors Phase 3's GitHub connector mocking precedent) so no real
+# Microsoft endpoint is reached during CI.
 ci:
-    uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
+    uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra connectors-ms365 --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
     uv run ruff check
     uv run ruff format --check
     uv run pyright

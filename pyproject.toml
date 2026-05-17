@@ -55,6 +55,13 @@ llm-ollama = ["httpx>=0.27"]
 connectors-github = ["httpx>=0.27", "PyGithub>=2.3"]
 connectors-slack = ["slack-sdk>=3.30"]
 connectors-msgraph = ["msgraph-sdk>=1.0"]
+# Microsoft 365 connector (Phase 7 step B1, ADR-0010 + ADR-0014). ``msal``
+# drives the OAuth 2.0 authorization-code (paste-code) flow and refresh
+# token handling; ``httpx`` is reserved for the Microsoft Graph API
+# fetcher landing in step B2. Both stay in extras so the core install
+# remains SDK-free (ADR-0001) — opt in via
+# ``uv sync --extra connectors-ms365``.
+connectors-ms365 = ["msal>=1.30", "httpx>=0.27"]
 connectors-box = ["boxsdk>=3.10"]
 # SaaS token storage (Phase 3, ADR-0014). OS keychain backed (macOS Keychain /
 # Linux Secret Service / Windows Credential Locker). Connectors fetch their

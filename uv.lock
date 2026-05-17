@@ -1863,6 +1863,10 @@ connectors-github = [
     { name = "httpx" },
     { name = "pygithub" },
 ]
+connectors-ms365 = [
+    { name = "httpx" },
+    { name = "msal" },
+]
 connectors-msgraph = [
     { name = "msgraph-sdk" },
 ]
@@ -1904,9 +1908,11 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'llm-anthropic'", specifier = ">=0.40" },
     { name = "boxsdk", marker = "extra == 'connectors-box'", specifier = ">=3.10" },
     { name = "httpx", marker = "extra == 'connectors-github'", specifier = ">=0.27" },
+    { name = "httpx", marker = "extra == 'connectors-ms365'", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'llm-ollama'", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "keyring", marker = "extra == 'secrets'", specifier = ">=24" },
+    { name = "msal", marker = "extra == 'connectors-ms365'", specifier = ">=1.30" },
     { name = "msgraph-sdk", marker = "extra == 'connectors-msgraph'", specifier = ">=1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "numpy", marker = "extra == 'vector'", specifier = ">=2.0" },
@@ -1930,7 +1936,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "voyageai", marker = "extra == 'api-embedding-voyage'", specifier = ">=0.2" },
 ]
-provides-extras = ["vector", "local-embedding", "api-embedding-openai", "api-embedding-voyage", "llm-anthropic", "llm-openai", "llm-ollama", "connectors-github", "connectors-slack", "connectors-msgraph", "connectors-box", "secrets", "dev", "all"]
+provides-extras = ["vector", "local-embedding", "api-embedding-openai", "api-embedding-voyage", "llm-anthropic", "llm-openai", "llm-ollama", "connectors-github", "connectors-slack", "connectors-msgraph", "connectors-ms365", "connectors-box", "secrets", "dev", "all"]
 
 [[package]]
 name = "orjson"

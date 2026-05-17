@@ -186,6 +186,52 @@ class OllamaLLMSettings(BaseModel):
     timeout_seconds: float = 60.0
 
 
+class MS365ConnectorSettings(BaseModel):
+    """Microsoft 365 connector tuning (Phase 7 step B1).
+
+    ``enabled = False`` is the default per Phase 7 plan §1 #2 — every
+    SaaS connector is opt-in so a fresh ``uv tool install`` never tries
+    to reach an external API. Operators flip the flag and populate
+    ``client_id`` after registering an Azure AD app (free for personal
+    Microsoft accounts; see docs/phase-7-plan.md §2.2 B1).
+
+    ``client_id`` has no useful default — Azure AD's "common" tenant
+    will reject any request without a registered application — so we
+    leave it as an empty string and let :class:`MS365Auth` raise a
+    :class:`~opshub.core.errors.ConfigError` with the actionable hint
+    at construction time. The empty default keeps the typing tight
+    (``str`` rather than ``str | None``) and matches the
+    :class:`OpenAILLMSettings` / :class:`AnthropicLLMSettings` style.
+
+    ``authority`` defaults to Microsoft's ``/common`` endpoint so both
+    personal (consumer) and work / school accounts work without
+    further configuration. Operators with a single Entra tenant can
+    override it via ``[connectors.ms365] authority``.
+    """
+
+    enabled: bool = False
+    client_id: str = ""
+    authority: str = "https://login.microsoftonline.com/common"
+
+
+class ConnectorSettings(BaseModel):
+    """External SaaS connector configuration root.
+
+    Phase 7 introduces this section as the dedicated home for each
+    connector's tuning (enable flag + OAuth metadata). Step B1 lands
+    the :class:`MS365ConnectorSettings` field; subsequent Phase 7 steps
+    (Slack, Box) add sibling fields the same way.
+
+    The section is intentionally separate from :class:`LLMSettings` /
+    :class:`EmbeddingSettings` so per-connector overrides like
+    ``OPSHUB_CONNECTORS__MS365__CLIENT_ID=...`` follow the documented
+    nested-env-var pattern without colliding with the LLM/embedding
+    namespaces.
+    """
+
+    ms365: MS365ConnectorSettings = Field(default_factory=MS365ConnectorSettings)
+
+
 class LLMSettings(BaseModel):
     """LLM backend selection (see ADR-0015 + ADR-0016 §決定 (h)).
 
@@ -235,6 +281,7 @@ class OpsHubSettings(BaseSettings):
     workspace: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    connectors: ConnectorSettings = Field(default_factory=ConnectorSettings)
 
     @model_validator(mode="after")
     def _apply_llm_backend_env_shortcut(self) -> OpsHubSettings:
