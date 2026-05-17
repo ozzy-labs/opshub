@@ -106,6 +106,17 @@ hub for humans and AI agents.
 - Tests: 1533 passing + 9 skipped (extras-gated for optional ML / connector
   SDKs)
 
+### Fixed
+
+- **`opshub init` blocker on default install** — Phase 4 migration 0013
+  unconditionally creates `embeddings_vec_*` virtual tables via `sqlite-vec`.
+  Previously gated by the `[vector]` extras, so `uv tool install opshub` (the
+  documented Quickstart) hit `OperationalError: no such module: vec0` and left
+  the DB half-applied. Promoted `sqlite-vec` to base dependency (~500 KB wheel,
+  within ADR-0001 distribution budget). `[vector]` extras remains as a
+  `numpy`-only alias for backward compat — existing `uv sync --extra vector`
+  invocations continue to work. See ADR-0001 §Updates for the rationale.
+
 ### Architecture
 
 - 17 ADRs accepted (0000-0017). See `docs/adr/`.

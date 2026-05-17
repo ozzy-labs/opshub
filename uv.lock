@@ -1838,6 +1838,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "sqlalchemy" },
+    { name = "sqlite-vec" },
     { name = "structlog" },
     { name = "typer" },
 ]
@@ -1851,7 +1852,6 @@ all = [
     { name = "pygithub" },
     { name = "sentence-transformers" },
     { name = "slack-sdk" },
-    { name = "sqlite-vec" },
 ]
 api-embedding-openai = [
     { name = "openai" },
@@ -1902,7 +1902,6 @@ secrets = [
 ]
 vector = [
     { name = "numpy" },
-    { name = "sqlite-vec" },
 ]
 
 [package.metadata]
@@ -1934,7 +1933,7 @@ requires-dist = [
     { name = "sentence-transformers", marker = "extra == 'local-embedding'", specifier = ">=3.0" },
     { name = "slack-sdk", marker = "extra == 'connectors-slack'", specifier = ">=3.30" },
     { name = "sqlalchemy", specifier = ">=2.0" },
-    { name = "sqlite-vec", marker = "extra == 'vector'", specifier = ">=0.1" },
+    { name = "sqlite-vec", specifier = ">=0.1" },
     { name = "structlog", specifier = ">=24.1" },
     { name = "typer", specifier = ">=0.12" },
     { name = "voyageai", marker = "extra == 'api-embedding-voyage'", specifier = ">=0.2" },
