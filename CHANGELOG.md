@@ -5,6 +5,13 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1](https://github.com/ozzy-labs/opshub/compare/v0.1.0...v0.1.1) (2026-05-17)
+
+
+### Documentation
+
+* **readme:** split into README.md (en) + README.ja.md (ja) with cross-links ([#161](https://github.com/ozzy-labs/opshub/issues/161)) ([30cd55c](https://github.com/ozzy-labs/opshub/commit/30cd55c4016253bd5d8513a6af819f00f71f0e63))
+
 ## [0.1.0] - 2026-05-17
 
 Initial public release. OpsHub is a local-first operational memory + execution
