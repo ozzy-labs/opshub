@@ -81,6 +81,51 @@ def embeddings_rebuild(
     )
 
 
+@embeddings_app.command("drain")
+def embeddings_drain(
+    entity_type: str | None = typer.Option(
+        None,
+        "--entity-type",
+        "-t",
+        help="Restrict drain to one entity type: task / decision / inbox_item / source.",
+    ),
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        "-n",
+        help="Cap the number of entities processed in this run.",
+    ),
+) -> None:
+    """Drain pending embeddings (catch up entities that auto-embed missed).
+
+    Thin wrapper around :meth:`EmbeddingService.embed_pending`
+    intended for the Phase 5 step C1 auto-embed path: when
+    ``[embedding] auto = true`` is configured but some hooks failed
+    silently (e.g. the embedder API was transiently rate-limited),
+    running ``drain`` is the explicit retry surface that picks up
+    every entity still in the "pending" state via the same
+    ``NOT EXISTS`` predicate the rebuild flow uses.
+
+    With ``auto = false`` this command is functionally equivalent to
+    ``opshub embeddings rebuild`` — both call :meth:`embed_pending`
+    and respect the same ``--entity-type`` / ``--limit`` flags — but
+    is more intent-explicit for the "auto missed something" use case.
+    The bracketing :class:`EmbeddingRebuildRequested` event is still
+    appended so audit trails treat drains and rebuilds uniformly.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.cli._wiring import build_embedding_service
+
+    service = build_embedding_service(actor="cli:embeddings_drain")
+    result = service.embed_pending(entity_type=entity_type, limit=limit)
+    typer.echo(
+        f"rebuild_run_id={result.rebuild_run_id}: "
+        f"embedded {result.embedded_count}, "
+        f"skipped {result.skipped_count}, "
+        f"failed {result.failed_count}"
+    )
+
+
 @embeddings_app.command("status")
 def embeddings_status(
     fmt: str = typer.Option(
@@ -100,6 +145,12 @@ def embeddings_status(
     in the output match what ``embeddings rebuild`` will write), and
     counts ``embeddings`` rows scoped to that ``(model_id,
     model_version)`` against the per-entity-type projection tables.
+
+    Phase 5 step C2 extends the output with an ``auto:`` diagnostic line
+    reporting whether ``[embedding] auto`` is enabled. When ``auto =
+    true`` but ``backend = disabled`` the operator gets a one-line
+    warning so the misconfiguration surfaces during the most common
+    debugging entry point (running ``embeddings status``).
     """
     # Lazy imports: keep CLI cold start fast (ADR-0001).
     from sqlalchemy import func, select, text
@@ -111,9 +162,11 @@ def embeddings_status(
     from opshub.projections.inbox import inbox_items_table
     from opshub.projections.sources import sources_table
     from opshub.projections.tasks import tasks_table
+    from opshub.services.auto_embed_hook import AUTO_EMBED_EVENT_TYPES
 
     settings = OpsHubSettings()
     backend = settings.embedding.backend
+    auto = settings.embedding.auto
 
     if backend == "disabled":
         # Fast path: no need to open the engine. Operators running
@@ -124,6 +177,18 @@ def embeddings_status(
             "(no embeddings; set [embedding] backend to local/openai/voyage "
             "and run `opshub embeddings rebuild`)"
         )
+        if auto:
+            # The auto flag is wired into the composition root so the
+            # hook short-circuits when backend=disabled (see
+            # :func:`opshub.cli._wiring._maybe_build_auto_embed_hooks`).
+            # Surface the conflict explicitly here so the operator does
+            # not assume their auto-embed setting is taking effect.
+            typer.echo(
+                "auto: enabled but [embedding] backend = disabled "
+                "(auto hook will skip; configure backend or set auto = false)"
+            )
+        else:
+            typer.echo("auto: disabled")
         return
 
     # Resolve the configured embedder so the status mirrors what
@@ -138,6 +203,17 @@ def embeddings_status(
 
     typer.echo(f"backend={backend}")
     typer.echo(f"model_id={model_id} version={model_version}")
+    if auto:
+        # Backend is active here, so the auto-embed hook is registered
+        # by :func:`_maybe_build_auto_embed_hooks` for every service
+        # that emits embeddable events. Echo the active event set so
+        # the operator can verify which event types trigger the hook
+        # without having to grep the source.
+        event_list = ", ".join(sorted(AUTO_EMBED_EVENT_TYPES))
+        typer.echo("auto: enabled")
+        typer.echo(f"auto-embed hook: active for events {{{event_list}}}")
+    else:
+        typer.echo("auto: disabled")
 
     # Per-entity-type counts: total comes from the projection table,
     # embedded comes from the `embeddings` metadata table filtered by

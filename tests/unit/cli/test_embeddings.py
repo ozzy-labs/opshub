@@ -421,3 +421,92 @@ def test_embeddings_status_md_format(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     status = runner.invoke(app, ["embeddings", "status", "--format", "md"])
     assert status.exit_code == 0, status.stdout
     assert "| entity_type | total | embedded | pending |" in status.stdout
+
+
+# ---- status: auto-embed diagnostic (Phase 5 step C2) ----------------------
+
+
+def test_status_shows_auto_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``status`` reports ``auto: disabled`` when ``[embedding] auto`` is unset.
+
+    Phase 5 step C2 adds the diagnostic line so operators can confirm
+    auto-embed is off without grepping ``config.toml``. The default
+    Phase 4 + 5 behaviour is ``auto = false``, so this is the baseline
+    output every operator sees after a fresh ``opshub init``.
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_EMBEDDING__BACKEND", "local")
+    _install_stub_embedder(monkeypatch, _StubEmbedder())
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0, init_result.stdout
+
+    status = runner.invoke(app, ["embeddings", "status"])
+    assert status.exit_code == 0, status.stdout
+    assert "auto: disabled" in status.stdout
+
+
+def test_status_shows_auto_enabled_when_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``[embedding] auto = true`` surfaces as ``auto: enabled`` + event list.
+
+    The event list mirrors :data:`AUTO_EMBED_EVENT_TYPES` so the
+    diagnostic stays in lock-step with the hook's actual dispatch
+    table. We assert on at least one well-known event_type
+    (``task.created``) to pin the contract without coupling the test
+    to the exact rendering order.
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_EMBEDDING__BACKEND", "local")
+    monkeypatch.setenv("OPSHUB_EMBEDDING__AUTO", "true")
+    _install_stub_embedder(monkeypatch, _StubEmbedder())
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0, init_result.stdout
+
+    status = runner.invoke(app, ["embeddings", "status"])
+    assert status.exit_code == 0, status.stdout
+    assert "auto: enabled" in status.stdout
+    # The diagnostic must mention at least the canonical event_types
+    # the hook reacts to (Phase 5 step C1's _EVENT_TYPE_TO_ENTITY_TYPE
+    # mapping). We pin one anchor per entity family rather than the
+    # full set so that adding new event types in Phase 5.x / 6 does not
+    # require touching this test.
+    assert "auto-embed hook: active for events" in status.stdout
+    assert "task.created" in status.stdout
+    assert "decision.recorded" in status.stdout
+    assert "inbox.enqueued" in status.stdout
+    assert "source.observed" in status.stdout
+
+
+def test_status_warns_when_auto_enabled_but_backend_disabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``auto = true`` + ``backend = disabled`` triggers the misconfig warning.
+
+    The composition root short-circuits the hook in this state (see
+    :func:`opshub.cli._wiring._maybe_build_auto_embed_hooks`) so the
+    operator's intent is silently ignored at runtime. The status
+    diagnostic surfaces the contradiction explicitly so the
+    misconfiguration is fixable without reading source.
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_EMBEDDING__BACKEND", "disabled")
+    monkeypatch.setenv("OPSHUB_EMBEDDING__AUTO", "true")
+    runner = CliRunner()
+
+    # NOTE: no `opshub init` here — the disabled-backend status path
+    # explicitly short-circuits before touching the DB so the warning
+    # must surface even on an uninitialised store.
+    status = runner.invoke(app, ["embeddings", "status"])
+    assert status.exit_code == 0, status.stdout
+    assert "backend=disabled" in status.stdout
+    assert (
+        "auto: enabled but [embedding] backend = disabled "
+        "(auto hook will skip; configure backend or set auto = false)" in status.stdout
+    )
