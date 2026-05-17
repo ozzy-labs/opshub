@@ -299,6 +299,69 @@ required. The `git+https://` Alternative install path is also supported
 (via `github-releases` / `github-tags` datasource) for users who prefer
 not to depend on PyPI.
 
+### v0.1.0 — release-please activation (2026-05-18)
+
+release-please (committed in §"配布チャネル" table as the planned release
+automation) is **now active** as of this update. `release-please-config.json`
++ `.release-please-manifest.json` + `.github/workflows/release-please.yaml`
+land together. Adopted pattern (sibling repo survey):
+
+- **`mcp-server-knowledge`** (closest functional analog: server CLI with
+  PyPI-equivalent npm distribution): bare release-please action, no
+  cascading publish job. Used as the "minimum config" baseline.
+- **`agentic-bootstrap`** (CLI installer with asset attachment): runs
+  release-please-action then chains an asset-upload step in the same
+  workflow using the `release_created` output. **Adopted this pattern**
+  for the PyPI publish step.
+- **`feedradar`**: similar to mcp-server-knowledge but with
+  `initial-version: 0.1.0`. Same shape, different boilerplate.
+
+**Why same-workflow publish (vs. cascading)**:
+
+GitHub Actions silently drops cascading workflow runs when the trigger
+event is produced by `GITHUB_TOKEN` — release-please-action creates the
+tag via the API using `GITHUB_TOKEN`, so the existing
+`.github/workflows/release.yaml` (`on: push: tags: 'v*.*.*'`) does **not**
+fire automatically. Two options:
+
+1. Issue a Personal Access Token to release-please so the tag-creation
+   event is "operator-authored" and cascades.
+2. Run the publish step in the same workflow as release-please-action,
+   gated on `release_created`.
+
+Option 2 (chosen) avoids the PAT secret entirely. `release.yaml` stays
+on disk as an **emergency escape hatch** — an operator pushing a tag
+manually (`git push origin vX.Y.Z` from their machine) is *not*
+`GITHUB_TOKEN`-authored, so `release.yaml` fires for them. This path is
+documented in `RELEASE_RUNBOOK.md §Emergency manual release`.
+
+**Config decisions**:
+
+- `release-type: python` — release-please natively bumps `pyproject.toml`
+  `[project] version`. `__init__.py`'s `__version__` is handled via
+  `extra-files` with the `x-release-please-version` marker (the standard
+  generic-updater hook).
+- `bump-minor-pre-major: true` + `bump-patch-for-minor-pre-major: true`
+  — in the 0.x line, `feat:` produces a minor bump (not a major), and
+  `fix:` produces a patch bump (release-please's default in 0.x is to
+  collapse everything to minor; the patch-for-minor knob restores
+  semver-conventional patch handling).
+- `include-v-in-tag: true` — tags read `v0.2.0` not `0.2.0` (matches the
+  existing `release.yaml` `on: push: tags: 'v*.*.*'` pattern).
+- Changelog sections — `feat` / `fix` / `perf` / `refactor` / `docs`
+  visible; `chore` / `test` / `ci` / `build` / `style` hidden. Matches
+  the existing CHANGELOG.md style (Phase 1-8 v0.1.0 entry used the
+  `### Added` / `### Fixed` / `### Performance` headings).
+- `package-name: "ozzylabs-opshub"` — the PyPI dist name (not the Python
+  import name), so release-please's PyPI-aware tooling sees the same
+  identity PyPI does.
+
+**v0.1.0 is bootstrapped, not retroactively managed**: the manifest
+records `0.1.0`, so release-please treats it as the "previous release"
+and computes v0.2.0+ from commits landed *after* this update. The v0.1.0
+CHANGELOG entry remains the hand-written Phase 1-8 narrative; release-please
+will append v0.2.0+ entries below it without touching v0.1.0.
+
 ## 関連
 
 - [Principles 10 (Pythonic but Vendor-Neutral)](../principles.md)

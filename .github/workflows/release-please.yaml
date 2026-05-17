@@ -1,0 +1,129 @@
+# release-please-driven release pipeline.
+#
+# This is the **primary** release path for OpsHub (ADR-0001 §Updates).
+# On every push to ``main``, release-please-action either:
+#
+#   1. Updates / creates a "release PR" (``chore(main): release vX.Y.Z``)
+#      that batches Conventional Commits since the last release into a
+#      version bump + CHANGELOG entry, OR
+#   2. (when that release PR is merged) creates the matching git tag +
+#      GitHub Release in one atomic step.
+#
+# Path (2) sets ``release_created: true``. We chain a ``publish`` job in
+# the same workflow to build the wheel and upload it to PyPI via Trusted
+# Publishers (OIDC). Doing publish in the *same* workflow avoids the
+# GitHub Actions cascading-trigger limitation: tags created by
+# release-please via ``GITHUB_TOKEN`` do **not** fire downstream
+# ``on: push: tags`` workflows, so the existing ``release.yaml`` stays
+# dormant in the normal flow and only fires for emergency manual tag
+# pushes (operator-pushed tags do trigger ``on: push: tags`` because the
+# auth is the operator's, not ``GITHUB_TOKEN``).
+#
+# Pattern adapted from ``ozzy-labs/agentic-bootstrap``'s
+# ``release-please.yaml`` (asset-upload-in-same-workflow) and
+# ``ozzy-labs/mcp-server-knowledge`` (bare release-please).
+#
+# References:
+#   - https://github.com/googleapis/release-please-action
+#   - https://docs.pypi.org/trusted-publishers/
+#   - knowledge MCP: ``tools/release-please``
+
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+# release-please needs to write commits (the release PR) + tags +
+# releases. ``pull-requests: write`` so it can open/update the release PR.
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  # Serialize so two rapid pushes to main don't race when computing the
+  # next version. ``cancel-in-progress: false`` keeps an in-flight release
+  # alive — cancelling halfway would leave a tag without an Release.
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Run release-please
+    runs-on: ubuntu-24.04
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    name: Publish to PyPI
+    # Only run when release-please actually produced a release. On a
+    # plain ``feat: ...`` push to main without a merged release PR, the
+    # first job updates the release PR and exits cleanly — there's
+    # nothing to publish yet.
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-24.04
+    environment:
+      # Trusted Publisher matching key on PyPI includes the environment
+      # name. Must match the Pending Publisher registered for
+      # ``ozzylabs-opshub`` (see ``docs/RELEASE_RUNBOOK.md`` §1).
+      name: pypi
+      url: https://pypi.org/project/ozzylabs-opshub/
+    permissions:
+      # OIDC token issuance for PyPI Trusted Publishers. No fallback
+      # static token exists.
+      id-token: write
+    steps:
+      - name: Checkout tagged commit
+        # release-please-action produced the tag; check it out so we
+        # build from the exact release-please-bumped pyproject.toml +
+        # __init__.py state, not from arbitrary main HEAD.
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          fetch-depth: 1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          # Pin to the version in .mise.toml so the build env matches
+          # local dev + ci.yaml + release.yaml. Drift here would surface
+          # only at publish time and is hard to debug after the fact.
+          version: "0.11.10"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install project (locked, no dev)
+        run: uv sync --locked --no-dev
+
+      - name: Verify tag matches package version (defensive)
+        # release-please already aligns the tag, pyproject.toml, and
+        # __init__.py — but a misconfigured ``extra-files`` entry could
+        # drift. Verify at the wire so a divergent publish can't slip
+        # through.
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          tag_version="${TAG_NAME#v}"
+          pkg_version="$(uv run python -c 'from opshub import __version__; print(__version__)')"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::tag ${TAG_NAME} does not match package version ${pkg_version}"
+            exit 1
+          fi
+          echo "Tag ${TAG_NAME} matches package version ${pkg_version}."
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Publish to PyPI
+        # OIDC auth is implicit when ``id-token: write`` + the job's
+        # ``environment.name`` matches the PyPI Trusted Publisher.
+        uses: pypa/gh-action-pypi-publish@release/v1
