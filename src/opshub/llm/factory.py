@@ -146,6 +146,21 @@ def build_llm_client(settings: OpsHubSettings) -> LLMClient:
             model_id=settings.llm.openai.model_id,
             model_version=settings.llm.openai.model_version,
         )
+    if backend == "ollama":
+        # Phase 6 step A4, ADR-0016 §決定 (h) — local daemon backend.
+        # The lazy import keeps ``httpx`` off the cold-start path; the
+        # ``[llm-ollama]`` extras gates installation but the import
+        # itself is gated again inside ``OllamaLLMClient.__init__`` so
+        # the error message points at the extras name explicitly.
+        from opshub.llm.ollama_client import OllamaLLMClient
+
+        return OllamaLLMClient(
+            model_id=settings.llm.ollama.model_id,
+            model_version=settings.llm.ollama.model_version,
+            host=settings.llm.ollama.host,
+            timeout_seconds=settings.llm.ollama.timeout_seconds,
+        )
     raise ConfigError(
-        f"unknown llm backend {backend!r}; expected one of 'disabled', 'anthropic', 'openai'"
+        f"unknown llm backend {backend!r}; "
+        "expected one of 'disabled', 'anthropic', 'openai', 'ollama'"
     )
