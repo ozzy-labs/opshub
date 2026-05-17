@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from opshub.projections import Projection
     from opshub.services import (
         AgentRunService,
+        BriefingService,
         DecisionService,
         DuplicateService,
         EmbeddingService,
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "build_agent_run_service",
+    "build_briefing_service",
     "build_decision_service",
     "build_duplicate_service",
     "build_embedding_service",
@@ -352,6 +354,60 @@ def build_recall_service() -> RecallService:
         embedder=build_embedder(settings),
         vector_store=build_vector_store(settings, engine),
         engine=engine,
+    )
+
+
+def build_briefing_service(actor: str = "cli:brief") -> BriefingService:
+    """Wire a :class:`BriefingService` for the configured backend.
+
+    Composes the Phase 5 briefing flow:
+
+    * :class:`RecallService` for topic-relevant entity discovery
+      (Phase 4 C1; resolves the active embedder + vector store via
+      :mod:`opshub.vectors.factory` so a backend switch in config
+      takes effect on the next ``opshub brief`` invocation).
+    * :class:`LLMClient` for the chat completion call (resolved via
+      :func:`opshub.llm.factory.build_llm_client`; returns a
+      :class:`NoOpLLMClient` when ``[llm] backend = "disabled"`` so
+      the service can record :class:`BriefingFailed` and propagate
+      :class:`ConfigError` with a clear remediation message).
+    * :class:`BriefingsProjection` for the read-model materialisation
+      (Phase 5 B2). The service runs ``store.append`` +
+      ``projector.apply`` on the same connection inside a single
+      transaction via ``engine.begin``.
+
+    Phase 5 step B4 will wire the actual ``opshub brief`` CLI
+    subcommand against this builder — this function is exported so
+    the CLI surface can stay thin (mirrors
+    :func:`build_recall_service` / :func:`build_duplicate_service`).
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001). The factories
+    # themselves defer the heavy embedder / LLM SDK imports to the
+    # branch the operator selected.
+    from opshub.core.config import OpsHubSettings
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.llm.factory import build_llm_client
+    from opshub.projections.briefings import BriefingsProjection
+    from opshub.services import BriefingService, RecallService
+    from opshub.vectors.factory import build_embedder, build_vector_store
+
+    settings = OpsHubSettings()
+    engine = build_engine()
+    embedder = build_embedder(settings)
+    vector_store = build_vector_store(settings, engine)
+    recall = RecallService(
+        embedder=embedder,
+        vector_store=vector_store,
+        engine=engine,
+    )
+    return BriefingService(
+        recall_service=recall,
+        llm_client=build_llm_client(settings),
+        store=SqlAlchemyEventStore(engine),
+        projector=BriefingsProjection(),
+        engine=engine,
+        actor=actor,
+        uow_factory=engine.begin,
     )
 
 

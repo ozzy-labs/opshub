@@ -13,6 +13,7 @@ dependency direction).
 
 from opshub.services.agent_run_service import AgentRunRow, AgentRunService
 from opshub.services.auto_embed_hook import AutoEmbedHook
+from opshub.services.briefings import Briefing, BriefingService
 from opshub.services.decision_service import DecisionService
 from opshub.services.duplicate_service import DuplicatePair, DuplicateService
 from opshub.services.embedding_service import (
@@ -36,6 +37,8 @@ __all__ = [
     "AgentRunRow",
     "AgentRunService",
     "AutoEmbedHook",
+    "Briefing",
+    "BriefingService",
     "DecisionService",
     "DuplicatePair",
     "DuplicateService",
