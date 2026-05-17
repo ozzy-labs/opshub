@@ -25,8 +25,10 @@ from opshub.cli.brief import register as register_brief
 from opshub.cli.connector import connector_app
 from opshub.cli.decision import decision_app
 from opshub.cli.embeddings import embeddings_app
+from opshub.cli.graph import graph_app
 from opshub.cli.handoff import handoff_app
 from opshub.cli.inbox import inbox_app
+from opshub.cli.link import link_app
 from opshub.cli.lock import lock_app
 from opshub.cli.projections import projections_app
 from opshub.cli.propose import propose_app
@@ -59,6 +61,8 @@ app.add_typer(agent_app)
 app.add_typer(workspace_app)
 app.add_typer(connector_app)
 app.add_typer(propose_app)
+app.add_typer(link_app)
+app.add_typer(graph_app)
 register_recall(app)
 register_brief(app)
 

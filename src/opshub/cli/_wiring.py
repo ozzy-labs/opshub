@@ -39,6 +39,7 @@ if TYPE_CHECKING:
         FileIngestService,
         HandoffService,
         InboxService,
+        LinkService,
         LockService,
         ProposalService,
         RecallService,
@@ -58,6 +59,7 @@ __all__ = [
     "build_file_ingest_service",
     "build_handoff_service",
     "build_inbox_service",
+    "build_link_service",
     "build_lock_service",
     "build_proposal_service",
     "build_recall_service",
@@ -555,6 +557,39 @@ def build_handoff_service(actor: str) -> HandoffService:
         actor=actor,
         uow_factory=engine.begin,
         engine=engine,
+    )
+
+
+def build_link_service(actor: str = "cli:link") -> LinkService:
+    """Wire a :class:`LinkService` for the configured database (Phase 8 D1).
+
+    The service is constructed with both the read-only :class:`Engine`
+    (used by :meth:`LinkService.related` / :meth:`trace` / :meth:`list_links`
+    / :meth:`find_link_id`) and the writer dependencies needed for
+    :meth:`LinkService.create_link` / :meth:`delete_link` (:class:`EventStore`
+    + :class:`_PersistingProjector` + ``engine.begin`` UoW factory).
+    The CLI surfaces both — ``opshub link add`` / ``opshub link
+    remove`` exercise the writer path while ``opshub link list`` /
+    ``opshub graph related`` / ``opshub graph trace`` exercise the
+    read path.
+
+    ``actor`` defaults to ``"cli:link"`` so any direct caller (e.g. an
+    ad-hoc script) still gets a meaningful audit trail; the CLI
+    subcommands pass more specific values (``cli:link_add`` /
+    ``cli:link_remove``) so the event log distinguishes between
+    verbs.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import LinkService
+
+    engine = build_engine()
+    return LinkService(
+        engine=engine,
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(),
+        uow_factory=engine.begin,
+        actor=actor,
     )
 
 
