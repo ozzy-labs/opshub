@@ -26,6 +26,7 @@ from typer.testing import CliRunner
 
 from opshub.cli.app import app
 from opshub.connectors.github.auth import GITHUB_PAT_SECRET_KEY
+from opshub.connectors.slack.auth import SLACK_BOT_TOKEN_SECRET_KEY
 from opshub.core.secrets import get_secret
 from opshub.vectors.openai_embedder import OPENAI_API_KEY_SECRET
 from opshub.vectors.voyage_embedder import VOYAGE_API_KEY_SECRET
@@ -125,6 +126,47 @@ def test_auth_set_strips_surrounding_whitespace(
     assert get_secret(GITHUB_PAT_SECRET_KEY) == "ghp_xxx"
 
 
+# ----- slack auth target (Phase 7 step A1) ------------------------------
+
+
+def test_auth_set_slack_with_token_flag_stores_to_keyring(
+    in_memory_keyring: _InMemoryKeyring,
+) -> None:
+    """``--token`` writes to the keyring slot the SlackAuth reader uses.
+
+    The ``connector:slack:bot_token`` key is the CLI writer ↔ SlackAuth
+    reader contract (mirrors the Phase 3 GitHub PAT precedent). Pinning
+    the round-trip here keeps the two halves from drifting.
+    """
+    runner = CliRunner()
+    result = runner.invoke(app, ["connector", "auth", "set", "slack", "--token", "xoxb-test"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "slack" in result.stdout
+    assert get_secret(SLACK_BOT_TOKEN_SECRET_KEY) == "xoxb-test"
+
+
+def test_auth_set_slack_uses_distinct_key_from_github(
+    in_memory_keyring: _InMemoryKeyring,
+) -> None:
+    """The Slack and GitHub connectors must store credentials under
+    different keyring slots — an operator pasting a GitHub PAT into
+    the Slack target (or vice versa) would silently overwrite the
+    wrong credential under a shared key. This test pins the
+    separation."""
+    runner = CliRunner()
+    r1 = runner.invoke(app, ["connector", "auth", "set", "github", "--token", "ghp_xxx"])
+    r2 = runner.invoke(app, ["connector", "auth", "set", "slack", "--token", "xoxb-yyy"])
+
+    assert r1.exit_code == 0
+    assert r2.exit_code == 0
+    assert get_secret(GITHUB_PAT_SECRET_KEY) == "ghp_xxx"
+    assert get_secret(SLACK_BOT_TOKEN_SECRET_KEY) == "xoxb-yyy"
+    # And the keys themselves are distinct strings — a sanity check
+    # that nothing collapsed them into one constant during a refactor.
+    assert GITHUB_PAT_SECRET_KEY != SLACK_BOT_TOKEN_SECRET_KEY
+
+
 # ----- error paths -------------------------------------------------------
 
 
@@ -162,17 +204,19 @@ def test_auth_set_unknown_connector(
     Phase 4 step B3 extends the supported list to include the
     ``embedder:openai`` / ``embedder:voyage`` API-key targets alongside
     ``github``. Phase 5 step A5 further adds ``llm:anthropic`` /
-    ``llm:openai`` (ADR-0015 §決定 (d)). The error must enumerate every
-    supported name so the operator can copy-paste the right one.
+    ``llm:openai`` (ADR-0015 §決定 (d)). Phase 7 step A1 adds ``slack``.
+    The error must enumerate every supported name so the operator can
+    copy-paste the right one.
     """
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "auth", "set", "slack-team", "--token", "x"])
+    result = runner.invoke(app, ["connector", "auth", "set", "ms365", "--token", "x"])
 
     assert result.exit_code == 2
     assert "unknown auth target" in result.stderr
-    assert "slack-team" in result.stderr
+    assert "ms365" in result.stderr
     # All currently-supported names must appear in the hint.
     assert "github" in result.stderr
+    assert "slack" in result.stderr
     assert "embedder:openai" in result.stderr
     assert "embedder:voyage" in result.stderr
     assert "llm:anthropic" in result.stderr
