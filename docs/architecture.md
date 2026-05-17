@@ -150,13 +150,38 @@ Phase 3 で確立した connector framework (ADR-0010 + ADR-0014 + ADR-0005) を
 
 CLI: `opshub connector auth set connector:<slack|ms365|box>` でクレデンシャル保存、`opshub connector sync <name>` で取り込み。Phase 5 brief / Phase 6 propose は新 source_type を automatic に活用 (RecallService が `sources` projection 横断 query する設計のため)。
 
-connector-side automatic `SourceReferenced` 発行 (Slack message URL parse / GitHub issue link parse 等) は Phase 8 (Knowledge graph) の文脈で扱う。
+connector-side automatic `SourceReferenced` 発行 (Slack message URL parse / GitHub issue link parse 等) は Phase 8.x で各 connector mapper を拡張する形で対応。
 
-### 2.10 Workspace Generation Layer
+### 2.10 Knowledge graph layer (Phase 8)
+
+ADR-0017 で `links` projection を導入し、Phase 1-7 で蓄積された entity 間 reference を materialise する経路を確立した。
+
+**4 自動抽出経路** (`LinksExtractor` projector、ADR-0017 §決定 (c) 純粋 derived state):
+
+| Source event | Link |
+|---|---|
+| `ProposalApplied` (Phase 6) | `proposal → task/decision` (`applied_to`) |
+| `BriefingGenerated.source_refs` (Phase 5) | `briefing → entity` per source_ref (`referenced_in_briefing`) |
+| `ProposalRequested.briefing_id` (Phase 6) | `proposal → briefing` (`generated_from_briefing`) |
+| `SourceReferenced` (Phase 3 placeholder closeout) | `source → entity` (`references`) |
+
+**Manual link CRUD** (ADR-0017 §決定 (d) event-sourced 経路): `opshub link add` emits `LinkCreated`、`opshub link remove` emits `LinkDeleted`。Auto-extracted links は新 event を発行せず projection に直接 derive される。
+
+**Graph traversal** (`LinkService`): `related` (1-hop bidirectional)、`trace` (incoming-direction provenance、default depth 3 / max 10)、`expand` (bidirectional N-hop、default 2 / max 5)。Cycle detection + visited tracking 必須。
+
+**`--expand-graph` flag** (ADR-0017 §決定 (f) default off): `opshub brief --expand-graph` / `opshub propose generate --expand-graph` で RecallService の hit を 1-hop graph 拡張し LLM prompt に追加 source block を注入。Phase 5 D1 follow-up と同じ delimiter wrap + html.escape contract が graph-expanded sources にも適用される — security 不変。
+
+CLI: `opshub link {add,remove,list}` + `opshub graph {related,trace,expand}` + `--format md|json|dot` (DOT は Graphviz 出力)。
+
+**Phase 3 `SourceReferenced` placeholder closeout**: Phase 3 で defined だが consumer のなかった event を Phase 8 B2 `LinksExtractor` が消費。Connector-side automatic 発行 (GitHub Issue body `#123` parse / Slack message URL parse etc.) は Phase 8.x で別 PR。
+
+詳細は [ADR-0017: Knowledge Graph](adr/0017-knowledge-graph.md) を参照。
+
+### 2.11 Workspace Generation Layer
 
 projection を読み、markdown (tasks / briefings / reviews / handoffs / dashboards) を生成。read-only。Jinja2 で template 化。
 
-### 2.11 Agent Runtime Boundary
+### 2.12 Agent Runtime Boundary
 
 agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換え / event bypass は禁止。lefthook / CI で検出する。
 
@@ -193,7 +218,7 @@ agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換�
 | `ingested_files` | projection | Phase 1+2+3 (✅ 実装済) | workspace inbox file ingest の content-hash 追跡 |
 | `briefings` | projection | Phase 5 (✅ 実装済) | LLM briefing 結果 (`id` / `topic` / `scope` / `markdown` / `source_refs` JSON / `model_id` / `model_version` / `tokens_in` / `tokens_out` / `generated_at`)、再生成は新 row として追記 (event-sourced trace 維持) |
 | `proposals` | projection | Phase 6 (✅ 実装済) | LLM proposal candidates (`id` / `topic` / `scope` / `briefing_id` / `candidates` JSON / `candidate_states` JSON (`pending` \| `applied` \| `rejected`) / `model_id` / `model_version` / `tokens_in` / `tokens_out` / `generated_at`)、`(proposal_id, candidate_index)` を natural key とした per-candidate state machine (ADR-0016 §決定 (d)) |
-| `links` | projection | Phase 6.x+ | entity 間 graph 関係 (Phase 3 では `inbox_items.source_ref` 列で簡易 link) |
+| `links` | projection | Phase 8 (✅ 実装済) | entity 間 graph 関係 (ADR-0017、4 自動抽出 + manual link CRUD、natural key `(from_*, to_*, link_type)` UPSERT、bidirectional 2 INDEX) |
 | `projects` | projection | Phase 3+ | task / decision のグルーピング (lock scope は Phase 2 で予約のみ) |
 
 ### 4.2 Event 命名規約
@@ -305,8 +330,8 @@ Agent は以下を行わない。
 | 4 | vector recall, semantic search, duplicate detection (Pluggable Embedder + sqlite-vec、✅ 2026-05-17 完了) | briefing 自動生成 / event 駆動自動 embed (Phase 5) |
 | 5 | Briefing layer (ADR-0015 + Pluggable LLM Anthropic / OpenAI + `opshub brief` + event-driven auto-embed 補助、✅ 2026-05-17 完了) | Local LLM backend / `links` projection 本実装 (Phase 6 / Phase 6.x) |
 | 6 | Action loop layer (ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain + `opshub propose` CLI、human-in-the-loop apply 必須、✅ 2026-05-17 完了) | `llama.cpp` direct binding / proposal scoring / multi-step plans (Phase 6.x) |
-| 7 | Connectors Wave 2 (Slack + Microsoft 365 + Box、ADR-0010 + ADR-0014 + ADR-0005 を再利用、✅ 2026-05-17 完了、epic #113) | additional connectors (Notion / Linear / Jira 等) / common OAuth helper refactor (Phase 7.x) / Knowledge graph (Phase 8) |
-| 8 | Knowledge graph (epic #128) | Planned |
+| 7 | Connectors Wave 2 (Slack + Microsoft 365 + Box、ADR-0010 + ADR-0014 + ADR-0005 を再利用、✅ 2026-05-17 完了、epic #113) | additional connectors (Notion / Linear / Jira 等) / common OAuth helper refactor (Phase 7.x) |
+| 8 | Knowledge graph layer (ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、✅ 2026-05-17 完了、epic #128) | connector-side automatic `SourceReferenced` 発行 / graph visualisation web UI (Phase 8.x) / multi-machine sync (Phase 9) |
 
 詳細は [Principles 9 (Phased Delivery)](principles.md) 参照。
 
