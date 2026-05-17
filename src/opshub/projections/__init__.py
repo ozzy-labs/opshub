@@ -31,6 +31,10 @@ from opshub.projections.connector_cursors import (
 from opshub.projections.decisions import DecisionsProjection, decisions_table
 from opshub.projections.handoffs import HandoffsProjection, handoffs_table
 from opshub.projections.inbox import InboxProjection, inbox_items_table
+from opshub.projections.ingested_files import (
+    IngestedFilesProjection,
+    ingested_files_table,
+)
 from opshub.projections.locks import LocksProjection, locks_table
 from opshub.projections.rebuild import rebuild_all
 from opshub.projections.registry import all_projections
@@ -44,6 +48,7 @@ __all__ = [
     "DecisionsProjection",
     "HandoffsProjection",
     "InboxProjection",
+    "IngestedFilesProjection",
     "LocksProjection",
     "Projection",
     "SourcesProjection",
@@ -55,6 +60,7 @@ __all__ = [
     "decisions_table",
     "handoffs_table",
     "inbox_items_table",
+    "ingested_files_table",
     "locks_table",
     "rebuild_all",
     "sources_table",

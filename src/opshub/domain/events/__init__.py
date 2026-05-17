@@ -40,6 +40,7 @@ from opshub.domain.events.coordination import (
     WorkSessionStarted,
 )
 from opshub.domain.events.decision import DecisionRecorded
+from opshub.domain.events.file_ingest import FileIngested
 from opshub.domain.events.handoff import HandoffClosed, HandoffOpened
 from opshub.domain.events.inbox import ItemEnqueued, ItemTriaged
 from opshub.domain.events.source import SourceObserved, SourceReferenced
@@ -69,14 +70,16 @@ Phase2Event = Annotated[
 ]
 
 # Phase 3's discriminated union. Source family + connector sync run
-# family. ``TypeAdapter(Phase3Event)`` is the right tool for tests and
-# migration scripts that want phase-scoped deserialisation.
+# family + workspace file ingest family. ``TypeAdapter(Phase3Event)``
+# is the right tool for tests and migration scripts that want
+# phase-scoped deserialisation.
 Phase3Event = Annotated[
     SourceObserved
     | SourceReferenced
     | ConnectorSyncStarted
     | ConnectorSyncCompleted
-    | ConnectorSyncFailed,
+    | ConnectorSyncFailed
+    | FileIngested,
     Field(discriminator="event_type"),
 ]
 
@@ -107,7 +110,8 @@ AllEvent = Annotated[
     | SourceReferenced
     | ConnectorSyncStarted
     | ConnectorSyncCompleted
-    | ConnectorSyncFailed,
+    | ConnectorSyncFailed
+    | FileIngested,
     Field(discriminator="event_type"),
 ]
 
@@ -120,6 +124,7 @@ __all__ = [
     "ConnectorSyncStarted",
     "DecisionRecorded",
     "DomainEvent",
+    "FileIngested",
     "HandoffClosed",
     "HandoffOpened",
     "ItemEnqueued",

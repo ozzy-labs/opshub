@@ -21,6 +21,7 @@ from opshub.projections.connector_cursors import ConnectorCursorsProjection
 from opshub.projections.decisions import DecisionsProjection
 from opshub.projections.handoffs import HandoffsProjection
 from opshub.projections.inbox import InboxProjection
+from opshub.projections.ingested_files import IngestedFilesProjection
 from opshub.projections.locks import LocksProjection
 from opshub.projections.sources import SourcesProjection
 from opshub.projections.tasks import TasksProjection
@@ -41,4 +42,5 @@ def all_projections() -> list[Projection]:
         AgentRunsProjection(),
         SourcesProjection(),
         ConnectorCursorsProjection(),
+        IngestedFilesProjection(),
     ]
