@@ -17,6 +17,8 @@ the raw exception on ``result.exception``.
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import typer
 
 from opshub import __version__
@@ -67,10 +69,32 @@ register_recall(app)
 register_brief(app)
 
 
+def _version_callback(value: bool) -> None:
+    """Eager ``--version`` handler: echo the package version and exit."""
+    if value:
+        typer.echo(f"opshub {__version__}")
+        raise typer.Exit()
+
+
 @app.callback()
-def _root() -> None:  # pyright: ignore[reportUnusedFunction]
+def _root(  # pyright: ignore[reportUnusedFunction]
+    version: Annotated[
+        bool | None,
+        typer.Option(
+            "--version",
+            callback=_version_callback,
+            is_eager=True,
+            help="Show the installed opshub version and exit.",
+        ),
+    ] = None,
+) -> None:
     """Root callback. Required so that single-subcommand mode is not used; this keeps
     `opshub <subcommand>` invocation stable as more commands are added in Phase 1.
+
+    The ``--version`` flag is wired here (rather than as a separate command)
+    so that ``opshub --version`` is recognised before any subcommand
+    parsing. The existing ``opshub version`` subcommand is preserved
+    below and produces identical output.
     """
 
 
