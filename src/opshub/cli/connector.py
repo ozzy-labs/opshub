@@ -164,18 +164,19 @@ def auth_set(
 
     Currently supported names: ``github``, ``slack``,
     ``embedder:openai``, ``embedder:voyage``, ``llm:anthropic``,
-    ``llm:openai``, ``connector:ms365``. The remaining Phase 7
-    connector (Box) lands in a later step; additional LLM / embedder
-    backends would extend this switch alongside their factory branch
-    in :mod:`opshub.llm.factory` / :mod:`opshub.vectors.factory`.
+    ``llm:openai``, ``connector:ms365``, ``connector:box``. Additional
+    LLM / embedder backends would extend this switch alongside their
+    factory branch in :mod:`opshub.llm.factory` /
+    :mod:`opshub.vectors.factory`.
 
-    The ``connector:ms365`` target is special-cased: the Microsoft 365
-    credential is an OAuth refresh token rather than a single-string
-    bearer, so this command dispatches to the interactive paste-code
-    flow in :mod:`opshub.cli._ms365_oauth`. The ``--token`` flag is
-    ignored for that target (the OAuth flow has no use for a
-    pre-baked token), which we surface as an explicit warning rather
-    than silently dropping it.
+    The ``connector:ms365`` and ``connector:box`` targets are
+    special-cased: both credentials are OAuth refresh tokens rather
+    than single-string bearers, so this command dispatches to the
+    respective interactive paste-code flow in
+    :mod:`opshub.cli._ms365_oauth` / :mod:`opshub.cli._box_oauth`. The
+    ``--token`` flag is ignored for those targets (the OAuth flow has
+    no use for a pre-baked token), which we surface as an explicit
+    warning rather than silently dropping it.
 
     Security: there is intentionally no ``auth get`` command — we never
     echo tokens to stdout. The env-var override is the documented
@@ -195,9 +196,26 @@ def auth_set(
                 "(OAuth paste-code flow is used instead)",
                 err=True,
             )
-        from opshub.cli._ms365_oauth import run_paste_code_flow
+        from opshub.cli._ms365_oauth import run_paste_code_flow as run_ms365
 
-        run_paste_code_flow()
+        run_ms365()
+        return
+
+    if name == "connector:box":
+        # Box mirrors the MS365 paste-code OAuth flow (Phase 7 step C1).
+        # The ``--token`` flag has no meaning here — the refresh token
+        # is produced by the OAuth exchange, not pasted in. Warn rather
+        # than silently drop it so a misconfigured script surfaces the
+        # mistake.
+        if token is not None:
+            typer.echo(
+                "warning: --token is ignored for connector:box "
+                "(OAuth paste-code flow is used instead)",
+                err=True,
+            )
+        from opshub.cli._box_oauth import run_paste_code_flow as run_box
+
+        run_box()
         return
 
     if name == "github":
@@ -244,7 +262,7 @@ def auth_set(
         typer.echo(
             f"unknown auth target {name!r}; currently supported: "
             "github, slack, embedder:openai, embedder:voyage, "
-            "llm:anthropic, llm:openai, connector:ms365",
+            "llm:anthropic, llm:openai, connector:ms365, connector:box",
             err=True,
         )
         raise typer.Exit(code=2)

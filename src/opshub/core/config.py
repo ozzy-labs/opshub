@@ -214,22 +214,44 @@ class MS365ConnectorSettings(BaseModel):
     authority: str = "https://login.microsoftonline.com/common"
 
 
+class BoxConnectorSettings(BaseModel):
+    """Box connector configuration (Phase 7 step C1).
+
+    Holds the **non-sensitive** Box app metadata. The accompanying
+    secrets (``client_secret`` and rotating ``refresh_token``) live in
+    the OS keyring under ``connector:box:client_secret`` /
+    ``connector:box:refresh_token`` per ADR-0014 — they never appear
+    in ``opshub.toml``.
+
+    Per phase-7-plan §1 #2, the connector defaults to ``enabled = false``
+    so a fresh install never tries to talk to Box without an explicit
+    opt-in. Operators set ``enabled = true`` after running
+    ``opshub connector auth set connector:box``.
+    """
+
+    enabled: bool = False
+    client_id: str = ""
+
+
 class ConnectorSettings(BaseModel):
     """External SaaS connector configuration root.
 
     Phase 7 introduces this section as the dedicated home for each
-    connector's tuning (enable flag + OAuth metadata). Step B1 lands
-    the :class:`MS365ConnectorSettings` field; subsequent Phase 7 steps
-    (Slack, Box) add sibling fields the same way.
+    connector's tuning (enable flag + OAuth metadata). Step B1 added
+    the :class:`MS365ConnectorSettings` field, and step C1 adds
+    :class:`BoxConnectorSettings`; subsequent Phase 7 steps extend the
+    same shape.
 
     The section is intentionally separate from :class:`LLMSettings` /
     :class:`EmbeddingSettings` so per-connector overrides like
-    ``OPSHUB_CONNECTORS__MS365__CLIENT_ID=...`` follow the documented
+    ``OPSHUB_CONNECTORS__MS365__CLIENT_ID=...`` or
+    ``OPSHUB_CONNECTORS__BOX__CLIENT_ID=...`` follow the documented
     nested-env-var pattern without colliding with the LLM/embedding
     namespaces.
     """
 
     ms365: MS365ConnectorSettings = Field(default_factory=MS365ConnectorSettings)
+    box: BoxConnectorSettings = Field(default_factory=BoxConnectorSettings)
 
 
 class LLMSettings(BaseModel):
