@@ -655,3 +655,128 @@ def test_reject_failure_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
     assert result.exit_code == 1, result.stdout
     assert "Error: candidate 0 already rejected" in result.stderr
+
+
+# ---- ADR-0016 §決定 (c) human-in-the-loop ---------------------------------
+
+
+def test_propose_app_has_no_auto_apply_flag_or_command() -> None:
+    """ADR-0016 §決定 (c) human-in-the-loop: proposal apply MUST be operator-triggered.
+
+    The contract is held by **surface absence** — no ``--auto-apply``
+    CLI flag, no ``auto_apply`` sub-command. This test is a negative
+    pin: if a future refactor accidentally adds either, this test
+    fails loudly so the change triggers an explicit ADR-0016 §決定 (c)
+    re-evaluation (which per ADR-0016 §決定 (c) requires a new ADR
+    that supersedes 0016).
+
+    The walk descends through every Typer command in the ``propose``
+    sub-app and inspects every Click option / argument exposed
+    underneath. Variants of the forbidden token (``--auto-apply`` /
+    ``auto_apply`` / ``--auto_apply`` / ``autoapply``) are all
+    rejected so a near-miss spelling still trips the assertion.
+    """
+    from typer.main import get_command
+
+    from opshub.cli.propose import propose_app
+
+    click_command = get_command(propose_app)
+
+    # Recursively collect every option / argument name exposed under
+    # the propose CLI tree. ``param.opts`` is the list of long/short
+    # option strings (e.g. ``["--max-candidates"]``); ``param.name`` is
+    # the snake-case Python identifier the callback receives. Click's
+    # API is loosely typed at the Python level, so we use ``Any``
+    # locally and rely on the runtime assertions to pin the surface.
+    all_option_names: list[str] = []
+
+    def _walk(cmd: Any) -> None:  # walking Click's untyped tree
+        params: list[Any] = list(getattr(cmd, "params", None) or [])
+        for param in params:
+            opts: list[Any] = list(getattr(param, "opts", None) or [])
+            for opt in opts:
+                if isinstance(opt, str):
+                    all_option_names.append(opt)
+            name = getattr(param, "name", None)
+            if isinstance(name, str):
+                all_option_names.append(name)
+        commands = getattr(cmd, "commands", None)
+        if isinstance(commands, dict):
+            for subcmd in cast(dict[str, Any], commands).values():
+                _walk(subcmd)
+
+    _walk(click_command)
+
+    forbidden_lowered = {"--auto-apply", "auto_apply", "--auto_apply", "autoapply"}
+    found = [name for name in all_option_names if name.lower() in forbidden_lowered]
+    assert not found, (
+        f"Forbidden flag / option found in `opshub propose`: {found}. "
+        "ADR-0016 §決定 (c) forbids auto-apply — re-evaluation requires "
+        "a new ADR that supersedes 0016."
+    )
+
+    # Also verify no sub-command of ``propose`` is named ``auto-apply`` /
+    # ``auto_apply``. The Typer surface registers four verbs (``generate``
+    # / ``list`` / ``apply`` / ``reject``); a future fifth ``auto-apply``
+    # verb would breach §決定 (c) even without a flag.
+    sub_commands: list[str] = []
+
+    def _collect_command_names(cmd: Any) -> None:
+        commands = getattr(cmd, "commands", None)
+        if isinstance(commands, dict):
+            for sub_name, subcmd in cast(dict[str, Any], commands).items():
+                # Click guarantees command dict keys are ``str`` at
+                # runtime; coerce explicitly so pyright doesn't flag
+                # the redundant isinstance check.
+                sub_commands.append(str(sub_name))
+                _collect_command_names(subcmd)
+
+    _collect_command_names(click_command)
+    forbidden_cmd_names = {"auto-apply", "auto_apply", "autoapply"}
+    found_cmds = [name for name in sub_commands if name.lower() in forbidden_cmd_names]
+    assert not found_cmds, (
+        f"Forbidden sub-command found in `opshub propose`: {found_cmds}. "
+        "ADR-0016 §決定 (c) forbids auto-apply — re-evaluation requires "
+        "a new ADR that supersedes 0016."
+    )
+
+
+def test_opshub_settings_has_no_auto_apply_field() -> None:
+    """ADR-0016 §決定 (c): no ``auto_apply`` field anywhere in the config schema.
+
+    Mirrors :func:`test_propose_app_has_no_auto_apply_flag_or_command`
+    on the config surface. Walks every ``BaseModel`` reachable from
+    :class:`OpsHubSettings` and asserts no field with an
+    ``auto_apply``-shaped name is registered. The §決定 (c) contract is
+    "no surface to enable auto-apply, even by config" — a config-only
+    backdoor would breach the principle even without a CLI flag.
+    """
+    from pydantic import BaseModel
+
+    from opshub.core.config import OpsHubSettings
+
+    forbidden_field_names = {"auto_apply", "autoapply"}
+    visited: set[type[BaseModel]] = set()
+    leaks: list[str] = []
+
+    def _walk_model(model: type[BaseModel], path: str) -> None:
+        if model in visited:
+            return
+        visited.add(model)
+        for field_name, field_info in model.model_fields.items():
+            qualified = f"{path}.{field_name}" if path else field_name
+            if field_name.lower() in forbidden_field_names:
+                leaks.append(qualified)
+            annotation = field_info.annotation
+            # Recurse into nested ``BaseModel`` annotations so a future
+            # ``LLMSettings.auto_apply: bool`` or
+            # ``OpsHubSettings.propose.auto_apply: bool`` is caught.
+            if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+                _walk_model(annotation, qualified)
+
+    _walk_model(OpsHubSettings, "")
+    assert not leaks, (
+        f"Forbidden ``auto_apply`` field found in OpsHubSettings: {leaks}. "
+        "ADR-0016 §決定 (c) forbids auto-apply — re-evaluation requires "
+        "a new ADR that supersedes 0016."
+    )
