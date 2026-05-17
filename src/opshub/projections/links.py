@@ -35,9 +35,12 @@ UPDATE`` so ``projections rebuild`` is idempotent end-to-end
 Dispatch table (ADR-0017 §決定 (b)+(c)+(d))
 ------------------------------------------
 
-The reducer dispatches on ``event.event_type`` because each event family
-already pins its discriminator at the type-system level (``Literal[...]``
-on every concrete event). The 6 dispatch paths:
+The reducer dispatches with :func:`isinstance` over the 6 concrete event
+classes (rather than branching on the ``event.event_type`` Literal
+discriminator). Both forms are functionally equivalent — every concrete
+event pins ``event_type`` as a ``Literal[...]`` — but ``isinstance``
+gives pyright / mypy full attribute-access narrowing inside each branch
+without ``type: ignore`` escapes. The 6 dispatch paths:
 
 1. ``proposal.applied`` (:class:`ProposalApplied`) → one ``applied_to``
    row from ``proposal:<aggregate_id>`` to
@@ -77,11 +80,14 @@ required by the rebuild idempotency contract in the Phase 8 plan
 
 If an operator manually emits ``LinkCreated`` for the same natural-key
 tuple as an auto-extracted link, the ``ON CONFLICT(<natural-key>) DO
-UPDATE`` clause merges them onto a single row; the operator-minted
-``aggregate_id`` wins as the PK because the manual path UPSERTs with
-that explicit id. This collision is rare (operators do not typically
-mirror automatic relationships by hand) but is acceptable behaviour
-for Phase 8 MVP.
+UPDATE`` clause merges them onto a single row: the existing ``id``
+column (whichever the first event minted) is preserved; only
+``source_event_id`` and ``metadata`` are updated to reflect the more
+recent event. This means the row identity stays stable across
+replays even when the ordering of manual vs. auto-extracted writes
+flips. The collision is rare (operators do not typically mirror
+automatic relationships by hand); preserving the first-seen ``id``
+matches the same first-seen invariant applied to ``created_at``.
 
 Cold-start guard
 ----------------
@@ -309,13 +315,15 @@ class LinksProjector:
 
         if isinstance(event, LinkCreated):
             # Phase 8 LinkCreated: aggregate_id is the operator-minted
-            # link ULID. Use it as the row PK directly (vs. the derived
-            # _stable_link_id) so an operator can ``WHERE id = ?``
-            # against either the ``links`` table or the ``events`` table
-            # with the same value. The on_conflict clause still targets
-            # the natural-key tuple — if the same five-tuple was
-            # previously auto-extracted (rare), the manual id supersedes
-            # the derived one.
+            # link ULID. When no row exists for this natural-key tuple
+            # yet, that ULID is used as the row PK so an operator can
+            # ``WHERE id = ?`` against either the ``links`` table or
+            # the ``events`` table with the same value. When a row
+            # already exists (rare: a prior auto-extraction collided
+            # on the natural key), the ON CONFLICT clause preserves
+            # the existing ``id`` and only refreshes
+            # ``source_event_id`` / ``metadata`` — see ``_upsert_link``
+            # for the full preservation contract.
             _upsert_link(
                 conn,
                 from_entity_type=event.from_entity_type,
@@ -406,9 +414,13 @@ def _upsert_link(
     the earliest causal event, not the latest replay pass).
 
     When ``explicit_id`` is provided (the ``LinkCreated`` path), it is
-    used as the row PK so an operator can address the row by the same
-    ULID that appears on the originating event. When omitted (the
-    auto-extraction paths), the id is derived via
+    used as the row PK on a fresh INSERT so an operator can address
+    the row by the same ULID that appears on the originating event.
+    On an ON CONFLICT collision the existing row's ``id`` is
+    preserved (we only refresh ``source_event_id`` / ``metadata`` —
+    see the set_ clause below); first-seen identity wins, matching
+    the same first-seen invariant applied to ``created_at``. When
+    omitted (the auto-extraction paths), the id is derived via
     :func:`_stable_link_id` so two consecutive rebuilds produce
     byte-identical rows.
     """
