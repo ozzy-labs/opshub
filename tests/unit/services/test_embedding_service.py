@@ -190,6 +190,17 @@ class _RecordingVectorStore:
         del query, k, entity_types
         return []
 
+    def recall_by_rowid(
+        self,
+        entity_type: str,
+        entity_id: str,
+        *,
+        k: int,
+        entity_types: list[str] | None = None,
+    ) -> list[RecallHit]:  # pragma: no cover - unused
+        del entity_type, entity_id, k, entity_types
+        return []
+
     def count(self, *, entity_type: str | None = None) -> int:  # pragma: no cover
         del entity_type
         return 0
@@ -218,6 +229,17 @@ class _FailingVectorStore:
         entity_types: list[str] | None = None,
     ) -> list[RecallHit]:  # pragma: no cover
         del query, k, entity_types
+        return []
+
+    def recall_by_rowid(
+        self,
+        entity_type: str,
+        entity_id: str,
+        *,
+        k: int,
+        entity_types: list[str] | None = None,
+    ) -> list[RecallHit]:  # pragma: no cover
+        del entity_type, entity_id, k, entity_types
         return []
 
     def count(self, *, entity_type: str | None = None) -> int:  # pragma: no cover

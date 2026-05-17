@@ -70,6 +70,30 @@ class VectorStore(Protocol):
         """
         ...
 
+    def recall_by_rowid(
+        self,
+        entity_type: str,
+        entity_id: str,
+        *,
+        k: int,
+        entity_types: list[str] | None = None,
+    ) -> list[RecallHit]:
+        """Return ``k`` nearest hits to the stored vector at ``(entity_type, entity_id)``.
+
+        Equivalent to fetching the entity's already-stored embedding and feeding it back to
+        :meth:`recall` — but without an extra ``Embedder`` round-trip. Callers that want
+        nearest neighbours of an entity that has already been embedded (e.g. offline
+        duplicate detection) should prefer this over re-embedding the source text, especially
+        for API-backed embedders where each ``embed_one`` is a network call.
+
+        If the entity has no stored embedding the result is empty (consistent with "no hits"
+        rather than raising). Self-match (the same ``entity_id``) is **not** filtered — the
+        caller decides whether to drop it. When multiple embeddings exist for the same
+        entity (e.g. across ``model_id`` / ``model_version``), implementations choose the
+        most recently inserted row.
+        """
+        ...
+
     def count(self, *, entity_type: str | None = None) -> int:
         """Return number of stored embeddings, optionally filtered by ``entity_type``."""
         ...

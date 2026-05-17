@@ -213,6 +213,82 @@ class SqliteVecStore:
             )
         return results
 
+    def recall_by_rowid(
+        self,
+        entity_type: str,
+        entity_id: str,
+        *,
+        k: int,
+        entity_types: list[str] | None = None,
+    ) -> list[RecallHit]:
+        """Return the ``k`` nearest hits to the embedding stored at ``(entity_type, entity_id)``.
+
+        Avoids a re-embed round-trip when the caller already has the
+        entity persisted (e.g. offline duplicate detection). The lookup
+        chain is:
+
+        1. ``embeddings`` metadata → most-recent ``rowid`` + ``dim``
+           for ``(entity_type, entity_id)``; "most recent" = largest
+           ``rowid`` so the latest insertion wins when an entity holds
+           multiple ``model_version`` rows.
+        2. ``dim`` → vec0 table via :data:`VEC_TABLES_BY_DIM`.
+        3. Fetch the stored vector blob from that vec0 table at the
+           captured ``rowid``.
+        4. Issue the same vec0 ``MATCH`` query as :meth:`recall` using
+           the fetched blob as the query vector.
+
+        If the entity has no metadata row (never embedded) the result
+        is an empty list — consistent with "no hits" rather than
+        raising. Self-match is **not** filtered; the caller decides.
+        """
+        if k <= 0:
+            return []
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT rowid AS rowid, dim AS dim "
+                    "FROM embeddings "
+                    "WHERE entity_type = :et AND entity_id = :eid "
+                    "ORDER BY rowid DESC LIMIT 1"
+                ),
+                {"et": entity_type, "eid": entity_id},
+            ).first()
+            if row is None:
+                return []
+            vec_table = self._resolve_vec_table(int(row.dim))
+            blob = conn.execute(
+                text(f"SELECT embedding FROM {vec_table} WHERE rowid = :rowid"),
+                {"rowid": int(row.rowid)},
+            ).scalar_one()
+            stmt = text(
+                f"""
+                SELECT e.entity_type AS entity_type,
+                       e.entity_id   AS entity_id,
+                       v.distance    AS distance,
+                       v.embedding   AS embedding
+                  FROM {vec_table} AS v
+                  JOIN embeddings  AS e ON e.rowid = v.rowid
+                 WHERE v.embedding MATCH :q AND k = :k
+                 ORDER BY v.distance
+                """
+            )
+            rows = conn.execute(stmt, {"q": blob, "k": k}).all()
+
+        results: list[RecallHit] = []
+        for hit in rows:
+            hit_type = str(hit.entity_type)
+            if entity_types is not None and hit_type not in entity_types:
+                continue
+            results.append(
+                RecallHit(
+                    entity_type=hit_type,
+                    entity_id=str(hit.entity_id),
+                    score=-float(hit.distance),
+                    vector=_blob_to_vec(hit.embedding),
+                )
+            )
+        return results
+
     def count(self, *, entity_type: str | None = None) -> int:
         """Return the number of metadata rows, optionally filtered.
 
