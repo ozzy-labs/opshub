@@ -9,10 +9,15 @@ graph rendering, expand integration) can sit alongside
 :class:`LinkService` without re-shaping callers' imports.
 
 Re-exports the public surface (:class:`Link`, :class:`LinkPath`,
-:class:`LinkService`) at package level so callers do not need to
-remember the inner module name.
+:class:`GraphSubset`, :class:`LinkService`) at package level so
+callers do not need to remember the inner module name.
 """
 
-from opshub.services.links.service import Link, LinkPath, LinkService
+from opshub.services.links.service import (
+    GraphSubset,
+    Link,
+    LinkPath,
+    LinkService,
+)
 
-__all__ = ["Link", "LinkPath", "LinkService"]
+__all__ = ["GraphSubset", "Link", "LinkPath", "LinkService"]

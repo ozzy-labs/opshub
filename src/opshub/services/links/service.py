@@ -51,7 +51,7 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Engine, Row
 
 
-__all__ = ["Link", "LinkPath", "LinkService"]
+__all__ = ["GraphSubset", "Link", "LinkPath", "LinkService"]
 
 
 # ADR-0017 §決定 (e): ``trace(entity, depth=N)`` defaults to 3-hop
@@ -60,6 +60,14 @@ __all__ = ["Link", "LinkPath", "LinkService"]
 # values without re-deriving them from the dataclass defaults.
 _TRACE_DEFAULT_DEPTH = 3
 _TRACE_MAX_DEPTH = 10
+
+# ADR-0017 §決定 (e): ``expand(entity, depth=N)`` defaults to 2-hop
+# bidirectional traversal with a hard ceiling at 5. ``expand`` walks
+# both directions so the fan-out grows roughly as ``branching^depth``
+# — a tighter ceiling than ``trace`` (which is uni-directional) keeps
+# CLI rendering tractable for typical operational graphs.
+_EXPAND_DEFAULT_DEPTH = 2
+_EXPAND_MAX_DEPTH = 5
 
 
 _Direction = Literal["outgoing", "incoming", "both"]
@@ -125,6 +133,48 @@ class LinkPath:
     """
 
     links: tuple[Link, ...]
+    depth: int
+
+
+@dataclass(frozen=True, slots=True)
+class GraphSubset:
+    """A bidirectional N-hop graph slice rooted at an entity.
+
+    Returned by :meth:`LinkService.expand`. ``nodes`` is the set of
+    entities reached (the root + everything within ``depth`` hops in
+    either direction). ``edges`` is the set of links between those
+    nodes — sufficient to render a graph (e.g. via Graphviz DOT or
+    JSON).
+
+    Sets-of-tuples (rather than lists) because expand may visit the
+    same node via multiple paths; we want unique nodes / edges.
+
+    Attributes
+    ----------
+    root:
+        The ``(entity_type, entity_id)`` tuple the expansion started
+        from. CLI renderers highlight this node to anchor the graph.
+    nodes:
+        All reachable entities within ``depth`` hops in either
+        direction (the root is always included). ``frozenset`` so
+        callers cannot mutate the result and so equality is set-based
+        rather than order-sensitive.
+    edges:
+        Links between visited nodes, deduplicated by ``id`` and
+        sorted by ``created_at`` ascending for deterministic CLI
+        output. A tuple (rather than ``frozenset``) is used because
+        :class:`Link` carries a ``metadata`` dict which is not
+        hashable — sorting + dedup-by-id gives the same uniqueness
+        guarantee without requiring hashable values.
+    depth:
+        The depth limit that was applied. Echoed back from the input
+        so CLI renderers can label the graph (e.g. "2-hop expansion
+        of task:abc") without re-passing the value.
+    """
+
+    root: tuple[str, str]
+    nodes: frozenset[tuple[str, str]]
+    edges: tuple[Link, ...]
     depth: int
 
 
@@ -279,6 +329,125 @@ class LinkService:
             out_paths=paths,
         )
         return paths
+
+    def expand(
+        self,
+        entity_type: str,
+        entity_id: str,
+        *,
+        depth: int = _EXPAND_DEFAULT_DEPTH,
+        link_types: list[str] | None = None,
+    ) -> GraphSubset:
+        """Bidirectional N-hop graph expansion rooted at ``(entity_type, entity_id)``.
+
+        Walks both outgoing and incoming links from the root,
+        recursively up to ``depth`` hops. BFS-style frontier
+        expansion with visited tracking prevents revisiting the
+        same node (cycle detection) and dedupes edges via the
+        ``link.id`` key (so diamond shapes produce distinct edges
+        without double-counting).
+
+        Parameters
+        ----------
+        entity_type, entity_id:
+            The root entity. Always included in ``nodes`` even when
+            it has no links.
+        depth:
+            Number of hops to expand. Defaults to ``2`` (ADR-0017
+            §決定 (e)). Must be in ``[0, _EXPAND_MAX_DEPTH]``;
+            outside that range raises :class:`ConfigError`. ``depth=0``
+            returns just the root node with no edges (useful as a
+            "describe this entity" call).
+        link_types:
+            If set, restrict expansion to links whose ``link_type``
+            is in the list — applied at *every* hop, not just the
+            first. ``None`` (default) means all types.
+
+        Returns
+        -------
+        GraphSubset
+            * ``root`` — the starting node tuple
+            * ``nodes`` — all reachable nodes within ``depth`` hops
+              (a ``frozenset`` of ``(entity_type, entity_id)`` tuples)
+            * ``edges`` — links between visited nodes, deduplicated
+              by ``id`` and sorted by ``created_at`` ascending
+            * ``depth`` — the applied depth (echoes the input for
+              CLI rendering)
+
+        Raises
+        ------
+        ConfigError
+            When ``depth > _EXPAND_MAX_DEPTH`` (the ADR-0017 max of
+            ``5``) or ``depth < 0``. Issued before any DB query so
+            the operator sees the error immediately.
+
+        Notes
+        -----
+        Cycle detection: visited nodes are tracked in a set; when an
+        outgoing/incoming neighbour resolves to an already-visited
+        node we record the edge but do not re-enqueue the node.
+        This is stricter than ``trace`` (which backtracks for
+        diamond branches) because ``expand`` only needs the *set*
+        of reachable nodes — not every path to each node.
+        """
+        if depth > _EXPAND_MAX_DEPTH:
+            raise ConfigError(f"expand depth {depth} exceeds maximum {_EXPAND_MAX_DEPTH}")
+        if depth < 0:
+            raise ConfigError(f"expand depth must be >= 0, got {depth}")
+
+        root = (entity_type, entity_id)
+        nodes: set[tuple[str, str]] = {root}
+        edges_by_id: dict[str, Link] = {}
+
+        # BFS by hop: ``frontier`` is the set of nodes whose
+        # neighbours we'll inspect next. After visiting them we
+        # collect any newly discovered nodes into
+        # ``next_frontier`` for the following hop. The loop runs
+        # at most ``depth`` times, so total node visits are bounded
+        # by ``branching^depth`` — protected at the high end by
+        # _EXPAND_MAX_DEPTH.
+        frontier: set[tuple[str, str]] = {root}
+        for _hop in range(depth):
+            if not frontier:
+                break
+            next_frontier: set[tuple[str, str]] = set()
+            for current_type, current_id in frontier:
+                # ``related`` already merges outgoing + incoming
+                # via direction="both" and applies the link_types
+                # filter at the SQL layer. limit=10_000 is a
+                # generous safety net; the real bound is the
+                # depth cap above.
+                links = self.related(
+                    current_type,
+                    current_id,
+                    direction="both",
+                    link_types=link_types,
+                    limit=10_000,
+                )
+                for link in links:
+                    # Dedupe by link.id so a link encountered from
+                    # both endpoints of an edge counts once.
+                    edges_by_id.setdefault(link.id, link)
+                    outgoing = (link.to_entity_type, link.to_entity_id)
+                    incoming = (link.from_entity_type, link.from_entity_id)
+                    for candidate in (outgoing, incoming):
+                        # Skip self (the endpoint we're expanding
+                        # from) and any already-visited node.
+                        if candidate == (current_type, current_id):
+                            continue
+                        if candidate in nodes:
+                            continue
+                        nodes.add(candidate)
+                        next_frontier.add(candidate)
+            frontier = next_frontier
+
+        sorted_edges = tuple(sorted(edges_by_id.values(), key=lambda link: link.created_at))
+        return GraphSubset(
+            root=root,
+            nodes=frozenset(nodes),
+            edges=sorted_edges,
+            depth=depth,
+        )
 
     def find_link_id(
         self,
