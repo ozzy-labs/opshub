@@ -43,9 +43,11 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from opshub.services.briefings import Briefing
+    from opshub.services.proposals import Proposal
 
 __all__ = [
     "Column",
+    "ProposalSummary",
     "dispatch",
     "format_date",
     "id_prefix",
@@ -53,6 +55,10 @@ __all__ = [
     "render_briefing_md",
     "render_json",
     "render_md",
+    "render_proposal_json",
+    "render_proposal_list_json",
+    "render_proposal_list_md",
+    "render_proposal_md",
     "render_table",
     "truncate",
 ]
@@ -358,3 +364,258 @@ def render_briefing_json(briefing: Briefing) -> str:
         indent=2,
         ensure_ascii=False,
     )
+
+
+# ---- proposal renderers (Phase 6 step B4) --------------------------------
+#
+# Proposals come in two shapes here:
+#
+# * The freshly generated :class:`Proposal` returned by
+#   :meth:`ProposalService.generate` — a single record with full
+#   ``candidates`` payload + cost trace, rendered for the
+#   ``opshub propose generate`` CLI body.
+# * The ``proposals`` projection rows surfaced by
+#   ``opshub propose list`` — a many-row summary view. The
+#   :class:`ProposalSummary` dataclass below is the CLI-local row shape;
+#   it lives here rather than in :mod:`opshub.cli.propose` so the
+#   renderer + the row dataclass stay co-located (mirrors the
+#   ``Column`` + ``dispatch`` pairing above).
+
+
+# Length of the proposal-id short prefix shown in user-facing output.
+# 6 hex/Base32 characters is enough to disambiguate within an
+# operator's working window without overwhelming a one-row summary
+# (mirrors the convention used by `git log --oneline`).
+_PROPOSAL_ID_SHORT_LEN = 6
+_PROPOSAL_TOPIC_TRUNCATE = 40
+_CANDIDATE_BODY_TRUNCATE = 200
+
+
+@dataclass(frozen=True)
+class ProposalSummary:
+    """One row of the ``opshub propose list`` view.
+
+    The CLI builds these from a SELECT against the ``proposals``
+    projection (``id`` / ``topic`` / ``candidate_states`` /
+    ``generated_at``); the renderer below knows how to flatten the
+    parallel ``candidate_states`` list into the ``Np/Mp/Kr`` summary
+    cell. Kept here rather than on the projection module so the
+    projection layer stays purely data-shape (no CLI concerns).
+    """
+
+    proposal_id: str
+    topic: str
+    candidate_states: list[str]
+    generated_at: datetime | None
+
+
+def render_proposal_md(proposal: Proposal) -> str:
+    """Render a freshly generated :class:`Proposal` for stdout (markdown).
+
+    The output is hand-formatted (not via :func:`dispatch`) because the
+    candidates are heterogeneous: a task candidate has ``title`` /
+    ``body``, a decision candidate has ``text`` / ``context``. The
+    rendered shape is designed for an agent that needs to pick a next
+    action without re-querying — the proposal id and per-candidate
+    index appear verbatim so the operator can paste them straight into
+    ``opshub propose apply <id> <index>``.
+
+    The trailing usage hint mentions both ``apply`` and ``reject`` so
+    a first-time user discovers both lifecycle verbs from the help
+    output alone.
+    """
+    lines: list[str] = [
+        f'# Proposals for "{proposal.topic}"',
+        "",
+        f"Proposal: {proposal.proposal_id}",
+        (
+            f"Model: {proposal.model_id} "
+            f"(in: {proposal.tokens_in} tokens, out: {proposal.tokens_out} tokens)"
+        ),
+        f"Generated: {proposal.generated_at.isoformat()}",
+    ]
+    if proposal.briefing_id is not None:
+        lines.append(f"Briefing: {proposal.briefing_id}")
+    if proposal.scope and proposal.scope != "all":
+        lines.append(f"Scope: {proposal.scope}")
+    lines.append("")
+
+    for index, candidate in enumerate(proposal.candidates):
+        kind = getattr(candidate, "kind", "?")
+        if kind == "task":
+            title = getattr(candidate, "title", "")
+            body = getattr(candidate, "body", None)
+            lines.append(f"[{index}] task: {title}")
+            if body is not None and str(body).strip():
+                truncated = truncate(str(body), _CANDIDATE_BODY_TRUNCATE)
+                lines.append(f"    body: {truncated}")
+        elif kind == "decision":
+            text = getattr(candidate, "text", "")
+            context = getattr(candidate, "context", None)
+            truncated_text = truncate(str(text), _CANDIDATE_BODY_TRUNCATE)
+            lines.append(f"[{index}] decision: {truncated_text}")
+            if context is not None and str(context).strip():
+                truncated_context = truncate(str(context), _CANDIDATE_BODY_TRUNCATE)
+                lines.append(f"    context: {truncated_context}")
+        else:
+            # Phase 6.x candidate kinds (e.g. inbox_item / source) land
+            # here; the renderer falls back to a JSON dump of the
+            # payload so an unexpected kind is still legible.
+            lines.append(f"[{index}] {kind}: {candidate!r}")
+
+    lines.extend(
+        [
+            "",
+            f"To apply:  opshub propose apply {proposal.proposal_id} <index>",
+            (f"To reject: opshub propose reject {proposal.proposal_id} <index> [--reason ...]"),
+        ]
+    )
+    return "\n".join(lines)
+
+
+def render_proposal_json(proposal: Proposal) -> str:
+    """Render a freshly generated :class:`Proposal` as a JSON document.
+
+    Surfaces the full record (id, topic, scope, optional briefing
+    link, model identifiers, token usage, candidate list, generated
+    timestamp) so callers piping into ``jq`` can introspect the cost
+    trace or extract a specific candidate body. Each candidate is
+    rendered as the dict produced by
+    :meth:`pydantic.BaseModel.model_dump` so the ``kind`` /
+    ``schema_version`` discriminators survive the JSON round-trip
+    (ADR-0016 §決定 (f)).
+
+    ``ensure_ascii=False`` so a CJK topic / candidate body stays
+    human-readable in the output.
+    """
+    candidates_payload: list[Any] = []
+    for candidate in proposal.candidates:
+        # All current candidate types are Pydantic v2 models; fall back
+        # to a best-effort string cast for any future non-Pydantic
+        # candidate shape so the renderer never raises on the JSON
+        # path.
+        dump = getattr(candidate, "model_dump", None)
+        if callable(dump):
+            candidates_payload.append(dump(mode="json"))
+        else:
+            candidates_payload.append(str(candidate))
+    return json.dumps(
+        {
+            "proposal_id": proposal.proposal_id,
+            "topic": proposal.topic,
+            "scope": proposal.scope,
+            "briefing_id": proposal.briefing_id,
+            "model_id": proposal.model_id,
+            "model_version": proposal.model_version,
+            "tokens_in": proposal.tokens_in,
+            "tokens_out": proposal.tokens_out,
+            "candidates": candidates_payload,
+            "generated_at": proposal.generated_at.isoformat(),
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
+
+
+def render_proposal_list_md(rows: Sequence[ProposalSummary]) -> str:
+    """Render a list of :class:`ProposalSummary` rows as a Markdown table.
+
+    Each row is one proposal. The ``Candidates`` column collapses the
+    parallel ``candidate_states`` list into a single ``Np/Ma/Kr`` cell
+    (pending / applied / rejected counts) so an operator scanning the
+    table can spot proposals that still have actionable candidates
+    without expanding every row.
+
+    The renderer uses :func:`dispatch` with ``fmt="md"`` so the
+    output uses the GitHub-flavoured Markdown table shape that every
+    other ``list`` view emits.
+    """
+    columns = _proposal_summary_columns()
+    return dispatch("md", columns, list(rows))
+
+
+def render_proposal_list_json(rows: Sequence[ProposalSummary]) -> str:
+    """Render a list of :class:`ProposalSummary` rows as a JSON array.
+
+    The shape matches the Markdown columns (id prefix, full topic,
+    per-state counts, generated_at ISO string) plus the full
+    ``candidate_states`` list so a ``jq`` consumer can re-derive the
+    breakdown. The proposal id is emitted in full (not the short
+    prefix) because the JSON path is the machine-readable surface.
+    """
+    payload: list[dict[str, Any]] = []
+    for row in rows:
+        counts = _candidate_state_counts(row.candidate_states)
+        payload.append(
+            {
+                "proposal_id": row.proposal_id,
+                "topic": row.topic,
+                "candidate_count": len(row.candidate_states),
+                "states": counts,
+                "candidate_states": list(row.candidate_states),
+                "generated_at": (
+                    row.generated_at.isoformat() if row.generated_at is not None else None
+                ),
+            }
+        )
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def _proposal_summary_columns() -> list[Column]:
+    """Column descriptors for the ``opshub propose list`` Markdown view.
+
+    Kept as a function (not a module-level constant) so the dataclass
+    field accessors are constructed lazily — the dataclass forward
+    ref :class:`ProposalSummary` is fully defined by the time the
+    function is called.
+    """
+    return [
+        Column(
+            header="ID",
+            accessor=lambda row: id_prefix(row.proposal_id, _PROPOSAL_ID_SHORT_LEN),
+            width=_PROPOSAL_ID_SHORT_LEN,
+            json_key="proposal_id",
+        ),
+        Column(
+            header="Topic",
+            accessor=lambda row: truncate(row.topic, _PROPOSAL_TOPIC_TRUNCATE),
+            width=_PROPOSAL_TOPIC_TRUNCATE,
+            json_key="topic",
+        ),
+        Column(
+            header="Candidates",
+            accessor=lambda row: _format_candidate_states(row.candidate_states),
+            width=12,
+            json_key="states",
+        ),
+        Column(
+            header="Generated",
+            accessor=lambda row: format_date(row.generated_at),
+            width=10,
+            json_key="generated_at",
+        ),
+    ]
+
+
+def _format_candidate_states(states: list[str]) -> str:
+    """Render the candidate-state breakdown as ``Np/Ma/Kr``.
+
+    A proposal with 2 pending / 1 applied / 0 rejected candidates
+    renders as ``2p/1a/0r`` — the trailing letter is the first
+    character of each state name so the cell stays compact.
+    """
+    counts = _candidate_state_counts(states)
+    return f"{counts['pending']}p/{counts['applied']}a/{counts['rejected']}r"
+
+
+def _candidate_state_counts(states: list[str]) -> dict[str, int]:
+    """Tally candidate states; unknown state labels collapse silently.
+
+    Used by both the Markdown column accessor and the JSON renderer
+    so the counts are computed from a single code path.
+    """
+    counts = {"pending": 0, "applied": 0, "rejected": 0}
+    for state in states:
+        if state in counts:
+            counts[state] += 1
+    return counts
