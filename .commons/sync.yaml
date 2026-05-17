@@ -17,7 +17,7 @@ pinned:
 # Skills sync (opt-in). Add adapter ids to skills_adapters and a SHA
 # to skills_commit. The skills repo's main HEAD SHA can be obtained via:
 #   gh api repos/ozzy-labs/skills/commits/main --jq .sha
-skills_commit: b8ae1c14aebc71c851d4f4781c6b0f76f7402574
+skills_commit: 27ae96210fee135e608b16e938cb338c9b2b45ae
 skills_adapters:
   - claude-code
   - codex-cli
