@@ -79,17 +79,27 @@ class WorkspaceSettings(BaseModel):
 class EmbeddingSettings(BaseModel):
     """Embedding backend selection (see ADR-0012).
 
-    Phase 1 only supports ``backend = "disabled"``; the other literals exist so
-    Phase 4 can flip them on without breaking config files. When disabled, the
-    descriptor fields must all be ``None`` — mixing ``disabled`` with a
-    ``model_id`` would silently be ignored, which is exactly the kind of
-    config-vs-vector drift ADR-0012 warns against.
+    All descriptor fields are optional. When ``backend`` selects a real
+    embedder (``"local"`` / ``"openai"`` / ``"voyage"``),
+    :func:`opshub.vectors.factory.build_embedder` substitutes
+    backend-specific defaults for any field left as ``None`` (e.g.
+    ``backend = "local"`` with no other keys means
+    bge-m3 / 1024-dim). The Phase 4 step A5 refinement adds
+    ``dimensions`` so callers can override the default vector size
+    without forking a custom embedder.
+
+    Disabled-state invariant: when ``backend = "disabled"``, every
+    descriptor must stay ``None``. Setting them alongside ``disabled``
+    is silently misleading (the values are never read), so we reject
+    the combination at validation time — ADR-0012 §3 calls this out
+    explicitly as the kind of config drift to fail loud on.
     """
 
     backend: EmbeddingBackend = "disabled"
     model_id: str | None = None
     model_version: str | None = None
     api_base_url: str | None = None
+    dimensions: int | None = None
 
     @model_validator(mode="after")
     def _check_disabled_has_no_descriptors(self) -> EmbeddingSettings:
@@ -98,6 +108,7 @@ class EmbeddingSettings(BaseModel):
                 "model_id": self.model_id,
                 "model_version": self.model_version,
                 "api_base_url": self.api_base_url,
+                "dimensions": self.dimensions,
             }
             populated = sorted(name for name, value in extras.items() if value is not None)
             if populated:

@@ -40,6 +40,7 @@ def test_embedding_default_is_disabled() -> None:
     assert embedding.model_id is None
     assert embedding.model_version is None
     assert embedding.api_base_url is None
+    assert embedding.dimensions is None
 
 
 def test_opshub_settings_sections_are_default_constructed(
@@ -54,6 +55,7 @@ def test_opshub_settings_sections_are_default_constructed(
         "OPSHUB_EMBEDDING__MODEL_ID",
         "OPSHUB_EMBEDDING__MODEL_VERSION",
         "OPSHUB_EMBEDDING__API_BASE_URL",
+        "OPSHUB_EMBEDDING__DIMENSIONS",
     ):
         monkeypatch.delenv(var, raising=False)
     settings = OpsHubSettings()
@@ -118,6 +120,29 @@ def test_embedding_disabled_rejects_model_version() -> None:
 def test_embedding_disabled_rejects_api_base_url() -> None:
     with pytest.raises(ConfigError, match="api_base_url"):
         EmbeddingSettings(backend="disabled", api_base_url="https://example.com")
+
+
+def test_embedding_disabled_rejects_dimensions() -> None:
+    with pytest.raises(ConfigError, match="dimensions"):
+        EmbeddingSettings(backend="disabled", dimensions=1024)
+
+
+def test_embedding_local_accepts_minimal_config() -> None:
+    """Phase 4 step A5: ``backend = "local"`` alone is now valid.
+
+    The :mod:`opshub.vectors.factory` supplies backend-specific
+    defaults (model_id, dim) so config files can opt into a backend
+    without forcing the operator to also pin the model id / dim.
+    """
+    embedding = EmbeddingSettings(backend="local")
+    assert embedding.backend == "local"
+    assert embedding.model_id is None
+    assert embedding.dimensions is None
+
+
+def test_embedding_local_with_dimensions_override() -> None:
+    embedding = EmbeddingSettings(backend="local", dimensions=768)
+    assert embedding.dimensions == 768
 
 
 def test_embedding_local_with_descriptors_validates() -> None:
