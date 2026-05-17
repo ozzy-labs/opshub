@@ -229,6 +229,73 @@ class EmbeddingService:
 
     # ------------------------------------------------------------------ commands
 
+    def embed_one_if_pending(self, entity_type: str, entity_id: str) -> bool:
+        """Embed a single entity if it has no current-backend embedding.
+
+        Single-row variant of :meth:`embed_pending` intended for the
+        Phase 5 step C1 auto-embed projector hook
+        (:class:`opshub.services.auto_embed_hook.AutoEmbedHook`). The
+        method reads the entity's text from the matching projection,
+        runs the same ``NOT EXISTS`` predicate that
+        :meth:`_iter_pending` uses, embeds when pending, and records
+        :class:`EmbeddingFailed` on embedder errors.
+
+        Crucially, this method **does not raise**. The auto-embed hook
+        runs **after** the originating event has committed (so the
+        embed cannot unwind it); propagating an exception from here
+        would surface a confusing post-commit traceback to the
+        operator. Failures land on the event log as
+        :class:`EmbeddingFailed` (same shape :meth:`embed_pending`
+        produces) so the next ``opshub embeddings drain`` /
+        ``opshub embeddings rebuild`` retries the entity via the
+        existing ``NOT EXISTS`` retry mechanism.
+
+        Parameters
+        ----------
+        entity_type:
+            One of the supported entity types (``"task"`` /
+            ``"decision"`` / ``"inbox_item"`` / ``"source"``).
+            Unknown values return ``False`` without raising — the
+            hook is allowed to dispatch on event types it does not
+            recognise without the service objecting.
+        entity_id:
+            The aggregate id of the entity to embed. When the row does
+            not exist in the projection (e.g. the projector did not
+            yet apply, or the entity was deleted) the method returns
+            ``False`` silently.
+
+        Returns
+        -------
+        bool
+            ``True`` when a new embedding was written. ``False`` when
+            the entity was already embedded by the current backend,
+            had empty / NULL text, or could not be embedded (failure
+            already recorded as :class:`EmbeddingFailed`).
+        """
+        sources = self._sources(entity_type)
+        if not sources:
+            return False
+        source = sources[0]
+        try:
+            raw_text = self._fetch_pending_text(source, entity_id)
+            if raw_text is None:
+                return False
+            outcome = self._embed_one(source, entity_id, raw_text)
+        except Exception as exc:  # post-commit safety net
+            # The originating event has already committed by the time
+            # the hook runs (see :mod:`opshub.services.auto_embed_hook`).
+            # We must never re-raise; the entity stays in the "pending"
+            # state for the next rebuild / drain to retry.
+            try:
+                self._record_failure(source.entity_type, entity_id, str(exc))
+            except Exception:  # pragma: no cover - last-resort guard
+                # Even the failure-event append went wrong (e.g. DB
+                # locked). Swallow so the hook never raises; the
+                # entity will simply be retried on the next rebuild.
+                pass
+            return False
+        return outcome == "embedded"
+
     def embed_pending(
         self,
         *,
@@ -347,6 +414,53 @@ class EmbeddingService:
                 # projection schemas constrain id_column to ``str`` and
                 # text_column to ``str | None``.
                 yield str(row[0]), (None if row[1] is None else str(row[1]))
+
+    def _fetch_pending_text(self, source: EntitySource, entity_id: str) -> str | None:
+        """Return the entity's text iff a current-backend embedding is missing.
+
+        Single-row counterpart to :meth:`_iter_pending`: reads the
+        projection row for ``entity_id`` and applies the same
+        ``NOT EXISTS`` predicate against the ``embeddings`` metadata
+        table keyed on the current ``(model_id, model_version)`` pair.
+
+        Returns
+        -------
+        str | None
+            The text value when the entity is pending (no current
+            embedding yet). ``None`` when the entity does not exist in
+            the projection, when the text column is NULL, or when the
+            current backend already has an embedding recorded.
+
+        Notes
+        -----
+        Reading ``model_id`` / ``model_version`` off the bound
+        ``_embedder`` matches :meth:`_iter_pending` so a backend
+        switch via config takes effect on the next hook invocation
+        without re-deriving the descriptors here.
+        """
+        source_table = _TABLE_BY_ENTITY_TYPE[source.entity_type]
+        id_col = source_table.c[source.id_column]
+        text_col = source_table.c[source.text_column]
+        not_exists_sql = text(
+            "NOT EXISTS (SELECT 1 FROM embeddings "
+            "WHERE embeddings.entity_type = :__et "
+            f"  AND embeddings.entity_id = {source.table_name}.{source.id_column} "
+            "  AND embeddings.model_id = :__mid "
+            "  AND embeddings.model_version = :__mv)"
+        ).bindparams(
+            __et=source.entity_type,
+            __mid=self._embedder.model_id,
+            __mv=self._embedder.model_version,
+        )
+        stmt = select(text_col).where(id_col == entity_id).where(not_exists_sql)
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).first()
+        if row is None:
+            return None
+        value = row[0]
+        if value is None:
+            return None
+        return str(value)
 
     def _embed_one(self, source: EntitySource, entity_id: str, raw_text: str | None) -> str:
         """Embed one row. Returns one of ``'embedded'`` / ``'skipped'`` / ``'failed'``.

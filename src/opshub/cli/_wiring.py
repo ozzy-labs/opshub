@@ -34,6 +34,7 @@ if TYPE_CHECKING:
         DecisionService,
         DuplicateService,
         EmbeddingService,
+        EventHook,
         FileIngestService,
         HandoffService,
         InboxService,
@@ -84,7 +85,14 @@ def _require_initialised(engine: Engine) -> None:
 
 
 def build_task_service(actor: str) -> TaskService:
-    """Wire a :class:`TaskService` against the configured database."""
+    """Wire a :class:`TaskService` against the configured database.
+
+    When ``[embedding] auto = true`` and a real backend is configured,
+    an :class:`~opshub.services.auto_embed_hook.AutoEmbedHook` is
+    injected as a post-commit event hook (Phase 5 step C1) so
+    ``task.created`` events auto-embed without a manual
+    ``opshub embeddings rebuild``.
+    """
     from opshub.db import SqlAlchemyEventStore
     from opshub.services import TaskService
 
@@ -94,11 +102,16 @@ def build_task_service(actor: str) -> TaskService:
         projector=_PersistingProjector(),
         actor=actor,
         uow_factory=engine.begin,
+        event_hooks=_maybe_build_auto_embed_hooks(engine),
     )
 
 
 def build_inbox_service(actor: str) -> InboxService:
-    """Wire an :class:`InboxService` against the configured database."""
+    """Wire an :class:`InboxService` against the configured database.
+
+    See :func:`build_task_service` for the Phase 5 auto-embed hook
+    semantics.
+    """
     from opshub.db import SqlAlchemyEventStore
     from opshub.services import InboxService
 
@@ -108,6 +121,7 @@ def build_inbox_service(actor: str) -> InboxService:
         projector=_PersistingProjector(),
         uow_factory=engine.begin,
         actor=actor,
+        event_hooks=_maybe_build_auto_embed_hooks(engine),
     )
 
 
@@ -126,7 +140,11 @@ def build_lock_service(actor: str) -> LockService:
 
 
 def build_decision_service(actor: str) -> DecisionService:
-    """Wire a :class:`DecisionService` against the configured database."""
+    """Wire a :class:`DecisionService` against the configured database.
+
+    See :func:`build_task_service` for the Phase 5 auto-embed hook
+    semantics.
+    """
     from opshub.db import SqlAlchemyEventStore
     from opshub.services import DecisionService
 
@@ -136,6 +154,7 @@ def build_decision_service(actor: str) -> DecisionService:
         projector=_PersistingProjector(),
         actor=actor,
         uow_factory=engine.begin,
+        event_hooks=_maybe_build_auto_embed_hooks(engine),
     )
 
 
@@ -199,11 +218,20 @@ def build_source_service(actor: str = "connector:source") -> SourceService:
     engine = build_engine()
     store = SqlAlchemyEventStore(engine)
     projector = _PersistingProjector()
+    # Phase 5 step C1: SourceService.observe appends a SourceObserved
+    # and an ItemEnqueued in the same UoW. We pass the auto-embed
+    # hook to BOTH services so each event runs through it after the
+    # shared UoW commits — InboxService.enqueue is never called
+    # (SourceService inlines the inbox event), but plumbing the hook
+    # symmetrically keeps the wiring graph consistent for future
+    # connector paths that might call InboxService directly.
+    hooks = _maybe_build_auto_embed_hooks(engine)
     inbox = InboxService(
         store=store,
         projector=projector,
         uow_factory=engine.begin,
         actor=actor,
+        event_hooks=hooks,
     )
     return SourceService(
         store=store,
@@ -212,6 +240,7 @@ def build_source_service(actor: str = "connector:source") -> SourceService:
         uow_factory=engine.begin,
         actor=actor,
         engine=engine,
+        event_hooks=hooks,
     )
 
 
@@ -239,11 +268,19 @@ def build_file_ingest_service(actor: str = "cli:workspace_ingest") -> FileIngest
     engine = build_engine()
     store = SqlAlchemyEventStore(engine)
     projector = _PersistingProjector()
+    # Phase 5 step C1: workspace ingest emits ItemEnqueued events; the
+    # auto-embed hook applies to those just like connector-origin
+    # inbox rows. FileIngestService itself does not (yet) accept an
+    # event_hooks kwarg — its ItemEnqueued event is built inline, so
+    # the post-commit dispatch happens via the InboxService reference
+    # the service holds (mirroring SourceService composition).
+    hooks = _maybe_build_auto_embed_hooks(engine)
     inbox = InboxService(
         store=store,
         projector=projector,
         uow_factory=engine.begin,
         actor=actor,
+        event_hooks=hooks,
     )
     return FileIngestService(
         store=store,
@@ -366,6 +403,52 @@ def build_handoff_service(actor: str) -> HandoffService:
         uow_factory=engine.begin,
         engine=engine,
     )
+
+
+def _maybe_build_auto_embed_hooks(engine: Engine) -> tuple[EventHook, ...]:
+    """Return ``(AutoEmbedHook,)`` when auto-embed is enabled, else ``()``.
+
+    Phase 5 step C1 introduces an opt-in projector hook that calls
+    :meth:`EmbeddingService.embed_one_if_pending` after a service
+    commits an embeddable event. The hook is wired into every
+    service that emits embeddable events (TaskService /
+    DecisionService / InboxService / SourceService) so the operator
+    only needs to flip ``[embedding] auto = true`` once.
+
+    Default behaviour (``auto = false``) returns an empty tuple, so
+    no hook is registered and the services run identically to Phase
+    4. When ``auto = true`` but ``backend = "disabled"``, the hook
+    cannot do anything useful (no embedder to call), so we also
+    return an empty tuple — failing loud here would be hostile to
+    operators who flipped the flag before installing an extras
+    bundle.
+
+    Building the hook involves constructing a transient
+    :class:`EmbeddingService` against the same engine + active
+    backend. The service is cheap to instantiate (factories defer
+    heavy embedder loading until first use), but the hook holds a
+    reference to it so subsequent ``maybe_embed`` calls reuse the
+    same embedder + vector store — important for backends that
+    cache model state (e.g. local sentence-transformer).
+    """
+    from opshub.core.config import OpsHubSettings
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import AutoEmbedHook, EmbeddingService
+    from opshub.vectors.factory import build_embedder, build_vector_store
+
+    settings = OpsHubSettings()
+    if not settings.embedding.auto or settings.embedding.backend == "disabled":
+        return ()
+    embedding_service = EmbeddingService(
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(),
+        embedder=build_embedder(settings),
+        vector_store=build_vector_store(settings, engine),
+        engine=engine,
+        uow_factory=engine.begin,
+        actor="hook:auto_embed",
+    )
+    return (AutoEmbedHook(embedding_service),)
 
 
 class _PersistingProjector:

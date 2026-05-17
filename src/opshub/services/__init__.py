@@ -12,6 +12,7 @@ dependency direction).
 """
 
 from opshub.services.agent_run_service import AgentRunRow, AgentRunService
+from opshub.services.auto_embed_hook import AutoEmbedHook
 from opshub.services.decision_service import DecisionService
 from opshub.services.duplicate_service import DuplicatePair, DuplicateService
 from opshub.services.embedding_service import (
@@ -19,6 +20,7 @@ from opshub.services.embedding_service import (
     EmbedResult,
     EntitySource,
 )
+from opshub.services.event_hook import EventHook
 from opshub.services.event_store import EventStore, InMemoryEventStore
 from opshub.services.file_ingest_service import FileIngestResult, FileIngestService
 from opshub.services.handoff_service import HandoffRow, HandoffService
@@ -33,12 +35,14 @@ from opshub.services.work_session_service import WorkSessionRow, WorkSessionServ
 __all__ = [
     "AgentRunRow",
     "AgentRunService",
+    "AutoEmbedHook",
     "DecisionService",
     "DuplicatePair",
     "DuplicateService",
     "EmbedResult",
     "EmbeddingService",
     "EntitySource",
+    "EventHook",
     "EventStore",
     "FileIngestResult",
     "FileIngestService",

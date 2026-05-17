@@ -42,10 +42,12 @@ from opshub.services.event_store import EventStore
 from opshub.services.projector import Projector
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Callable, Generator, Sequence
     from contextlib import AbstractContextManager
 
     from sqlalchemy.engine import Connection
+
+    from opshub.services.event_hook import EventHook
 
 _DEFAULT_ACTOR = "cli:default"
 
@@ -83,11 +85,16 @@ class DecisionService:
         projector: Projector,
         actor: str = _DEFAULT_ACTOR,
         uow_factory: Callable[[], AbstractContextManager[Connection]] | None = None,
+        event_hooks: Sequence[EventHook] | None = None,
     ) -> None:
         self._store = store
         self._projector = projector
         self._actor = actor
         self._uow_factory = uow_factory
+        # Phase 5 step C1: post-commit hooks; see :mod:`opshub.services.event_hook`.
+        self._event_hooks: tuple[EventHook, ...] = (
+            tuple(event_hooks) if event_hooks is not None else ()
+        )
 
     def record_decision(self, text: str, context: str | None = None) -> DecisionRecorded:
         """Record a decision and return the appended event.
@@ -124,10 +131,18 @@ class DecisionService:
 
         Without a factory: legacy path — append then apply on whatever
         transaction the store / projector open internally.
+
+        Post-commit hooks (Phase 5 step C1) run **after** the UoW
+        closes; a hook failure cannot unwind the originating event.
         """
         with self._open_uow() as connection:
             self._store.append(event, connection)
             self._projector.apply(event, connection)
+        for hook in self._event_hooks:
+            try:
+                hook.maybe_embed(event)
+            except Exception:  # pragma: no cover - hooks must not raise
+                continue
 
     @contextmanager
     def _open_uow(self) -> Generator[Connection | None]:

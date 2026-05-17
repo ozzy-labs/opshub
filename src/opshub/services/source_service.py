@@ -102,12 +102,13 @@ from opshub.services.event_store import EventStore
 from opshub.services.projector import Projector
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator
+    from collections.abc import Callable, Generator, Sequence
     from contextlib import AbstractContextManager
 
     from sqlalchemy.engine import Connection, Engine
 
     from opshub.domain.events import DomainEvent
+    from opshub.services.event_hook import EventHook
     from opshub.services.inbox_service import InboxService
 
 _DEFAULT_ACTOR = "connector:source"
@@ -153,6 +154,7 @@ class SourceService:
         uow_factory: Callable[[], AbstractContextManager[Connection]] | None = None,
         actor: str = _DEFAULT_ACTOR,
         engine: Engine | None = None,
+        event_hooks: Sequence[EventHook] | None = None,
     ) -> None:
         self._store = store
         self._projector = projector
@@ -160,6 +162,10 @@ class SourceService:
         self._uow_factory = uow_factory
         self._actor = actor
         self._engine = engine
+        # Phase 5 step C1: post-commit hooks; see :mod:`opshub.services.event_hook`.
+        self._event_hooks: tuple[EventHook, ...] = (
+            tuple(event_hooks) if event_hooks is not None else ()
+        )
 
     # ------------------------------------------------------------------ commands
 
@@ -334,11 +340,22 @@ class SourceService:
         pair runs on whatever transaction the implementation opens
         internally. Order is preserved; atomicity is not guaranteed
         across events.
+
+        Post-commit hooks (Phase 5 step C1) run after the UoW closes,
+        once per event in batch order. Hook failures cannot unwind
+        the originating events by design.
         """
         with self._open_uow() as connection:
             for event in events:
                 self._store.append(event, connection)
                 self._projector.apply(event, connection)
+        if self._event_hooks:
+            for event in events:
+                for hook in self._event_hooks:
+                    try:
+                        hook.maybe_embed(event)
+                    except Exception:  # pragma: no cover - hooks must not raise
+                        continue
 
     @contextmanager
     def _open_uow(self) -> Generator[Connection | None]:
