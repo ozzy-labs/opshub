@@ -24,6 +24,7 @@ one-way dependency rule in ADR-0004).
 
 from opshub.projections.agent_runs import AgentRunsProjection, agent_runs_table
 from opshub.projections.base import Projection
+from opshub.projections.briefings import BriefingsProjection, briefings_table
 from opshub.projections.connector_cursors import (
     ConnectorCursorsProjection,
     connector_cursors_table,
@@ -44,6 +45,7 @@ from opshub.projections.work_sessions import WorkSessionsProjection, work_sessio
 
 __all__ = [
     "AgentRunsProjection",
+    "BriefingsProjection",
     "ConnectorCursorsProjection",
     "DecisionsProjection",
     "HandoffsProjection",
@@ -56,6 +58,7 @@ __all__ = [
     "WorkSessionsProjection",
     "agent_runs_table",
     "all_projections",
+    "briefings_table",
     "connector_cursors_table",
     "decisions_table",
     "handoffs_table",

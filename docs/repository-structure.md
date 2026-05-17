@@ -168,6 +168,7 @@ src/opshub/
 │   ├── sources.py                  # external source 現在状態 [P1+2+3]
 │   ├── connector_cursors.py        # connector 差分同期 cursor [P1+2+3]
 │   ├── ingested_files.py           # workspace file ingest の content_hash 追跡 [P1+2+3]
+│   ├── briefings.py                # LLM briefing 結果 (markdown + source_refs + cost trace) [P5]
 │   └── links.py                    # entity 間 graph 関係 [P5]
 ├── connectors/                     # [P1+2+3]
 │   ├── __init__.py                 # discover_connectors / register_connector [P1+2+3]
