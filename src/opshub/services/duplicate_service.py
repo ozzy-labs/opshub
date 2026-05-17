@@ -28,15 +28,15 @@ flag therefore accepts a cosine *similarity* in ``[0, 1]`` and the
 conversion is hidden from operators.
 
 The CLI surface is ``opshub embeddings find-duplicates`` (this PR
-adds the subcommand). Implementation caveat: the
-:class:`~opshub.vectors.store.VectorStore` Protocol (frozen in Phase
-1) does not expose a "fetch vector at rowid" accessor, so this MVP
-re-embeds the source entity's text to find neighbours. For local
-backends that is cheap; for API embedders (OpenAI / Voyage) it
-doubles the embed cost on a duplicate scan. Phase 4.x can extend
-the Protocol with ``get_vector(entity_type, entity_id)`` to avoid
-the second round-trip — captured here so the cost trade-off is not
-forgotten.
+adds the subcommand). Neighbour lookup uses
+:meth:`~opshub.vectors.store.VectorStore.recall_by_rowid` so the
+service never re-embeds source text — the entity's already-stored
+vector is fed straight back through vec0's ``MATCH``. The
+:class:`~opshub.vectors.embedder.Embedder` is still injected (and
+required) because the service needs ``model_id`` /
+``model_version`` to scope the EXISTS JOIN to the active backend;
+its ``embed_one`` / ``embed`` methods are not invoked on a duplicate
+scan.
 """
 
 from __future__ import annotations
@@ -133,14 +133,15 @@ class DuplicateService:
     Parameters
     ----------
     embedder:
-        Concrete :class:`~opshub.vectors.embedder.Embedder` used both
-        to identify the "current" ``(model_id, model_version)`` (so
-        the projection JOIN only yields entities embedded by the
-        active backend) and to re-embed each source entity for
-        nearest-neighbour search.
+        Concrete :class:`~opshub.vectors.embedder.Embedder`. Used
+        only to identify the "current" ``(model_id, model_version)``
+        so the projection JOIN yields exactly the entities embedded
+        by the active backend. ``embed_one`` / ``embed`` are not
+        invoked — neighbour lookup goes through
+        :meth:`VectorStore.recall_by_rowid` instead.
     vector_store:
         Concrete :class:`~opshub.vectors.store.VectorStore` providing
-        the ``recall`` Protocol method.
+        the ``recall_by_rowid`` Protocol method.
     engine:
         SQLAlchemy :class:`~sqlalchemy.engine.Engine` used to read the
         per-entity projection tables and the ``embeddings`` metadata
@@ -170,11 +171,11 @@ class DuplicateService:
         """Return up to ``limit`` near-duplicate pairs for ``entity_type``.
 
         For each entity in scope that has a current
-        ``(model_id, model_version)`` embedding, re-embed its text and
-        ask the :class:`VectorStore` for the top
-        ``per_entity_neighbors`` hits. Pairs whose
-        :func:`_score_to_cosine_similarity` exceeds ``threshold`` are
-        emitted, with self-matches and reverse-pairs de-duplicated.
+        ``(model_id, model_version)`` embedding, ask the
+        :class:`VectorStore` for the top ``per_entity_neighbors`` hits
+        using :meth:`VectorStore.recall_by_rowid` (no re-embed). Pairs
+        whose :func:`_score_to_cosine_similarity` exceeds ``threshold``
+        are emitted, with self-matches and reverse-pairs de-duplicated.
         Results are sorted by similarity descending so the operator
         sees the strongest matches first.
 
@@ -226,7 +227,7 @@ class DuplicateService:
                 continue
             neighbors = self._fetch_neighbors(
                 entity_type=entity_type,
-                query_text=source_text,
+                source_id=source_id,
                 k=per_entity_neighbors,
             )
             for neighbor in neighbors:
@@ -310,24 +311,19 @@ class DuplicateService:
         self,
         *,
         entity_type: str,
-        query_text: str,
+        source_id: str,
         k: int,
     ) -> list[_NeighborHit]:
-        """Re-embed ``query_text`` and recall ``k`` nearest entities of ``entity_type``.
+        """Recall the ``k`` nearest entities of ``entity_type`` to ``source_id``.
 
-        Implementation note: the cleanest design would pull the
-        already-stored vector for the source entity from the vec0
-        table and skip the re-embed entirely. The Phase 1
-        :class:`~opshub.vectors.store.VectorStore` Protocol does not
-        expose a "vector at rowid" accessor, so the MVP re-embeds.
-        For local embedders this is cheap; for API embedders it
-        doubles the cost of a duplicate scan. Phase 4.x can extend
-        the Protocol with ``get_vector(entity_type, entity_id)`` —
-        see module docstring for the rationale.
+        Uses :meth:`VectorStore.recall_by_rowid` so the source entity's
+        already-stored embedding is reused — no re-embed round-trip.
+        Self-match is not filtered by the store; the caller drops it
+        when assembling :class:`DuplicatePair` results.
         """
-        result = self._embedder.embed_one(query_text)
-        hits = self._vector_store.recall(
-            result.vector,
+        hits = self._vector_store.recall_by_rowid(
+            entity_type,
+            source_id,
             k=k,
             entity_types=[entity_type],
         )

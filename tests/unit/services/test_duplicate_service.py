@@ -8,10 +8,11 @@ on a model file or sqlite-vec MATCH semantics.
 
 The stubs are deliberately small:
 
-* :class:`_StubEmbedder` returns deterministic vectors derived from
-  the input text length — irrelevant for these tests since the
-  :class:`_ScriptedVectorStore` ignores the query vector and replays
-  canned recall hits keyed on the call ordering.
+* :class:`_StubEmbedder` exposes the ``model_id`` / ``model_version``
+  the service joins on. ``embed_one`` is not invoked by the
+  duplicate scan after the Phase 4 follow-up (lookup goes through
+  :meth:`VectorStore.recall_by_rowid`), so the stub records calls
+  and the tests assert the recorded list stays empty.
 * :class:`_ScriptedVectorStore` lets each test enumerate the
   ``RecallHit``s it wants per ``(entity_id, k)`` lookup, modelling a
   cosine-similarity-by-fiat fixture.
@@ -130,12 +131,11 @@ class _ScriptedVectorStore:
     """VectorStore that replays canned recall hits keyed on call ordering.
 
     Tests pass a list-of-lists where each inner list is the result of
-    one :meth:`recall` call (in the order the service invokes it).
-    The script may also be a dict keyed on the query text used by
-    ``_fetch_neighbors`` — but call-ordering is simpler and matches
-    the iteration order of :meth:`DuplicateService._iter_embedded_entities`,
-    which itself follows the ``embeddings``-EXISTS filter against the
-    projection table (insertion order on SQLite).
+    one :meth:`recall_by_rowid` call (in the order the service invokes
+    it). Call-ordering matches the iteration order of
+    :meth:`DuplicateService._iter_embedded_entities`, which itself
+    follows the ``embeddings``-EXISTS filter against the projection
+    table (insertion order on SQLite).
     """
 
     def __init__(
@@ -143,7 +143,7 @@ class _ScriptedVectorStore:
         scripted_hits: list[list[RecallHit]] | None = None,
     ) -> None:
         self._scripted: list[list[RecallHit]] = list(scripted_hits or [])
-        self.recall_calls: list[tuple[tuple[float, ...], int, list[str] | None]] = []
+        self.recall_by_rowid_calls: list[tuple[str, str, int, list[str] | None]] = []
 
     def upsert(self, embeddings: list[StoredEmbedding]) -> None:  # pragma: no cover
         del embeddings
@@ -154,8 +154,22 @@ class _ScriptedVectorStore:
         *,
         k: int,
         entity_types: list[str] | None = None,
+    ) -> list[RecallHit]:  # pragma: no cover
+        del query, k, entity_types
+        # The service uses :meth:`recall_by_rowid` exclusively; this
+        # method is here only so the stub still satisfies the
+        # ``runtime_checkable`` :class:`VectorStore` Protocol.
+        return []
+
+    def recall_by_rowid(
+        self,
+        entity_type: str,
+        entity_id: str,
+        *,
+        k: int,
+        entity_types: list[str] | None = None,
     ) -> list[RecallHit]:
-        self.recall_calls.append((query, k, entity_types))
+        self.recall_by_rowid_calls.append((entity_type, entity_id, k, entity_types))
         if not self._scripted:
             return []
         return self._scripted.pop(0)
@@ -337,6 +351,15 @@ def test_find_duplicates_returns_pairs_above_threshold(
     assert {pair.entity_id_a, pair.entity_id_b} == {a_id, b_id}
     assert pair.entity_type == "source"
     assert math.isclose(pair.similarity, 0.95, abs_tol=1e-6)
+    # Phase 4 follow-up contract: lookup goes through recall_by_rowid;
+    # the embedder is never asked to re-embed source text on a scan.
+    assert embedder.calls == []
+    assert [call[:2] for call in store.recall_by_rowid_calls] == [
+        ("source", a_id),
+        ("source", b_id),
+        ("source", c_id),
+        ("source", d_id),
+    ]
 
 
 def test_find_duplicates_deduplicates_reverse_pairs(
@@ -568,10 +591,12 @@ def test_find_duplicates_skips_entities_without_text(
     pairs = service.find_duplicates(threshold=0.90)
 
     assert pairs == []
-    # Embedder was never asked to embed the empty-summary source — the
-    # EXISTS JOIN excluded it before _fetch_neighbors could run.
+    # Embedder is never invoked at all on a duplicate scan (lookup
+    # uses :meth:`VectorStore.recall_by_rowid`); double-checking the
+    # empty-summary source was also excluded by the EXISTS JOIN so no
+    # recall happened either.
     assert embedder.calls == []
-    assert store.recall_calls == []
+    assert store.recall_by_rowid_calls == []
 
 
 # ---- _score_to_cosine_similarity ------------------------------------------

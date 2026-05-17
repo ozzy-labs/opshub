@@ -86,7 +86,7 @@ def test_embedder_embed_one_signature() -> None:
 
 
 def test_vector_store_member_names_are_frozen() -> None:
-    expected = {"upsert", "recall", "count", "delete"}
+    expected = {"upsert", "recall", "recall_by_rowid", "count", "delete"}
     actual = {name for name in vars(VectorStore) if not name.startswith("_")}
     assert actual == expected, (
         f"VectorStore surface drifted. expected={expected!r} actual={actual!r}"
@@ -112,6 +112,23 @@ def test_vector_store_recall_signature() -> None:
     assert params["entity_types"].default is None
     hints = get_type_hints(VectorStore.recall)
     assert hints["query"] == tuple[float, ...]
+    assert hints["k"] is int
+    assert hints["entity_types"] == list[str] | None
+    assert hints["return"] == list[RecallHit]
+
+
+def test_vector_store_recall_by_rowid_signature() -> None:
+    sig = inspect.signature(VectorStore.recall_by_rowid)
+    params = sig.parameters
+    assert list(params) == ["self", "entity_type", "entity_id", "k", "entity_types"]
+    # k and entity_types kw-only to mirror :meth:`VectorStore.recall` and lock
+    # callers out of positional ordering tricks.
+    assert params["k"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["entity_types"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["entity_types"].default is None
+    hints = get_type_hints(VectorStore.recall_by_rowid)
+    assert hints["entity_type"] is str
+    assert hints["entity_id"] is str
     assert hints["k"] is int
     assert hints["entity_types"] == list[str] | None
     assert hints["return"] == list[RecallHit]

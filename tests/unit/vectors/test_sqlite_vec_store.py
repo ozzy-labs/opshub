@@ -410,6 +410,158 @@ def test_recall_returns_vector_blob_intact(store: SqliteVecStore) -> None:
     assert hits[0].vector == _make_vector(1024, fill=fill)
 
 
+# ---- recall_by_rowid ------------------------------------------------------
+
+
+def test_recall_by_rowid_returns_neighbours_for_existing_entity(
+    store: SqliteVecStore,
+) -> None:
+    """``recall_by_rowid`` finds the same neighbours as ``recall`` would on the stored vector.
+
+    Seeds five vectors at distinct constant fills (predictable
+    monotone distance ordering), then asks for the neighbours of the
+    middle entry. The expected ordering — self first, then the
+    adjacent fills — proves the lookup is using the entity's own
+    stored vector as the query.
+    """
+    fills = [0.1, 0.3, 0.5, 0.7, 0.9]
+    embeddings = [
+        StoredEmbedding(
+            entity_type="task",
+            entity_id=f"01J{i}",
+            model_id="bge-m3",
+            model_version="v1",
+            vector=_make_vector(1024, fill=fill),
+            created_at=_ts(),
+        )
+        for i, fill in enumerate(fills)
+    ]
+    store.upsert(embeddings)
+
+    hits = store.recall_by_rowid("task", "01J2", k=3)
+
+    assert len(hits) == 3
+    # The first hit must be the entity itself — self-match is the
+    # caller's responsibility to filter (see Protocol docstring).
+    assert hits[0].entity_id == "01J2"
+    scores = [h.score for h in hits]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_recall_by_rowid_missing_entity_returns_empty(
+    store: SqliteVecStore,
+) -> None:
+    """Unknown entity → empty list (no exception).
+
+    Mirrors :meth:`SqliteVecStore.delete`'s "missing is not an error"
+    contract — callers can use this against an entity that may or
+    may not have been embedded yet.
+    """
+    assert store.recall_by_rowid("task", "missing", k=5) == []
+
+
+def test_recall_by_rowid_k_zero_returns_empty(store: SqliteVecStore) -> None:
+    """``k=0`` short-circuits without hitting vec0 (matches :meth:`recall`)."""
+    store.upsert(
+        [
+            StoredEmbedding(
+                entity_type="task",
+                entity_id="01J0",
+                model_id="bge-m3",
+                model_version="v1",
+                vector=_make_vector(1024, fill=0.1),
+                created_at=_ts(),
+            )
+        ]
+    )
+    assert store.recall_by_rowid("task", "01J0", k=0) == []
+
+
+def test_recall_by_rowid_filters_by_entity_type(store: SqliteVecStore) -> None:
+    """``entity_types=["task"]`` drops source hits even when they would otherwise match."""
+    rows: list[StoredEmbedding] = []
+    for i in range(3):
+        rows.append(
+            StoredEmbedding(
+                entity_type="task",
+                entity_id=f"task-{i}",
+                model_id="bge-m3",
+                model_version="v1",
+                vector=_make_vector(1024, fill=0.1 + i * 0.01),
+                created_at=_ts(),
+            )
+        )
+    for i in range(3):
+        rows.append(
+            StoredEmbedding(
+                entity_type="source",
+                entity_id=f"src-{i}",
+                model_id="bge-m3",
+                model_version="v1",
+                vector=_make_vector(1024, fill=0.2 + i * 0.01),
+                created_at=_ts(),
+            )
+        )
+    store.upsert(rows)
+
+    hits = store.recall_by_rowid("task", "task-0", k=6, entity_types=["task"])
+
+    assert len(hits) >= 1
+    assert all(h.entity_type == "task" for h in hits), (
+        f"entity_types filter leaked non-task hits: {[h.entity_type for h in hits]!r}"
+    )
+
+
+def test_recall_by_rowid_uses_latest_model_version_when_multiple_exist(
+    store: SqliteVecStore,
+) -> None:
+    """When an entity has multiple ``(model_id, model_version)`` rows, the latest wins.
+
+    The Protocol docstring pins "most recently inserted row"; this
+    test seeds v1 (fill=0.0) and v2 (fill=0.5), then asserts the
+    nearest neighbour to entity ``01J0`` is the row at fill=0.5
+    (i.e. v2's stored vector is what got matched against, not v1's).
+    Fill values are exactly representable in float32 so the returned
+    vector compares bit-exact.
+    """
+    base = StoredEmbedding(
+        entity_type="task",
+        entity_id="01J0",
+        model_id="bge-m3",
+        model_version="v1",
+        vector=_make_vector(1024, fill=0.0),
+        created_at=_ts(),
+    )
+    newer = StoredEmbedding(
+        entity_type="task",
+        entity_id="01J0",
+        model_id="bge-m3",
+        model_version="v2",
+        vector=_make_vector(1024, fill=0.5),
+        created_at=_ts(),
+    )
+    # Unrelated entity close to v2's fill so it beats the older v1 row
+    # in nearest-neighbour ordering only if v2 is the chosen query.
+    other = StoredEmbedding(
+        entity_type="task",
+        entity_id="01J1",
+        model_id="bge-m3",
+        model_version="v2",
+        # 0.5 + 2^-10 = 0.5009765625 — exact in float32.
+        vector=_make_vector(1024, fill=0.5 + 2**-10),
+        created_at=_ts(),
+    )
+    store.upsert([base, newer, other])
+
+    hits = store.recall_by_rowid("task", "01J0", k=2)
+
+    assert len(hits) == 2
+    # The top hit is the latest stored row (fill=0.5, itself).
+    assert hits[0].vector == _make_vector(1024, fill=0.5)
+    # ``01J1`` at fill≈0.5 must beat the older ``v1`` row at fill=0.0.
+    assert hits[1].entity_id == "01J1"
+
+
 # ---- count ----------------------------------------------------------------
 
 

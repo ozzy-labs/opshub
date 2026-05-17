@@ -163,6 +163,17 @@ class _StubVectorStore:
         self.recall_calls.append((k, entity_types))
         return list(self._hits)
 
+    def recall_by_rowid(
+        self,
+        entity_type: str,
+        entity_id: str,
+        *,
+        k: int,
+        entity_types: list[str] | None = None,
+    ) -> list[VectorRecallHit]:  # pragma: no cover - unused by recall service
+        del entity_type, entity_id, k, entity_types
+        return []
+
     def count(self, *, entity_type: str | None = None) -> int:  # pragma: no cover
         del entity_type
         return 0
