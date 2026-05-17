@@ -134,3 +134,15 @@ Phase 5 (briefing layer + Pluggable LLM + event-driven auto-embed 補助) は 20
 | Auto fallback (Anthropic → OpenAI) を MVP に含める | 自動 fallback なし、`OpsHubError` で caller に伝播 | 再現性 / cache invariant が壊れる、cost surprise、Protocol 層が複雑化 | ADR-0015 |
 | API key を `[llm.<backend>] api_key_env` で config 駆動 | ADR-0014 (`core/secrets` + keyring + env override) 再利用、key 規約 `llm:<name>:api_key` | embedding (`embedder:<name>:api_key`) と規約統一、operator の mental model を 1 つに | ADR-0015 |
 | `max_tokens` を Protocol で optional + default 持ち | `max_tokens` 必須引数 | caller が cost を把握できず observability 低下、backend ごとの reasonable default 差で Protocol 側の選定が lock-in | ADR-0015 |
+
+## 13. Action loop / structured output (ADR-0016)
+
+| 却下案 | 採用案 | 理由 | 参照 |
+|---|---|---|---|
+| Grammar / JSON-mode constrained decoding (provider 固有 `response_format` 等) | provider-native tool calling (Anthropic `tool_use` / OpenAI `tools=` / Ollama OpenAI 互換 `tools=`) | JSON-mode は availability が provider 固有で portability が劣る、tool calling は 3 backend 同一概念モデル + multi-step proposal への拡張余地 | ADR-0016 |
+| Free-form text + regex 抽出 | Pydantic v2 model を SSOT、各 client が JSON schema に serialize | regex は brittle、schema validation の二重化、prompt engineering で format 強制は遵守率不安定 | ADR-0016 |
+| Single-shot markdown を人間が手で apply | `(proposal_id, candidate_index)` natural key + CLI apply 経路 | markdown には index が無く idempotent apply 不可、Action loop 自動化が薄まる、`ProposalApplied` event の意義が消える | ADR-0016 |
+| Auto-apply mode (`opshub propose --auto-apply` / `[llm] auto_apply = true`) | human-in-the-loop 必須、Phase 6.x 以降も禁止 | ADR-0004 (Agent Runtime Boundary) と矛盾、LLM 生成 text が prompt injection / hallucination 経由で durable state に到達、OpsHub の core value (信用できる operational memory) と直接矛盾 | ADR-0016 |
+| Apply 経路で entity event を直接 append (TaskService 不経由) | 既存 TaskService / DecisionService を経由 | Phase 1-2 で確立した validation / sanitisation が bypass、validation の 2 系統化、ADR-0005 (External Content Minimization) summary 制約も bypass | ADR-0016 |
+| In-place migration (Phase 6.x で v1 candidate を v2 に rewrite) | `schema_version: Literal["v1"]` literal + 両 version 読み分け | ADR-0002 event immutability 違反、event log の audit trail / replay 整合性が崩れる、Pydantic discriminated union で type-safe に表現可 | ADR-0016 |
+| `llama.cpp` direct (python binding) を MVP に含める | Ollama daemon 経由のみ MVP、`llama.cpp` direct は Phase 6.x | OS-specific binary install + model file 4-30GB が ADR-0001 配布制約 (`uv tool install opshub`) を破る、Ollama で 90% covered | ADR-0016 |
