@@ -1,6 +1,6 @@
 # Principles (基本方針)
 
-> Status: Draft (in active design). Last reviewed: 2026-05-16.
+> Status: Draft (in active design). Last reviewed: 2026-05-17.
 
 OpsHub の設計判断はすべて以下の方針に従う。各方針には可能な限り対応する ADR を紐づける。方針自体が変わる場合は、新しい ADR で superseded を明示する。
 
@@ -79,9 +79,11 @@ CI でこの不変条件を検証する。
 |---|---|---|
 | 1 | Foundation: event store + tasks + CLI + markdown 生成 + tests + CI | ✅ Complete (2026-05-17) |
 | 2 | Coordination: inbox triage / decisions / locks / handoffs / work sessions / agent runs | ✅ Complete (2026-05-17) |
-| 3 | Connectors: framework + GitHub (MVP) + workspace inbox file ingest。Slack / Microsoft 365 / Box は Phase 3.x で順次 | ✅ Complete (2026-05-17) |
+| 3 | Connectors: framework + GitHub (MVP) + workspace inbox file ingest。Slack / Microsoft 365 / Box は Phase 7 (Connectors Wave 2、epic #113) で順次 | ✅ Complete (2026-05-17) |
 | 4 | Semantic Layer: vector recall / semantic search / duplicate detection (MVP = Pluggable Embedder + sqlite-vec; briefing 自動生成は Phase 5) | ✅ Complete (2026-05-17) |
 | 5 | Briefing layer: ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed (補助) | ✅ Complete (2026-05-17) |
+| 6 | Action loop layer: ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須) | ✅ Complete (2026-05-17) |
+| 7 | Connectors Wave 2: Slack / Microsoft 365 / Box (epic #113) | Planned |
 
 各 phase で価値検証してから次へ進む。Phase をスキップしない。
 
@@ -93,16 +95,20 @@ Python 3.13+ / uv / Typer / SQLAlchemy Core / Pydantic v2 を採用。ただし 
 
 ## Open Questions
 
-検討中の項目 (本ドキュメントの今後の更新対象):
+> Phase 6 完了時点で残る Open Question は §5 (Multi-machine sync) のみ。
+> ADR-0015 §決定 (a) (Local LLM deferred) は Phase 6 A4 (Ollama) で closeout され、ADR-0016 §決定 (h) として記録された。
 
-(現時点で確定待ちの項目はない。Phase 5 で LLM 利用方針が ADR-0015 として closeout されたため §確定済み に移動した。)
+検討中の項目 (本ドキュメントの今後の更新対象、番号は旧 Open Q list を継承):
+
+- **§5 Multi-machine sync** — operational memory を複数 host で共有する経路 (event log replication + projection rebuild on follower、または cloud-hosted sync server)。ADR-0002 (Event-Sourced Architecture) の append-only / replayable 不変条件と整合する設計は可能だが、conflict resolution (同 task に対する複数 host からの並行 update) と private data residency の評価が必要。Phase 7+ で別 ADR / 別 plan を検討。
 
 ## 確定済み (旧 Open Question)
 
-> 旧 Open Q 番号 trace: 旧 Open Q #1 = LLM 利用方針 (ADR-0015 で本セクションに移動)、旧 Open Q #2 = Lock 粒度 (本セクションで解決)、旧 Open Q #3 = SaaS token 保管方式 (本セクションで解決)。
+> 旧 Open Q 番号 trace: 旧 Open Q #1 = LLM 利用方針 (ADR-0015 で本セクションに移動)、旧 Open Q #2 = Lock 粒度 (本セクションで解決)、旧 Open Q #3 = SaaS token 保管方式 (本セクションで解決)、旧 Open Q #4 = Local LLM backend (ADR-0016 §決定 (h) Ollama 採用で closeout、Phase 6 A4 で実装)。
 
 - **LLM 利用方針** (旧 Open Q #1) → ADR-0015 で Pluggable LLM Protocol + Anthropic / OpenAI 具象 + prompt injection mitigation + API key 保管 (ADR-0014 再利用) を採択 (Phase 5 step A1 で確定、D1 で Validation セクションを追加)
 - **Embedding モデル選定** → ADR-0012 で Pluggable Embedder 設計を採択。具体モデル選定は Phase 4 着手時 (ADR-0012 の Open Questions 1-2)
 - **Task runner** → `just` 採用 (ADR-0001)
 - **Lock の粒度設計** (旧 Open Q #2) → ADR-0013 で `task:<id>` / `project:<id>` / `global:` の 3 階層 + fail-fast conflict semantics を採択 (Phase 2 step 5 で実装)
 - **SaaS token 保管方式** (旧 Open Q #3) → ADR-0014 で `keyring` library 経由の OS keychain を採択 (Phase 3 step A6 で実装)
+- **Local LLM backend** (旧 Open Q #4) → ADR-0016 §決定 (h) で Ollama daemon (OpenAI 互換 endpoint) を採択 (Phase 6 step A4 で実装)。`llama.cpp` direct binding は Phase 6.x 持ち越し
