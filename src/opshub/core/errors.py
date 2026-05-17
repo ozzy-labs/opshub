@@ -38,3 +38,21 @@ class OwnershipError(OpsHubError):
     acquire-time) because the failure mode differs: ownership errors are
     user / agent mistakes that must surface without releasing the lock.
     """
+
+
+class ConnectorFailedError(OpsHubError):
+    """A connector aborted a sync because the external SaaS surface failed.
+
+    Connectors raise this when they have exhausted their fallback paths —
+    e.g. the auth token cannot be refreshed (repeated 401), the API keeps
+    rate-limiting after the configured retry budget (repeated 429), or a
+    response shape drifts so far that the connector cannot parse it. The
+    CLI driver in :mod:`opshub.services.connector_sync_service` translates
+    this exception into a ``ConnectorSyncFailed`` event (ADR-0010) so the
+    failure is durably recorded alongside the run that produced it.
+
+    The message is operator-actionable but must NOT echo bearer tokens or
+    raw response bodies that may contain user data — connectors are
+    responsible for sanitising before raising (ADR-0005 External Content
+    Min).
+    """
