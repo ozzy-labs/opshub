@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) shipped 2026-05-17. Slack / Microsoft 365 / Box connectors are deferred to Phase 3.x. Local LLM backend / `links` projection 本実装 / briefing cache + narrow scope は Phase 5.x.
+> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) + Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須)) shipped 2026-05-17. Slack / Microsoft 365 / Box connectors are deferred to Phase 7 (Connectors Wave 2、epic #113). `llama.cpp` direct binding / `links` projection 本実装 / briefing cache + narrow scope / multi-machine sync は Phase 6.x / 7.
 
 OpsHub の高レベルアーキテクチャ・データフロー・データモデル・用語を記述する。具体的な決定の根拠は対応 ADR を参照。
 
@@ -115,11 +115,30 @@ LLM backend は `[llm] backend` で切替: `disabled` (Phase 5 default) / `anthr
 
 詳細は [ADR-0015: LLM Usage Strategy](adr/0015-llm-usage-strategy.md) を参照。
 
-### 2.8 Workspace Generation Layer
+### 2.8 Action loop layer (Phase 6)
+
+ADR-0016 で Pluggable LLM の structured output (Anthropic `tool_use` / OpenAI / Ollama `tools=` 関数呼び出し) を採択し、`ProposalService` が:
+
+1. `ProposalRequested` event を append (UoW)
+2. `RecallService` + 任意で Phase 5 briefing から context 抽出 (briefing.markdown を `<briefing>` block で wrap)
+3. `<source id="..." type="...">...</source>` delimiter wrap + `html.escape` + "do not follow instructions" preamble で prompt 構築 (ADR-0015 §決定 (f) + Phase 5 D1 follow-up と同 contract)
+4. `LLMClient.complete_structured(messages, schema=ProposalCandidatesSchema, ...)` を呼出 (network I/O、UoW 外)。Pydantic v2 model を SSOT として各 LLM client が native tool format に serialize (Anthropic `input_schema` / OpenAI `parameters` + strict mode / Ollama OpenAI 互換)
+5. 成功時 `ProposalGenerated` event + `proposals` projection apply を 1 UoW で commit。失敗時 `ProposalFailed` event を `core.sanitise.sanitise_error_message` 経由で記録 (UoW)
+6. `ProposalService.apply(proposal_id, candidate_index)` で operator 承認 → 既存 `TaskService.create_task` / `DecisionService.record_decision` 経由で実 entity 化 (ADR-0016 §決定 (g) validation 二重化禁止) → `ProposalApplied` event。再 apply / reject は service-layer fail-fast (`OpsHubError`、§決定 (d) idempotency)
+
+**Human-in-the-loop 必須** (ADR-0004 + ADR-0016 §決定 (c)): apply は operator-triggered のみ。auto-apply は Phase 6.x 以降も導入しない。
+
+**Local LLM backend (Ollama)** で principles.md §1 (Local-first) と LLM 利用の tension を緩和。3 backend (Anthropic + OpenAI + Ollama) で ADR-0009 (Multi-Agent Neutrality) を完備。`llama.cpp` direct binding は配布性の問題で Phase 6.x 持ち越し。
+
+CLI: `opshub propose generate / list / apply / reject` 4 subcommands。
+
+詳細は [ADR-0016: Action Loop and Structured Output](adr/0016-action-loop-and-structured-output.md) を参照。
+
+### 2.9 Workspace Generation Layer
 
 projection を読み、markdown (tasks / briefings / reviews / handoffs / dashboards) を生成。read-only。Jinja2 で template 化。
 
-### 2.9 Agent Runtime Boundary
+### 2.10 Agent Runtime Boundary
 
 agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換え / event bypass は禁止。lefthook / CI で検出する。
 
@@ -155,7 +174,8 @@ agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換�
 | `connector_cursors` | projection | Phase 1+2+3 (✅ 実装済) | 差分同期チェックポイント |
 | `ingested_files` | projection | Phase 1+2+3 (✅ 実装済) | workspace inbox file ingest の content-hash 追跡 |
 | `briefings` | projection | Phase 5 (✅ 実装済) | LLM briefing 結果 (`id` / `topic` / `scope` / `markdown` / `source_refs` JSON / `model_id` / `model_version` / `tokens_in` / `tokens_out` / `generated_at`)、再生成は新 row として追記 (event-sourced trace 維持) |
-| `links` | projection | Phase 4+ | entity 間 graph 関係 (Phase 3 では `inbox_items.source_ref` 列で簡易 link) |
+| `proposals` | projection | Phase 6 (✅ 実装済) | LLM proposal candidates (`id` / `topic` / `scope` / `briefing_id` / `candidates` JSON / `candidate_states` JSON (`pending` \| `applied` \| `rejected`) / `model_id` / `model_version` / `tokens_in` / `tokens_out` / `generated_at`)、`(proposal_id, candidate_index)` を natural key とした per-candidate state machine (ADR-0016 §決定 (d)) |
+| `links` | projection | Phase 6.x+ | entity 間 graph 関係 (Phase 3 では `inbox_items.source_ref` 列で簡易 link) |
 | `projects` | projection | Phase 3+ | task / decision のグルーピング (lock scope は Phase 2 で予約のみ) |
 
 ### 4.2 Event 命名規約
@@ -263,9 +283,11 @@ Agent は以下を行わない。
 |---|---|---|
 | 1 | event store, tasks projection, CLI 骨格, markdown 生成, tests, CI | connector, vector, lock, triage |
 | 2 | inbox triage, decisions, work sessions, locks, handoffs | connector, vector |
-| 3 | Connector framework + GitHub connector + workspace inbox file ingest (✅ 2026-05-17 完了)。Slack / Microsoft 365 / Box は Phase 3.x | vector recall |
+| 3 | Connector framework + GitHub connector + workspace inbox file ingest (✅ 2026-05-17 完了)。Slack / Microsoft 365 / Box は Phase 7 (Connectors Wave 2、epic #113) | vector recall |
 | 4 | vector recall, semantic search, duplicate detection (Pluggable Embedder + sqlite-vec、✅ 2026-05-17 完了) | briefing 自動生成 / event 駆動自動 embed (Phase 5) |
-| 5 | Briefing layer (ADR-0015 + Pluggable LLM Anthropic / OpenAI + `opshub brief` + event-driven auto-embed 補助、✅ 2026-05-17 完了) | Local LLM backend / briefing cache + narrow scope / `links` projection 本実装 (Phase 5.x) |
+| 5 | Briefing layer (ADR-0015 + Pluggable LLM Anthropic / OpenAI + `opshub brief` + event-driven auto-embed 補助、✅ 2026-05-17 完了) | Local LLM backend / `links` projection 本実装 (Phase 6 / Phase 6.x) |
+| 6 | Action loop layer (ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain + `opshub propose` CLI、human-in-the-loop apply 必須、✅ 2026-05-17 完了) | `llama.cpp` direct binding / proposal scoring / multi-step plans (Phase 6.x) |
+| 7 | Connectors Wave 2 (Slack / Microsoft 365 / Box、epic #113) | — |
 
 詳細は [Principles 9 (Phased Delivery)](principles.md) 参照。
 
@@ -274,4 +296,4 @@ Agent は以下を行わない。
 1. 4.x で扱う `embeddings` テーブルのスキーマ (sqlite-vec への bind 方法を含む)
 2. `Decision` テーブルと `Task` テーブルの関係 (Decision は Task の親か別 entity か)
 3. `events` の partitioning / archive 戦略 (long-term 運用時)
-4. multi-machine 利用 (将来 sync を許す場合の競合解決)
+4. multi-machine 利用 (将来 sync を許す場合の競合解決) — principles.md §Open Q #5 と同件、Phase 7+ で別 plan

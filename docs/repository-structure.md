@@ -79,7 +79,7 @@ opshub/
 
 ## 2. Python パッケージ構成 (src/opshub/)
 
-各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで merge 済 (2026-05-17)。`[P3.x]` は Phase 3 完了後の継続作業 (Slack / Microsoft 365 / Box connector 等)、`[P5.x]` は Phase 5 完了後の継続作業 (Local LLM backend / briefing cache + narrow scope / `links` projection 本実装 等)。
+各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P6]` / `[P6.x]` / `[P7]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで merge 済 (2026-05-17)。`[P3.x]` は Phase 3 完了後の継続作業 (Slack / Microsoft 365 / Box connector は Phase 7 / epic #113)、`[P6.x]` は Phase 6 完了後の継続作業 (`llama.cpp` direct binding / proposal scoring / `links` projection 本実装 / multi-machine sync 等)、`[P7]` は Phase 7 (Connectors Wave 2)。
 
 ```text
 src/opshub/
@@ -95,10 +95,11 @@ src/opshub/
 │   ├── embeddings.py               # rebuild / drain / status / find-duplicates [P1+2+3+4+5]
 │   ├── recall.py                   # semantic search [P1+2+3+4]
 │   ├── brief.py                    # LLM-backed briefing CLI [P5]
-│   ├── _wiring.py                  # 内部 helper: service/projection の組み立て (briefing / auto-embed hook 含む) [P1+2+5]
+│   ├── propose.py                  # LLM-backed proposal CLI (generate / list / apply / reject) [P6]
+│   ├── _wiring.py                  # 内部 helper: service/projection の組み立て (briefing / proposal / auto-embed hook 含む) [P1+2+5+6]
 │   ├── _task_list.py               # 内部 helper: task list 共通フォーマッタ [P1]
 │   ├── _actor.py                   # 内部 helper: actor / work_session_id 解決 [P1+2]
-│   ├── _render.py                  # 内部 helper: 汎用 table/json/md renderer + briefing renderer [P1+2+5]
+│   ├── _render.py                  # 内部 helper: 汎用 table/json/md renderer + briefing / proposal renderer [P1+2+5+6]
 │   ├── _inbox_list.py              # 内部 helper: inbox list 共通フォーマッタ [P1+2]
 │   ├── _decision_list.py           # 内部 helper: decision list 共通フォーマッタ [P1+2]
 │   ├── _handoff_render.py          # 内部 helper: handoff list 共通フォーマッタ [P1+2]
@@ -113,7 +114,7 @@ src/opshub/
 │   ├── source.py                   # source add / list [future]
 │   └── connector.py                # list / sync / auth set (Phase 5 で `llm:<name>` 名前空間にも対応) [P1+2+3+5]
 ├── core/                           # 共通ユーティリティ [P1]
-│   ├── config.py                   # Pydantic Settings (Phase 5 で LLMSettings 追加) [P1+2+3+4+5]
+│   ├── config.py                   # Pydantic Settings (Phase 5 で LLMSettings 追加、Phase 6 で OllamaLLMSettings + `ollama` backend literal 追加) [P1+2+3+4+5+6]
 │   ├── ids.py                      # ULID / UUID [P1]
 │   ├── time.py                     # tz-aware datetime helpers [P1]
 │   ├── logging.py                  # structlog [P1]
@@ -139,6 +140,7 @@ src/opshub/
 │   │   ├── file_ingest.py          # FileIngested [P1+2+3]
 │   │   ├── embedding.py            # TextEmbedded / EmbeddingRebuildRequested / EmbeddingFailed [P1+2+3+4]
 │   │   ├── briefing.py             # BriefingRequested / BriefingGenerated / BriefingFailed [P5]
+│   │   ├── proposal.py             # ProposalRequested / ProposalGenerated / ProposalApplied / ProposalRejected / ProposalFailed + Candidate discriminated union [P6]
 │   │   └── agent.py                # [future]
 │   ├── ids.py                      # TaskId / SourceId など [P1]
 │   └── value_objects.py            # [P1]
@@ -162,6 +164,10 @@ src/opshub/
 │   │   ├── __init__.py             # [P5]
 │   │   ├── prompts.py              # SYSTEM_PROMPT / USER_PROMPT_TEMPLATE / render_user_prompt [P5]
 │   │   └── service.py              # BriefingService.generate(topic, ...) [P5]
+│   ├── proposals/                  # ProposalService + prompts (ADR-0016) [P6]
+│   │   ├── __init__.py             # [P6]
+│   │   ├── prompts.py              # SYSTEM_PROMPT / render_user_prompt (briefing-seed + delimiter wrap) [P6]
+│   │   └── service.py              # ProposalService.generate / apply / reject [P6]
 │   ├── auto_embed_hook.py          # post-commit projector hook for opt-in auto-embed [P5]
 │   └── event_hook.py               # EventHook Protocol (post-commit fan-out) [P5]
 ├── projections/                    # event → projection reducer
@@ -180,7 +186,7 @@ src/opshub/
 │   ├── ingested_files.py           # workspace file ingest の content_hash 追跡 [P1+2+3]
 │   ├── briefings.py                # LLM briefing 結果 (markdown + source_refs + cost trace、Phase 5 で実装済) [P5]
 │   ├── proposals.py                # LLM proposal candidates + per-candidate state (pending/applied/rejected、ADR-0016) [P6]
-│   └── links.py                    # entity 間 graph 関係 [P5.x]
+│   └── links.py                    # entity 間 graph 関係 [P6.x]
 ├── connectors/                     # [P1+2+3]
 │   ├── __init__.py                 # discover_connectors / register_connector [P1+2+3]
 │   ├── base.py                     # Connector Protocol + SyncResult [P1+2+3]
@@ -213,12 +219,14 @@ src/opshub/
 │   ├── voyage_embedder.py          # VoyageEmbedder (voyage-3) [P1+2+3+4]
 │   ├── sqlite_vec_store.py         # SqliteVecStore (sqlite-vec backed VectorStore) [P1+2+3+4]
 │   └── factory.py                  # backend resolution (build_embedder / build_vector_store) [P1+2+3+4]
-├── llm/                            # LLM 抽象 + 具象 backend (ADR-0015) [P5]
+├── llm/                            # LLM 抽象 + 具象 backend (ADR-0015 + ADR-0016) [P5+6]
 │   ├── __init__.py                 # [P5]
-│   ├── client.py                   # LLMMessage / LLMResponse / LLMClient Protocol (frozen) [P5]
-│   ├── anthropic_client.py         # AnthropicLLMClient (claude-haiku-4-5 default) [P5]
-│   ├── openai_client.py            # OpenAILLMClient (gpt-4o-mini default) [P5]
-│   └── factory.py                  # build_llm_client + NoOpLLMClient [P5]
+│   ├── client.py                   # LLMMessage / LLMResponse / LLMClient Protocol + StructuredResponse (Phase 6 で complete_structured 追加) [P5+6]
+│   ├── schema.py                   # pydantic_to_tool_schema helper (SSOT、ADR-0016 §決定 (b)) [P6]
+│   ├── anthropic_client.py         # AnthropicLLMClient (claude-haiku-4-5 default、Phase 6 で tool_use structured output 拡張) [P5+6]
+│   ├── openai_client.py            # OpenAILLMClient (gpt-4o-mini default、Phase 6 で tools= structured output 拡張) [P5+6]
+│   ├── ollama_client.py            # OllamaLLMClient (local daemon、OpenAI 互換 endpoint、ADR-0016 §決定 (h)) [P6]
+│   └── factory.py                  # build_llm_client + NoOpLLMClient (Phase 6 で `ollama` branch + NoOp.complete_structured 追加) [P5+6]
 ├── graph/                          # entity 間 link [Phase 4 以降で検討]
 │   ├── links.py
 │   └── queries.py
