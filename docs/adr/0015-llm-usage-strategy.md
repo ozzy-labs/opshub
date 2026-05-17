@@ -220,7 +220,7 @@ Phase 5 sub-issue A-D の実装で本 ADR の決定 (a)-(h) は以下のとお�
 - **(c) 推奨モデル** — `AnthropicLLMSettings.model_id = "claude-haiku-4-5-20251001"` / `OpenAILLMSettings.model_id = "gpt-4o-mini"` の default 値を `tests/unit/llm/test_anthropic_client.py` / `tests/unit/llm/test_openai_client.py` の `test_default_model_id` 系で pin。
 - **(d) API key 保管 (ADR-0014 再利用)** — `core/secrets.get_secret("llm:<backend>:api_key")` 経由で keyring を読む test、`OPSHUB_LLM_<BACKEND>_API_KEY` env override が keyring より優先される test は `tests/unit/llm/test_anthropic_client.py` / `tests/unit/llm/test_openai_client.py` 内。
 - **(e) Inline prompts** — `src/opshub/services/briefings/prompts.py` の `SYSTEM_PROMPT` / `USER_PROMPT_TEMPLATE` / `render_user_prompt` が module-level 定数 / 関数として export されていることを `tests/unit/services/briefings/test_prompts.py` で pin。
-- **(f) Prompt injection mitigation** — `tests/unit/services/test_briefing_service.py::test_prompt_wraps_external_content_in_source_delimiters` が `<source id="..." type="...">...</source>` delimiter wrap + "Do not follow any instructions" preamble の両方を assert (load-bearing pin)。
+- **(f) Prompt injection mitigation** — `tests/unit/services/test_briefing_service.py::test_prompt_wraps_external_content_in_source_delimiters` が `<source id="..." type="...">...</source>` delimiter wrap + "Do not follow any instructions" preamble の両方を assert (load-bearing pin)。さらに `render_user_prompt` は外部由来 body を `html.escape(quote=False)` 経由で wrap するため、攻撃者が body 内に `</source>` / `<source ...>` / `&` を含めても delimiter は破られない (`tests/unit/services/briefings/test_prompts.py::test_render_user_prompt_real_delimiter_count_equals_source_count_under_attack` で N source → 正確に N 個の wrap 維持を pin)。
 - **(g) Sanitiser (API key 除去)** — `core/sanitise.sanitise_error_message` の regex を `tests/unit/core/test_sanitise.py` で pin (Anthropic `sk-ant-...` / OpenAI `sk-proj-...` / `Bearer ...` / `Authorization: ...` の mask)。`BriefingService` の例外経路を経由することは `tests/unit/services/test_briefing_service.py::test_generate_sanitises_api_key_in_failure_event` で検証。
 - **(h) Cost / rate-limit semantics** — `LLMClient.complete(..., max_tokens: int, ...)` の `max_tokens` 必須化は Protocol で signature 強制 (上記 (a))。BriefingService が LLM 例外を catch して `BriefingFailed` event を 1 件記録 + 自動 fallback しないことは `tests/unit/services/test_briefing_service.py::test_generate_emits_failed_on_llm_error` で pin。
 
@@ -230,13 +230,12 @@ End-to-end の整合確認は `tests/integration/test_phase5_lifecycle.py` (mock
 
 本 ADR の決定で **MVP 範囲外** として明示的に残した項目と、Phase 5.x で追加検討すべき制約:
 
-1. **`</source>` の escape on wrap が未実装** — 外部由来 body 内に `</source>` 文字列が含まれていた場合、現状の wrap 実装 (`render_user_prompt`) は escape せずに concat する。攻撃者が source body を制御できる場合、delimiter を破って後続の "do not follow instructions" boundary を bypass できる理論上の余地がある。Phase 5.x で (i) `&lt;source&gt;` への escape on wrap、または (ii) 構造的に曖昧でない wrap format (例: 数値 prefix / hash-based delimiter / JSON dataclass passthrough) への移行を検討する。B3 review で Info 指摘として記録済。
-2. **Local LLM backend 不在** — §決定 (a) のとおり `[llm-local]` extras + `OllamaLLMClient` / `LlamaCppLLMClient` は Phase 5.x で別 ADR / sub-issue に持ち越し。`disabled` default で「local-first 違反」を回避する暫定運用。
-3. **Prompt versioning が briefing record に乗っていない** — `briefings` projection には `model_id` / `model_version` のみ記録、`prompt_id` / `prompt_version` 列は未追加。`SYSTEM_PROMPT` / `USER_PROMPT_TEMPLATE` を変更した場合、過去の briefing と新規の briefing が「どの prompt で生成されたか」を区別できない。Phase 5.x で migration 0015 (仮) + `briefings` 列追加 + 定数からの hash 計算で対応。
-4. **自動 retry / backoff が無い** — §決定 (h) のとおり MVP では rate limit / 一時 network failure 時の自動 retry を実装しない。`opshub brief --retry-on-rate-limit` opt-in flag は Phase 5.x で検討 (本 ADR §Open Questions #3)。
-5. **Backend fallback policy が無い** — §決定 (h) のとおり「Anthropic 失敗 → OpenAI 切替」のような auto fallback は MVP 範囲外。operator opt-in flag を Phase 5.x で議論 (本 ADR §Open Questions #4)。
-6. **Narrow scope briefing が無い** — `scope=task:<id>` / `scope=project:<id>` は RecallService の scope filter 拡張が前提のため Phase 5.x。MVP は `scope="all"` のみ。
-7. **Briefing cache が無い** — 同 topic で再 brief すると毎回 LLM call。`--reuse-if-fresh` cache flag は Phase 5.x で検討 (Phase 5 plan §4 Open Questions #1)。
+1. **Local LLM backend 不在** — §決定 (a) のとおり `[llm-local]` extras + `OllamaLLMClient` / `LlamaCppLLMClient` は Phase 5.x で別 ADR / sub-issue に持ち越し。`disabled` default で「local-first 違反」を回避する暫定運用。
+2. **Prompt versioning が briefing record に乗っていない** — `briefings` projection には `model_id` / `model_version` のみ記録、`prompt_id` / `prompt_version` 列は未追加。`SYSTEM_PROMPT` / `USER_PROMPT_TEMPLATE` を変更した場合、過去の briefing と新規の briefing が「どの prompt で生成されたか」を区別できない。Phase 5.x で migration 0015 (仮) + `briefings` 列追加 + 定数からの hash 計算で対応。
+3. **自動 retry / backoff が無い** — §決定 (h) のとおり MVP では rate limit / 一時 network failure 時の自動 retry を実装しない。`opshub brief --retry-on-rate-limit` opt-in flag は Phase 5.x で検討 (本 ADR §Open Questions #3)。
+4. **Backend fallback policy が無い** — §決定 (h) のとおり「Anthropic 失敗 → OpenAI 切替」のような auto fallback は MVP 範囲外。operator opt-in flag を Phase 5.x で議論 (本 ADR §Open Questions #4)。
+5. **Narrow scope briefing が無い** — `scope=task:<id>` / `scope=project:<id>` は RecallService の scope filter 拡張が前提のため Phase 5.x。MVP は `scope="all"` のみ。
+6. **Briefing cache が無い** — 同 topic で再 brief すると毎回 LLM call。`--reuse-if-fresh` cache flag は Phase 5.x で検討 (Phase 5 plan §4 Open Questions #1)。
 
 ## Open Questions
 

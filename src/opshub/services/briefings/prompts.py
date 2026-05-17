@@ -6,10 +6,15 @@ caps ``max_tokens`` per call.
 
 The user prompt MUST wrap every external content snippet in
 ``<source id="...">...</source>`` blocks and lead with the explicit
-do-not-follow-instructions preamble. See ADR-0015 §決定 (f).
+do-not-follow-instructions preamble (ADR-0015 §決定 (f)). External
+body text passes through :func:`html.escape` before wrapping so a
+``</source>`` substring inside untrusted body cannot break the
+delimiter and inject post-boundary instructions.
 """
 
 from __future__ import annotations
+
+import html
 
 __all__ = ["SYSTEM_PROMPT", "USER_PROMPT_PREAMBLE", "render_user_prompt"]
 
@@ -74,8 +79,14 @@ def render_user_prompt(topic: str, sources: list[tuple[str, str, str]]) -> str:
         body_parts.append("(No relevant sources found.)\n")
     else:
         for entity_type, entity_id, text in sources:
+            # HTML-escape so any `</source>` / `<source ...>` in
+            # attacker-controlled body text becomes literal
+            # ``&lt;/source&gt;`` / ``&lt;source ...&gt;`` and cannot
+            # terminate the wrap. ``entity_id`` (ULID) + ``entity_type``
+            # (Literal) are OpsHub-controlled and don't need escaping.
+            safe_text = html.escape(text, quote=False)
             body_parts.append(
-                f'<source id="{entity_id}" type="{entity_type}">\n{text}\n</source>\n\n'
+                f'<source id="{entity_id}" type="{entity_type}">\n{safe_text}\n</source>\n\n'
             )
     body_parts.append("Now produce the briefing.")
     return "".join(body_parts)
