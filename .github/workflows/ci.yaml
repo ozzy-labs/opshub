@@ -31,7 +31,13 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Install dependencies (locked)
-        run: uv sync --locked --extra dev
+        # ``connectors-github`` is included so type-checkers and pytest
+        # can resolve ``httpx`` (required by
+        # ``opshub.connectors.github.api`` — Phase 3 step B2). The
+        # cold-start guard (``tests/integration/test_cli_imports.py``)
+        # still asserts that connector code never reaches the
+        # ``opshub --help`` path.
+        run: uv sync --locked --extra dev --extra connectors-github
 
       - name: Ruff (lint)
         run: uv run ruff check
