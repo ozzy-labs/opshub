@@ -168,20 +168,26 @@ def test_embeddings_table_has_no_vector_column_after_upgrade(
 
 
 def test_downgrade_restores_phase1_schema(tmp_path: Path) -> None:
-    """Downgrading one step revives ``vector BLOB`` and drops the vec0 tables.
+    """Downgrading past 0013 revives ``vector BLOB`` and drops the vec0 tables.
 
-    Drives ``alembic upgrade head`` followed by ``downgrade -1`` so we
-    land on revision ``0012_create_ingested_files_table``. After the
-    downgrade:
+    Drives ``alembic upgrade head`` followed by an explicit
+    ``downgrade`` to revision ``0012_create_ingested_files_table`` so
+    we land just before Phase 4 step A1. After the downgrade:
 
     * Every ``embeddings_vec_<backend>`` table is gone.
     * ``embeddings`` has the ``vector`` column back (with the
       documented ``X''`` empty-blob default for any pre-existing rows).
+
+    Targeting a named revision (rather than ``-1``) keeps the
+    assertion stable as new migrations append on top of 0013 — the
+    earlier ``-1`` step count broke when Phase 5 migration 0014 landed
+    (downgrading one step from ``head`` then rested on 0013, not 0012,
+    so the ``vector`` column was still absent).
     """
     db_path = tmp_path / "downgrade.sqlite"
     cfg = _make_alembic_config(db_path)
     command.upgrade(cfg, "head")
-    command.downgrade(cfg, "-1")
+    command.downgrade(cfg, "0012_create_ingested_files_table")
 
     engine = create_engine_for_sqlite(db_path)
     try:

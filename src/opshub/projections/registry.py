@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from opshub.projections.agent_runs import AgentRunsProjection
 from opshub.projections.base import Projection
+from opshub.projections.briefings import BriefingsProjection
 from opshub.projections.connector_cursors import ConnectorCursorsProjection
 from opshub.projections.decisions import DecisionsProjection
 from opshub.projections.handoffs import HandoffsProjection
@@ -43,4 +44,5 @@ def all_projections() -> list[Projection]:
         SourcesProjection(),
         ConnectorCursorsProjection(),
         IngestedFilesProjection(),
+        BriefingsProjection(),
     ]
