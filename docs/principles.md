@@ -79,11 +79,12 @@ CI でこの不変条件を検証する。
 |---|---|---|
 | 1 | Foundation: event store + tasks + CLI + markdown 生成 + tests + CI | ✅ Complete (2026-05-17) |
 | 2 | Coordination: inbox triage / decisions / locks / handoffs / work sessions / agent runs | ✅ Complete (2026-05-17) |
-| 3 | Connectors: framework + GitHub (MVP) + workspace inbox file ingest。Slack / Microsoft 365 / Box は Phase 7 (Connectors Wave 2、epic #113) で順次 | ✅ Complete (2026-05-17) |
+| 3 | Connectors: framework + GitHub (MVP) + workspace inbox file ingest | ✅ Complete (2026-05-17) |
 | 4 | Semantic Layer: vector recall / semantic search / duplicate detection (MVP = Pluggable Embedder + sqlite-vec; briefing 自動生成は Phase 5) | ✅ Complete (2026-05-17) |
 | 5 | Briefing layer: ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed (補助) | ✅ Complete (2026-05-17) |
 | 6 | Action loop layer: ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須) | ✅ Complete (2026-05-17) |
-| 7 | Connectors Wave 2: Slack / Microsoft 365 / Box (epic #113) | Planned |
+| 7 | Connectors Wave 2: Slack + Microsoft 365 + Box (3 SaaS connector を Phase 3 framework + ADR-0010 + ADR-0014 + ADR-0005 上で実装、epic #113) | ✅ Complete (2026-05-17) |
+| 8 | Knowledge graph (epic #128、planned) | Planned |
 
 各 phase で価値検証してから次へ進む。Phase をスキップしない。
 
@@ -95,12 +96,12 @@ Python 3.13+ / uv / Typer / SQLAlchemy Core / Pydantic v2 を採用。ただし 
 
 ## Open Questions
 
-> Phase 6 完了時点で残る Open Question は §5 (Multi-machine sync) のみ。
+> Phase 7 完了時点で残る Open Question は §5 (Multi-machine sync) のみ — Phase 8 (Knowledge graph、epic #128) 後の Phase 9 候補。
 > ADR-0015 §決定 (a) (Local LLM deferred) は Phase 6 A4 (Ollama) で closeout され、ADR-0016 §決定 (h) として記録された。
 
 検討中の項目 (本ドキュメントの今後の更新対象、番号は旧 Open Q list を継承):
 
-- **§5 Multi-machine sync** — operational memory を複数 host で共有する経路 (event log replication + projection rebuild on follower、または cloud-hosted sync server)。ADR-0002 (Event-Sourced Architecture) の append-only / replayable 不変条件と整合する設計は可能だが、conflict resolution (同 task に対する複数 host からの並行 update) と private data residency の評価が必要。Phase 7+ で別 ADR / 別 plan を検討。
+- **§5 Multi-machine sync** — operational memory を複数 host で共有する経路 (event log replication + projection rebuild on follower、または cloud-hosted sync server)。ADR-0002 (Event-Sourced Architecture) の append-only / replayable 不変条件と整合する設計は可能だが、conflict resolution (同 task に対する複数 host からの並行 update) と private data residency の評価が必要。Phase 9+ で別 ADR / 別 plan を検討。
 
 ## 確定済み (旧 Open Question)
 

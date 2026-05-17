@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-共通方針は AGENTS.md を参照（Phase 1-6 完了状態の記載含む）。以下は Claude Code 固有の設定。
+共通方針は AGENTS.md を参照（Phase 1-7 完了状態の記載含む）。以下は Claude Code 固有の設定。
 
 ## 基本ルール
 
