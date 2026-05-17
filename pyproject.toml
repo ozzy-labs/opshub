@@ -17,7 +17,18 @@ classifiers = [
 ]
 
 # Core dependencies are intentionally ML-free (ADR-0001).
-# All ML / connector deps live under [project.optional-dependencies].
+# All heavy ML / connector / LLM SDKs live under [project.optional-dependencies].
+#
+# ``sqlite-vec`` is a base dependency (not gated by extras) because Phase 4
+# migration 0013 unconditionally creates ``embeddings_vec_*`` virtual tables —
+# ``opshub init`` would fail with ``no such module: vec0`` on a default install
+# without it. The extension binary is ~500 KB, well within the ADR-0001
+# distribution budget which targets heavy ML SDKs (~100 MB+). See ADR-0001
+# §"Updates (Phase 8.x — sqlite-vec promotion)" for the rationale.
+#
+# ``numpy`` stays in the ``[vector]`` extras since it's only required when
+# building embeddings (callers of :class:`opshub.vectors.local_embedder.LocalSentenceTransformerEmbedder`,
+# which itself sits under ``[local-embedding]``).
 dependencies = [
   "typer>=0.12",
   "sqlalchemy>=2.0",
@@ -26,11 +37,16 @@ dependencies = [
   "pydantic-settings>=2.3",
   "jinja2>=3.1",
   "structlog>=24.1",
+  "sqlite-vec>=0.1",
 ]
 
 [project.optional-dependencies]
-# Vector storage backend (Phase 4, ADR-0012).
-vector = ["sqlite-vec>=0.1", "numpy>=2.0"]
+# Vector storage backend numerics (Phase 4, ADR-0012). ``sqlite-vec`` itself
+# moved to base dependencies (Phase 8.x follow-up); this extras now only
+# carries ``numpy`` for callers that need vector arithmetic outside the
+# embedder path. Retained as an empty-ish alias so existing
+# ``uv sync --extra vector`` invocations continue to work.
+vector = ["numpy>=2.0"]
 # Local embedding backend (Phase 4, ADR-0012). Pulls torch (~500MB-2GB).
 local-embedding = ["sentence-transformers>=3.0"]
 # API embedding backends (Phase 4, ADR-0012).

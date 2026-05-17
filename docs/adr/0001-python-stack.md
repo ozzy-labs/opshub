@@ -35,7 +35,7 @@ OpsHub を **Python 3.13+** で実装する。中心スタック:
 | Type Check (local) | pyright (高速、watch mode) |
 | Type Check (CI) | mypy (`--strict`) |
 | Migration | Alembic |
-| Vector storage | sqlite-vec (Phase 4、`[vector]` extras) |
+| Vector storage | sqlite-vec (Phase 4 / **base dep from Phase 8.x** — see §Updates) |
 | Local embedding | sentence-transformers (Phase 4、`[local-embedding]` extras) |
 | API embedding | openai / voyageai (Phase 4、`[api-embedding-*]` extras) |
 | Logging | structlog |
@@ -56,13 +56,14 @@ ADR-0012 と整合する `pyproject.toml` 設計を Phase 1 で確定する。
 ```toml
 [project]
 dependencies = [
-  # core はピュア Python 中心、ML 依存ゼロ
+  # core はピュア Python 中心、heavy ML SDK ゼロ
   "typer", "sqlalchemy", "alembic", "pydantic",
   "jinja2", "structlog",
+  "sqlite-vec",                  # Phase 8.x: 昇格 (詳細は §Updates 参照)
 ]
 
 [project.optional-dependencies]
-vector              = ["sqlite-vec", "numpy"]
+vector              = ["numpy"]  # Phase 8.x: sqlite-vec を base へ昇格
 local-embedding     = ["sentence-transformers"]
 api-embedding-openai = ["openai"]
 api-embedding-voyage = ["voyage-ai"]
@@ -76,8 +77,8 @@ all                 = ["opshub[vector,local-embedding,api-embedding-openai,conne
 
 これにより:
 
-- core install (`uv tool install opshub`) は ~10MB
-- vector 検索を使うユーザーは `uv tool install 'opshub[vector]'`
+- core install (`uv tool install opshub`) は ~10MB (sqlite-vec ~500KB 含む)
+- API embedder を使うユーザーは `uv tool install 'opshub[api-embedding-openai]'`
 - フルスタックは `uv tool install 'opshub[all]'`
 - 単一バイナリ配布の道 (PyInstaller / Nuitka) は core 限定で残る
 
@@ -204,6 +205,46 @@ Typer subcommand を `app.command()` の関数内 import で遅延ロードす�
 3. **`opshub serve` REPL の優先度** — Phase 2 で着手するか、Phase 4 の MCP server 化に統合するか
 4. **Homebrew formula の維持** — Phase 4 で formula を作るか、`uv tool install` の案内で十分とするか
 5. **Python 3.13 `--disable-gil` (PEP 703) の採用タイミング** — preview 期間中はオプション、GA 後に標準採用するかは Phase 3-4 で判断
+
+## Updates
+
+### Phase 8.x — sqlite-vec promotion (2026-05-18)
+
+`sqlite-vec` was promoted from the `[vector]` extras to base `[project.dependencies]`.
+
+**Why**: Phase 4 migration 0013 (`0013_create_embeddings_vec_table`) unconditionally
+runs `CREATE VIRTUAL TABLE ... USING vec0(...)` on `opshub init`. Without the
+extension loaded, init fails with `OperationalError: no such module: vec0` and
+leaves the DB in a half-applied state (subsequent retries hit
+`_alembic_tmp_embeddings already exists`). The v0.1.0 release smoke test caught
+this against the documented `uv tool install opshub` Quickstart path.
+
+**Why this is consistent with the original "heavy ML deps in extras" stance**:
+
+- sqlite-vec wheel is ~500 KB (vs. sentence-transformers + torch at ~500 MB-2 GB)
+- It is a SQLite extension, not an ML framework — closer to "DB engine
+  feature" than "embedding model"
+- Phase 4-8 are uniformly built on top of vec0 (embeddings + recall + dup
+  detect + briefing source_refs + knowledge graph) — the package is
+  effectively unusable without it
+- ADR-0001 §"配布チャネル" explicitly mentioned "core install ~10 MB" as the
+  target; sqlite-vec keeps the core inside that budget
+
+**What's kept in `[vector]`**:
+
+- `numpy>=2.0` — required only by callers that materialise embedding tensors
+  outside the embedder path. Most operators using OpsHub through the CLI do
+  not need it; `local-embedding` extras pulls it transitively when the local
+  embedder is active.
+
+**Backward compat**: `uv sync --extra vector` and `uv tool install
+"opshub[vector]"` continue to work (the extras still exists, just narrowed to
+`numpy`). Existing CI recipes that pass `--extra vector` to enable sqlite-vec
+work without modification because pip / uv resolve unions.
+
+This change is also why this ADR's §"配布チャネル" table no longer mentions
+`[vector]` as a Phase-3-end prerequisite — sqlite-vec is now available out of
+the box.
 
 ## 関連
 
