@@ -51,6 +51,8 @@ pytest.importorskip(
 )
 
 from opshub.cli.app import app
+from opshub.connectors import register_connector, unregister_all
+from opshub.connectors.slack.connector import SlackConnector
 from opshub.connectors.slack.fetcher import RawSlackMessage
 from opshub.core.errors import ConnectorFailedError
 from opshub.db.engine import create_engine_for_sqlite
@@ -153,6 +155,26 @@ def slack_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_BOT_TOKEN", "xoxb-test")
     monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '["C1"]')
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_registry() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """Restore the slack connector around each test.
+
+    Sibling Phase 7 integration suites (``test_phase7_box_sync.py`` /
+    ``test_phase7_ms365_sync.py``) call :func:`unregister_all` to
+    isolate their stubs; if they run before this module the slack
+    connector's import-time registration has already happened but
+    the registry now omits it. Re-registering on entry restores the
+    process-wide invariant ``"slack" in discover_connectors()`` that
+    the CLI driver depends on. The exit-side :func:`unregister_all`
+    keeps subsequent tests in the same process from inheriting our
+    state.
+    """
+    unregister_all()
+    register_connector(SlackConnector())
+    yield
+    unregister_all()
 
 
 # ---------------------------------------------------------------------- happy path

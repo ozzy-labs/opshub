@@ -236,11 +236,22 @@ class MS365ConnectorSettings(BaseModel):
     personal (consumer) and work / school accounts work without
     further configuration. Operators with a single Entra tenant can
     override it via ``[connectors.ms365] authority``.
+
+    The per-endpoint ``calendar_enabled`` / ``onedrive_enabled`` /
+    ``outlook_enabled`` flags (Phase 7 step B3) default to ``True`` so
+    a freshly-enabled MS365 connector observes every endpoint group
+    out of the box; operators who only consented to a subset of
+    scopes (e.g. ``Calendars.Read`` only) flip the unused flags to
+    ``False`` so :meth:`MS365Connector.sync` skips them without
+    raising an authorisation error.
     """
 
     enabled: bool = False
     client_id: str = ""
     authority: str = "https://login.microsoftonline.com/common"
+    calendar_enabled: bool = True
+    onedrive_enabled: bool = True
+    outlook_enabled: bool = True
 
 
 class BoxConnectorSettings(BaseModel):

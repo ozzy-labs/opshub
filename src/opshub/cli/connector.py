@@ -91,19 +91,46 @@ def connector_sync(name: str) -> None:
     # ``test_cli_imports`` static check.
     from typing import Any
 
-    # Importing each connector subpackage triggers its
-    # ``register_connector(<Connector>())`` side effect (see the
-    # corresponding ``opshub.connectors.<name>.__init__``). Phase 7.x
-    # will replace this with entry-points / scan-based discovery; for
-    # the MVP an explicit import per connector is honest and easy to
-    # audit. ``noqa: F401`` + the per-line pyright suppression
-    # document that the import is for the side effect alone — the
-    # bound ``opshub`` name itself is unused on the slack branch
-    # (``import opshub.connectors.github`` binds the top-level
-    # ``opshub`` package, so the second import is dead-code-shaped
-    # to static analysis even though its side effect is load-bearing).
+    # Importing each connector subpackage triggers ``register_connector``
+    # as an import side effect (see ``opshub.connectors.<name>.__init__``).
+    # Phase 3.x will replace this with entry-points / scan-based
+    # discovery; for the MVP an explicit import per connector is honest
+    # and easy to audit. ``ImportError`` is swallowed for the optional
+    # connectors so an operator who skipped the ``[connectors-ms365]`` /
+    # ``[connectors-slack]`` / ``[connectors-box]`` extras still gets a
+    # working ``opshub connector sync github`` — the import only fails
+    # when the extras-bundled SDK is missing AND the connector module
+    # touches it at import time (which the MS365 / Box / Slack
+    # ``__init__`` do not, but the safety net keeps future
+    # contributors from breaking that).
     import opshub.connectors.github  # pyright: ignore[reportUnusedImport]
-    import opshub.connectors.slack  # noqa: F401  # pyright: ignore[reportUnusedImport]
+
+    try:
+        import opshub.connectors.slack  # pyright: ignore[reportUnusedImport]
+    except ImportError:
+        # Slack connector module imports cleanly without the extras
+        # (the heavy ``slack_sdk`` imports stay inside the auth /
+        # fetcher methods); this branch is defensive and would only
+        # trigger if a future refactor adds a top-level SDK import.
+        pass
+
+    try:
+        import opshub.connectors.ms365  # pyright: ignore[reportUnusedImport]
+    except ImportError:
+        # MS365 connector module imports cleanly without the extras (the
+        # heavy ``msal`` / ``httpx`` imports stay inside the auth /
+        # fetcher constructors); this branch is defensive and would only
+        # trigger if a future refactor adds a top-level SDK import.
+        pass
+
+    try:
+        import opshub.connectors.box  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    except ImportError:
+        # Box connector module imports cleanly without the extras (the
+        # heavy ``boxsdk`` imports stay inside the auth / fetcher
+        # constructors); this branch is defensive and would only trigger
+        # if a future refactor adds a top-level SDK import.
+        pass
     from opshub.connectors import discover_connectors
     from opshub.connectors.context import ConnectorContext
     from opshub.core.logging import get_logger
