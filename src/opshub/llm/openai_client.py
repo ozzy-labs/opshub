@@ -32,11 +32,13 @@ Static type-checkers see the SDK as optional, so we type the client as
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from opshub.llm.client import LLMMessage, LLMResponse, StructuredResponse
+from opshub.llm.schema import pydantic_to_tool_schema
 
 __all__ = ["OPENAI_API_KEY_SECRET", "OpenAILLMClient"]
 
@@ -165,16 +167,112 @@ class OpenAILLMClient:
         max_tokens: int,
         temperature: float = 0.2,
     ) -> StructuredResponse[BaseModel]:
-        """Structured-output completion (Phase 6 step A2 Protocol stub).
+        """Synchronous chat completion with structured output via OpenAI function calling.
 
-        The full OpenAI ``tools=`` function-calling round-trip is
-        implemented in Phase 6 step A3. This stub exists so
-        :class:`OpenAILLMClient` satisfies the extended
-        :class:`~opshub.llm.LLMClient` Protocol's ``runtime_checkable``
-        isinstance check at A2 merge time.
+        Translation flow (ADR-0016 §決定 (a)+(b)):
+
+        1. ``schema`` → tool definition via the shared converter.
+        2. Wrap into OpenAI's ``tools=`` shape:
+           ``[{"type": "function", "function": {"name", "description",
+           "parameters", "strict": True}}]``. ``strict: True`` is
+           required for the ``additionalProperties: false`` guarantee
+           that the converter already injected to be enforced by the
+           API.
+        3. Call ``client.chat.completions.create(..., tools=[tool_def],
+           tool_choice={"type": "function", "function": {"name":
+           tool_name}})``.
+        4. Extract ``response.choices[0].message.tool_calls[0]``. If
+           missing / empty, raise :class:`OpsHubError` with the actual
+           ``message`` payload for debug.
+        5. JSON-parse ``tool_call.function.arguments`` (a JSON
+           **string** unlike Anthropic's pre-parsed ``dict``),
+           Pydantic-validate into ``schema``.
+        6. Return :class:`StructuredResponse` mirroring :meth:`complete`
+           token mapping (``response.usage.prompt_tokens`` /
+           ``completion_tokens``).
+
+        Unlike Anthropic, OpenAI accepts ``role="system"`` directly in
+        the ``messages=`` array — no system / user split needed.
         """
-        raise NotImplementedError(
-            "OpenAILLMClient.complete_structured is implemented in Phase 6 step A3"
+        client = self._ensure_client()
+        api_messages = [{"role": m.role, "content": m.content} for m in messages]
+
+        tool_def_common = pydantic_to_tool_schema(schema)
+        tool_name = tool_def_common["name"]
+        openai_tool_def: dict[str, Any] = {
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "description": tool_def_common["description"],
+                "parameters": tool_def_common["parameters"],
+                # ``strict: True`` makes OpenAI enforce
+                # ``additionalProperties: false`` and required-field
+                # rules at the API level (the helper already injects
+                # them into the schema; strict mode honours them).
+                "strict": True,
+            },
+        }
+
+        kwargs: dict[str, Any] = {
+            "model": self._model_id_value,
+            "messages": api_messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "tools": [openai_tool_def],
+            "tool_choice": {"type": "function", "function": {"name": tool_name}},
+        }
+
+        response = client.chat.completions.create(**kwargs)
+
+        choice = response.choices[0]
+        message = choice.message
+        tool_calls = getattr(message, "tool_calls", None)
+        if not tool_calls:
+            from opshub.core.errors import OpsHubError
+
+            # ``content`` may be ``None`` (text-empty refusal) or a
+            # short refusal string — truncate to 200 chars so the error
+            # message stays bounded.
+            raw_content = getattr(message, "content", None)
+            truncated: str
+            if raw_content is None:
+                truncated = "<None>"
+            else:
+                content_str = str(raw_content)
+                truncated = content_str if len(content_str) <= 200 else f"{content_str[:200]}..."
+            raise OpsHubError(
+                "OpenAILLMClient.complete_structured: no tool_calls in "
+                f"response.choices[0].message; got content: {truncated!r}"
+            )
+
+        first_call = tool_calls[0]
+        arguments_str = first_call.function.arguments
+        try:
+            parsed_args = json.loads(arguments_str)
+        except json.JSONDecodeError as exc:
+            from opshub.core.errors import OpsHubError
+
+            raise OpsHubError(
+                f"OpenAILLMClient.complete_structured: tool_call arguments malformed JSON: {exc}"
+            ) from exc
+
+        try:
+            parsed = schema.model_validate(parsed_args)
+        except ValidationError as exc:
+            from opshub.core.errors import OpsHubError
+
+            raise OpsHubError(
+                "OpenAILLMClient.complete_structured: tool_call arguments "
+                f"failed schema validation: {exc}"
+            ) from exc
+
+        usage = response.usage
+        return StructuredResponse[BaseModel](
+            parsed=parsed,
+            model_id=self._model_id_value,
+            model_version=self._model_version_value,
+            tokens_in=int(usage.prompt_tokens),
+            tokens_out=int(usage.completion_tokens),
         )
 
     def _ensure_client(self) -> Any:

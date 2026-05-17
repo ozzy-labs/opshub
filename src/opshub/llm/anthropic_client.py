@@ -27,9 +27,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from opshub.llm.client import LLMMessage, LLMResponse, StructuredResponse
+from opshub.llm.schema import pydantic_to_tool_schema
 
 __all__ = ["ANTHROPIC_API_KEY_SECRET", "AnthropicLLMClient"]
 
@@ -171,15 +172,111 @@ class AnthropicLLMClient:
         max_tokens: int,
         temperature: float = 0.2,
     ) -> StructuredResponse[BaseModel]:
-        """Structured-output completion (Phase 6 step A2 Protocol stub).
+        """Synchronous chat completion with structured output via Anthropic ``tool_use``.
 
-        The full Anthropic ``tool_use`` round-trip is implemented in
-        Phase 6 step A3. This stub exists so :class:`AnthropicLLMClient`
-        satisfies the extended :class:`~opshub.llm.LLMClient` Protocol's
-        ``runtime_checkable`` isinstance check at A2 merge time.
+        Translation flow (ADR-0016 §決定 (a)+(b)):
+
+        1. Convert ``schema`` Pydantic model → tool definition via
+           :func:`opshub.llm.schema.pydantic_to_tool_schema` (shared
+           converter, identical wire format used by OpenAI / Ollama).
+        2. Wrap into Anthropic's tool-definition shape:
+           ``{"name": ..., "description": ..., "input_schema": <parameters>}``.
+        3. Call ``client.messages.create(..., tools=[tool_def],
+           tool_choice={"type": "tool", "name": tool_name})`` so the
+           model MUST emit a ``tool_use`` block (no free-text fallback).
+        4. Extract the first ``tool_use`` content block. ``thinking``
+           blocks are skipped (Claude sometimes emits them before
+           tool_use). If no ``tool_use`` block is present, raise
+           :class:`OpsHubError` listing the observed block types so the
+           caller (ProposalService) can record a ``ProposalFailed``
+           event with actionable debug info.
+        5. Pydantic-validate ``block.input`` (already a parsed ``dict``
+           per the SDK) into an instance of ``schema``.
+        6. Return :class:`StructuredResponse` with the validated
+           instance + token usage (mirrors :meth:`complete` mapping:
+           ``response.usage.input_tokens`` / ``output_tokens``).
         """
-        raise NotImplementedError(
-            "AnthropicLLMClient.complete_structured is implemented in Phase 6 step A3"
+        client = self._ensure_client()
+        system_parts: list[str] = []
+        chat_messages: list[dict[str, str]] = []
+        for message in messages:
+            if message.role == "system":
+                system_parts.append(message.content)
+            else:
+                chat_messages.append({"role": message.role, "content": message.content})
+        system_text = "\n\n".join(system_parts)
+
+        # Shared converter returns ``{name, description, parameters}``.
+        # Anthropic's tool-definition shape names the JSON-schema slot
+        # ``input_schema`` (OpenAI keeps the OpenAI-style ``parameters``
+        # key, hence the rename here rather than in the helper).
+        tool_def_common = pydantic_to_tool_schema(schema)
+        tool_name = tool_def_common["name"]
+        anthropic_tool_def: dict[str, Any] = {
+            "name": tool_name,
+            "description": tool_def_common["description"],
+            "input_schema": tool_def_common["parameters"],
+        }
+
+        kwargs: dict[str, Any] = {
+            "model": self._model_id_value,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "system": system_text,
+            "messages": chat_messages,
+            "tools": [anthropic_tool_def],
+            # ``"type": "tool"`` + explicit ``name`` forces THIS tool
+            # (not "any" / "auto"). The model has no free-text fallback.
+            "tool_choice": {"type": "tool", "name": tool_name},
+        }
+
+        response: Any = client.messages.create(**kwargs)
+
+        content_blocks: list[Any] = list(response.content)
+        observed_types: list[str | None] = [
+            getattr(block, "type", None) for block in content_blocks
+        ]
+        tool_use_block: Any = None
+        for block in content_blocks:
+            block_type = getattr(block, "type", None)
+            if block_type == "thinking":
+                # Claude may emit "thinking" blocks before tool_use in
+                # tool-use contexts; they carry no payload we need.
+                continue
+            if block_type == "tool_use":
+                tool_use_block = block
+                break
+            # Any other type (text, etc.) before tool_use means the
+            # model deviated from the forced tool_choice contract.
+            break
+
+        if tool_use_block is None:
+            from opshub.core.errors import OpsHubError
+
+            raise OpsHubError(
+                "AnthropicLLMClient.complete_structured: no tool_use block "
+                f"in response; got types: {observed_types!r}"
+            )
+
+        # The Anthropic SDK already parses ``input`` into a ``dict``
+        # (not a JSON string). Pass directly to Pydantic.
+        try:
+            parsed = schema.model_validate(tool_use_block.input)
+        except ValidationError as exc:
+            from opshub.core.errors import OpsHubError
+
+            raise OpsHubError(
+                "AnthropicLLMClient.complete_structured: tool_use input "
+                f"failed schema validation: {exc}"
+            ) from exc
+
+        usage: Any = response.usage
+        return StructuredResponse[BaseModel](
+            parsed=parsed,
+            model_id=self._model_id_value,
+            model_version=self._model_version_value,
+            tokens_in=int(usage.input_tokens),
+            tokens_out=int(usage.output_tokens),
         )
 
     def _ensure_client(self) -> Any:
