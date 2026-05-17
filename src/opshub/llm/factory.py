@@ -30,9 +30,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from opshub.core.errors import ConfigError
-from opshub.llm.client import LLMMessage, LLMResponse
+from opshub.llm.client import LLMMessage, LLMResponse, StructuredResponse
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from opshub.core.config import OpsHubSettings
     from opshub.llm.client import LLMClient
 
@@ -77,6 +79,30 @@ class NoOpLLMClient:
         # remains a structural :class:`~opshub.llm.LLMClient` — the
         # caller never has to type-narrow before invoking ``complete``.
         del messages, max_tokens, temperature, stop
+        raise ConfigError(
+            "[llm] backend is disabled; configure 'anthropic' or 'openai' "
+            "in opshub.toml (or set OPSHUB_LLM_BACKEND env var) and run "
+            "`opshub connector auth set llm:<backend>` to store the API key."
+        )
+
+    def complete_structured(
+        self,
+        messages: list[LLMMessage],
+        *,
+        schema: type[BaseModel],
+        max_tokens: int,
+        temperature: float = 0.2,
+    ) -> StructuredResponse[BaseModel]:
+        """Phase 6 step A2 Protocol extension — same fail-loud contract.
+
+        Keeps :class:`NoOpLLMClient` a structural
+        :class:`~opshub.llm.LLMClient` after ADR-0016 added
+        ``complete_structured`` to the Protocol. The disabled backend
+        cannot serve any LLM call, structured or otherwise, so we raise
+        the same actionable :class:`~opshub.core.errors.ConfigError` as
+        :meth:`complete`.
+        """
+        del messages, schema, max_tokens, temperature
         raise ConfigError(
             "[llm] backend is disabled; configure 'anthropic' or 'openai' "
             "in opshub.toml (or set OPSHUB_LLM_BACKEND env var) and run "
