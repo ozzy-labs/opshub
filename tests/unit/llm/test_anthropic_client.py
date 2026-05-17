@@ -25,8 +25,10 @@ pytest.importorskip(
     reason="opshub.llm.anthropic_client tests require the 'llm-anthropic' extras",
 )
 
-from opshub.core.errors import ConfigError
-from opshub.llm import LLMClient, LLMMessage, LLMResponse
+from pydantic import BaseModel
+
+from opshub.core.errors import ConfigError, OpsHubError
+from opshub.llm import LLMClient, LLMMessage, LLMResponse, StructuredResponse
 from opshub.llm.anthropic_client import ANTHROPIC_API_KEY_SECRET, AnthropicLLMClient
 
 # ---- helpers --------------------------------------------------------------
@@ -415,3 +417,226 @@ def test_client_is_constructed_once_across_calls(
         client.complete([LLMMessage(role="user", content="c")], max_tokens=10)
 
     assert anthropic_cls.call_count == 1
+
+
+# ---- complete_structured --------------------------------------------------
+#
+# ADR-0016 §決定 (a)+(b): Anthropic structured output uses the ``tool_use``
+# content block, with ``tool_choice={"type": "tool", "name": ...}`` forcing
+# the model to emit a single tool call (no free-text fallback). The
+# ``input`` attribute on the SDK tool_use block is already a ``dict`` per
+# the SDK, so the client validates it directly with Pydantic.
+
+
+class _StructuredFoo(BaseModel):
+    """Minimal schema used to exercise tool-definition serialisation."""
+
+    x: int
+
+
+def _fake_tool_use_response(
+    *,
+    input_payload: dict[str, Any] | None = None,
+    extra_blocks_before: list[tuple[str, dict[str, Any] | str]] | None = None,
+    extra_blocks_only: list[tuple[str, dict[str, Any] | str]] | None = None,
+    input_tokens: int = 11,
+    output_tokens: int = 22,
+) -> MagicMock:
+    """Build a MagicMock shaped like an Anthropic structured response.
+
+    ``input_payload`` becomes the single ``tool_use`` block's ``input``.
+    ``extra_blocks_before`` injects e.g. ``thinking`` blocks ahead of
+    the tool_use block. ``extra_blocks_only`` REPLACES the tool_use
+    block with the given list (used for "no tool_use" error path).
+    """
+    blocks: list[MagicMock] = []
+    if extra_blocks_only is not None:
+        for block_type, payload in extra_blocks_only:
+            block = MagicMock()
+            block.type = block_type
+            if isinstance(payload, dict):
+                block.input = payload
+            else:
+                block.text = payload
+            blocks.append(block)
+    else:
+        if extra_blocks_before:
+            for block_type, payload in extra_blocks_before:
+                block = MagicMock()
+                block.type = block_type
+                if isinstance(payload, dict):
+                    block.input = payload
+                else:
+                    block.text = payload
+                blocks.append(block)
+        tool_use = MagicMock()
+        tool_use.type = "tool_use"
+        tool_use.input = input_payload if input_payload is not None else {"x": 42}
+        blocks.append(tool_use)
+
+    response = MagicMock()
+    response.content = blocks
+    response.usage = MagicMock(input_tokens=input_tokens, output_tokens=output_tokens)
+    return response
+
+
+def test_complete_structured_passes_tool_definition_and_forces_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tool definition uses Anthropic's ``input_schema`` key and
+    ``tool_choice`` forces the specific tool (no ``"any"`` / ``"auto"``)."""
+    monkeypatch.setenv("OPSHUB_LLM_ANTHROPIC_API_KEY", "sk-ant-test")
+
+    fake_sdk = MagicMock()
+    fake_sdk.messages.create.return_value = _fake_tool_use_response()
+    with patch("anthropic.Anthropic", return_value=fake_sdk):
+        AnthropicLLMClient().complete_structured(
+            [LLMMessage(role="user", content="produce a Foo")],
+            schema=_StructuredFoo,
+            max_tokens=200,
+        )
+
+    kwargs = fake_sdk.messages.create.call_args.kwargs
+    tools: list[dict[str, Any]] = kwargs["tools"]
+    assert isinstance(tools, list)
+    assert len(tools) == 1
+    tool_def: dict[str, Any] = tools[0]
+    # Anthropic uses ``input_schema`` (NOT OpenAI's ``parameters``).
+    assert set(tool_def.keys()) == {"name", "description", "input_schema"}
+    # Snake_case derived from ``_StructuredFoo`` (leading underscore
+    # preserved; the schema helper does not strip private prefixes).
+    tool_name: str = tool_def["name"]
+    assert tool_name.endswith("structured_foo")
+    assert tool_def["input_schema"]["type"] == "object"
+    assert "x" in tool_def["input_schema"]["properties"]
+    # ``tool_choice`` forces THIS specific tool.
+    assert kwargs["tool_choice"] == {"type": "tool", "name": tool_name}
+
+
+def test_complete_structured_parses_tool_use_block_to_pydantic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``response.content[0].input`` (already a dict) Pydantic-validates
+    into the requested schema; token usage maps from ``response.usage``."""
+    monkeypatch.setenv("OPSHUB_LLM_ANTHROPIC_API_KEY", "sk-ant-test")
+
+    fake_sdk = MagicMock()
+    fake_sdk.messages.create.return_value = _fake_tool_use_response(
+        input_payload={"x": 42},
+        input_tokens=11,
+        output_tokens=22,
+    )
+    with patch("anthropic.Anthropic", return_value=fake_sdk):
+        response = AnthropicLLMClient().complete_structured(
+            [LLMMessage(role="user", content="hi")],
+            schema=_StructuredFoo,
+            max_tokens=50,
+        )
+
+    assert isinstance(response, StructuredResponse)
+    assert isinstance(response.parsed, _StructuredFoo)
+    assert response.parsed.x == 42
+    assert response.model_id == "claude-haiku-4-5-20251001"
+    assert response.model_version == "2026-05-01"
+    assert response.tokens_in == 11
+    assert response.tokens_out == 22
+
+
+def test_complete_structured_skips_thinking_blocks_before_tool_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Claude may emit ``thinking`` blocks before ``tool_use`` in tool-use
+    contexts; the implementation skips them and finds the tool_use anyway."""
+    monkeypatch.setenv("OPSHUB_LLM_ANTHROPIC_API_KEY", "sk-ant-test")
+
+    fake_sdk = MagicMock()
+    fake_sdk.messages.create.return_value = _fake_tool_use_response(
+        input_payload={"x": 1},
+        extra_blocks_before=[("thinking", "ruminating about Foo")],
+    )
+    with patch("anthropic.Anthropic", return_value=fake_sdk):
+        response = AnthropicLLMClient().complete_structured(
+            [LLMMessage(role="user", content="hi")],
+            schema=_StructuredFoo,
+            max_tokens=50,
+        )
+
+    assert response.parsed == _StructuredFoo(x=1)
+
+
+def test_complete_structured_raises_when_no_tool_use_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forced tool_choice means a missing ``tool_use`` block is a
+    contract violation — surface via :class:`OpsHubError` and include
+    the observed block types for debugging."""
+    monkeypatch.setenv("OPSHUB_LLM_ANTHROPIC_API_KEY", "sk-ant-test")
+
+    fake_sdk = MagicMock()
+    fake_sdk.messages.create.return_value = _fake_tool_use_response(
+        extra_blocks_only=[("text", "I refuse to use tools")],
+    )
+    with (
+        patch("anthropic.Anthropic", return_value=fake_sdk),
+        pytest.raises(OpsHubError) as excinfo,
+    ):
+        AnthropicLLMClient().complete_structured(
+            [LLMMessage(role="user", content="hi")],
+            schema=_StructuredFoo,
+            max_tokens=50,
+        )
+
+    message = str(excinfo.value)
+    assert "no tool_use block" in message
+    assert "'text'" in message  # observed block types listed
+
+
+def test_complete_structured_raises_when_input_fails_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``tool_use.input`` that fails Pydantic validation raises
+    :class:`OpsHubError` with the validation reason."""
+    monkeypatch.setenv("OPSHUB_LLM_ANTHROPIC_API_KEY", "sk-ant-test")
+
+    fake_sdk = MagicMock()
+    fake_sdk.messages.create.return_value = _fake_tool_use_response(
+        input_payload={"x": "not an int"},
+    )
+    with (
+        patch("anthropic.Anthropic", return_value=fake_sdk),
+        pytest.raises(OpsHubError) as excinfo,
+    ):
+        AnthropicLLMClient().complete_structured(
+            [LLMMessage(role="user", content="hi")],
+            schema=_StructuredFoo,
+            max_tokens=50,
+        )
+
+    assert "schema validation" in str(excinfo.value)
+
+
+def test_complete_structured_system_message_routed_to_system_kwarg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``LLMMessage(role="system", ...)`` is routed to the SDK's
+    ``system=`` kwarg, mirroring :meth:`complete` (Anthropic does not
+    accept ``role="system"`` inside ``messages``)."""
+    monkeypatch.setenv("OPSHUB_LLM_ANTHROPIC_API_KEY", "sk-ant-test")
+
+    fake_sdk = MagicMock()
+    fake_sdk.messages.create.return_value = _fake_tool_use_response()
+    with patch("anthropic.Anthropic", return_value=fake_sdk):
+        AnthropicLLMClient().complete_structured(
+            [
+                LLMMessage(role="system", content="Be terse."),
+                LLMMessage(role="user", content="produce a Foo"),
+            ],
+            schema=_StructuredFoo,
+            max_tokens=50,
+        )
+
+    kwargs = fake_sdk.messages.create.call_args.kwargs
+    assert kwargs["system"] == "Be terse."
+    assert kwargs["messages"] == [
+        {"role": "user", "content": "produce a Foo"},
+    ]

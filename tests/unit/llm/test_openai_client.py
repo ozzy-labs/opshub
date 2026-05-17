@@ -24,8 +24,10 @@ pytest.importorskip(
     reason="opshub.llm.openai_client tests require the 'llm-openai' extras",
 )
 
+from pydantic import BaseModel
+
 from opshub.core.errors import ConfigError, OpsHubError
-from opshub.llm import LLMClient, LLMMessage, LLMResponse
+from opshub.llm import LLMClient, LLMMessage, LLMResponse, StructuredResponse
 from opshub.llm.openai_client import OPENAI_API_KEY_SECRET, OpenAILLMClient
 
 # ---- helpers --------------------------------------------------------------
@@ -380,3 +382,218 @@ def test_client_is_constructed_once_across_calls(
         client.complete([LLMMessage(role="user", content="c")], max_tokens=10)
 
     assert openai_cls.call_count == 1
+
+
+# ---- complete_structured --------------------------------------------------
+#
+# ADR-0016 §決定 (a)+(b): OpenAI structured output uses function-calling
+# (``tools=[{"type": "function", "function": {...}}]``) with
+# ``tool_choice={"type": "function", "function": {"name": ...}}`` forcing
+# the model to call the specific tool. ``tool_calls[0].function.arguments``
+# is a JSON **string** (unlike Anthropic's pre-parsed dict), so the client
+# json.loads() it before Pydantic validation. ``strict: True`` is required
+# for OpenAI to honour ``additionalProperties: false``.
+
+
+class _StructuredFoo(BaseModel):
+    """Minimal schema used to exercise tool-definition serialisation."""
+
+    x: int
+
+
+def _fake_structured_completion(
+    *,
+    arguments: str | None = '{"x": 42}',
+    content: str | None = None,
+    prompt_tokens: int = 17,
+    completion_tokens: int = 29,
+) -> MagicMock:
+    """Build a MagicMock shaped like a structured-output completion.
+
+    ``arguments`` becomes the JSON string on ``tool_calls[0].function``.
+    Pass ``arguments=None`` to model "no tool_calls" (text response).
+    ``content`` is the fallback text content (used when no tool_calls).
+    """
+    response = MagicMock()
+    choice = MagicMock()
+    message = MagicMock()
+    message.content = content
+    if arguments is None:
+        message.tool_calls = None
+    else:
+        tool_call = MagicMock()
+        tool_call.function = MagicMock(arguments=arguments)
+        message.tool_calls = [tool_call]
+    choice.message = message
+    choice.finish_reason = "tool_calls" if arguments is not None else "stop"
+    response.choices = [choice]
+    response.usage = MagicMock(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+    return response
+
+
+def test_complete_structured_passes_function_tool_with_strict_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tool definition uses OpenAI's ``{"type": "function", "function":
+    {..., "strict": True}}`` shape and ``tool_choice`` forces the specific
+    function."""
+    monkeypatch.setenv("OPSHUB_LLM_OPENAI_API_KEY", "sk-test")
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = _fake_structured_completion()
+    with patch("openai.OpenAI", return_value=fake_client):
+        OpenAILLMClient().complete_structured(
+            [LLMMessage(role="user", content="produce a Foo")],
+            schema=_StructuredFoo,
+            max_tokens=200,
+        )
+
+    kwargs = fake_client.chat.completions.create.call_args.kwargs
+    tools: list[dict[str, Any]] = kwargs["tools"]
+    assert isinstance(tools, list)
+    assert len(tools) == 1
+    tool_def: dict[str, Any] = tools[0]
+    assert tool_def["type"] == "function"
+    function: dict[str, Any] = tool_def["function"]
+    assert set(function.keys()) == {"name", "description", "parameters", "strict"}
+    assert function["strict"] is True
+    assert function["parameters"]["type"] == "object"
+    assert "x" in function["parameters"]["properties"]
+    # ``tool_choice`` forces THIS specific function.
+    assert kwargs["tool_choice"] == {
+        "type": "function",
+        "function": {"name": function["name"]},
+    }
+
+
+def test_complete_structured_parses_tool_calls_arguments_to_pydantic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``tool_calls[0].function.arguments`` is a JSON string — the
+    client ``json.loads`` it and Pydantic-validates into the schema."""
+    monkeypatch.setenv("OPSHUB_LLM_OPENAI_API_KEY", "sk-test")
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = _fake_structured_completion(
+        arguments='{"x": 42}',
+        prompt_tokens=17,
+        completion_tokens=29,
+    )
+    with patch("openai.OpenAI", return_value=fake_client):
+        response = OpenAILLMClient().complete_structured(
+            [LLMMessage(role="user", content="hi")],
+            schema=_StructuredFoo,
+            max_tokens=50,
+        )
+
+    assert isinstance(response, StructuredResponse)
+    assert isinstance(response.parsed, _StructuredFoo)
+    assert response.parsed.x == 42
+    assert response.model_id == "gpt-4o-mini"
+    assert response.tokens_in == 17
+    assert response.tokens_out == 29
+
+
+def test_complete_structured_raises_when_no_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``tool_calls=None`` (model went text instead) → :class:`OpsHubError`
+    with the actual content payload truncated for debug."""
+    monkeypatch.setenv("OPSHUB_LLM_OPENAI_API_KEY", "sk-test")
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = _fake_structured_completion(
+        arguments=None,
+        content="I refuse to use the tool",
+    )
+    with (
+        patch("openai.OpenAI", return_value=fake_client),
+        pytest.raises(OpsHubError) as excinfo,
+    ):
+        OpenAILLMClient().complete_structured(
+            [LLMMessage(role="user", content="hi")],
+            schema=_StructuredFoo,
+            max_tokens=50,
+        )
+
+    message = str(excinfo.value)
+    assert "no tool_calls" in message
+    assert "I refuse" in message  # content surfaced for debug
+
+
+def test_complete_structured_raises_when_arguments_not_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``arguments = "not valid json"`` → :class:`OpsHubError` mentioning
+    malformed JSON (not a raw ``JSONDecodeError`` leaking out)."""
+    monkeypatch.setenv("OPSHUB_LLM_OPENAI_API_KEY", "sk-test")
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = _fake_structured_completion(
+        arguments="not valid json",
+    )
+    with (
+        patch("openai.OpenAI", return_value=fake_client),
+        pytest.raises(OpsHubError) as excinfo,
+    ):
+        OpenAILLMClient().complete_structured(
+            [LLMMessage(role="user", content="hi")],
+            schema=_StructuredFoo,
+            max_tokens=50,
+        )
+
+    assert "malformed JSON" in str(excinfo.value)
+
+
+def test_complete_structured_raises_when_arguments_fail_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JSON-parseable arguments that fail Pydantic validation →
+    :class:`OpsHubError` mentioning schema validation."""
+    monkeypatch.setenv("OPSHUB_LLM_OPENAI_API_KEY", "sk-test")
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = _fake_structured_completion(
+        arguments='{"x": "string"}',
+    )
+    with (
+        patch("openai.OpenAI", return_value=fake_client),
+        pytest.raises(OpsHubError) as excinfo,
+    ):
+        OpenAILLMClient().complete_structured(
+            [LLMMessage(role="user", content="hi")],
+            schema=_StructuredFoo,
+            max_tokens=50,
+        )
+
+    assert "schema validation" in str(excinfo.value)
+
+
+def test_complete_structured_forwards_system_message_directly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenAI accepts ``role="system"`` natively in the ``messages=``
+    array (unlike Anthropic). The structured-output path mirrors
+    :meth:`complete` — no split-out, messages travel verbatim."""
+    monkeypatch.setenv("OPSHUB_LLM_OPENAI_API_KEY", "sk-test")
+
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = _fake_structured_completion()
+    with patch("openai.OpenAI", return_value=fake_client):
+        OpenAILLMClient().complete_structured(
+            [
+                LLMMessage(role="system", content="Be terse."),
+                LLMMessage(role="user", content="produce a Foo"),
+            ],
+            schema=_StructuredFoo,
+            max_tokens=50,
+        )
+
+    kwargs = fake_client.chat.completions.create.call_args.kwargs
+    assert kwargs["messages"] == [
+        {"role": "system", "content": "Be terse."},
+        {"role": "user", "content": "produce a Foo"},
+    ]
