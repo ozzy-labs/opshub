@@ -60,8 +60,14 @@ opshub *args:
 # ... USING vec0) can run during the migration integration tests. The
 # extras pulls in ``sqlite-vec`` + ``numpy``; the engine's connect
 # listener (``opshub.db.engine``) loads sqlite-vec automatically.
+#
+# ``llm-anthropic`` is included so Phase 5 step A3 unit tests
+# (``tests/unit/llm/test_anthropic_client.py``) can ``importorskip``
+# the ``anthropic`` SDK and run mocked round-trips. No real API call
+# leaves CI — every SDK touchpoint is patched (see ADR-0015 §決定 + the
+# Phase 4 OpenAI embedder precedent).
 ci:
-    uv sync --locked --extra dev --extra connectors-github --extra vector
+    uv sync --locked --extra dev --extra connectors-github --extra vector --extra llm-anthropic
     uv run ruff check
     uv run ruff format --check
     uv run pyright
