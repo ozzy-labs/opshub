@@ -51,7 +51,7 @@ OpsHub では以下を ADR 化する。
 | `Deprecated` | 採用を取り下げ。後継 ADR を必須としない |
 | `Superseded by ADR-NNNN` | 新しい ADR で置き換え。新 ADR にリンク |
 
-Phase 1 着手前に主要 ADR (0001-0007 + 0012) を一括 `Accepted` に昇格させた。Phase 2 着手前に ADR-0009 (Multi-Agent Neutrality) を、Phase 2 step 5 で ADR-0013 (Lock Granularity) を、Phase 3 step A6 で ADR-0014 (SaaS Token Storage) を、Phase 3 step D (closeout) で ADR-0010 (Connector Contract) を、それぞれ実装で検証した上で Accepted に昇格させた。
+Phase 1 着手前に主要 ADR (0001-0007 + 0012) を一括 `Accepted` に昇格させた。Phase 2 着手前に ADR-0009 (Multi-Agent Neutrality) を、Phase 2 step 5 で ADR-0013 (Lock Granularity) を、Phase 3 step A6 で ADR-0014 (SaaS Token Storage) を、Phase 3 step D (closeout) で ADR-0010 (Connector Contract) を、それぞれ実装で検証した上で Accepted に昇格させた。Phase 5 step A1 で ADR-0015 (LLM Usage Strategy) を Accepted で起票し、principles.md §Open Q #1 (LLM 利用方針) を closeout する (closeout 反映自体は Phase 5 D1)。
 
 ## 4. ファイル命名
 
@@ -90,6 +90,7 @@ NNNN-kebab-case-title.md
 | 0012 | [Embedding Strategy](0012-embedding-strategy.md) | Accepted |
 | 0013 | [Lock Granularity](0013-lock-granularity.md) | Accepted |
 | 0014 | [SaaS Token Storage](0014-saas-token-storage.md) | Accepted |
+| 0015 | [LLM Usage Strategy](0015-llm-usage-strategy.md) | Accepted |
 
 ## Open Questions
 

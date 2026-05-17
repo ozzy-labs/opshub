@@ -1,6 +1,6 @@
 # Decisions Log (Rejected Alternatives)
 
-> Status: Draft (in active design). Last reviewed: 2026-05-16.
+> Status: Draft (in active design). Last reviewed: 2026-05-17.
 
 設計フェーズで検討したが採用しなかった案の索引。詳細理由は対応する ADR / docs に記載。本ドキュメントは「あの議論はどこで結論が出たか」の早見表として機能する。
 
@@ -119,3 +119,16 @@
 | 単一 model + version 列なし | `model_id` + `model_version` 列で増分 re-embed 可能に | モデル変更で全件 re-embed 必須、A/B 比較不能 | ADR-0012 |
 | event payload も embed | summary 系のみ | event は immutable で量が多い、検索は projection で代替可能 | ADR-0012 |
 | Hybrid (短期 API + 長期 local archive) | Pluggable で柔軟性 | 同一 entity が異 embedder で recall 結果不安定、切替ロジック複雑 | ADR-0012 |
+
+## 12. LLM 利用方針 (ADR-0015)
+
+| 却下案 | 採用案 | 理由 | 参照 |
+|---|---|---|---|
+| LLM 抽象なし (Anthropic / OpenAI SDK を BriefingService が直接呼ぶ) | Pluggable `LLMClient` Protocol + Anthropic / OpenAI 具象 | Phase 6+ の backend 追加で service に分岐が滲み、test stub 化も困難。ADR-0012 Pluggable Embedder と非対称になり ADR-0009 と衝突 | ADR-0015 |
+| Local LLM (Ollama / `llama.cpp`) を MVP に含める | API backend 2 つ (Anthropic + OpenAI) のみ MVP、local は Phase 5.x | model ファイル 4-30GB で配布が壊れる、daemon 前提の cross-platform 問題、briefing 品質の validation 未実施 | ADR-0015 |
+| Default backend = `anthropic` (or `openai`) | `disabled` を default | 片方 vendor 固定化で ADR-0009 と衝突、初回 install で認証エラーを踏む、Phase 4 embedding default と非一致 | ADR-0015 |
+| Prompt を初手から外部ファイル化 (`~/.config/opshub/prompts/briefing.md`) | inline Python 定数 (Phase 5 MVP) | 1 flow のために loader + packaging を実装するのは scope crepp、Phase 5.x で後付け可能 | ADR-0015 |
+| Prompt injection 対策を system prompt の自然言語注意のみ | 明示 delimiter wrap (`<source id="...">...</source>`) + do-not-follow preamble | 「prompt で強く言えば従う」は誤り (知識 MCP), OWASP LLM01:2025 典型攻撃面 | ADR-0015 |
+| Auto fallback (Anthropic → OpenAI) を MVP に含める | 自動 fallback なし、`OpsHubError` で caller に伝播 | 再現性 / cache invariant が壊れる、cost surprise、Protocol 層が複雑化 | ADR-0015 |
+| API key を `[llm.<backend>] api_key_env` で config 駆動 | ADR-0014 (`core/secrets` + keyring + env override) 再利用、key 規約 `llm:<name>:api_key` | embedding (`embedder:<name>:api_key`) と規約統一、operator の mental model を 1 つに | ADR-0015 |
+| `max_tokens` を Protocol で optional + default 持ち | `max_tokens` 必須引数 | caller が cost を把握できず observability 低下、backend ごとの reasonable default 差で Protocol 側の選定が lock-in | ADR-0015 |
