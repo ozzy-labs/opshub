@@ -4,7 +4,7 @@
 
 *人間と AI エージェントのための、ローカルファーストな Operational Memory 兼 実行ハブ。*
 
-> Status: **Phase 1 (foundation) + Phase 2 (coordination) complete (2026-05-17)**. Phase 3 (connectors) と Phase 4 (semantic layer) は引き続き設計中。`docs/` 配下のドキュメントは現状の方針を反映しつつ、議論を踏まえて更新されます。
+> Status: **Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP = framework + GitHub) complete (2026-05-17)**. Phase 4 (semantic layer) は引き続き設計中。Slack / Microsoft 365 / Box の connector は Phase 3.x 以降で順次追加する。`docs/` 配下のドキュメントは現状の方針を反映しつつ、議論を踏まえて更新されます。
 
 ## 概要
 
@@ -79,6 +79,15 @@ opshub session end --summary "EOD wrap"
 opshub handoff open --from agent:claude --to ozzy --topic "review"
 opshub handoff close <handoff-id> --note "merged"
 
+# Connector layer (Phase 3, ADR-0010 / ADR-0014)
+opshub connector auth set github       # store GitHub PAT in OS keychain
+opshub connector sync github           # incremental sync (requires OPSHUB_CONNECTOR_GITHUB_REPO=owner/repo)
+opshub connector list                  # show registered connectors
+
+# Ingest hand-written notes (Phase 3 workspace inbox)
+opshub workspace ingest                # ingest workspace/inbox/*.md
+opshub workspace ingest --dry-run      # scan only, no writes
+
 # Regenerate the markdown workspace from the projections
 opshub workspace generate
 
@@ -101,13 +110,13 @@ All state lives under XDG directories; override via `OPSHUB_*` env vars (e.g.
 
 ## ステータス
 
-Phase 1 (foundation) と Phase 2 (coordination) を 2026-05-17 に完了しました。`opshub init` / `task` / `inbox` / `decision` / `lock` / `session` / `agent run` / `handoff` / `workspace generate` / `projections rebuild` が動作し、event store + 全 projection + markdown 生成 + tests + CI が green の状態です。次は Phase 3 (connectors) の設計に着手します。
+Phase 1 (foundation)・Phase 2 (coordination)・Phase 3 (connectors + workspace ingest、MVP = framework + GitHub) を 2026-05-17 に完了しました。`opshub init` / `task` / `inbox` / `decision` / `lock` / `session` / `agent run` / `handoff` / `connector` (`auth set` / `sync` / `list`) / `workspace ingest` / `workspace generate` / `projections rebuild` が動作し、event store + 全 projection + markdown 生成 + GitHub connector + workspace inbox file ingest + tests + CI が green の状態です。次は Phase 4 (semantic layer) の設計に着手します。Slack / Microsoft 365 / Box の connector は Phase 3.x 以降で順次追加します。
 
 Phase ロードマップ:
 
 1. **Phase 1**: Event store + tasks + CLI + markdown 生成 (foundation) — ✅ Complete (2026-05-17)
 2. **Phase 2**: Inbox triage / decisions / locks / work sessions / agent runs / handoffs (coordination) — ✅ Complete (2026-05-17)
-3. **Phase 3**: GitHub / Slack / Microsoft 365 / Box connectors — Planned
+3. **Phase 3**: Connector framework + GitHub connector + workspace inbox file ingest — ✅ Complete (2026-05-17) (Slack / Microsoft 365 / Box は Phase 3.x で順次)
 4. **Phase 4**: Vector recall / semantic search / briefing 自動生成 (semantic layer) — Planned
 
 詳細は [Principles 項 9 (Phased Delivery)](docs/principles.md) と各 ADR を参照。

@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-> Status: Draft (in active design). Last reviewed: 2026-05-16.
+> Status: Draft (in active design). Last reviewed: 2026-05-17.
 
 このディレクトリには OpsHub の重要な設計判断を **ADR (Architecture Decision Record)** として記録する。
 
@@ -51,7 +51,7 @@ OpsHub では以下を ADR 化する。
 | `Deprecated` | 採用を取り下げ。後継 ADR を必須としない |
 | `Superseded by ADR-NNNN` | 新しい ADR で置き換え。新 ADR にリンク |
 
-Phase 1 着手前に主要 ADR (0001-0007 + 0012) を一括 `Accepted` に昇格させた。Phase 2-3 を担う ADR-0009 (Multi-Agent Neutrality) / ADR-0010 (Connector Contract) は該当 Phase 着手時に評価・昇格を判断する。
+Phase 1 着手前に主要 ADR (0001-0007 + 0012) を一括 `Accepted` に昇格させた。Phase 2 着手前に ADR-0009 (Multi-Agent Neutrality) を、Phase 2 step 5 で ADR-0013 (Lock Granularity) を、Phase 3 step A6 で ADR-0014 (SaaS Token Storage) を、Phase 3 step D (closeout) で ADR-0010 (Connector Contract) を、それぞれ実装で検証した上で Accepted に昇格させた。
 
 ## 4. ファイル命名
 
@@ -85,7 +85,7 @@ NNNN-kebab-case-title.md
 | 0007 | [Single Python Package, defer Monorepo](0007-single-python-package.md) | Accepted |
 | 0008 | [Naming: opshub](0008-naming-opshub.md) | Accepted |
 | 0009 | [Multi-Agent Neutrality](0009-multi-agent-neutrality.md) | Accepted |
-| 0010 | [Connector Contract](0010-connector-contract.md) | Proposed |
+| 0010 | [Connector Contract](0010-connector-contract.md) | Accepted |
 | 0011 | [Ozzy-Labs Ecosystem Adoption](0011-ozzy-labs-ecosystem-adoption.md) | Accepted |
 | 0012 | [Embedding Strategy](0012-embedding-strategy.md) | Accepted |
 | 0013 | [Lock Granularity](0013-lock-granularity.md) | Accepted |
