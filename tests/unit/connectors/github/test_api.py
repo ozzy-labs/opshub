@@ -22,6 +22,8 @@ import httpx
 import pytest
 
 from opshub.connectors.github.api import (
+    SUMMARY_MAX_CHARS,
+    TITLE_MAX_CHARS,
     GitHubAPIError,
     GitHubAuthError,
     GitHubItem,
@@ -409,3 +411,217 @@ def test_github_item_is_frozen_and_minimal() -> None:
         "summary",
         "updated_at",
     }
+
+
+# ---------------------------------------------------------------------------
+# ADR-0005 summary / title length caps (Phase 7 Validation §3 parity)
+# ---------------------------------------------------------------------------
+
+
+def test_summary_max_chars_constant_pins_phase7_convention() -> None:
+    """The GitHub connector ships the same 200-char cap as Slack / MS365 / Box.
+
+    ADR-0010 Phase 7 Validation §3 mandates ``summary ≤ 200 chars`` for
+    every connector. Pinning the constant explicitly here keeps the
+    cross-connector contract visible at review time: bumping the
+    GitHub side in isolation would silently violate ADR-0005.
+    """
+    assert SUMMARY_MAX_CHARS == 200
+    assert TITLE_MAX_CHARS == 500
+
+
+def test_summary_truncated_to_200_chars_with_ellipsis() -> None:
+    """An issue body whose first line exceeds 200 chars is clipped to exactly 200.
+
+    The truncated summary ends with ``"…"`` (U+2026, one unicode
+    character) so operators reading recall / brief output see at a
+    glance that the preview was cut. The Phase 7 mappers
+    (Slack / MS365 / Box) use the same shape — the cross-connector
+    convention is pinned in :func:`test_summary_max_chars_constant_pins_phase7_convention`.
+    """
+    long_body = "a" * 250
+    payload = _issue_payload(1, body=long_body)
+    routes = {
+        ("GET", "/repos/owner/repo/issues"): httpx.Response(200, json=[payload]),
+    }
+    with _client(routes) as client:
+        items = list(list_issues_since("owner/repo", None, token=_TOKEN, client=client))
+
+    assert len(items) == 1
+    summary = items[0].summary
+    assert summary is not None
+    assert len(summary) == SUMMARY_MAX_CHARS
+    assert summary.endswith("…")
+    # The clipped prefix matches the input verbatim up to the ellipsis.
+    assert summary[:-1] == "a" * (SUMMARY_MAX_CHARS - 1)
+
+
+def test_summary_short_first_line_preserved_verbatim() -> None:
+    """A first line shorter than the cap survives the mapper unchanged.
+
+    Pins that the truncation helper is a no-op below the cap — long-form
+    PR descriptions stay readable in recall output rather than being
+    artificially clipped.
+    """
+    payload = _pr_payload(1, updated_at="2026-05-15T12:00:00Z", body="short body line")
+    routes = {
+        ("GET", "/repos/owner/repo/pulls"): httpx.Response(200, json=[payload]),
+    }
+    with _client(routes) as client:
+        items = list(list_pulls_since("owner/repo", None, token=_TOKEN, client=client))
+
+    assert len(items) == 1
+    assert items[0].summary == "short body line"
+
+
+def test_summary_exactly_at_cap_preserved_verbatim() -> None:
+    """A first line whose length is *exactly* :data:`SUMMARY_MAX_CHARS` is returned verbatim.
+
+    Mirrors the Phase 7 boundary contract — appending the ellipsis at
+    the boundary would push past the cap and defeat the truncation
+    rule. Pinned here so a future refactor that flips the comparison
+    from ``<=`` to ``<`` fails loudly instead of silently overshooting.
+    """
+    body = "x" * SUMMARY_MAX_CHARS
+    payload = _issue_payload(1, body=body)
+    routes = {
+        ("GET", "/repos/owner/repo/issues"): httpx.Response(200, json=[payload]),
+    }
+    with _client(routes) as client:
+        items = list(list_issues_since("owner/repo", None, token=_TOKEN, client=client))
+
+    assert items[0].summary == body
+    assert len(items[0].summary or "") == SUMMARY_MAX_CHARS
+
+
+def test_summary_empty_body_handled() -> None:
+    """``body=""`` and ``body=None`` both yield ``summary=None`` (no exception)."""
+    payload_empty = _issue_payload(1, body="")
+    payload_none = _issue_payload(2, body=None)
+    routes = {
+        ("GET", "/repos/owner/repo/issues"): httpx.Response(
+            200, json=[payload_empty, payload_none]
+        ),
+    }
+    with _client(routes) as client:
+        items = list(list_issues_since("owner/repo", None, token=_TOKEN, client=client))
+
+    assert len(items) == 2
+    assert all(it.summary is None for it in items)
+
+
+def test_summary_truncates_long_first_line_of_multiline_body() -> None:
+    """Truncation runs on the *first line*, not the whole body.
+
+    The historical contract is that ``_first_line`` picks the first
+    non-empty stripped line and clips it; trailing lines are
+    discarded. This test pins both halves — only the first line
+    reaches the mapper, and that line is then clamped to the cap.
+    """
+    long_first_line = "first " * 50  # ~300 chars
+    body = f"{long_first_line}\nsecond line\nthird line"
+    payload = _issue_payload(1, body=body)
+    routes = {
+        ("GET", "/repos/owner/repo/issues"): httpx.Response(200, json=[payload]),
+    }
+    with _client(routes) as client:
+        items = list(list_issues_since("owner/repo", None, token=_TOKEN, client=client))
+
+    summary = items[0].summary
+    assert summary is not None
+    assert len(summary) == SUMMARY_MAX_CHARS
+    assert summary.endswith("…")
+    # The discarded lines never appear in the mapped summary.
+    assert "second line" not in summary
+    assert "third line" not in summary
+
+
+def test_summary_preserves_unicode_character_count() -> None:
+    """The cap counts unicode characters, not UTF-8 bytes.
+
+    A 250-char Japanese body becomes a 200-character summary (NOT a
+    200-byte truncation that mangles a multi-byte glyph mid-codepoint).
+    The Phase 7 connectors take the same stance — using
+    :func:`len` on a ``str`` counts code points so emoji / CJK
+    summaries are clipped on glyph boundaries.
+    """
+    japanese_body = "あ" * 250  # 250 chars, 750 UTF-8 bytes
+    payload = _issue_payload(1, body=japanese_body)
+    routes = {
+        ("GET", "/repos/owner/repo/issues"): httpx.Response(200, json=[payload]),
+    }
+    with _client(routes) as client:
+        items = list(list_issues_since("owner/repo", None, token=_TOKEN, client=client))
+
+    summary = items[0].summary
+    assert summary is not None
+    assert len(summary) == SUMMARY_MAX_CHARS
+    assert summary.endswith("…")
+    # The non-ellipsis prefix is a contiguous run of the input character —
+    # no mid-codepoint split.
+    assert summary[:-1] == "あ" * (SUMMARY_MAX_CHARS - 1)
+
+
+def test_notification_long_reason_truncated() -> None:
+    """``notification.reason`` is also subject to the 200-char cap.
+
+    The reason field is normally a short enum-like string (``"mention"``,
+    ``"subscribed"``, ...) but GitHub does not contractually bound its
+    length, so the mapper truncates defensively to keep the Pydantic
+    ``SourceObserved.summary`` ``max_length=200`` happy.
+    """
+    long_reason = "r" * 250
+    payload: dict[str, object] = {
+        "id": "123",
+        "reason": long_reason,
+        "subject": {"title": "subject", "url": "https://example.invalid/x"},
+        "updated_at": "2026-05-15T11:00:00Z",
+    }
+    routes = {
+        ("GET", "/notifications"): httpx.Response(200, json=[payload]),
+    }
+    with _client(routes) as client:
+        items = list(list_notifications(token=_TOKEN, client=client))
+
+    summary = items[0].summary
+    assert summary is not None
+    assert len(summary) == SUMMARY_MAX_CHARS
+    assert summary.endswith("…")
+
+
+def test_title_truncated_to_500_chars_with_ellipsis() -> None:
+    """A title longer than :data:`TITLE_MAX_CHARS` is clamped, not propagated raw.
+
+    Before this PR, the GitHub mapper forwarded the API ``title``
+    verbatim — a 600-char title would crash downstream at the
+    :class:`SourceObserved.title` ``max_length=500`` Pydantic bound.
+    Truncating defensively here keeps the connector robust against
+    operator-authored edge cases (Issue / PR titles have no
+    GitHub-side cap).
+    """
+    long_title = "t" * 600
+    payload = _issue_payload(1)
+    payload["title"] = long_title
+    routes = {
+        ("GET", "/repos/owner/repo/issues"): httpx.Response(200, json=[payload]),
+    }
+    with _client(routes) as client:
+        items = list(list_issues_since("owner/repo", None, token=_TOKEN, client=client))
+
+    title = items[0].title
+    assert len(title) == TITLE_MAX_CHARS
+    assert title.endswith("…")
+    assert title[:-1] == "t" * (TITLE_MAX_CHARS - 1)
+
+
+def test_title_short_preserved_verbatim() -> None:
+    """A title below the cap survives unchanged — no spurious ellipsis."""
+    payload = _issue_payload(42)  # default title "issue #42"
+    routes = {
+        ("GET", "/repos/owner/repo/issues"): httpx.Response(200, json=[payload]),
+    }
+    with _client(routes) as client:
+        items = list(list_issues_since("owner/repo", None, token=_TOKEN, client=client))
+
+    assert items[0].title == "issue #42"
+    assert not items[0].title.endswith("…")

@@ -86,6 +86,13 @@ def test_source_observed_full_fields() -> None:
         ("source_type", "x" * 51),
         ("title", ""),
         ("title", "x" * 501),
+        # ADR-0005 + ADR-0010 Phase 7 Validation §3: every connector
+        # caps the persisted summary at 200 unicode characters. The
+        # schema-side cap fails fast if a connector ever forgets to
+        # truncate, complementing the per-connector
+        # ``SUMMARY_MAX_CHARS = 200`` constants (Slack / MS365 / Box /
+        # GitHub mappers).
+        ("summary", "x" * 201),
     ],
 )
 def test_source_observed_rejects_out_of_range_strings(field: str, value: str) -> None:
@@ -110,11 +117,14 @@ def test_source_observed_accepts_max_length_strings() -> None:
         external_id="x" * 200,
         source_type="x" * 50,
         title="x" * 500,
+        summary="x" * 200,
     )
     assert len(event.connector_name) == 50
     assert len(event.external_id) == 200
     assert len(event.source_type) == 50
     assert len(event.title) == 500
+    assert event.summary is not None
+    assert len(event.summary) == 200
 
 
 # ---- SourceReferenced ------------------------------------------------------

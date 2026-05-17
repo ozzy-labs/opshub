@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 __all__ = [
+    "SUMMARY_MAX_CHARS",
+    "TITLE_MAX_CHARS",
     "GitHubAPIError",
     "GitHubAuthError",
     "GitHubItem",
@@ -53,6 +55,31 @@ _DEFAULT_BASE_URL = "https://api.github.com"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _DEFAULT_PER_PAGE = 100
 _USER_AGENT = "opshub-connector/0.1"
+
+#: Hard cap on :attr:`GitHubItem.summary` (in unicode characters) enforced
+#: by :func:`_normalise_issue` / :func:`_normalise_pull` /
+#: :func:`_normalise_notification`. The cap matches the Phase 7
+#: connectors' ``SUMMARY_MAX_CHARS = 200`` convention (Slack / MS365 /
+#: Box mappers) so every ``SourceObserved`` row in the event log obeys
+#: ADR-0005 (External Content Minimization) uniformly. ADR-0010 Phase 7
+#: Validation §3 pins the rule ("全 connector で summary ≤ 200 chars
+#: enforce") — this constant is the GitHub-side enforcement point.
+#:
+#: The :class:`opshub.domain.events.SourceObserved` Pydantic model also
+#: carries ``max_length=200`` on its ``summary`` field; the mapper-side
+#: truncation here lets the GitHub connector ship long-body issues
+#: gracefully instead of raising :class:`pydantic.ValidationError`.
+SUMMARY_MAX_CHARS = 200
+
+#: Hard cap on :attr:`GitHubItem.title` (in unicode characters). Mirrors
+#: :class:`SourceObserved`'s ``title`` ``max_length=500`` Pydantic
+#: constraint so the mapper clamps long GitHub titles defensively
+#: rather than relying on a downstream ``ValidationError`` to surface
+#: the problem. The GitHub REST API rarely emits titles longer than a
+#: few hundred chars, but Issue / PR titles are user-input and have no
+#: server-side cap, so a defensive clamp here keeps the connector
+#: robust against operator-authored edge cases.
+TITLE_MAX_CHARS = 500
 
 
 class GitHubAPIError(OpsHubError):
@@ -84,13 +111,23 @@ class GitHubItem:
         external_id: the canonical reference within ``connector_name="github"``
             -- for issues / PRs: ``"<owner>/<repo>#<number>"``; for
             notifications: the notification ``id`` (stringified)
-        title: 1-line title (truncated at 500 chars at the call site
-            if needed -- the API rarely exceeds that)
+        title: 1-line title clamped to :data:`TITLE_MAX_CHARS` (500)
+            unicode characters by the normaliser. The GitHub REST API
+            rarely exceeds that, but Issue / PR titles are user-input
+            without a server-side cap so the mapper truncates
+            defensively to satisfy :class:`SourceObserved.title`'s
+            ``max_length=500`` Pydantic bound. A clipped title gains a
+            trailing ``"…"`` (U+2026) so operators see it was cut.
         url: the canonical web URL (``html_url`` for issues / PRs,
             constructed from ``subject.url`` for notifications)
         summary: a 1-2 sentence summary derived from the API payload
-            (e.g. issue ``body`` first line, or notification reason).
-            ``None`` if the API gave nothing usable.
+            (e.g. issue ``body`` first line, or notification reason),
+            clamped to :data:`SUMMARY_MAX_CHARS` (200) unicode
+            characters with a trailing ``"…"`` when truncated. ``None``
+            if the API gave nothing usable. The cap honours ADR-0005
+            (External Content Minimization) and matches Phase 7
+            connectors (Slack / MS365 / Box) so every connector ships
+            uniform summary shape — see ADR-0010 Phase 7 Validation §3.
         updated_at: the API-reported ``updated_at`` (tz-aware UTC), used
             by the connector to advance its cursor.
     """
@@ -274,7 +311,7 @@ def _normalise_issue(repo: str, item: dict[str, Any]) -> GitHubItem:
     return GitHubItem(
         source_type="issue",
         external_id=f"{repo}#{item['number']}",
-        title=item["title"],
+        title=_truncate(item["title"], TITLE_MAX_CHARS),
         url=item["html_url"],
         summary=_first_line(item.get("body")),
         updated_at=_parse_iso_utc(item["updated_at"]),
@@ -285,7 +322,7 @@ def _normalise_pull(repo: str, item: dict[str, Any], *, updated_at: datetime) ->
     return GitHubItem(
         source_type="pull_request",
         external_id=f"{repo}#{item['number']}",
-        title=item["title"],
+        title=_truncate(item["title"], TITLE_MAX_CHARS),
         url=item["html_url"],
         summary=_first_line(item.get("body")),
         updated_at=updated_at,
@@ -303,19 +340,64 @@ def _normalise_notification(item: dict[str, Any]) -> GitHubItem:
     subject_title = subject.get("title")
     title: str = subject_title if isinstance(subject_title, str) and subject_title else "(no title)"
     reason = item.get("reason")
-    summary: str | None = reason if isinstance(reason, str) else None
+    raw_summary: str | None = reason if isinstance(reason, str) else None
     return GitHubItem(
         source_type="notification",
         external_id=str(item["id"]),
-        title=title,
+        title=_truncate(title, TITLE_MAX_CHARS),
         url=url,
-        summary=summary,
+        summary=_truncate_optional(raw_summary, SUMMARY_MAX_CHARS),
         updated_at=_parse_iso_utc(item["updated_at"]),
     )
 
 
 def _first_line(text: str | None) -> str | None:
+    """Return the first non-empty line of ``text`` clamped to :data:`SUMMARY_MAX_CHARS`.
+
+    Phase 3 originally returned the whole first line verbatim, which
+    could exceed :class:`SourceObserved.summary`'s 200-char Pydantic
+    cap and trigger a :class:`pydantic.ValidationError` on long-issue
+    bodies. The truncation here enforces ADR-0005 (External Content
+    Minimization) at the mapper layer — matching Phase 7 connectors
+    (Slack / MS365 / Box) which carry their own
+    ``SUMMARY_MAX_CHARS = 200`` constant. ADR-0010 Phase 7 Validation
+    §3 pins the rule across every connector.
+
+    A clipped line gains a trailing ``"…"`` (U+2026) so operators see
+    at a glance that the preview was cut; the ellipsis is one unicode
+    *character* (not three ASCII dots) so the cap counts in
+    character-terms rather than byte-terms, matching the Phase 7
+    precedent.
+    """
     if not text:
         return None
     head = text.strip().splitlines()
-    return head[0] if head else None
+    if not head:
+        return None
+    return _truncate(head[0], SUMMARY_MAX_CHARS)
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    """Truncate ``text`` to ``max_chars`` unicode characters with a ``"…"`` tail.
+
+    Mirrors the Phase 7 connector convention (see
+    :mod:`opshub.connectors.slack.mapper._truncate` and
+    :mod:`opshub.connectors.box.mapper._build_summary`): a value that
+    is **exactly** ``max_chars`` characters is returned verbatim, and
+    a longer value is clipped to ``max_chars - 1`` characters with a
+    single ``"…"`` appended so the final string is exactly
+    ``max_chars`` characters long. The ellipsis is one unicode
+    character so the cap counts in character-terms rather than
+    byte-terms — emoji / Japanese / CJK summaries are counted by
+    glyph, not by UTF-8 byte width.
+    """
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1] + "…"
+
+
+def _truncate_optional(text: str | None, max_chars: int) -> str | None:
+    """``None``-tolerant wrapper around :func:`_truncate` for nullable summary fields."""
+    if text is None:
+        return None
+    return _truncate(text, max_chars)
