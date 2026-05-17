@@ -37,6 +37,7 @@ from opshub.projections.ingested_files import (
     ingested_files_table,
 )
 from opshub.projections.locks import LocksProjection, locks_table
+from opshub.projections.proposals import ProposalsProjection, proposals_table
 from opshub.projections.rebuild import rebuild_all
 from opshub.projections.registry import all_projections
 from opshub.projections.sources import SourcesProjection, sources_table
@@ -53,6 +54,7 @@ __all__ = [
     "IngestedFilesProjection",
     "LocksProjection",
     "Projection",
+    "ProposalsProjection",
     "SourcesProjection",
     "TasksProjection",
     "WorkSessionsProjection",
@@ -65,6 +67,7 @@ __all__ = [
     "inbox_items_table",
     "ingested_files_table",
     "locks_table",
+    "proposals_table",
     "rebuild_all",
     "sources_table",
     "tasks_table",

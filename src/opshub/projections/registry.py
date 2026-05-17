@@ -24,6 +24,7 @@ from opshub.projections.handoffs import HandoffsProjection
 from opshub.projections.inbox import InboxProjection
 from opshub.projections.ingested_files import IngestedFilesProjection
 from opshub.projections.locks import LocksProjection
+from opshub.projections.proposals import ProposalsProjection
 from opshub.projections.sources import SourcesProjection
 from opshub.projections.tasks import TasksProjection
 from opshub.projections.work_sessions import WorkSessionsProjection
@@ -45,4 +46,5 @@ def all_projections() -> list[Projection]:
         ConnectorCursorsProjection(),
         IngestedFilesProjection(),
         BriefingsProjection(),
+        ProposalsProjection(),
     ]
