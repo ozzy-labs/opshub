@@ -162,8 +162,11 @@ def auth_set(
     the ``OPSHUB_CONNECTOR_<NAME>_PAT`` env var to override at runtime
     without touching the keychain (useful for CI / containers).
 
-    Currently supported names: ``github``. Other connectors (Slack /
-    MS365 / Box) land in Phase 3.x.
+    Currently supported names: ``github``, ``embedder:openai``,
+    ``embedder:voyage``. Other connectors (Slack / MS365 / Box) land
+    in Phase 3.x; additional embedder backends would extend this
+    switch alongside their factory branch in
+    :mod:`opshub.vectors.factory`.
 
     Security: there is intentionally no ``auth get`` command — we never
     echo tokens to stdout. The env-var override is the documented
@@ -177,9 +180,23 @@ def auth_set(
         from opshub.connectors.github.auth import GITHUB_PAT_SECRET_KEY
 
         key = GITHUB_PAT_SECRET_KEY
+    elif name == "embedder:openai":
+        # The embedder modules export the keyring key as a module
+        # constant so the CLI writer + embedder reader cannot drift.
+        # Lazy-imported per-branch so the OpenAI / Voyage SDK paths
+        # remain off the cold-start path when the operator never uses
+        # them.
+        from opshub.vectors.openai_embedder import OPENAI_API_KEY_SECRET
+
+        key = OPENAI_API_KEY_SECRET
+    elif name == "embedder:voyage":
+        from opshub.vectors.voyage_embedder import VOYAGE_API_KEY_SECRET
+
+        key = VOYAGE_API_KEY_SECRET
     else:
         typer.echo(
-            f"unknown connector {name!r}; currently supported: github",
+            f"unknown auth target {name!r}; currently supported: "
+            "github, embedder:openai, embedder:voyage",
             err=True,
         )
         raise typer.Exit(code=2)
