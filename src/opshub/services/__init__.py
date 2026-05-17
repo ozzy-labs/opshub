@@ -26,6 +26,7 @@ from opshub.services.event_store import EventStore, InMemoryEventStore
 from opshub.services.file_ingest_service import FileIngestResult, FileIngestService
 from opshub.services.handoff_service import HandoffRow, HandoffService
 from opshub.services.inbox_service import InboxService
+from opshub.services.links import Link, LinkPath, LinkService
 from opshub.services.lock_service import LockRow, LockService
 from opshub.services.projector import NoOpProjector, Projector
 from opshub.services.proposals import Proposal, ProposalService
@@ -54,6 +55,9 @@ __all__ = [
     "HandoffService",
     "InMemoryEventStore",
     "InboxService",
+    "Link",
+    "LinkPath",
+    "LinkService",
     "LockRow",
     "LockService",
     "NoOpProjector",
