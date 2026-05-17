@@ -204,9 +204,10 @@ def test_auth_set_unknown_connector(
     Phase 4 step B3 extends the supported list to include the
     ``embedder:openai`` / ``embedder:voyage`` API-key targets alongside
     ``github``. Phase 5 step A5 further adds ``llm:anthropic`` /
-    ``llm:openai`` (ADR-0015 §決定 (d)). Phase 7 step A1 adds ``slack``.
-    The error must enumerate every supported name so the operator can
-    copy-paste the right one.
+    ``llm:openai`` (ADR-0015 §決定 (d)). Phase 7 step A1 adds ``slack``
+    and step B1 adds ``connector:ms365`` (interactive OAuth paste-code
+    flow). The error must enumerate every supported name so the
+    operator can copy-paste the right one.
     """
     runner = CliRunner()
     result = runner.invoke(app, ["connector", "auth", "set", "ms365", "--token", "x"])
@@ -221,6 +222,7 @@ def test_auth_set_unknown_connector(
     assert "embedder:voyage" in result.stderr
     assert "llm:anthropic" in result.stderr
     assert "llm:openai" in result.stderr
+    assert "connector:ms365" in result.stderr
 
 
 # ----- embedder API-key targets (Phase 4 step B3) -----------------------

@@ -162,11 +162,20 @@ def auth_set(
     the ``OPSHUB_CONNECTOR_<NAME>_PAT`` env var to override at runtime
     without touching the keychain (useful for CI / containers).
 
-    Currently supported names: ``github``, ``slack``, ``embedder:openai``,
-    ``embedder:voyage``, ``llm:anthropic``, ``llm:openai``. Other
-    connectors (MS365 / Box) land later in Phase 7; additional LLM /
-    embedder backends would extend this switch alongside their factory
-    branch in :mod:`opshub.llm.factory` / :mod:`opshub.vectors.factory`.
+    Currently supported names: ``github``, ``slack``,
+    ``embedder:openai``, ``embedder:voyage``, ``llm:anthropic``,
+    ``llm:openai``, ``connector:ms365``. The remaining Phase 7
+    connector (Box) lands in a later step; additional LLM / embedder
+    backends would extend this switch alongside their factory branch
+    in :mod:`opshub.llm.factory` / :mod:`opshub.vectors.factory`.
+
+    The ``connector:ms365`` target is special-cased: the Microsoft 365
+    credential is an OAuth refresh token rather than a single-string
+    bearer, so this command dispatches to the interactive paste-code
+    flow in :mod:`opshub.cli._ms365_oauth`. The ``--token`` flag is
+    ignored for that target (the OAuth flow has no use for a
+    pre-baked token), which we surface as an explicit warning rather
+    than silently dropping it.
 
     Security: there is intentionally no ``auth get`` command — we never
     echo tokens to stdout. The env-var override is the documented
@@ -175,6 +184,21 @@ def auth_set(
     # Lazy imports keep CLI cold start fast (ADR-0001) and keep this
     # module compatible with ``tests/integration/test_cli_imports``.
     from opshub.core.secrets import set_secret
+
+    if name == "connector:ms365":
+        # MS365 needs an interactive OAuth dance; ``--token`` is
+        # meaningless on this path and silently dropping it would
+        # confuse operators who tried to script the auth set.
+        if token is not None:
+            typer.echo(
+                "warning: --token is ignored for connector:ms365 "
+                "(OAuth paste-code flow is used instead)",
+                err=True,
+            )
+        from opshub.cli._ms365_oauth import run_paste_code_flow
+
+        run_paste_code_flow()
+        return
 
     if name == "github":
         from opshub.connectors.github.auth import GITHUB_PAT_SECRET_KEY
@@ -220,7 +244,7 @@ def auth_set(
         typer.echo(
             f"unknown auth target {name!r}; currently supported: "
             "github, slack, embedder:openai, embedder:voyage, "
-            "llm:anthropic, llm:openai",
+            "llm:anthropic, llm:openai, connector:ms365",
             err=True,
         )
         raise typer.Exit(code=2)
