@@ -9,7 +9,7 @@ from opshub.cli.app import app
 
 
 def test_version_constant_is_set() -> None:
-    assert __version__ == "0.0.0"
+    assert __version__ == "0.1.0"
 
 
 def test_cli_version_command() -> None:

@@ -1,6 +1,6 @@
 [project]
 name = "opshub"
-version = "0.0.0"
+version = "0.1.0"
 description = "Local-first operational memory and execution hub for humans and AI agents"
 readme = "README.md"
 license = { text = "MIT" }
