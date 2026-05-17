@@ -1,26 +1,33 @@
 """Microsoft 365 connector (Phase 7 sub-issue B).
 
-Step B1 lands the auth surface only — :mod:`opshub.connectors.ms365.auth`
-implements the OAuth 2.0 authorization-code (paste-code default) flow on
-top of :mod:`msal` and persists the refresh token through
-:mod:`opshub.core.secrets` (ADR-0014). Subsequent steps (B2 fetcher, B3
-mapper) layer on the Microsoft Graph fetcher and the
-``SourceObserved`` mapper; until those land the connector is **not**
-registered with :mod:`opshub.connectors._registry` — the auth module
-is callable directly via the CLI flow added in
-:mod:`opshub.cli.connectors.ms365_oauth`.
+Step B1 lands the auth surface (:mod:`opshub.connectors.ms365.auth`),
+step B2 adds the Microsoft Graph fetcher
+(:mod:`opshub.connectors.ms365.fetcher`), and step B3 wires the mapper
+(:mod:`opshub.connectors.ms365.mapper`) + connector
+(:mod:`opshub.connectors.ms365.connector`) into the framework registry.
 
-Heavy imports (``msal``) stay lazy inside the auth submodule's
-constructor so importing this package never pays the cold-start cost
-for operators who have not opted into the ``[connectors-ms365]``
-extras (ADR-0001 lazy-import rule, enforced by
-``tests/integration/test_cli_imports``).
+Importing this package now registers :class:`MS365Connector` with the
+process-wide registry so ``opshub connector sync ms365`` can discover
+it (mirrors the Phase 3 GitHub pattern). Heavy SDK imports (``msal``,
+``httpx``) stay lazy inside :class:`MS365Auth` / :class:`MS365Fetcher`
+constructors — importing this package itself only pulls in the
+framework primitives + a single ``register_connector`` call, which
+keeps the ADR-0001 cold-start budget intact (the call site lives
+inside the CLI command callback in :mod:`opshub.cli.connector`, so it
+never runs on the ``opshub --help`` path).
 """
 
 from __future__ import annotations
 
-# Intentionally empty re-export surface for step B1. The auth helper is
-# exposed at the submodule path (``opshub.connectors.ms365.auth``) so
-# the CLI wiring layer can import it lazily without dragging the whole
-# package surface onto cold start.
-__all__: list[str] = []
+from opshub.connectors._registry import register_connector
+from opshub.connectors.ms365.connector import MS365Connector
+
+__all__ = ["MS365Connector"]
+
+# Register exactly once on first import. The registry's idempotency
+# rule (registering the *same* instance twice is a no-op) makes this
+# safe even when importers come in via several paths within a single
+# process; registering a *different* instance under the same name
+# would raise — which is what we want if a future refactor accidentally
+# ships two MS365Connector classes.
+register_connector(MS365Connector())
