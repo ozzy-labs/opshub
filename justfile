@@ -49,8 +49,14 @@ opshub *args:
     uv run opshub {{args}}
 
 # Full CI mirror. Mirrors what .github/workflows/ci.yaml will run.
+#
+# The ``connectors-github`` extras is included so that type-checkers
+# (pyright, mypy) and pytest can resolve ``httpx`` -- which is required
+# by ``opshub.connectors.github.api`` (Phase 3 step B2). The cold-start
+# guard test still asserts that ``httpx`` does NOT leak onto the
+# ``opshub --help`` path (see ``tests/integration/test_cli_imports.py``).
 ci:
-    uv sync --locked --extra dev
+    uv sync --locked --extra dev --extra connectors-github
     uv run ruff check
     uv run ruff format --check
     uv run pyright

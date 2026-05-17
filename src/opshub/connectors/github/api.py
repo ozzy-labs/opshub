@@ -1,0 +1,321 @@
+"""GitHub REST API thin wrappers (Phase 3 step B2).
+
+Pure I/O primitives for fetching Issues / Pull Requests / Notifications.
+B3 (GitHubConnector) composes these into the sync workflow:
+
+    cursor (= last updated_at ISO 8601) -> list_*_since(repo, cursor)
+        -> for each item: source_service.observe(...)
+        -> new cursor = max(updated_at across items)
+
+Why httpx over PyGithub (per docs/phase-3-plan.md Open Q #1):
+
+- ~5x lighter import footprint (relevant to the cold-start budget,
+  even though this module is only imported when ``opshub connector
+  sync github`` runs -- connectors/github/api.py never appears on the
+  ``opshub --help`` cold path per the M6 import-whitelist test)
+- Direct control over the ``If-Modified-Since`` / ``ETag`` semantics
+  we need for incremental sync
+- Static type integrity: httpx has clean type hints; PyGithub's
+  ``GithubObject`` lazy attribute system trips pyright strict
+
+This module is intentionally narrow -- Phase 3 MVP fetches 3 entity
+types. Slack / MS365 / Box will be entirely separate modules and
+will NOT inherit from this. Resist the urge to factor a shared
+``BaseHttpConnector``; each SaaS has its own auth / pagination /
+rate-limit shape, and a premature base would lock in GitHub's
+quirks.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, cast
+
+import httpx
+
+from opshub.core.errors import OpsHubError
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+__all__ = [
+    "GitHubAPIError",
+    "GitHubAuthError",
+    "GitHubItem",
+    "GitHubRateLimitError",
+    "list_issues_since",
+    "list_notifications",
+    "list_pulls_since",
+]
+
+_DEFAULT_BASE_URL = "https://api.github.com"
+_DEFAULT_TIMEOUT_SECONDS = 30.0
+_DEFAULT_PER_PAGE = 100
+_USER_AGENT = "opshub-connector/0.1"
+
+
+class GitHubAPIError(OpsHubError):
+    """Generic GitHub API failure (non-success status outside the auth / rate-limit branches)."""
+
+
+class GitHubAuthError(GitHubAPIError):
+    """Raised on 401 -- the PAT is missing or revoked. Caller should surface to the user."""
+
+
+class GitHubRateLimitError(GitHubAPIError):
+    """Raised on 403 with a primary / secondary rate-limit response.
+
+    Caller should fail-fast (Phase 3 Section 4 Q3).
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubItem:
+    """Normalised view of one fetched GitHub item.
+
+    Connector code reads only these fields. The raw API response is
+    discarded after normalisation so the connector layer never sees
+    payloads we did not intend to retain (ADR-0005 External Content
+    Minimization).
+
+    Attributes:
+        source_type: ``"issue"`` / ``"pull_request"`` / ``"notification"``
+        external_id: the canonical reference within ``connector_name="github"``
+            -- for issues / PRs: ``"<owner>/<repo>#<number>"``; for
+            notifications: the notification ``id`` (stringified)
+        title: 1-line title (truncated at 500 chars at the call site
+            if needed -- the API rarely exceeds that)
+        url: the canonical web URL (``html_url`` for issues / PRs,
+            constructed from ``subject.url`` for notifications)
+        summary: a 1-2 sentence summary derived from the API payload
+            (e.g. issue ``body`` first line, or notification reason).
+            ``None`` if the API gave nothing usable.
+        updated_at: the API-reported ``updated_at`` (tz-aware UTC), used
+            by the connector to advance its cursor.
+    """
+
+    source_type: str
+    external_id: str
+    title: str
+    url: str
+    summary: str | None
+    updated_at: datetime
+
+
+def list_issues_since(
+    repo: str,
+    since: datetime | None,
+    *,
+    token: str,
+    client: httpx.Client | None = None,
+) -> Iterator[GitHubItem]:
+    """Yield issues updated at or after ``since``.
+
+    Uses ``GET /repos/{owner}/{repo}/issues?since=...&state=all&per_page=100``
+    and paginates via the ``Link: <...>; rel="next"`` header. The
+    GitHub Issues API returns *both* issues and pull requests; we
+    filter out pull requests here (an issue payload that carries a
+    ``pull_request`` key is actually a PR -- those are fetched by
+    ``list_pulls_since``).
+    """
+    params: dict[str, str] = {"state": "all", "per_page": str(_DEFAULT_PER_PAGE)}
+    if since is not None:
+        params["since"] = _to_iso_utc(since)
+    path = f"/repos/{repo}/issues"
+    for item in _paginate(path, params, token=token, client=client):
+        if item.get("pull_request") is not None:
+            continue
+        yield _normalise_issue(repo, item)
+
+
+def list_pulls_since(
+    repo: str,
+    since: datetime | None,
+    *,
+    token: str,
+    client: httpx.Client | None = None,
+) -> Iterator[GitHubItem]:
+    """Yield pull requests updated at or after ``since``.
+
+    Uses ``GET /repos/{owner}/{repo}/pulls?state=all&sort=updated&direction=desc&per_page=100``
+    and short-circuits pagination once an item's ``updated_at`` is
+    older than ``since`` (the pulls endpoint does not honour
+    ``?since=`` directly, unlike issues; sort + walk-and-stop is the
+    documented workaround in GitHub's API guide).
+    """
+    params: dict[str, str] = {
+        "state": "all",
+        "sort": "updated",
+        "direction": "desc",
+        "per_page": str(_DEFAULT_PER_PAGE),
+    }
+    path = f"/repos/{repo}/pulls"
+    for item in _paginate(path, params, token=token, client=client):
+        updated_at = _parse_iso_utc(item["updated_at"])
+        if since is not None and updated_at < since:
+            break  # subsequent pages are even older
+        yield _normalise_pull(repo, item, updated_at=updated_at)
+
+
+def list_notifications(
+    *,
+    token: str,
+    since: datetime | None = None,
+    client: httpx.Client | None = None,
+) -> Iterator[GitHubItem]:
+    """Yield notifications for the authenticated user.
+
+    Uses ``GET /notifications?per_page=100`` and (when ``since`` is
+    set) the ``since`` query param for cache friendliness. Unlike
+    issues / pulls there is no per-repo scope here -- notifications
+    are user-scoped.
+    """
+    params: dict[str, str] = {"per_page": str(_DEFAULT_PER_PAGE)}
+    if since is not None:
+        params["since"] = _to_iso_utc(since)
+    for item in _paginate("/notifications", params, token=token, client=client):
+        yield _normalise_notification(item)
+
+
+# ---------- helpers (private) ----------
+
+
+def _paginate(
+    path: str,
+    params: dict[str, str],
+    *,
+    token: str,
+    client: httpx.Client | None,
+) -> Iterator[dict[str, Any]]:
+    owns_client = client is None
+    if client is None:
+        client = httpx.Client(
+            base_url=_DEFAULT_BASE_URL,
+            timeout=_DEFAULT_TIMEOUT_SECONDS,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": _USER_AGENT,
+                "Authorization": f"Bearer {token}",
+            },
+        )
+    # Caller-supplied client: assume the auth header is already set.
+    try:
+        url: str | None = path
+        request_params: dict[str, str] | None = params
+        while url is not None:
+            response = client.get(url, params=request_params)
+            _raise_for_status(response)
+            payload: object = response.json()
+            if not isinstance(payload, list):
+                raise GitHubAPIError(
+                    f"unexpected GitHub response shape at {url}: "
+                    f"expected list, got {type(payload).__name__}"
+                )
+            # The isinstance narrow above gives us ``list`` but pyright
+            # widens its element type to Unknown -- cast to the documented
+            # GitHub contract (JSON objects keyed by string).
+            items = cast(list[dict[str, Any]], payload)
+            yield from items
+            # On subsequent pages the Link header already encodes ``per_page`` etc.
+            request_params = None
+            url = _next_link(response.headers.get("link"))
+    finally:
+        if owns_client:
+            client.close()
+
+
+def _raise_for_status(response: httpx.Response) -> None:
+    if response.status_code == 401:
+        raise GitHubAuthError("GitHub returned 401 -- token missing or revoked")
+    if response.status_code == 403 and "rate limit" in response.text.lower():
+        raise GitHubRateLimitError(
+            f"GitHub rate limit hit (status 403); retry after "
+            f"{response.headers.get('X-RateLimit-Reset', 'unknown')}"
+        )
+    if response.status_code >= 400:
+        raise GitHubAPIError(
+            f"GitHub returned {response.status_code} for "
+            f"{response.request.url}: {response.text[:200]}"
+        )
+
+
+def _next_link(link_header: str | None) -> str | None:
+    if not link_header:
+        return None
+    for part in link_header.split(","):
+        section = part.strip()
+        if section.endswith('rel="next"'):
+            # Section format: ``<https://...>; rel="next"``
+            url_part = section.split(";", 1)[0].strip()
+            if url_part.startswith("<") and url_part.endswith(">"):
+                return url_part[1:-1]
+    return None
+
+
+def _to_iso_utc(dt: datetime) -> str:
+    """GitHub expects ISO 8601 in UTC ending with ``Z``.
+
+    Naive datetimes are assumed to be UTC (matching ``opshub.core.time``
+    conventions); tz-aware values are converted to UTC before formatting.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _parse_iso_utc(s: str) -> datetime:
+    """Parse the ``...Z``-suffixed ISO 8601 GitHub returns."""
+    return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def _normalise_issue(repo: str, item: dict[str, Any]) -> GitHubItem:
+    return GitHubItem(
+        source_type="issue",
+        external_id=f"{repo}#{item['number']}",
+        title=item["title"],
+        url=item["html_url"],
+        summary=_first_line(item.get("body")),
+        updated_at=_parse_iso_utc(item["updated_at"]),
+    )
+
+
+def _normalise_pull(repo: str, item: dict[str, Any], *, updated_at: datetime) -> GitHubItem:
+    return GitHubItem(
+        source_type="pull_request",
+        external_id=f"{repo}#{item['number']}",
+        title=item["title"],
+        url=item["html_url"],
+        summary=_first_line(item.get("body")),
+        updated_at=updated_at,
+    )
+
+
+def _normalise_notification(item: dict[str, Any]) -> GitHubItem:
+    raw_subject = item.get("subject")
+    subject: dict[str, Any] = (
+        cast(dict[str, Any], raw_subject) if isinstance(raw_subject, dict) else {}
+    )
+    subject_url = subject.get("url")
+    item_url = item.get("url")
+    url: str = subject_url or item_url or ""
+    subject_title = subject.get("title")
+    title: str = subject_title if isinstance(subject_title, str) and subject_title else "(no title)"
+    reason = item.get("reason")
+    summary: str | None = reason if isinstance(reason, str) else None
+    return GitHubItem(
+        source_type="notification",
+        external_id=str(item["id"]),
+        title=title,
+        url=url,
+        summary=summary,
+        updated_at=_parse_iso_utc(item["updated_at"]),
+    )
+
+
+def _first_line(text: str | None) -> str | None:
+    if not text:
+        return None
+    head = text.strip().splitlines()
+    return head[0] if head else None
