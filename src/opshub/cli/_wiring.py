@@ -40,6 +40,7 @@ if TYPE_CHECKING:
         HandoffService,
         InboxService,
         LockService,
+        ProposalService,
         RecallService,
         SourceService,
         TaskService,
@@ -58,6 +59,7 @@ __all__ = [
     "build_handoff_service",
     "build_inbox_service",
     "build_lock_service",
+    "build_proposal_service",
     "build_recall_service",
     "build_session_service",
     "build_source_service",
@@ -405,6 +407,101 @@ def build_briefing_service(actor: str = "cli:brief") -> BriefingService:
         llm_client=build_llm_client(settings),
         store=SqlAlchemyEventStore(engine),
         projector=BriefingsProjection(),
+        engine=engine,
+        actor=actor,
+        uow_factory=engine.begin,
+    )
+
+
+def build_proposal_service(actor: str = "cli:propose") -> ProposalService:
+    """Wire a :class:`ProposalService` for the configured backend.
+
+    Composes the Phase 6 proposal flow (ADR-0016):
+
+    * :class:`RecallService` for topic-relevant entity discovery
+      (Phase 4 C1; resolves the active embedder + vector store via
+      :mod:`opshub.vectors.factory` so a backend switch in config
+      takes effect on the next ``opshub propose`` invocation).
+    * :class:`LLMClient` for the structured-output chat completion
+      call (resolved via :func:`opshub.llm.factory.build_llm_client`;
+      returns a :class:`NoOpLLMClient` when ``[llm] backend =
+      "disabled"`` so the service can record :class:`ProposalFailed`
+      and propagate :class:`ConfigError` with a clear remediation
+      message).
+    * :class:`ProposalsProjection` for the read-model materialisation
+      (Phase 6 B2). The service runs ``store.append`` +
+      ``projector.apply`` on the same connection inside a single
+      transaction via ``engine.begin``.
+    * :class:`TaskService` / :class:`DecisionService` for the apply
+      path (ADR-0016 §決定 (g) — single validation path through the
+      existing entity services). Each gets its own
+      :class:`_PersistingProjector` instance so the fan-out across
+      registered projections stays consistent with the wiring used
+      by the standalone :func:`build_task_service` /
+      :func:`build_decision_service` helpers; auto-embed hooks are
+      threaded through identically so apply-driven entity creation
+      respects the operator's ``[embedding] auto`` setting.
+
+    Phase 6 step B4 will wire the actual ``opshub propose`` CLI
+    subcommand against this builder — this function is exported so
+    the CLI surface can stay thin (mirrors
+    :func:`build_briefing_service` /
+    :func:`build_duplicate_service`).
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001). The factories
+    # themselves defer the heavy embedder / LLM SDK imports to the
+    # branch the operator selected.
+    from opshub.core.config import OpsHubSettings
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.llm.factory import build_llm_client
+    from opshub.projections.proposals import ProposalsProjection
+    from opshub.services import (
+        DecisionService,
+        ProposalService,
+        RecallService,
+        TaskService,
+    )
+    from opshub.vectors.factory import build_embedder, build_vector_store
+
+    settings = OpsHubSettings()
+    engine = build_engine()
+    store = SqlAlchemyEventStore(engine)
+    # The TaskService / DecisionService each carry their own
+    # ``_PersistingProjector`` so a Phase 6 apply that creates a new
+    # task or decision dispatches through every registered projection
+    # exactly as if the operator had run ``opshub task add`` directly.
+    # Auto-embed hooks mirror the standalone wiring for the same
+    # reason — Phase 5 step C1's contract carries over to LLM-driven
+    # entity creation.
+    auto_embed_hooks = _maybe_build_auto_embed_hooks(engine)
+    task_service = TaskService(
+        store=store,
+        projector=_PersistingProjector(),
+        actor=actor,
+        uow_factory=engine.begin,
+        event_hooks=auto_embed_hooks,
+    )
+    decision_service = DecisionService(
+        store=store,
+        projector=_PersistingProjector(),
+        actor=actor,
+        uow_factory=engine.begin,
+        event_hooks=auto_embed_hooks,
+    )
+    embedder = build_embedder(settings)
+    vector_store = build_vector_store(settings, engine)
+    recall = RecallService(
+        embedder=embedder,
+        vector_store=vector_store,
+        engine=engine,
+    )
+    return ProposalService(
+        recall_service=recall,
+        llm_client=build_llm_client(settings),
+        store=store,
+        projector=ProposalsProjection(),
+        task_service=task_service,
+        decision_service=decision_service,
         engine=engine,
         actor=actor,
         uow_factory=engine.begin,
