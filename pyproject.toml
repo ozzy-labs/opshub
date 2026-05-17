@@ -41,6 +41,10 @@ connectors-github = ["httpx>=0.27", "PyGithub>=2.3"]
 connectors-slack = ["slack-sdk>=3.30"]
 connectors-msgraph = ["msgraph-sdk>=1.0"]
 connectors-box = ["boxsdk>=3.10"]
+# SaaS token storage (Phase 3, ADR-0014). OS keychain backed (macOS Keychain /
+# Linux Secret Service / Windows Credential Locker). Connectors fetch their
+# PAT / OAuth tokens through ``opshub.core.secrets``.
+secrets = ["keyring>=24"]
 # Development tools.
 dev = [
   "pytest>=8.2",
@@ -53,7 +57,7 @@ dev = [
 ]
 # Convenience: install everything a Phase 4 user typically wants.
 all = [
-  "opshub[vector,local-embedding,api-embedding-openai,connectors-github,connectors-slack]",
+  "opshub[vector,local-embedding,api-embedding-openai,connectors-github,connectors-slack,secrets]",
 ]
 
 [project.scripts]
