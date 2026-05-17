@@ -15,12 +15,14 @@ Phase 2 widened :data:`AllEvent` from ``TaskEvent`` to
 :data:`Phase2Event`. Phase 3 extends it again with :data:`Phase3Event`
 (source + connector families). Phase 4 extends it once more with
 :data:`Phase4Event` (embedding lifecycle family). Phase 5 extends it
-again with :data:`Phase5Event` (briefing lifecycle family). The five
-unions are concatenated into a single flat discriminated union (rather
-than nesting ``Annotated[..., Field(discriminator=...)]`` inside
-another) because pydantic builds the discriminator dispatch directly
-from the flat member list — nesting would force a runtime walk that we
-deliberately avoid here.
+again with :data:`Phase5Event` (briefing lifecycle family). Phase 6
+extends it once more with :data:`Phase6Event` (proposal lifecycle
+family — Action loop per ADR-0016). The six unions are concatenated
+into a single flat discriminated union (rather than nesting
+``Annotated[..., Field(discriminator=...)]`` inside another) because
+pydantic builds the discriminator dispatch directly from the flat
+member list — nesting would force a runtime walk that we deliberately
+avoid here.
 """
 
 from typing import Annotated
@@ -55,6 +57,16 @@ from opshub.domain.events.embedding import (
 from opshub.domain.events.file_ingest import FileIngested
 from opshub.domain.events.handoff import HandoffClosed, HandoffOpened
 from opshub.domain.events.inbox import ItemEnqueued, ItemTriaged
+from opshub.domain.events.proposal import (
+    Candidate,
+    DecisionCandidatePayload,
+    ProposalApplied,
+    ProposalFailed,
+    ProposalGenerated,
+    ProposalRejected,
+    ProposalRequested,
+    TaskCandidatePayload,
+)
 from opshub.domain.events.source import SourceObserved, SourceReferenced
 from opshub.domain.events.task import (
     TaskActivated,
@@ -115,15 +127,27 @@ Phase5Event = Annotated[
     Field(discriminator="event_type"),
 ]
 
+# Phase 6's discriminated union. Proposal lifecycle family (Action
+# loop, ADR-0016): request (``ProposalRequested``), success
+# (``ProposalGenerated``), per-candidate apply / reject
+# (``ProposalApplied`` / ``ProposalRejected``), and per-call failure
+# (``ProposalFailed``). ``TypeAdapter(Phase6Event)`` is the right tool
+# for tests and migration scripts that want phase-scoped
+# deserialisation.
+Phase6Event = Annotated[
+    ProposalRequested | ProposalGenerated | ProposalApplied | ProposalRejected | ProposalFailed,
+    Field(discriminator="event_type"),
+]
+
 # ``AllEvent`` is the discriminated union across every event family the
-# binary can deserialise. Phase 5 extends the alias to include the 3
-# new briefing event types on top of Phase 1 + Phase 2 + Phase 3 +
-# Phase 4. Persistence code reaches for ``AllEvent`` (never the
-# per-family unions) so the dispatch stays version-neutral — adding a
-# new family in Phase 6+ remains a one-line edit on this union (see
-# ``SqlAlchemyEventStore._decode``, which routes raw JSON through
-# ``TypeAdapter(AllEvent)`` and therefore picks up new families
-# automatically once they are listed here).
+# binary can deserialise. Phase 6 extends the alias to include the 5
+# new proposal event types on top of Phase 1 + Phase 2 + Phase 3 +
+# Phase 4 + Phase 5. Persistence code reaches for ``AllEvent`` (never
+# the per-family unions) so the dispatch stays version-neutral —
+# adding a new family in Phase 7+ remains a one-line edit on this
+# union (see ``SqlAlchemyEventStore._decode``, which routes raw JSON
+# through ``TypeAdapter(AllEvent)`` and therefore picks up new
+# families automatically once they are listed here).
 AllEvent = Annotated[
     TaskCreated
     | TaskActivated
@@ -150,7 +174,12 @@ AllEvent = Annotated[
     | EmbeddingFailed
     | BriefingRequested
     | BriefingGenerated
-    | BriefingFailed,
+    | BriefingFailed
+    | ProposalRequested
+    | ProposalGenerated
+    | ProposalApplied
+    | ProposalRejected
+    | ProposalFailed,
     Field(discriminator="event_type"),
 ]
 
@@ -161,9 +190,11 @@ __all__ = [
     "BriefingFailed",
     "BriefingGenerated",
     "BriefingRequested",
+    "Candidate",
     "ConnectorSyncCompleted",
     "ConnectorSyncFailed",
     "ConnectorSyncStarted",
+    "DecisionCandidatePayload",
     "DecisionRecorded",
     "DomainEvent",
     "EmbeddingFailed",
@@ -179,9 +210,16 @@ __all__ = [
     "Phase3Event",
     "Phase4Event",
     "Phase5Event",
+    "Phase6Event",
+    "ProposalApplied",
+    "ProposalFailed",
+    "ProposalGenerated",
+    "ProposalRejected",
+    "ProposalRequested",
     "SourceObserved",
     "SourceReferenced",
     "TaskActivated",
+    "TaskCandidatePayload",
     "TaskCompleted",
     "TaskCreated",
     "TaskEvent",
