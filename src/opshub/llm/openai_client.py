@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from opshub.llm.client import LLMClient, LLMMessage, LLMResponse
+from opshub.llm.client import LLMMessage, LLMResponse
 
 __all__ = ["OPENAI_API_KEY_SECRET", "OpenAILLMClient"]
 
@@ -44,12 +44,20 @@ __all__ = ["OPENAI_API_KEY_SECRET", "OpenAILLMClient"]
 OPENAI_API_KEY_SECRET = "llm:openai:api_key"
 
 
-class OpenAILLMClient(LLMClient):
+class OpenAILLMClient:
     """LLM client backed by OpenAI's ``/v1/chat/completions`` endpoint.
 
-    Implements :class:`opshub.llm.LLMClient`. Network / SDK access is
-    deferred until the first :meth:`complete` call so the module is safe
-    to import without the ``[llm-openai]`` extras installed.
+    Satisfies :class:`opshub.llm.LLMClient` structurally (the Protocol is
+    ``@runtime_checkable``). Following the Phase 4 embedder precedent
+    (:class:`opshub.vectors.openai_embedder.OpenAIEmbedder`), the class
+    does **not** inherit from the Protocol — structural conformance is
+    asserted by ``test_satisfies_llm_client_protocol`` instead, which
+    catches surface drift just as effectively without coupling the
+    concrete class to ``Protocol``'s metaclass machinery.
+
+    Network / SDK access is deferred until the first :meth:`complete`
+    call so the module is safe to import without the ``[llm-openai]``
+    extras installed.
     """
 
     def __init__(
