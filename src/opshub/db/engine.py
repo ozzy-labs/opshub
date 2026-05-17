@@ -34,8 +34,11 @@ from sqlalchemy.pool import ConnectionPoolEntry
 
 from opshub.core.config import OpsHubSettings
 from opshub.core.errors import ConfigError
+from opshub.core.logging import get_logger
 
 __all__ = ["create_engine_for_sqlite", "default_db_path"]
+
+_logger = get_logger(__name__)
 
 
 def default_db_path(settings: OpsHubSettings | None = None) -> Path:
@@ -83,6 +86,7 @@ def create_engine_for_sqlite(db_path: Path, *, echo: bool = False) -> Engine:
     )
 
     _register_pragma_listener(engine)
+    _register_extension_loader(engine)
     return engine
 
 
@@ -129,3 +133,57 @@ def _register_pragma_listener(engine: Engine) -> None:
             cursor.execute("PRAGMA journal_mode=WAL")
         finally:
             cursor.close()
+
+
+def _register_extension_loader(engine: Engine) -> None:
+    """Attach a ``connect`` listener that loads sqlite-vec when available.
+
+    Phase 4 (ADR-0012 §5) stores embeddings in a ``vec0`` virtual table
+    backed by the sqlite-vec extension. Loading it on every connection —
+    rather than once after ``create_engine`` — mirrors the PRAGMA
+    listener strategy so lazily-opened pool connections also see ``vec0``.
+
+    Behaviour when the extension is unavailable:
+
+    * sqlite-vec ships only under the ``[vector]`` extras. Importing it
+      in a non-extras environment raises :class:`ImportError`; we catch
+      that and emit a warning so engines still work for non-vector
+      workloads (CLI startup, Phase 1-3 services). Only Phase 4 vector
+      queries / migrations will fail later with a clear ``no such module:
+      vec0`` error at query time.
+    * After loading, we flip ``enable_load_extension(False)`` so domain
+      code cannot subsequently load arbitrary native extensions through
+      the same connection.
+    """
+
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_extensions(  # pyright: ignore[reportUnusedFunction]
+        dbapi_connection: Any,
+        _connection_record: ConnectionPoolEntry,
+    ) -> None:
+        # ``enable_load_extension`` is a method on the stdlib sqlite3
+        # Connection object. SQLAlchemy hands us that raw DB-API object
+        # here (not the ORM ``Connection``), so the call is direct.
+        try:
+            dbapi_connection.enable_load_extension(True)
+        except AttributeError:
+            # Python's sqlite3 module is compiled without extension
+            # loading on some distros. Nothing we can do; log and bail.
+            _logger.warning("sqlite3 build lacks enable_load_extension; vector search disabled")
+            return
+
+        try:
+            import sqlite_vec  # type: ignore[import-untyped]
+
+            sqlite_vec.load(dbapi_connection)
+        except ImportError:
+            # sqlite-vec lives in the ``[vector]`` extras and may not be
+            # installed. Engine still works for non-vector workloads; only
+            # Phase 4 vector queries will fail later with a clear error
+            # when they hit the missing ``vec0`` module.
+            _logger.warning("sqlite-vec not installed; vector search disabled")
+        finally:
+            # Always re-disable extension loading so that downstream code
+            # (services, projections, agent tools) cannot load arbitrary
+            # native extensions through this connection.
+            dbapi_connection.enable_load_extension(False)

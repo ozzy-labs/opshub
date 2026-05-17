@@ -203,16 +203,17 @@ def test_sources_unique_constraint_on_connector_and_external_id(
 def test_migrations_downgrade_phase3_tables(tmp_path: Path) -> None:
     """Downgrading the Phase 3 revisions removes only those tables.
 
-    Drives ``alembic upgrade head`` then ``downgrade -3``. After
-    downgrading three steps the chain should rest on
+    Drives ``alembic upgrade head`` then downgrades far enough to
+    rewind past every Phase 4 migration AND the three Phase 3 tables.
+    After downgrade the chain should rest on
     ``0009_create_handoffs_table``: ``sources``,
     ``connector_cursors`` and ``ingested_files`` must be gone, every
     prior projection table must remain.
 
-    The step count tracks the number of Phase 3 migrations (currently
-    0010, 0011, 0012). When a future Phase 3 migration lands the count
-    has to bump accordingly — there is no "downgrade to revision
-    0009" shortcut that does not hard-code the prior PR's revision id.
+    To stay revision-agnostic we downgrade explicitly to revision
+    ``0009_create_handoffs_table``. The earlier ``-3`` step count
+    broke when Phase 4 migration 0013 landed; targeting a named
+    revision keeps the assertion stable as new migrations append.
     """
     db_path = tmp_path / "downgrade.sqlite"
     cfg = _make_alembic_config(db_path)
@@ -228,8 +229,10 @@ def test_migrations_downgrade_phase3_tables(tmp_path: Path) -> None:
     finally:
         engine.dispose()
 
-    # Roll back all three Phase 3 revisions in one shot.
-    command.downgrade(cfg, "-3")
+    # Roll back to the last Phase 2 revision so every Phase 3 table is
+    # dropped regardless of how many Phase 4 migrations sit on top of
+    # them.
+    command.downgrade(cfg, "0009_create_handoffs_table")
 
     engine = create_engine_for_sqlite(db_path)
     try:
