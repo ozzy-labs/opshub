@@ -100,17 +100,27 @@ def connector_sync(name: str) -> None:
     # ``[connectors-slack]`` / ``[connectors-box]`` extras still gets a
     # working ``opshub connector sync github`` — the import only fails
     # when the extras-bundled SDK is missing AND the connector module
-    # touches it at import time (which the MS365 ``__init__`` does not,
-    # but the safety net keeps future contributors from breaking that).
+    # touches it at import time (which the MS365 / Box ``__init__`` do
+    # not, but the safety net keeps future contributors from breaking
+    # that).
     import opshub.connectors.github  # pyright: ignore[reportUnusedImport]
 
     try:
-        import opshub.connectors.ms365  # noqa: F401  # pyright: ignore[reportUnusedImport]
+        import opshub.connectors.ms365  # pyright: ignore[reportUnusedImport]
     except ImportError:
         # MS365 connector module imports cleanly without the extras (the
         # heavy ``msal`` / ``httpx`` imports stay inside the auth /
         # fetcher constructors); this branch is defensive and would only
         # trigger if a future refactor adds a top-level SDK import.
+        pass
+
+    try:
+        import opshub.connectors.box  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    except ImportError:
+        # Box connector module imports cleanly without the extras (the
+        # heavy ``boxsdk`` imports stay inside the auth / fetcher
+        # constructors); this branch is defensive and would only trigger
+        # if a future refactor adds a top-level SDK import.
         pass
     from opshub.connectors import discover_connectors
     from opshub.connectors.context import ConnectorContext
