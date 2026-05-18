@@ -11,39 +11,7 @@ Thumbs.db
 .env.*
 !.env.example
 
-# Claude Code per-user settings (project defaults belong in .claude/settings.json)
-.claude/settings.local.json
-
-# Claude Code agent worktrees (created by Agent tool with isolation: worktree).
-# These are throwaway working copies of the repo; they should not be tracked.
-.claude/worktrees/
-
-# Re-include project-level VSCode workspace defaults (global gitignore may exclude .vscode/).
-!.vscode/
-!.vscode/extensions.json
-!.vscode/settings.json
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-.venv/
-venv/
-
-# Python tooling caches
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.pyright/
-.coverage
-.coverage.*
-htmlcov/
-
-# uv
-.uv-cache/
-
-# Node (for npm-distributed dev tools like markdownlint, bats, commitlint)
+# Dependencies
 node_modules/
 
 # Build
@@ -52,13 +20,3 @@ build/
 
 # Logs
 *.log
-
-# OpsHub runtime data (per docs/repository-structure.md §1.1, repo-external)
-*.sqlite
-*.sqlite-journal
-*.sqlite-shm
-*.sqlite-wal
-# Anchor `/db/` so it only matches a repo-root `db/` directory, not the
-# `src/opshub/db/` source package or `tests/unit/db/`.
-/db/
-workspace/runtime/
