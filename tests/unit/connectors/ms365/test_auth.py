@@ -407,3 +407,106 @@ def test_extract_code_variants(text: str, expected: str) -> None:
     extract: object = getattr(MS365Auth, "_extract_code")  # noqa: B009
     assert callable(extract)
     assert extract(text) == expected
+
+
+# ----- test_token() (Phase 7.x — `opshub connector auth test`) ----------
+
+
+def test_test_token_success_returns_user_fields(
+    fake_msal_app: MagicMock,
+) -> None:
+    """Happy path: ``get_access_token`` succeeds, ``GET /me`` returns a
+    Graph user payload. The CLI consumer pins
+    ``display_name`` / ``user_principal_name`` / ``token_expiry``.
+    """
+    import httpx
+
+    fake_msal_app.acquire_token_by_authorization_code.return_value = {
+        "access_token": "AT",
+        "refresh_token": "RT",
+        "expires_in": 3600,
+    }
+
+    def fake_get(url: str, headers: dict[str, str], timeout: float) -> httpx.Response:
+        assert url == "https://graph.microsoft.com/v1.0/me"
+        assert headers["Authorization"] == "Bearer AT"
+        return httpx.Response(
+            200,
+            json={"displayName": "Alice", "userPrincipalName": "alice@example.com"},
+        )
+
+    with (
+        patch("msal.PublicClientApplication", return_value=fake_msal_app),
+        patch("opshub.core.secrets.set_secret"),
+        patch.object(httpx, "get", fake_get),
+    ):
+        auth = MS365Auth(client_id="app")
+        auth.complete_auth_flow("code")
+        result = auth.test_token()
+
+    assert result["display_name"] == "Alice"
+    assert result["user_principal_name"] == "alice@example.com"
+    # ``token_expiry`` is an ISO 8601 UTC timestamp; pin shape, not value
+    # (the value depends on wall-clock time when the test runs).
+    assert result["token_expiry"].endswith("+00:00")
+
+
+def test_test_token_raises_on_non_200(fake_msal_app: MagicMock) -> None:
+    """A non-2xx Graph response surfaces as :class:`ConfigError` with
+    the status code but NOT the response body — Graph error envelopes
+    sometimes echo the access token."""
+    import httpx
+
+    fake_msal_app.acquire_token_by_authorization_code.return_value = {
+        "access_token": "AT_invalid",
+        "refresh_token": "RT",
+        "expires_in": 3600,
+    }
+
+    def fake_get(url: str, headers: dict[str, str], timeout: float) -> httpx.Response:
+        return httpx.Response(401, json={"error": "InvalidAuthenticationToken"})
+
+    with (
+        patch("msal.PublicClientApplication", return_value=fake_msal_app),
+        patch("opshub.core.secrets.set_secret"),
+        patch.object(httpx, "get", fake_get),
+    ):
+        auth = MS365Auth(client_id="app")
+        auth.complete_auth_flow("code")
+        with pytest.raises(ConfigError) as excinfo:
+            auth.test_token()
+
+    message = str(excinfo.value)
+    assert "401" in message
+    # Token-leak invariant: access token must not appear in the error.
+    assert "AT_invalid" not in message
+
+
+def test_test_token_raises_on_transport_error(fake_msal_app: MagicMock) -> None:
+    """Transport-level errors (DNS / TLS) surface only the exception
+    type name, never the message — that message can echo request body
+    including the Authorization header."""
+    import httpx
+
+    fake_msal_app.acquire_token_by_authorization_code.return_value = {
+        "access_token": "AT_leak",
+        "refresh_token": "RT",
+        "expires_in": 3600,
+    }
+
+    def fake_get(url: str, headers: dict[str, str], timeout: float) -> httpx.Response:
+        raise httpx.ConnectError("graph.microsoft.com timed out: AT_leak")
+
+    with (
+        patch("msal.PublicClientApplication", return_value=fake_msal_app),
+        patch("opshub.core.secrets.set_secret"),
+        patch.object(httpx, "get", fake_get),
+    ):
+        auth = MS365Auth(client_id="app")
+        auth.complete_auth_flow("code")
+        with pytest.raises(ConfigError) as excinfo:
+            auth.test_token()
+
+    message = str(excinfo.value)
+    assert "ConnectError" in message
+    assert "AT_leak" not in message

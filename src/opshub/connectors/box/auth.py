@@ -336,6 +336,59 @@ class BoxAuth:
         """
         self._token = None
 
+    def test_token(self) -> dict[str, str]:
+        """Verify the stored refresh token by getting an access token + calling ``users/me``.
+
+        Returns a dict containing ``login`` (the Box account email),
+        ``name`` (the user's display name), and ``enterprise_id``
+        (the Box Enterprise this user belongs to — empty string for
+        free personal accounts).
+
+        Added in Phase 7.x for the ``opshub connector auth test`` CLI
+        per opshub#173. The implementation:
+
+        1. Calls :meth:`build_authenticated_client` which internally
+           hits :meth:`get_access_token` (refreshing through boxsdk
+           if needed). Any failure here is already mapped to
+           :class:`ConfigError` so verification fails-fast with an
+           actionable message.
+        2. Calls ``client.user(user_id='me').get()`` — boxsdk's
+           documented way to fetch the authenticated user.
+
+        Raises
+        ------
+        ConfigError
+            On any boxsdk error during the API call. The token never
+            appears in raised exceptions — only the exception type
+            name surfaces, matching the Slack / GitHub / MS365
+            token-leak invariant.
+        """
+        client = self.build_authenticated_client()
+        try:
+            me = client.user(user_id="me").get()
+        except Exception as exc:
+            # boxsdk error messages can echo request bodies — surface
+            # only the exception type name to preserve the token-leak
+            # invariant established by sibling connectors.
+            raise ConfigError(f"Box auth.test failed: {type(exc).__name__}") from exc
+
+        # ``client.user(...).get()`` returns a boxsdk ``User`` object
+        # whose fields are accessed as attributes. boxsdk is untyped so
+        # every attribute resolves as ``Any``; coerce to ``str`` at the
+        # boundary for the ``-> dict[str, str]`` contract. ``enterprise``
+        # is omitted for free / personal accounts — defensively handle
+        # both shapes.
+        enterprise_id = ""
+        enterprise = getattr(me, "enterprise", None)
+        if enterprise is not None:
+            enterprise_id = str(getattr(enterprise, "id", "") or "")
+
+        return {
+            "login": str(getattr(me, "login", "") or ""),
+            "name": str(getattr(me, "name", "") or ""),
+            "enterprise_id": enterprise_id,
+        }
+
     # ----- helpers ------------------------------------------------------
 
     def _build_oauth_with_access_token(self, access_token: str) -> Any:

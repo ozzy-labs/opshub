@@ -487,3 +487,119 @@ def test_get_access_token_refreshes_when_cache_expired_by_time(
     assert token == "AT-refreshed"
     # The keyring must reflect the rotated refresh token.
     assert stub_secrets[BOX_REFRESH_TOKEN_SECRET_KEY] == "RT-rotated"
+
+
+# ---------------------------------------------------------------------------
+# test_token() (Phase 7.x — `opshub connector auth test`)
+# ---------------------------------------------------------------------------
+
+
+def test_test_token_success_returns_user_fields(
+    fake_oauth: type[_FakeOAuth2],
+    stub_secrets: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path: ``test_token`` returns ``login`` / ``name`` /
+    ``enterprise_id`` from the boxsdk ``user(me).get()`` response.
+
+    We mock ``build_authenticated_client`` to bypass the SDK ``Client``
+    instantiation (which would require mocking boxsdk's HTTP plumbing
+    at a deeper level) — :meth:`get_access_token` is already covered by
+    sibling tests, so reaching past it here keeps the assertion scoped
+    to the new ``test_token`` contract.
+    """
+    from unittest.mock import MagicMock
+
+    fake_user = MagicMock()
+    fake_user.login = "alice@example.com"
+    fake_user.name = "Alice"
+    fake_user.enterprise = MagicMock()
+    fake_user.enterprise.id = "ENT123"
+
+    fake_client = MagicMock()
+    fake_client.user.return_value.get.return_value = fake_user
+
+    def _stub_build(_self: BoxAuth) -> Any:
+        return fake_client
+
+    monkeypatch.setattr(BoxAuth, "build_authenticated_client", _stub_build)
+
+    auth = BoxAuth(client_id="cid", client_secret="csec")
+    result = auth.test_token()
+
+    assert result == {
+        "login": "alice@example.com",
+        "name": "Alice",
+        "enterprise_id": "ENT123",
+    }
+    # ``client.user(user_id="me")`` is the documented boxsdk way to
+    # fetch the authenticated user; pin the call shape so a refactor
+    # using a different surface (e.g. ``client.current_user()``) is
+    # caught.
+    fake_client.user.assert_called_once_with(user_id="me")
+
+
+def test_test_token_handles_free_account_without_enterprise(
+    fake_oauth: type[_FakeOAuth2],
+    stub_secrets: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A free / personal Box account has no ``enterprise`` field on the
+    User object; ``enterprise_id`` must render as empty string rather
+    than raising or returning ``"None"``."""
+    from unittest.mock import MagicMock
+
+    fake_user = MagicMock()
+    fake_user.login = "bob@personal.example"
+    fake_user.name = "Bob"
+    fake_user.enterprise = None  # Free account → no enterprise
+
+    fake_client = MagicMock()
+    fake_client.user.return_value.get.return_value = fake_user
+
+    def _stub_build(_self: BoxAuth) -> Any:
+        return fake_client
+
+    monkeypatch.setattr(BoxAuth, "build_authenticated_client", _stub_build)
+
+    auth = BoxAuth(client_id="cid", client_secret="csec")
+    result = auth.test_token()
+
+    assert result["login"] == "bob@personal.example"
+    assert result["name"] == "Bob"
+    assert result["enterprise_id"] == ""
+
+
+def test_test_token_raises_when_user_call_fails(
+    fake_oauth: type[_FakeOAuth2],
+    stub_secrets: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A boxsdk exception (network / 401 / etc.) surfaces as
+    :class:`ConfigError` with the exception *type name only* — the
+    underlying message can echo request bodies and therefore leak the
+    access token."""
+    from unittest.mock import MagicMock
+
+    class _BoxAPIError(Exception):
+        pass
+
+    fake_client = MagicMock()
+    fake_client.user.return_value.get.side_effect = _BoxAPIError(
+        "401 unauthorized; access_token=AT_leak"
+    )
+
+    def _stub_build(_self: BoxAuth) -> Any:
+        return fake_client
+
+    monkeypatch.setattr(BoxAuth, "build_authenticated_client", _stub_build)
+
+    auth = BoxAuth(client_id="cid", client_secret="csec")
+    with pytest.raises(ConfigError) as excinfo:
+        auth.test_token()
+
+    message = str(excinfo.value)
+    assert "_BoxAPIError" in message
+    # Token-leak invariant: the access token echoed in the fake
+    # exception message must NOT appear in the raised error.
+    assert "AT_leak" not in message

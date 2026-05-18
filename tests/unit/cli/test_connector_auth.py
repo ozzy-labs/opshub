@@ -382,3 +382,120 @@ def test_auth_does_not_expose_get_subcommand() -> None:
     # code is 2 for usage errors. The important assertion is that the
     # command did NOT succeed.
     assert result.exit_code != 0
+
+
+# ----- `opshub connector auth test` (Phase 7.x — opshub#173) -----------
+
+
+def test_auth_test_github_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``auth test github`` calls ``github.auth.test_token`` and renders
+    its dict as aligned ``key: value`` lines with ``status: ok``.
+
+    The token never appears in stdout — the consumer prints only the
+    keys ``github.auth.test_token`` returned.
+    """
+    import opshub.connectors.github.auth as github_auth
+
+    def fake_test_token() -> dict[str, str]:
+        return {"login": "alice", "name": "Alice Smith", "scopes": "repo, read:user"}
+
+    monkeypatch.setattr(github_auth, "test_token", fake_test_token)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["connector", "auth", "test", "github"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "connector: github" in result.stdout
+    assert "status:    ok" in result.stdout
+    assert "alice" in result.stdout
+    assert "Alice Smith" in result.stdout
+    assert "repo, read:user" in result.stdout
+
+
+def test_auth_test_github_failure_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``ConfigError`` from the connector surfaces as exit code 1 + status: failed.
+
+    The error message is rendered on stderr (not stdout) so scripts
+    parsing stdout for success markers cannot get false positives.
+    """
+    import opshub.connectors.github.auth as github_auth
+    from opshub.core.errors import ConfigError
+
+    def fake_test_token() -> dict[str, str]:
+        raise ConfigError("GitHub auth.test returned non-2xx: status=401")
+
+    monkeypatch.setattr(github_auth, "test_token", fake_test_token)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["connector", "auth", "test", "github"])
+
+    assert result.exit_code == 1
+    # Failure output goes to stderr per the CLI contract.
+    assert "status:    failed" in result.stderr
+    assert "401" in result.stderr
+
+
+def test_auth_test_slack_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``auth test slack`` delegates to ``SlackAuth.test_token`` and
+    renders the dict including the ``principal`` field (ADR-0018)."""
+    import opshub.connectors.slack.auth as slack_auth
+
+    class _FakeSlackAuth:
+        def __init__(self) -> None:
+            pass
+
+        def test_token(self) -> dict[str, str]:
+            return {
+                "team": "Acme",
+                "team_id": "T1",
+                "user": "alice",
+                "user_id": "U1",
+                "principal": "user",
+            }
+
+    monkeypatch.setattr(slack_auth, "SlackAuth", _FakeSlackAuth)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["connector", "auth", "test", "slack"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "connector: slack" in result.stdout
+    assert "principal" in result.stdout
+    assert "user" in result.stdout
+    # The bare ``slack`` legacy alias and ``connector:slack`` must both
+    # route to the same code path (mirrors auth set). Pin via a second
+    # invocation under the namespaced form.
+    result_ns = runner.invoke(app, ["connector", "auth", "test", "connector:slack"])
+    assert result_ns.exit_code == 0
+    assert "connector: connector:slack" in result_ns.stdout
+
+
+def test_auth_test_unknown_target_exits_2() -> None:
+    """Unknown connector name → exit 2 (usage error) with the supported
+    list on stderr — matches ``auth set`` error UX."""
+    runner = CliRunner()
+    result = runner.invoke(app, ["connector", "auth", "test", "discord"])
+
+    assert result.exit_code == 2
+    assert "unknown auth target" in result.stderr
+    assert "github" in result.stderr
+    assert "connector:ms365" in result.stderr
+    assert "connector:box" in result.stderr
+
+
+def test_auth_test_renders_empty_values_as_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Empty-string values (e.g. a GitHub user without a configured
+    display name) render as ``(none)`` rather than a blank line — the
+    operator-readability contract pinned in the CLI docstring."""
+    import opshub.connectors.github.auth as github_auth
+
+    def fake_test_token() -> dict[str, str]:
+        return {"login": "bob", "name": "", "scopes": ""}
+
+    monkeypatch.setattr(github_auth, "test_token", fake_test_token)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["connector", "auth", "test", "github"])
+
+    assert result.exit_code == 0
+    assert "(none)" in result.stdout

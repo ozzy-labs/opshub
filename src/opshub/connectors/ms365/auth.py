@@ -345,6 +345,92 @@ class MS365Auth:
         )
         return access_token
 
+    def test_token(self) -> dict[str, str]:
+        """Verify the stored refresh token by acquiring an access token + calling ``GET /me``.
+
+        Returns a dict containing ``display_name`` (the user's display
+        name from Microsoft Graph), ``user_principal_name`` (UPN, the
+        operator's sign-in email-like identifier), and ``token_expiry``
+        (ISO 8601 UTC timestamp when the in-memory access token
+        expires).
+
+        Added in Phase 7.x for the ``opshub connector auth test`` CLI
+        per ADR-0014 / opshub#173. The implementation:
+
+        1. Calls :meth:`get_access_token` to ensure we have a valid
+           access token (refreshing through MSAL if needed). Any
+           failure here is already mapped to :class:`ConfigError` by
+           the refresh path so verification fails-fast with an
+           actionable message.
+        2. Hits ``https://graph.microsoft.com/v1.0/me`` over httpx with
+           the access token. ``httpx`` is imported lazily to preserve
+           the cold-start budget (ADR-0001).
+
+        Raises
+        ------
+        ConfigError
+            On any network failure or non-2xx response. The access
+            token / refresh token never appear in raised exceptions —
+            only the exception type name (transport errors) or HTTP
+            status code (API errors) surface, matching the Slack /
+            Box / GitHub token-leak invariant.
+        """
+        access_token = self.get_access_token()
+
+        # Lazy import keeps httpx off the cold-start path. The
+        # ``connectors-ms365`` extras don't strictly require httpx
+        # (msal carries its own HTTP client) but httpx is already
+        # pulled by ``connectors-github`` extras and is the project's
+        # standard HTTP client.
+        try:
+            import httpx
+        except ImportError as exc:
+            raise ConfigError(
+                "MS365 verification requires httpx; install the "
+                "[connectors-github] extras (which pulls httpx) or "
+                "ensure httpx is available."
+            ) from exc
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+            "User-Agent": "opshub-connector/0.1",
+        }
+        try:
+            response = httpx.get(
+                "https://graph.microsoft.com/v1.0/me",
+                headers=headers,
+                timeout=10.0,
+            )
+        except Exception as exc:
+            raise ConfigError(f"MS365 auth.test failed: {type(exc).__name__}") from exc
+
+        if response.status_code != 200:
+            raise ConfigError(f"MS365 auth.test returned non-2xx: status={response.status_code}")
+
+        payload: dict[str, Any] = response.json()
+        # Convert the in-memory expiry timestamp to ISO 8601 UTC for
+        # operator-readable display. The ``MS365TokenSet`` is guaranteed
+        # to be populated by ``get_access_token`` above, but defensively
+        # handle the ``None`` case (shouldn't happen in practice — if
+        # ``get_access_token`` returned without raising, the token is
+        # cached).
+        from datetime import UTC, datetime
+
+        expiry_iso = ""
+        if self._token is not None:
+            expiry_iso = (
+                datetime.fromtimestamp(self._token.expires_at, tz=UTC)
+                .replace(microsecond=0)
+                .isoformat()
+            )
+
+        return {
+            "display_name": str(payload.get("displayName", "")),
+            "user_principal_name": str(payload.get("userPrincipalName", "")),
+            "token_expiry": expiry_iso,
+        }
+
     # ----- helpers -------------------------------------------------------
 
     @staticmethod
