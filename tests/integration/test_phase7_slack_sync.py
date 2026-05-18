@@ -7,10 +7,12 @@ twists:
 1. :class:`opshub.connectors.slack.fetcher.SlackFetcher` is
    monkeypatched to yield controlled :class:`RawSlackMessage`
    payloads so the suite never reaches Slack's API.
-2. The Slack bot token is injected through the
-   ``OPSHUB_CONNECTOR_SLACK_BOT_TOKEN`` env var override so the
+2. The Slack OAuth access token is injected through the
+   ``OPSHUB_CONNECTOR_SLACK_TOKEN`` env var override so the
    ``[secrets]`` keyring backend is never consulted (matches the
-   Phase 3 GitHub precedent and keeps CI hermetic).
+   Phase 3 GitHub precedent and keeps CI hermetic). Per ADR-0018
+   the test uses a User Token (``xoxp-``) — the first-class
+   principal — but the override accepts either prefix.
 
 Why integration-level (not pure unit):
 
@@ -143,16 +145,18 @@ def _patch_slack_fetcher(
 
 @pytest.fixture
 def slack_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Inject the Slack bot token + channel list the connector requires.
+    """Inject the Slack OAuth access token + channel list the connector requires.
 
-    * The bot token override (``OPSHUB_CONNECTOR_SLACK_BOT_TOKEN``)
-      keeps :class:`SlackAuth` away from the keyring so the test is
+    * The token override (``OPSHUB_CONNECTOR_SLACK_TOKEN``) keeps
+      :class:`SlackAuth` away from the keyring so the test is
       hermetic on dev machines without ``[secrets]`` installed.
+      Per ADR-0018 the value is a User Token (``xoxp-``); Bot Tokens
+      (``xoxb-``) are accepted equivalently.
     * The channel list (``OPSHUB_CONNECTORS__SLACK__CHANNELS``) is
       a JSON-encoded list per :mod:`pydantic_settings` conventions for
       nested list overrides.
     """
-    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_TOKEN", "xoxp-test")
     monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '["C1"]')
     yield
 

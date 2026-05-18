@@ -123,7 +123,7 @@ opshub handoff close <handoff-id> --note "merged"
 # Connectors (Phase 3 + Phase 7, ADR-0010 / ADR-0014)
 opshub connector auth set github                      # GitHub PAT を OS keychain に保存
 opshub connector sync github                          # 差分同期 (OPSHUB_CONNECTOR_GITHUB_REPO=owner/repo)
-opshub connector auth set connector:slack             # Slack bot token を OS keychain に保存
+opshub connector auth set connector:slack             # Slack OAuth token を OS keychain に保存 (User Token 推奨、Bot Token も可 — ADR-0018)
 opshub connector sync slack                           # 差分同期 ([connectors.slack] channels)
 opshub connector auth set connector:ms365             # OAuth paste-code (Microsoft Graph Calendar / OneDrive / Outlook)
 opshub connector sync ms365                           # endpoint ごとの差分同期

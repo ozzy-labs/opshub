@@ -2,8 +2,10 @@
 
 Phase 7 step A3 wires the connector end-to-end:
 
-* :class:`SlackAuth` (A1) resolves the bot token from
-  :mod:`opshub.core.secrets`.
+* :class:`SlackAuth` (A1; principal updated in Phase 7.x per ADR-0018)
+  resolves the Slack OAuth access token from :mod:`opshub.core.secrets`.
+  User Token (``xoxp-``) is the first-class principal; Bot Token
+  (``xoxb-``) is accepted as an alternative.
 * :class:`SlackFetcher` (A2) paginates Slack's
   ``conversations.history`` API for the configured channels.
 * :func:`map_message` (A3) translates each raw message into the
@@ -43,13 +45,13 @@ and the integration cold-start budget continue to hold.
 """
 
 from opshub.connectors._registry import register_connector
-from opshub.connectors.slack.auth import SLACK_BOT_TOKEN_SECRET_KEY, SlackAuth
+from opshub.connectors.slack.auth import SLACK_TOKEN_SECRET_KEY, SlackAuth
 from opshub.connectors.slack.connector import SlackConnector
 from opshub.connectors.slack.fetcher import RawSlackMessage, SlackFetcher
 from opshub.connectors.slack.mapper import SOURCE_TYPE, SUMMARY_MAX_CHARS, map_message
 
 __all__ = [
-    "SLACK_BOT_TOKEN_SECRET_KEY",
+    "SLACK_TOKEN_SECRET_KEY",
     "SOURCE_TYPE",
     "SUMMARY_MAX_CHARS",
     "RawSlackMessage",

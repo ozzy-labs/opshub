@@ -93,6 +93,7 @@ NNNN-kebab-case-title.md
 | 0015 | [LLM Usage Strategy](0015-llm-usage-strategy.md) | Accepted |
 | 0016 | [Action Loop and Structured Output](0016-action-loop-and-structured-output.md) | Accepted |
 | 0017 | [Knowledge Graph](0017-knowledge-graph.md) | Accepted |
+| 0018 | [Slack Connector Token Principal](0018-slack-token-principal.md) | Accepted |
 
 ## Open Questions
 

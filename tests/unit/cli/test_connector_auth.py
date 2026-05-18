@@ -26,7 +26,7 @@ from typer.testing import CliRunner
 
 from opshub.cli.app import app
 from opshub.connectors.github.auth import GITHUB_PAT_SECRET_KEY
-from opshub.connectors.slack.auth import SLACK_BOT_TOKEN_SECRET_KEY
+from opshub.connectors.slack.auth import SLACK_TOKEN_SECRET_KEY
 from opshub.core.secrets import get_secret
 from opshub.vectors.openai_embedder import OPENAI_API_KEY_SECRET
 from opshub.vectors.voyage_embedder import VOYAGE_API_KEY_SECRET
@@ -134,16 +134,18 @@ def test_auth_set_slack_with_token_flag_stores_to_keyring(
 ) -> None:
     """``--token`` writes to the keyring slot the SlackAuth reader uses.
 
-    The ``connector:slack:bot_token`` key is the CLI writer ↔ SlackAuth
+    The ``connector:slack:token`` key is the CLI writer ↔ SlackAuth
     reader contract (mirrors the Phase 3 GitHub PAT precedent). Pinning
-    the round-trip here keeps the two halves from drifting.
+    the round-trip here keeps the two halves from drifting. We use a
+    User Token (``xoxp-``) here since ADR-0018 makes it the first-class
+    principal; the slot accepts Bot Tokens (``xoxb-``) equivalently.
     """
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "auth", "set", "slack", "--token", "xoxb-test"])
+    result = runner.invoke(app, ["connector", "auth", "set", "slack", "--token", "xoxp-test"])
 
     assert result.exit_code == 0, result.stdout
     assert "slack" in result.stdout
-    assert get_secret(SLACK_BOT_TOKEN_SECRET_KEY) == "xoxb-test"
+    assert get_secret(SLACK_TOKEN_SECRET_KEY) == "xoxp-test"
 
 
 def test_auth_set_connector_slack_alias_writes_to_same_key(
@@ -158,9 +160,9 @@ def test_auth_set_connector_slack_alias_writes_to_same_key(
     see only one of them.
     """
     runner = CliRunner()
-    r_legacy = runner.invoke(app, ["connector", "auth", "set", "slack", "--token", "xoxb-legacy"])
+    r_legacy = runner.invoke(app, ["connector", "auth", "set", "slack", "--token", "xoxp-legacy"])
     r_namespaced = runner.invoke(
-        app, ["connector", "auth", "set", "connector:slack", "--token", "xoxb-namespaced"]
+        app, ["connector", "auth", "set", "connector:slack", "--token", "xoxp-namespaced"]
     )
 
     assert r_legacy.exit_code == 0, r_legacy.stdout
@@ -168,7 +170,7 @@ def test_auth_set_connector_slack_alias_writes_to_same_key(
     # Both writes target the same key, so the second write (via the
     # namespaced form) overwrites the first — that's the pin: not
     # "two distinct keys for two surfaces" but "one key, two aliases".
-    assert get_secret(SLACK_BOT_TOKEN_SECRET_KEY) == "xoxb-namespaced"
+    assert get_secret(SLACK_TOKEN_SECRET_KEY) == "xoxp-namespaced"
 
 
 def test_auth_set_slack_uses_distinct_key_from_github(
@@ -181,15 +183,15 @@ def test_auth_set_slack_uses_distinct_key_from_github(
     separation."""
     runner = CliRunner()
     r1 = runner.invoke(app, ["connector", "auth", "set", "github", "--token", "ghp_xxx"])
-    r2 = runner.invoke(app, ["connector", "auth", "set", "slack", "--token", "xoxb-yyy"])
+    r2 = runner.invoke(app, ["connector", "auth", "set", "slack", "--token", "xoxp-yyy"])
 
     assert r1.exit_code == 0
     assert r2.exit_code == 0
     assert get_secret(GITHUB_PAT_SECRET_KEY) == "ghp_xxx"
-    assert get_secret(SLACK_BOT_TOKEN_SECRET_KEY) == "xoxb-yyy"
+    assert get_secret(SLACK_TOKEN_SECRET_KEY) == "xoxp-yyy"
     # And the keys themselves are distinct strings — a sanity check
     # that nothing collapsed them into one constant during a refactor.
-    assert GITHUB_PAT_SECRET_KEY != SLACK_BOT_TOKEN_SECRET_KEY
+    assert GITHUB_PAT_SECRET_KEY != SLACK_TOKEN_SECRET_KEY
 
 
 # ----- error paths -------------------------------------------------------

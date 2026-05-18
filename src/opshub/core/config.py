@@ -193,22 +193,24 @@ class SlackConnectorSettings(BaseModel):
     SaaS connector is opt-in so a fresh ``uv tool install`` never tries
     to reach Slack on first run. Operators flip the flag and populate
     ``channels`` after running ``opshub connector auth set slack`` to
-    store the bot token.
+    store the OAuth access token.
 
     ``channels`` is the list of Slack channel ids
     (``["C0123ABC", "C0456DEF"]``) the connector will sync. Channel
-    *names* (``#general``) are intentionally not accepted — the bot's
-    membership is keyed on the id and Slack does not guarantee name
-    stability, so accepting names would force a per-sync
-    ``conversations.list`` lookup that risks the Tier-2 rate-limit
-    budget. Empty list means "no channels configured" — the connector
-    surfaces this as a structured warning and runs as a no-op
-    (the sync command still exits 0; the operator sees the warning in
-    the structured log).
+    *names* (``#general``) are intentionally not accepted — channel
+    membership / access is keyed on the id and Slack does not
+    guarantee name stability, so accepting names would force a
+    per-sync ``conversations.list`` lookup that risks the Tier-2
+    rate-limit budget. Empty list means "no channels configured" —
+    the connector surfaces this as a structured warning and runs as
+    a no-op (the sync command still exits 0; the operator sees the
+    warning in the structured log).
 
-    The bot token lives in the OS keyring under
-    ``connector:slack:bot_token`` per ADR-0014 — it never appears in
-    ``opshub.toml`` or this settings model.
+    The OAuth access token lives in the OS keyring under
+    ``connector:slack:token`` per ADR-0014 / ADR-0018 — it never
+    appears in ``opshub.toml`` or this settings model. User Token
+    (``xoxp-``) is the first-class principal; Bot Token (``xoxb-``)
+    is accepted as an alternative.
     """
 
     enabled: bool = False
