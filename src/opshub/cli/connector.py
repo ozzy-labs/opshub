@@ -259,9 +259,13 @@ def auth_set(
 
         key = GITHUB_PAT_SECRET_KEY
     elif name in ("slack", "connector:slack"):
-        # Phase 7 step A1: the Slack bot token is stored under
-        # ``connector:slack:bot_token`` so the CLI writer + SlackAuth
+        # Phase 7 step A1 (principal updated in Phase 7.x per ADR-0018):
+        # the Slack OAuth access token is stored under
+        # ``connector:slack:token`` so the CLI writer + SlackAuth
         # reader cannot drift (mirrors the GitHub PAT precedent).
+        # User Token (``xoxp-``) is the first-class principal; Bot
+        # Token (``xoxb-``) is accepted as an alternative for
+        # workspace-policy / audit-policy constraints.
         # Both ``slack`` (the original A1 form, kept for backward
         # compatibility) and ``connector:slack`` (the Phase 7 plan
         # §1 #4 namespace, matched by sibling MS365 / Box) route to
@@ -273,9 +277,9 @@ def auth_set(
         # Lazy-imported per-branch so the ``slack_sdk`` import path
         # (deferred inside ``SlackAuth.test_token``) stays off the
         # cold-start path entirely when the operator never uses Slack.
-        from opshub.connectors.slack.auth import SLACK_BOT_TOKEN_SECRET_KEY
+        from opshub.connectors.slack.auth import SLACK_TOKEN_SECRET_KEY
 
-        key = SLACK_BOT_TOKEN_SECRET_KEY
+        key = SLACK_TOKEN_SECRET_KEY
     elif name == "embedder:openai":
         # The embedder modules export the keyring key as a module
         # constant so the CLI writer + embedder reader cannot drift.

@@ -478,8 +478,8 @@ def phase7_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     so the test is hermetic (no ``opshub.toml`` mutation, no keyring
     access — the SDK boundaries are mocked anyway).
     """
-    # Slack: bot token via env override, single channel id.
-    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_BOT_TOKEN", "xoxb-test")
+    # Slack: OAuth token via env override (User Token per ADR-0018), single channel id.
+    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_TOKEN", "xoxp-test")
     monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '["C1"]')
     # MS365: client id is the only mandatory bootstrapping setting.
     monkeypatch.setenv("OPSHUB_CONNECTORS__MS365__CLIENT_ID", "test-client-id")

@@ -47,10 +47,18 @@ escalates to :class:`ConnectorFailedError` so the caller's UoW can
 record a ``ConnectorSyncFailed`` event.
 
 Non-rate-limit ``SlackApiError`` (``invalid_auth`` /
-``channel_not_found`` / ``not_in_channel`` / ...) is mapped directly
-to :class:`ConnectorFailedError` without retry — re-running the
-fetch with the same token will fail the same way (phase-3-plan §4
-Q3 fail-fast posture).
+``channel_not_found`` / ``missing_scope`` / ``not_in_channel`` /
+...) is mapped directly to :class:`ConnectorFailedError` without
+retry — re-running the fetch with the same token will fail the
+same way (phase-3-plan §4 Q3 fail-fast posture).
+``missing_scope`` typically indicates the configured channel
+requires a scope the current token does not have (e.g. a private
+channel without ``groups:history``, a DM without ``im:history``);
+the operator should extend the token's scope set per ADR-0018.
+``not_in_channel`` indicates the configured channel is not
+accessible to the current token's principal — for a User Token
+the operator should join the channel via Slack UI; for a Bot
+Token they should ``/invite`` the bot to the channel.
 
 Cold-start guard
 ----------------
@@ -66,11 +74,12 @@ Slack subpackage as a whole.
 Token safety
 ------------
 
-The resolved bot token never appears in raised exceptions: we
-surface the Slack API ``error`` code (which is a documented string
-like ``invalid_auth``) or, for transport errors, the exception's
-type name only. The token never leaks even if an operator pastes
-the error into a bug report.
+The resolved Slack OAuth token never appears in raised exceptions:
+we surface the Slack API ``error`` code (which is a documented
+string like ``invalid_auth``) or, for transport errors, the
+exception's type name only. The token never leaks even if an
+operator pastes the error into a bug report. This invariant holds
+regardless of principal (User Token / Bot Token) per ADR-0018.
 """
 
 from __future__ import annotations
@@ -255,11 +264,14 @@ class SlackFetcher:
                 )
             except SlackApiError as exc:
                 # ``invalid_auth`` / ``channel_not_found`` /
-                # ``not_in_channel`` / exhausted-retries-on-429 all
-                # land here. We surface the API ``error`` code (a
-                # documented short string, never the token) and the
-                # channel id so the operator can map the failure
-                # back to a config change without exposing secrets.
+                # ``missing_scope`` / ``not_in_channel`` /
+                # exhausted-retries-on-429 all land here. We surface
+                # the API ``error`` code (a documented short string,
+                # never the token) and the channel id so the operator
+                # can map the failure back to a config change without
+                # exposing secrets. ``missing_scope`` / ``not_in_channel``
+                # are principal-sensitive — see the module docstring
+                # for the User Token / Bot Token resolution paths.
                 # ``exc.response`` is typed as ``SlackResponse`` whose
                 # ``.get`` is partially-unknown to pyright; cast to
                 # ``Any`` so the documented dict access type-checks.
