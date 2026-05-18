@@ -6,6 +6,11 @@ synced_at: 2026-05-16T12:08:47Z
 # Files excluded from commons sync (Python project overrides).
 # OpsHub is Python-based (ADR-0001), so Node-oriented commons defaults
 # are pinned here to prevent re-introduction during weekly sync.
+# .editorconfig / .gitignore / SECURITY.md were added in #165 follow-up
+# after the bot's weekly sync attempted to clobber Python-specific
+# rules (.editorconfig [*.py]), Python tooling cache patterns and
+# .claude/worktrees gitignore entries, and the opshub-specific threat
+# model in SECURITY.md.
 pinned:
   - biome.json
   - .mise.toml
@@ -13,6 +18,9 @@ pinned:
   - .vscode/settings.json
   - .devcontainer/Dockerfile
   - lefthook.yaml
+  - .editorconfig
+  - .gitignore
+  - SECURITY.md
 
 # Skills sync (opt-in). Add adapter ids to skills_adapters and a SHA
 # to skills_commit. The skills repo's main HEAD SHA can be obtained via:
