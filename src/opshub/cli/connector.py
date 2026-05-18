@@ -335,6 +335,126 @@ def auth_set(
     typer.echo(f"stored token for connector {name!r}")
 
 
+@auth_app.command("test")
+def auth_test(
+    name: str = typer.Argument(
+        ...,
+        help=(
+            "Connector name to verify (github, slack / connector:slack, "
+            "connector:ms365, connector:box)."
+        ),
+    ),
+) -> None:
+    """Verify a stored connector token by hitting its SaaS auth-check endpoint.
+
+    Calls each connector's ``test_token()`` helper which authenticates
+    a live API call (Slack ``auth.test`` / GitHub ``GET /user`` /
+    Microsoft Graph ``GET /me`` / Box ``users#me``) and prints the
+    operator-relevant fields (username, principal, expiry, scopes).
+
+    Exit codes:
+
+    * ``0`` — verification succeeded; token is valid
+    * ``1`` — verification failed (token revoked, network error,
+      missing scope, etc.). The error message surfaces the failure
+      reason but **never** the token itself — only API error codes or
+      exception type names surface, matching the per-connector
+      token-leak invariant.
+    * ``2`` — unknown connector name (usage error)
+
+    Security: this command performs a live API call. Network failures
+    bubble up as ``ConfigError`` → exit 1. The token is loaded via the
+    same precedence rule as the rest of opshub (env var override wins
+    over keyring per ADR-0014).
+
+    Supported targets mirror :func:`auth_set` for the SaaS connectors
+    only — embedder / LLM auth verification is intentionally out of
+    scope (those backends have their own verification surfaces in their
+    respective factories).
+    """
+    # Lazy import per dispatch branch keeps the cold-start path light
+    # (ADR-0001) — operators on the ``opshub --help`` path never pay
+    # the SDK / httpx import cost.
+    from opshub.core.errors import ConfigError
+
+    try:
+        result: dict[str, str]
+        if name == "github":
+            from opshub.connectors.github.auth import test_token as github_test
+
+            result = github_test()
+        elif name in ("slack", "connector:slack"):
+            from opshub.connectors.slack.auth import SlackAuth
+
+            result = SlackAuth().test_token()
+        elif name == "connector:ms365":
+            # MS365 needs the configured client_id to build the MSAL
+            # PublicClientApplication. Load it from opshub.toml just
+            # like the sync path does.
+            from opshub.connectors.ms365.auth import MS365Auth
+            from opshub.core.config import OpsHubSettings
+
+            settings = OpsHubSettings()
+            ms365_client_id = settings.connectors.ms365.client_id
+            if not ms365_client_id:
+                typer.echo(
+                    "MS365 client_id is not configured; set "
+                    "`[connectors.ms365] client_id` in opshub.toml",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            result = MS365Auth(client_id=ms365_client_id).test_token()
+        elif name == "connector:box":
+            # Box needs client_id (config) + client_secret (keyring).
+            # BoxAuth resolves the latter internally via core.secrets.
+            from opshub.connectors.box.auth import BoxAuth
+            from opshub.core.config import OpsHubSettings
+
+            settings = OpsHubSettings()
+            box_client_id = settings.connectors.box.client_id
+            if not box_client_id:
+                typer.echo(
+                    "Box client_id is not configured; set "
+                    "`[connectors.box] client_id` in opshub.toml",
+                    err=True,
+                )
+                raise typer.Exit(code=1)
+            result = BoxAuth(client_id=box_client_id).test_token()
+        else:
+            typer.echo(
+                f"unknown auth target {name!r}; currently supported: "
+                "github, connector:slack (or legacy slack), "
+                "connector:ms365, connector:box",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+    except ConfigError as exc:
+        # ConfigError already carries a sanitised message (no token
+        # substrings) per each connector's token-leak invariant. We
+        # surface it verbatim and exit 1 so scripts / CI can branch on
+        # the exit code.
+        typer.echo(f"connector: {name}", err=True)
+        typer.echo("status:    failed", err=True)
+        typer.echo(f"error:     {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    # Success path: print the connector header + status + result fields
+    # in a stable column-aligned format. The order is determined by the
+    # connector's ``test_token()`` return-dict order (Python dicts are
+    # insertion-ordered) so each connector controls its own display.
+    typer.echo(f"connector: {name}")
+    typer.echo("status:    ok")
+    # Find the widest key for column alignment. Cap at 20 chars so a
+    # future overly-long key name doesn't blow out the layout.
+    key_width = min(max((len(k) for k in result), default=0), 20)
+    for k, v in result.items():
+        # Empty values (e.g. user without a configured display name)
+        # render as ``(none)`` rather than a blank line — operator
+        # readability beats strict round-trip fidelity here.
+        display = v if v else "(none)"
+        typer.echo(f"{k:<{key_width}}  {display}")
+
+
 def _build_source_service(*, actor: str) -> object:
     """Indirection for the step-A4 ``build_source_service`` helper.
 

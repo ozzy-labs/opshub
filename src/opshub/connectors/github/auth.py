@@ -1,4 +1,4 @@
-"""GitHub PAT resolution (Phase 3 step B1).
+"""GitHub PAT resolution (Phase 3 step B1; verification API added in Phase 7.x).
 
 Token storage strategy per ADR-0014:
 
@@ -11,16 +11,24 @@ Token storage strategy per ADR-0014:
 This module is intentionally tiny so the cold-start path remains lazy
 (``keyring`` is in the ``[secrets]`` extras and is only imported when a
 token is actually requested through :mod:`opshub.core.secrets`).
+
+:func:`test_token` (added in Phase 7.x for the ``opshub connector auth
+test`` CLI) calls GitHub's ``GET /user`` endpoint to verify that the
+PAT is valid. ``httpx`` is imported lazily inside the function so the
+cold-start budget (ADR-0001) is preserved — operators on the
+auth-only path never pay the import cost.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from opshub.core.errors import ConfigError
 from opshub.core.secrets import get_secret
 
 _SECRET_KEY = "connector:github:pat"
 
-__all__ = ["GITHUB_PAT_SECRET_KEY", "get_github_token"]
+__all__ = ["GITHUB_PAT_SECRET_KEY", "get_github_token", "test_token"]
 
 #: Keyring key used to store the GitHub PAT. Exposed so the CLI command
 #: ``opshub connector auth set github`` writes to the same key the
@@ -45,3 +53,80 @@ def get_github_token() -> str:
             "OPSHUB_CONNECTOR_GITHUB_PAT in the environment"
         )
     return token
+
+
+def test_token(*, token: str | None = None) -> dict[str, str]:
+    """Verify a GitHub PAT by calling ``GET /user``.
+
+    Returns a dict containing ``login`` (the GitHub username),
+    ``name`` (display name, may be empty for users without a configured
+    name), and ``scopes`` (comma-separated list extracted from the
+    ``X-OAuth-Scopes`` response header — empty string if GitHub omits
+    the header for fine-grained PATs).
+
+    Parameters
+    ----------
+    token:
+        Optional explicit token. When omitted resolves via
+        :func:`get_github_token` (keyring + env-var override). The
+        explicit form is the documented seam for unit tests so they
+        do not need to touch the real keyring.
+
+    Raises
+    ------
+    ConfigError
+        On any network failure or non-2xx response. The PAT never
+        appears in raised exceptions — only the exception type name
+        (transport errors) or HTTP status code (API errors) surface,
+        matching the Slack / Box token-leak invariant.
+    """
+    if token is None:
+        token = get_github_token()
+
+    # Lazy import keeps httpx off the cold-start path. The
+    # ``connectors-github`` extras ship httpx; if it is missing this
+    # branch never runs (operator never set up github connector).
+    try:
+        import httpx
+    except ImportError as exc:
+        raise ConfigError(
+            "GitHub support requires the [connectors-github] extras; "
+            "install with `uv sync --extra connectors-github`"
+        ) from exc
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "opshub-connector/0.1",
+    }
+    try:
+        response = httpx.get(
+            "https://api.github.com/user",
+            headers=headers,
+            timeout=10.0,
+        )
+    except Exception as exc:
+        # Transport-level failures (DNS / TLS / connection) surface as
+        # the exception type name only — never the message, which can
+        # echo the request body and therefore the Authorization header.
+        raise ConfigError(f"GitHub auth.test failed: {type(exc).__name__}") from exc
+
+    if response.status_code != 200:
+        # ``response.text`` can echo the rejected token in rare cases
+        # (GitHub error envelopes sometimes include the rate-limit
+        # context which has been observed to leak Authorization bits in
+        # the wild). Surface only the status code, not the body.
+        raise ConfigError(f"GitHub auth.test returned non-2xx: status={response.status_code}")
+
+    payload: dict[str, Any] = response.json()
+    # ``X-OAuth-Scopes`` is omitted for fine-grained PATs; default to
+    # empty so the CLI shows ``scopes: (none reported)`` rather than a
+    # KeyError. ``response.headers`` is a case-insensitive multidict so
+    # both header-case variants work.
+    scopes_raw = response.headers.get("X-OAuth-Scopes") or ""
+    return {
+        "login": str(payload.get("login", "")),
+        "name": str(payload.get("name") or ""),
+        "scopes": scopes_raw.strip(),
+    }
