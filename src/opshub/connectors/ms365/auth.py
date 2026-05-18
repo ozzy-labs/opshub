@@ -345,7 +345,7 @@ class MS365Auth:
         )
         return access_token
 
-    def test_token(self) -> dict[str, str]:
+    def test_token(self, *, client: Any | None = None) -> dict[str, str]:
         """Verify the stored refresh token by acquiring an access token + calling ``GET /me``.
 
         Returns a dict containing ``display_name`` (the user's display
@@ -365,6 +365,20 @@ class MS365Auth:
         2. Hits ``https://graph.microsoft.com/v1.0/me`` over httpx with
            the access token. ``httpx`` is imported lazily to preserve
            the cold-start budget (ADR-0001).
+
+        Parameters
+        ----------
+        client:
+            Optional pre-configured :class:`httpx.Client` (the
+            documented seam for tests — pass a client built with
+            ``httpx.MockTransport`` to assert against without hitting
+            Microsoft Graph). When ``None`` a default client is created
+            with the Bearer auth header baked in; the client is closed
+            at the end of the call. When supplied, the caller owns the
+            lifecycle and must have already set the Authorization
+            header. Mirrors the pattern used by
+            :mod:`opshub.connectors.github.api`. Typed as :class:`Any`
+            so ``httpx`` stays out of the module-level import graph.
 
         Raises
         ------
@@ -391,45 +405,53 @@ class MS365Auth:
                 "ensure httpx is available."
             ) from exc
 
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json",
-            "User-Agent": "opshub-connector/0.1",
-        }
-        try:
-            response = httpx.get(
-                "https://graph.microsoft.com/v1.0/me",
-                headers=headers,
+        owns_client = client is None
+        if client is None:
+            client = httpx.Client(
+                base_url="https://graph.microsoft.com",
                 timeout=10.0,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                    "User-Agent": "opshub-connector/0.1",
+                },
             )
-        except Exception as exc:
-            raise ConfigError(f"MS365 auth.test failed: {type(exc).__name__}") from exc
+        try:
+            try:
+                response = client.get("/v1.0/me")
+            except Exception as exc:
+                raise ConfigError(f"MS365 auth.test failed: {type(exc).__name__}") from exc
 
-        if response.status_code != 200:
-            raise ConfigError(f"MS365 auth.test returned non-2xx: status={response.status_code}")
+            if response.status_code != 200:
+                raise ConfigError(
+                    f"MS365 auth.test returned non-2xx: status={response.status_code}"
+                )
 
-        payload: dict[str, Any] = response.json()
-        # Convert the in-memory expiry timestamp to ISO 8601 UTC for
-        # operator-readable display. The ``MS365TokenSet`` is guaranteed
-        # to be populated by ``get_access_token`` above, but defensively
-        # handle the ``None`` case (shouldn't happen in practice — if
-        # ``get_access_token`` returned without raising, the token is
-        # cached).
-        from datetime import UTC, datetime
+            payload: dict[str, Any] = response.json()
+            # Convert the in-memory expiry timestamp to ISO 8601 UTC for
+            # operator-readable display. The ``MS365TokenSet`` is
+            # guaranteed to be populated by ``get_access_token`` above,
+            # but defensively handle the ``None`` case (shouldn't
+            # happen in practice — if ``get_access_token`` returned
+            # without raising, the token is cached).
+            from datetime import UTC, datetime
 
-        expiry_iso = ""
-        if self._token is not None:
-            expiry_iso = (
-                datetime.fromtimestamp(self._token.expires_at, tz=UTC)
-                .replace(microsecond=0)
-                .isoformat()
-            )
+            expiry_iso = ""
+            if self._token is not None:
+                expiry_iso = (
+                    datetime.fromtimestamp(self._token.expires_at, tz=UTC)
+                    .replace(microsecond=0)
+                    .isoformat()
+                )
 
-        return {
-            "display_name": str(payload.get("displayName", "")),
-            "user_principal_name": str(payload.get("userPrincipalName", "")),
-            "token_expiry": expiry_iso,
-        }
+            return {
+                "display_name": str(payload.get("displayName", "")),
+                "user_principal_name": str(payload.get("userPrincipalName", "")),
+                "token_expiry": expiry_iso,
+            }
+        finally:
+            if owns_client:
+                client.close()
 
     # ----- helpers -------------------------------------------------------
 

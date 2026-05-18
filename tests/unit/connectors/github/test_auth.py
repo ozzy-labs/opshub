@@ -34,7 +34,7 @@ from opshub.connectors.github.auth import (
 from opshub.core.errors import ConfigError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 
 keyring: Any = pytest.importorskip(
@@ -145,11 +145,36 @@ def test_get_github_token_raises_config_error_when_unset(
 
 
 # ----- test_token() (Phase 7.x — `opshub connector auth test`) ----------
+#
+# These tests inject an ``httpx.MockTransport``-backed client via the
+# ``client=`` seam — mirrors the precedent set by
+# ``tests/unit/connectors/github/test_api.py`` (which also lets callers
+# pass a pre-configured Client). The DI seam keeps the contract honest:
+# tests never reach the real api.github.com endpoint, and the
+# production default-client construction path is exercised by the
+# integration tests indirectly.
 
 
-def test_test_token_success_returns_user_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _mock_github_client(
+    handler: Callable[[Any], Any],
+) -> Any:
+    """Build an ``httpx.Client`` whose every request is matched against ``handler``.
+
+    Mirrors :func:`tests.unit.connectors.github.test_api._client` —
+    constructing the client with :class:`httpx.MockTransport` means
+    the call into ``test_token`` follows the production code path
+    (Client.get → response.json / headers) without hitting the
+    network.
+    """
+    import httpx
+
+    return httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.github.com",
+    )
+
+
+def test_test_token_success_returns_user_fields() -> None:
     """Happy path: ``GET /user`` returns the user payload + scopes header.
 
     The CLI ``connector auth test github`` consumer of this function
@@ -157,21 +182,32 @@ def test_test_token_success_returns_user_fields(
     """
     import httpx
 
-    def fake_get(url: str, headers: dict[str, str], timeout: float) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
         # Pin the request shape: Authorization header must carry the
         # Bearer token; Accept must request the GitHub JSON format.
-        assert url == "https://api.github.com/user"
-        assert headers["Authorization"] == "Bearer ghp_test"
-        assert headers["Accept"] == "application/vnd.github+json"
+        assert request.url.path == "/user"
+        assert request.headers["Authorization"] == "Bearer ghp_test"
+        assert request.headers["Accept"] == "application/vnd.github+json"
         return httpx.Response(
             200,
             json={"login": "alice", "name": "Alice Smith"},
             headers={"X-OAuth-Scopes": "repo, read:user"},
         )
 
-    monkeypatch.setattr(httpx, "get", fake_get)
+    # ``client=`` injects a Client without the production default's
+    # auth header (the production path bakes it in at construction).
+    # We add the header here so the request-shape assertion above sees
+    # it; this mirrors the api.py test seam.
+    client = httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.github.com",
+        headers={
+            "Authorization": "Bearer ghp_test",
+            "Accept": "application/vnd.github+json",
+        },
+    )
 
-    result = github_test_token(token="ghp_test")
+    result = github_test_token(token="ghp_test", client=client)
 
     assert result == {
         "login": "alice",
@@ -180,42 +216,38 @@ def test_test_token_success_returns_user_fields(
     }
 
 
-def test_test_token_handles_missing_name_field(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_test_token_handles_missing_name_field() -> None:
     """A user without a configured ``name`` (the field is ``None``) renders
     as empty string, not as the literal ``"None"`` repr. The CLI
     consumer turns empty values into ``(none)`` for readability — we
     pin the empty-string contract here."""
     import httpx
 
-    def fake_get(url: str, headers: dict[str, str], timeout: float) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={"login": "bob", "name": None},
             headers={"X-OAuth-Scopes": ""},
         )
 
-    monkeypatch.setattr(httpx, "get", fake_get)
-
-    result = github_test_token(token="ghp_test")
+    result = github_test_token(token="ghp_test", client=_mock_github_client(handler))
 
     assert result["login"] == "bob"
     assert result["name"] == ""  # not "None"
     assert result["scopes"] == ""
 
 
-def test_test_token_raises_when_unauthorized(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_test_token_raises_when_unauthorized() -> None:
     """A 401 (revoked / wrong-scope PAT) surfaces as :class:`ConfigError`
     with the status code but NOT the response body — the body can echo
     rate-limit context that leaks Authorization bits per GitHub docs."""
     import httpx
 
-    def fake_get(url: str, headers: dict[str, str], timeout: float) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"message": "Bad credentials"})
 
-    monkeypatch.setattr(httpx, "get", fake_get)
-
     with pytest.raises(ConfigError) as excinfo:
-        github_test_token(token="ghp_invalid")
+        github_test_token(token="ghp_invalid", client=_mock_github_client(handler))
 
     message = str(excinfo.value)
     assert "401" in message
@@ -225,19 +257,17 @@ def test_test_token_raises_when_unauthorized(monkeypatch: pytest.MonkeyPatch) ->
     assert "ghp_invalid" not in message
 
 
-def test_test_token_raises_on_transport_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_test_token_raises_on_transport_error() -> None:
     """DNS / TLS / connection errors must surface as :class:`ConfigError`
     with the exception *type name only* — the message can echo
     request body which carries the Authorization header."""
     import httpx
 
-    def fake_get(url: str, headers: dict[str, str], timeout: float) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("DNS resolution failed: ghp_test")
 
-    monkeypatch.setattr(httpx, "get", fake_get)
-
     with pytest.raises(ConfigError) as excinfo:
-        github_test_token(token="ghp_test")
+        github_test_token(token="ghp_test", client=_mock_github_client(handler))
 
     message = str(excinfo.value)
     assert "ConnectError" in message

@@ -25,9 +25,14 @@ every CI run.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import typer
 
 # Heavy imports happen inside command bodies (ADR-0001 lazy-import rule).
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 connector_app = typer.Typer(
     name="connector",
@@ -377,57 +382,28 @@ def auth_test(
     # the SDK / httpx import cost.
     from opshub.core.errors import ConfigError
 
+    # Resolve the connector-specific verification callable. Each arm
+    # returns a zero-arg callable that, when invoked, performs the live
+    # API check and returns a ``dict[str, str]``. Keeping the dispatch
+    # focussed on resolution (and the call + error-handling unified
+    # below) cuts the function size roughly in half versus the original
+    # all-in-one if/elif tree.
     try:
-        result: dict[str, str]
-        if name == "github":
-            from opshub.connectors.github.auth import test_token as github_test
+        verifier = _resolve_auth_test_verifier(name)
+    except _UnknownAuthTargetError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    except ConfigError as exc:
+        # Pre-flight ``ConfigError`` (e.g. MS365 / Box client_id
+        # unconfigured) is surfaced as exit 1 with the same status:
+        # failed framing as a runtime verification failure.
+        typer.echo(f"connector: {name}", err=True)
+        typer.echo("status:    failed", err=True)
+        typer.echo(f"error:     {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
-            result = github_test()
-        elif name in ("slack", "connector:slack"):
-            from opshub.connectors.slack.auth import SlackAuth
-
-            result = SlackAuth().test_token()
-        elif name == "connector:ms365":
-            # MS365 needs the configured client_id to build the MSAL
-            # PublicClientApplication. Load it from opshub.toml just
-            # like the sync path does.
-            from opshub.connectors.ms365.auth import MS365Auth
-            from opshub.core.config import OpsHubSettings
-
-            settings = OpsHubSettings()
-            ms365_client_id = settings.connectors.ms365.client_id
-            if not ms365_client_id:
-                typer.echo(
-                    "MS365 client_id is not configured; set "
-                    "`[connectors.ms365] client_id` in opshub.toml",
-                    err=True,
-                )
-                raise typer.Exit(code=1)
-            result = MS365Auth(client_id=ms365_client_id).test_token()
-        elif name == "connector:box":
-            # Box needs client_id (config) + client_secret (keyring).
-            # BoxAuth resolves the latter internally via core.secrets.
-            from opshub.connectors.box.auth import BoxAuth
-            from opshub.core.config import OpsHubSettings
-
-            settings = OpsHubSettings()
-            box_client_id = settings.connectors.box.client_id
-            if not box_client_id:
-                typer.echo(
-                    "Box client_id is not configured; set "
-                    "`[connectors.box] client_id` in opshub.toml",
-                    err=True,
-                )
-                raise typer.Exit(code=1)
-            result = BoxAuth(client_id=box_client_id).test_token()
-        else:
-            typer.echo(
-                f"unknown auth target {name!r}; currently supported: "
-                "github, connector:slack (or legacy slack), "
-                "connector:ms365, connector:box",
-                err=True,
-            )
-            raise typer.Exit(code=2)
+    try:
+        result: dict[str, str] = verifier()
     except ConfigError as exc:
         # ConfigError already carries a sanitised message (no token
         # substrings) per each connector's token-leak invariant. We
@@ -453,6 +429,93 @@ def auth_test(
         # readability beats strict round-trip fidelity here.
         display = v if v else "(none)"
         typer.echo(f"{k:<{key_width}}  {display}")
+
+
+class _UnknownAuthTargetError(Exception):
+    """Raised by :func:`_resolve_auth_test_verifier` for unknown connector names.
+
+    :func:`auth_test` catches this to map to exit code 2 (usage error)
+    while keeping :class:`ConfigError` (operational failure) on the
+    exit-code-1 path. Using a dedicated exception type rather than
+    returning ``None`` makes the dispatch's intent self-documenting at
+    the type level.
+    """
+
+
+def _resolve_auth_test_verifier(
+    name: str,
+) -> Callable[[], dict[str, str]]:
+    """Return a zero-arg callable that verifies the given connector's token.
+
+    Centralises the per-connector wiring (SDK import, config lookup,
+    constructor) so :func:`auth_test` itself stays focussed on the
+    universal display + error-handling path. Each arm:
+
+    1. Lazy-imports the connector's auth module (cold-start budget).
+    2. Resolves any required config (e.g. ``client_id``) and raises
+       :class:`~opshub.core.errors.ConfigError` if missing — the CLI
+       maps that to exit 1 with the same ``status: failed`` framing as
+       a runtime API failure, so operators see a uniform UX.
+    3. Returns ``connector.test_token`` (bound method or module
+       function) so the caller can invoke it inside a single
+       ``try/except ConfigError`` block.
+
+    Unknown connector names raise :class:`_UnknownAuthTargetError` with the
+    supported-list error message ready to print verbatim — mirrors the
+    ``unknown auth target`` error UX used by :func:`auth_set`.
+    """
+    from opshub.core.errors import ConfigError
+
+    if name == "github":
+        from opshub.connectors.github.auth import test_token as github_test_token
+
+        return github_test_token
+
+    if name in ("slack", "connector:slack"):
+        from opshub.connectors.slack.auth import SlackAuth
+
+        return SlackAuth().test_token
+
+    if name == "connector:ms365":
+        # MS365 needs the configured client_id to build the MSAL
+        # PublicClientApplication. The error message points the
+        # operator at both ``opshub init`` (which writes the starter
+        # config) and the exact section / field name so they can edit
+        # the existing file if ``opshub init`` already ran.
+        from opshub.connectors.ms365.auth import MS365Auth
+        from opshub.core.config import OpsHubSettings
+
+        settings = OpsHubSettings()
+        ms365_client_id = settings.connectors.ms365.client_id
+        if not ms365_client_id:
+            raise ConfigError(
+                "MS365 client_id is not configured. Set "
+                "`[connectors.ms365] client_id` in "
+                f"{settings.config_dir}/config.toml "
+                "(run `opshub init` first if the file does not exist yet)."
+            )
+        return MS365Auth(client_id=ms365_client_id).test_token
+
+    if name == "connector:box":
+        from opshub.connectors.box.auth import BoxAuth
+        from opshub.core.config import OpsHubSettings
+
+        settings = OpsHubSettings()
+        box_client_id = settings.connectors.box.client_id
+        if not box_client_id:
+            raise ConfigError(
+                "Box client_id is not configured. Set "
+                "`[connectors.box] client_id` in "
+                f"{settings.config_dir}/config.toml "
+                "(run `opshub init` first if the file does not exist yet)."
+            )
+        return BoxAuth(client_id=box_client_id).test_token
+
+    raise _UnknownAuthTargetError(
+        f"unknown auth target {name!r}; currently supported: "
+        "github, connector:slack (or legacy slack), "
+        "connector:ms365, connector:box"
+    )
 
 
 def _build_source_service(*, actor: str) -> object:

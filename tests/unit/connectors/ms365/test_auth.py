@@ -410,6 +410,27 @@ def test_extract_code_variants(text: str, expected: str) -> None:
 
 
 # ----- test_token() (Phase 7.x — `opshub connector auth test`) ----------
+#
+# These tests inject an ``httpx.MockTransport``-backed client via the
+# ``client=`` seam (mirrors the api.py DI pattern). The MSAL
+# ``get_access_token`` path is still exercised through the
+# ``fake_msal_app`` fixture so the integration of MSAL refresh +
+# Graph call is end-to-end mocked.
+
+
+def _mock_graph_client(handler: Any) -> Any:
+    """Build an ``httpx.Client`` whose every request is matched against ``handler``.
+
+    Mirrors the helper pattern in
+    ``tests/unit/connectors/github/test_auth.py`` and
+    ``tests/unit/connectors/github/test_api.py``.
+    """
+    import httpx
+
+    return httpx.Client(
+        transport=httpx.MockTransport(handler),
+        base_url="https://graph.microsoft.com",
+    )
 
 
 def test_test_token_success_returns_user_fields(
@@ -427,9 +448,8 @@ def test_test_token_success_returns_user_fields(
         "expires_in": 3600,
     }
 
-    def fake_get(url: str, headers: dict[str, str], timeout: float) -> httpx.Response:
-        assert url == "https://graph.microsoft.com/v1.0/me"
-        assert headers["Authorization"] == "Bearer AT"
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1.0/me"
         return httpx.Response(
             200,
             json={"displayName": "Alice", "userPrincipalName": "alice@example.com"},
@@ -438,11 +458,10 @@ def test_test_token_success_returns_user_fields(
     with (
         patch("msal.PublicClientApplication", return_value=fake_msal_app),
         patch("opshub.core.secrets.set_secret"),
-        patch.object(httpx, "get", fake_get),
     ):
         auth = MS365Auth(client_id="app")
         auth.complete_auth_flow("code")
-        result = auth.test_token()
+        result = auth.test_token(client=_mock_graph_client(handler))
 
     assert result["display_name"] == "Alice"
     assert result["user_principal_name"] == "alice@example.com"
@@ -463,18 +482,17 @@ def test_test_token_raises_on_non_200(fake_msal_app: MagicMock) -> None:
         "expires_in": 3600,
     }
 
-    def fake_get(url: str, headers: dict[str, str], timeout: float) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "InvalidAuthenticationToken"})
 
     with (
         patch("msal.PublicClientApplication", return_value=fake_msal_app),
         patch("opshub.core.secrets.set_secret"),
-        patch.object(httpx, "get", fake_get),
     ):
         auth = MS365Auth(client_id="app")
         auth.complete_auth_flow("code")
         with pytest.raises(ConfigError) as excinfo:
-            auth.test_token()
+            auth.test_token(client=_mock_graph_client(handler))
 
     message = str(excinfo.value)
     assert "401" in message
@@ -494,18 +512,17 @@ def test_test_token_raises_on_transport_error(fake_msal_app: MagicMock) -> None:
         "expires_in": 3600,
     }
 
-    def fake_get(url: str, headers: dict[str, str], timeout: float) -> httpx.Response:
+    def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("graph.microsoft.com timed out: AT_leak")
 
     with (
         patch("msal.PublicClientApplication", return_value=fake_msal_app),
         patch("opshub.core.secrets.set_secret"),
-        patch.object(httpx, "get", fake_get),
     ):
         auth = MS365Auth(client_id="app")
         auth.complete_auth_flow("code")
         with pytest.raises(ConfigError) as excinfo:
-            auth.test_token()
+            auth.test_token(client=_mock_graph_client(handler))
 
     message = str(excinfo.value)
     assert "ConnectError" in message
