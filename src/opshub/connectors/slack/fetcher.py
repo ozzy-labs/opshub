@@ -240,7 +240,11 @@ class SlackFetcher:
             (e.g. ``invalid_auth``, ``channel_not_found``), or when
             the 429 retry budget is exhausted. The error message
             includes the Slack ``error`` code and the offending
-            channel id; it never includes the bot token.
+            channel id; it never includes the bot token. For
+            ``missing_scope`` the message additionally surfaces the
+            ``needed`` scope (when Slack populates it) and a link to
+            ADR-0018 + ``https://api.slack.com/scopes`` so the
+            operator can remediate without round-tripping the docs.
         """
         # Lazy-imported inside the method so importing this module
         # never pulls slack_sdk onto the cold-start path. The static
@@ -277,6 +281,24 @@ class SlackFetcher:
                 # ``Any`` so the documented dict access type-checks.
                 response_any = cast(Any, exc.response)
                 error_code = response_any.get("error") or type(exc).__name__
+                if error_code == "missing_scope":
+                    # Slack populates ``needed`` on missing_scope responses
+                    # with the scope name(s) the token lacks. The field
+                    # contains only documented scope identifiers (e.g.
+                    # ``channels:history``) — never the token — so it is
+                    # safe to echo. User Token vs. Bot Token scope tabs
+                    # diverge in the Slack admin UI, so we point at
+                    # ADR-0018 (which documents the principal split) and
+                    # the canonical scope catalogue rather than re-listing
+                    # scopes inline.
+                    needed = response_any.get("needed") or ""
+                    raise ConnectorFailedError(
+                        f"Slack fetch failed for channel {channel_id}: "
+                        f"missing_scope (needed: {needed!r}). See "
+                        f"ADR-0018 §Decision (7) or "
+                        f"https://api.slack.com/scopes for the scope "
+                        f"catalogue."
+                    ) from exc
                 raise ConnectorFailedError(
                     f"Slack fetch failed for channel {channel_id}: {error_code}"
                 ) from exc

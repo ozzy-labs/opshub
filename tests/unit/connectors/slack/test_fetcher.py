@@ -503,6 +503,123 @@ def test_fetch_messages_raises_connector_failed_on_invalid_auth(
     assert "xoxb-test" not in message
 
 
+def test_fetch_messages_raises_connector_failed_on_missing_scope_with_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``missing_scope`` → :class:`ConnectorFailedError` with scope-extension hint.
+
+    The generic ``error_code`` arm only surfaces the documented short
+    string (``missing_scope``), which leaves the operator to guess
+    which scope to add — and User Token vs. Bot Token scope tabs
+    diverge in the Slack admin UI. The dedicated ``missing_scope``
+    branch echoes Slack's ``needed`` field (scope name(s), never the
+    token) and links to ADR-0018 + the scope catalogue so the
+    operator can remediate in one hop.
+
+    Token-leak invariant: even when the SDK response carries the
+    token elsewhere on the response proxy, the raised message must
+    never contain it. We pin this with a substring assertion against
+    the test token.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    bad_response = MagicMock()
+    bad_response.status_code = 200  # Slack quirk: ``ok: false`` on 200
+
+    # Slack returns ``{"ok": false, "error": "missing_scope",
+    # "needed": "<scope>", "provided": "<scope>"}`` — the SDK proxies
+    # ``__getitem__`` / ``.get`` access to this dict. We model the
+    # ``.get(<key>)`` interface explicitly so the fetcher's branch
+    # on ``response.get("error")`` / ``response.get("needed")``
+    # resolves to documented payload fields.
+    def _response_get(key: str, default: object = None) -> object:
+        return {"error": "missing_scope", "needed": "channels:history"}.get(key, default)
+
+    bad_response.get.side_effect = _response_get
+    bad_response.headers = {}
+
+    client = _build_client(
+        history_side_effect=[
+            # See test_fetch_messages_respects_retry_after_on_429 for
+            # the ``no-untyped-call`` suppression rationale.
+            SlackApiError(  # type: ignore[no-untyped-call]
+                message="missing_scope",
+                response=bad_response,
+            )
+        ]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    message = str(excinfo.value)
+    # Channel id + error code: same operator-actionable invariants
+    # as the other API-error tests.
+    assert "C1" in message
+    assert "missing_scope" in message
+    # The dedicated branch surfaces the ``needed`` scope so the
+    # operator knows exactly which scope to add.
+    assert "channels:history" in message
+    # The remediation link: ADR-0018 documents the User Token / Bot
+    # Token principal split; the Slack scope catalogue is the source
+    # of truth for scope names.
+    assert "ADR-0018" in message
+    assert "https://api.slack.com/scopes" in message
+    # Token-leak invariant: the bot token must never appear in the
+    # surfaced error, even when the SDK exception's response carries
+    # it elsewhere. This is the load-bearing safety property — never
+    # let scope diagnostics widen the leak surface.
+    assert "xoxb-test" not in message
+
+
+def test_fetch_messages_missing_scope_omits_needed_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``missing_scope`` without a ``needed`` field still includes the docs link.
+
+    Older Slack response shapes (and some thin-client proxies) omit
+    ``needed`` even on ``missing_scope`` failures. The fetcher must
+    still produce a useful error: it falls back to an empty
+    ``needed`` and still links to ADR-0018 + the scope catalogue so
+    the operator has a starting point.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    bad_response = MagicMock()
+    bad_response.status_code = 200
+    # No ``needed`` key — Slack's response shape is incomplete.
+
+    def _response_get(key: str, default: object = None) -> object:
+        return {"error": "missing_scope"}.get(key, default)
+
+    bad_response.get.side_effect = _response_get
+    bad_response.headers = {}
+
+    client = _build_client(
+        history_side_effect=[
+            SlackApiError(  # type: ignore[no-untyped-call]
+                message="missing_scope",
+                response=bad_response,
+            )
+        ]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    message = str(excinfo.value)
+    assert "missing_scope" in message
+    # The remediation link is unconditional — even without ``needed``
+    # the operator can navigate to the scope catalogue.
+    assert "ADR-0018" in message
+    assert "https://api.slack.com/scopes" in message
+    assert "xoxb-test" not in message
+
+
 def test_fetch_messages_raises_connector_failed_on_channel_not_found(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
