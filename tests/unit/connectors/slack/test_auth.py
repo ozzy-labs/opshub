@@ -247,6 +247,37 @@ def test_test_token_returns_bot_principal_when_bot_id_present(
     assert result["user_id"] == "U1"
 
 
+def test_test_token_classifies_empty_bot_id_as_bot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive check: if Slack ever returns ``bot_id: ""`` (empty
+    string) in an auth.test response, the principal must still be
+    classified as ``"bot"`` — the Slack docs key the distinction on
+    presence of the ``bot_id`` field, not on its truthiness. A naive
+    truthy check (``if response.get("bot_id")``) would mis-classify
+    this edge case as a User Token; ``is not None`` matches the
+    documented contract more faithfully (see PR #167 review follow-up,
+    issue #168)."""
+    import slack_sdk
+
+    mock_client = MagicMock()
+    mock_client.auth_test.return_value = {
+        "ok": True,
+        "team": "Acme",
+        "team_id": "T1",
+        "user": "opshub-bot",
+        "user_id": "U1",
+        # Empty string — present but falsy. Must still be "bot".
+        "bot_id": "",
+    }
+    monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=mock_client))
+
+    auth = SlackAuth(token="xoxb-test")
+    result = auth.test_token()
+
+    assert result["principal"] == "bot"
+
+
 def test_test_token_raises_when_invalid_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     """Slack returns ``{"ok": False, "error": "invalid_auth"}`` for
     revoked / mis-scoped tokens. The helper must surface this as a

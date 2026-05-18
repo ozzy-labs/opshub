@@ -160,7 +160,14 @@ class SlackAuth:
         # distinguish principal at runtime — checking the token prefix
         # is fragile because Slack may introduce additional prefixes in
         # the future.
-        principal = "bot" if response.get("bot_id") else "user"
+        #
+        # We use ``is not None`` instead of a truthy check so a
+        # hypothetical ``bot_id: ""`` (empty string) response from Slack
+        # would still be classified as a Bot Token. The Slack docs only
+        # specify presence/absence of ``bot_id`` — they don't guarantee
+        # non-empty content — so being defensive against falsy-but-
+        # present values matches the documented contract more faithfully.
+        principal = "bot" if response.get("bot_id") is not None else "user"
 
         return {
             "team": str(response.get("team", "")),
