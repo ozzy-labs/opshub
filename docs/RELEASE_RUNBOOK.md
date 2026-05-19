@@ -51,7 +51,11 @@ Steps (one time, requires repo admin + PyPI account):
      - **PyPI Project Name:** `ozzylabs-opshub`
      - **Owner:** `ozzy-labs` (the GitHub org, not the PyPI account name)
      - **Repository name:** `opshub`
-     - **Workflow name:** `release.yaml`
+     - **Workflow name:** `release-please.yaml` (the primary publish workflow
+       — file name only, no path prefix; matches `workflow_ref` in the OIDC
+       claim. The legacy `release.yaml` is the escape-hatch only — register
+       it as a **second** pending publisher if you expect to ever push tags
+       manually)
      - **Environment name:** `pypi`
    - Submit. The pending publisher converts into a real publisher on the
      first successful upload.
@@ -277,8 +281,14 @@ Publisher entry on PyPI matches the repo / workflow / environment exactly
 (<https://pypi.org/manage/project/ozzylabs-opshub/settings/publishing/>).
 Common mismatches:
 
-- Workflow filename is `release.yaml` on disk but the publisher was
-  registered with `release.yml`
+- Primary workflow on disk is `release-please.yaml` but the publisher was
+  registered with `release.yaml` (the escape-hatch workflow). The OIDC
+  `workflow_ref` claim carries the filename of the workflow that actually
+  ran, so a `release-please.yaml`-fired job needs a publisher registered
+  with that exact filename. Hit during the v0.2.0 release — see also
+  §1 step 2 above.
+- Workflow filename extension `.yaml` on disk but the publisher was
+  registered with `.yml` (or vice versa)
 - GitHub environment is `pypi` but the publisher was registered with
   `pypi-prod`
 - Owner is `ozzy-labs` but the publisher was registered with a personal
