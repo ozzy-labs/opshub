@@ -5,6 +5,25 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/ozzy-labs/opshub/compare/v0.1.1...v0.2.0) (2026-05-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **connectors/slack:** make User Token the first-class principal ([#167](https://github.com/ozzy-labs/opshub/issues/167))
+
+### Added
+
+* **cli:** add generic `opshub connector auth test <name>` subcommand ([#176](https://github.com/ozzy-labs/opshub/issues/176)) ([d4eb986](https://github.com/ozzy-labs/opshub/commit/d4eb9866f7792d296dd788e47e17edfe52bfe1ef))
+* **connectors/slack:** include scope-extension hint in missing_scope error message ([#172](https://github.com/ozzy-labs/opshub/issues/172)) ([7338ae3](https://github.com/ozzy-labs/opshub/commit/7338ae3baa61e2b861abe7e72ed17c3cbb7ad29c)), closes [#169](https://github.com/ozzy-labs/opshub/issues/169)
+* **connectors/slack:** make User Token the first-class principal ([#167](https://github.com/ozzy-labs/opshub/issues/167)) ([10a01ac](https://github.com/ozzy-labs/opshub/commit/10a01acac55014d279584dd9dce742b9792bcfd8))
+
+
+### Changed
+
+* **connectors/slack:** make principal detection defensive against bot_id falsy values ([#171](https://github.com/ozzy-labs/opshub/issues/171)) ([9dfe8bb](https://github.com/ozzy-labs/opshub/commit/9dfe8bb339591453fb0e07a9abac55427c98dc4d)), closes [#168](https://github.com/ozzy-labs/opshub/issues/168)
+* **connectors:** align auth-test polish (httpx DI, dispatch table, config pointers) ([#177](https://github.com/ozzy-labs/opshub/issues/177)) ([aa05fc6](https://github.com/ozzy-labs/opshub/commit/aa05fc674689d4c18a515ae0fdc947b1e2b3809f))
+
 ## [0.1.1](https://github.com/ozzy-labs/opshub/compare/v0.1.0...v0.1.1) (2026-05-17)
 
 
