@@ -19,9 +19,7 @@ _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 def test_version_constant_is_set() -> None:
     assert __version__
-    assert _SEMVER_RE.match(__version__), (
-        f"__version__ should be SemVer-shaped: {__version__!r}"
-    )
+    assert _SEMVER_RE.match(__version__), f"__version__ should be SemVer-shaped: {__version__!r}"
 
 
 def test_cli_version_command() -> None:
