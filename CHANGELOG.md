@@ -5,6 +5,19 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1](https://github.com/ozzy-labs/opshub/compare/v0.2.0...v0.2.1) (2026-05-19)
+
+
+### Fixed
+
+* **release-please:** refresh uv.lock and auto-sync on future release PRs ([#181](https://github.com/ozzy-labs/opshub/issues/181)) ([e2d7544](https://github.com/ozzy-labs/opshub/commit/e2d7544b4d744603093291662fa2727f6f2ee1a2))
+* **tests:** assert __version__ matches SemVer shape instead of hardcoded value ([#182](https://github.com/ozzy-labs/opshub/issues/182)) ([6d0e696](https://github.com/ozzy-labs/opshub/commit/6d0e69667b5c834383c5ff48b8c3a717afdacb1a))
+
+
+### Documentation
+
+* **release-runbook:** correct primary workflow name for PyPI Trusted Publisher ([#179](https://github.com/ozzy-labs/opshub/issues/179)) ([c1cfc3e](https://github.com/ozzy-labs/opshub/commit/c1cfc3ef9826a61c53b187067d130792af8634d6))
+
 ## [0.2.0](https://github.com/ozzy-labs/opshub/compare/v0.1.1...v0.2.0) (2026-05-18)
 
 
