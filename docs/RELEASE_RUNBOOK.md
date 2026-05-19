@@ -286,7 +286,7 @@ Common mismatches:
   `workflow_ref` claim carries the filename of the workflow that actually
   ran, so a `release-please.yaml`-fired job needs a publisher registered
   with that exact filename. Hit during the v0.2.0 release — see also
-  step 1.2 above.
+  §1 step 2 above.
 - Workflow filename extension `.yaml` on disk but the publisher was
   registered with `.yml` (or vice versa)
 - GitHub environment is `pypi` but the publisher was registered with
