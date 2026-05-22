@@ -1,6 +1,6 @@
 # Phase 9 Implementation Plan
 
-> Status: Draft (planning). Last reviewed: 2026-05-23. Scope: Local-filesystem-backed Connector Layer = ADR-0018 (新規) + `sources.fingerprint` 列 (migration 0017) + `SourceObserved.fingerprint` field (backward-compat 追加) + `box_drive` connector (scanner + mapper + connector) + `core/platform.py` (WSL2 検出 helper) + `opshub connector sync box_drive` 経路 + closeout。Box Drive Web API が使えない operator (mountvol で `/mnt/b` にマウント済の WSL2 / macOS) を対象。Multi-machine sync (principles.md §Open Q #5) は Phase 10 候補にスライド。
+> Status: Draft (planning). Last reviewed: 2026-05-23. Scope: Local-filesystem-backed Connector Layer = ADR-0019 (新規) + `sources.fingerprint` 列 (migration 0017) + `SourceObserved.fingerprint` field (backward-compat 追加) + `box_drive` connector (scanner + mapper + connector) + `core/platform.py` (WSL2 検出 helper) + `opshub connector sync box_drive` 経路 + closeout。Box Drive Web API が使えない operator (mountvol で `/mnt/b` にマウント済の WSL2 / macOS) を対象。Multi-machine sync (principles.md §Open Q #5) は Phase 10 候補にスライド。
 
 Phase 9 の目的は **ローカル FS にマウントされた SaaS sync client を source として扱う新パターン** を Phase 1-8 の foundation 上に追加すること。第一弾として Box Drive を実装する。Phase 7 で Box を Web API 経由 (`box_event`) で取り込む経路を確立済だが、developer app 登録不能 / OAuth 不可な企業環境では Web API が使えず、**Box Drive デスクトップクライアントは使える** ケースがある。Phase 9 はその受け皿。
 
@@ -13,9 +13,9 @@ Phase 9 着手前に解消が必要な事項は **なし**。Phase 1-8 で確立
 **確定済み事項** (Phase 9 着手前に確定):
 
 1. **Phase 番号**: Phase 9（top-level）。Phase 8.x 枠ではない（新 ADR + sources projection schema 変更 + 新 connector category のため）
-2. **Scope の絞り込み**: Phase 9 MVP = ADR-0018 + `sources.fingerprint` 列 + `box_drive` connector + `core/platform.py` + `opshub connector sync box_drive` + closeout。**Watch mode (filewatch / inotify / FSEvents / CldAPI callback) は Phase 9 scope 外**（scan-only で identity 戦略を pin する）。Multi-machine sync / 追加 FS connector / `local_drive/` 共通基底 / `opshub source list --stale` は Phase 9.x / 10
+2. **Scope の絞り込み**: Phase 9 MVP = ADR-0019 + `sources.fingerprint` 列 + `box_drive` connector + `core/platform.py` + `opshub connector sync box_drive` + closeout。**Watch mode (filewatch / inotify / FSEvents / CldAPI callback) は Phase 9 scope 外**（scan-only で identity 戦略を pin する）。Multi-machine sync / 追加 FS connector / `local_drive/` 共通基底 / `opshub source list --stale` は Phase 9.x / 10
 3. **Operator precondition**: Box Drive がインストール済みかつ OS から FS として可視であること。WSL2 では `mountvol B: \\?\Volume{GUID}\` + `wsl --shutdown` を operator が事前に実施し `/mnt/b` を出現させる（opshub は automate しない）。手順は `docs/box-drive-setup.md` (C1 PR で新設) に記載
-4. **Identity strategy**: `external_id = rel_path`（root_path 相対パス、SHA hash しない grep 可能形式）。rename / move は「旧 path の SourceObserved が止まり、新 path で SourceObserved 発火」として観測される MVP 制限を ADR-0018 に明記。xattr / ADS ベースの安定 Box item ID は Phase 9.x 候補
+4. **Identity strategy**: `external_id = rel_path`（root_path 相対パス、SHA hash しない grep 可能形式）。rename / move は「旧 path の SourceObserved が止まり、新 path で SourceObserved 発火」として観測される MVP 制限を ADR-0019 に明記。xattr / ADS ベースの安定 Box item ID は Phase 9.x 候補
 5. **Diff detection**: スキャナは事前に `sources` projection から `(connector_name="box_drive", external_id, fingerprint)` を一括 SELECT → in-memory dict 構築 → walk 中の各 file について `fingerprint = f"{size}:{mtime_ns}"` を計算 → prior fingerprint と一致しない / 不在の file のみ `SourceObserved` を発行。**変更なし file の event noise を抑える**
 6. **削除検知**: Phase 9 MVP では **追跡しない**。Drive から消えた file は次回スキャンで再 observe されないだけ。`sources` projection に stale row が残るのは event-sourced append-only の自然な帰結。`opshub source list --stale` で炙り出す機能は Phase 9.x
 7. **`stat()` 非 hydrate**: Microsoft CldAPI / macOS File Provider Extension の documented contract に依拠（`os.stat` は metadata access のみで CldAPI hydration を triggered しない）。**`open()` / magic bytes 読み出しは禁止** を ADR §不変条件で pin、`tests/integration/test_box_drive_no_hydration.py` を `OPSHUB_BOX_DRIVE_TEST_ROOT` env 設定時のみ実行する CI 持続検証として配置
@@ -68,14 +68,14 @@ Conventional Commits 準拠。1 step = 1 PR = 1 commit (squash 後) を厳守。
 
 | # | Commit | 概要 | Sub-issue |
 |---|---|---|---|
-| C1 | `feat(cli): box_drive sync + phase 9 closeout` | `opshub connector sync box_drive` が既存 `cli/connector.py` の sync 経路で動作することを e2e で pin（新 CLI module 不要、registry 経由 dispatch）。`opshub connector list` に `box_drive` が `enabled=false` で表示されることを pin。`tests/integration/test_phase9_lifecycle.py`: tmp dir を `root_path` として `BoxDriveConnector.sync` を 2 回呼び (1 回目で全 file が SourceObserved、2 回目で 1 file modify + 1 file 追加 + 1 file 削除 → modify+追加のみ event 発火、削除は無視) `sources` projection が正しく追従することを e2e で pin。Real Box Drive 環境は使わず tmp dir で skipless test。docs: README に `opshub connector sync box_drive` 追記 + `docs/box-drive-setup.md` 新設 (WSL2 `mountvol` 手順 + qiita 記事 link + macOS 既定パス)。AGENTS.md / CLAUDE.md / docs/principles.md (§9 Phase 9 = ✅ Complete、§Open Q #5 Multi-machine sync を「Phase 10+ 候補」に表現変更) / docs/architecture.md (§2.1 Connector Layer に FS-backed vendor 行追加 + §2.11 (新規) Local-filesystem-backed Connector Pattern 節を追加) / docs/repository-structure.md (`[P9]` annotation: `core/platform.py` / `connectors/box_drive/` / migration 0017) / docs/decisions-log.md (Phase 9 entry) / ADR-0018 Validation 追記 (test ファイルへの reference)。Phase 7 `box` connector との関係 (二重取り込み許容、`source_type` 分離) を ADR-0018 §関連で明示 | C |
+| C1 | `feat(cli): box_drive sync + phase 9 closeout` | `opshub connector sync box_drive` が既存 `cli/connector.py` の sync 経路で動作することを e2e で pin（新 CLI module 不要、registry 経由 dispatch）。`opshub connector list` に `box_drive` が `enabled=false` で表示されることを pin。`tests/integration/test_phase9_lifecycle.py`: tmp dir を `root_path` として `BoxDriveConnector.sync` を 2 回呼び (1 回目で全 file が SourceObserved、2 回目で 1 file modify + 1 file 追加 + 1 file 削除 → modify+追加のみ event 発火、削除は無視) `sources` projection が正しく追従することを e2e で pin。Real Box Drive 環境は使わず tmp dir で skipless test。docs: README に `opshub connector sync box_drive` 追記 + `docs/box-drive-setup.md` 新設 (WSL2 `mountvol` 手順 + qiita 記事 link + macOS 既定パス)。AGENTS.md / CLAUDE.md / docs/principles.md (§9 Phase 9 = ✅ Complete、§Open Q #5 Multi-machine sync を「Phase 10+ 候補」に表現変更) / docs/architecture.md (§2.1 Connector Layer に FS-backed vendor 行追加 + §2.11 (新規) Local-filesystem-backed Connector Pattern 節を追加) / docs/repository-structure.md (`[P9]` annotation: `core/platform.py` / `connectors/box_drive/` / migration 0017) / docs/decisions-log.md (Phase 9 entry) / ADR-0019 Validation 追記 (test ファイルへの reference)。Phase 7 `box` connector との関係 (二重取り込み許容、`source_type` 分離) を ADR-0019 §関連で明示 | C |
 
 = 合計 **5 PR** (A 2 + B 2 + C 1)。
 
 **Wave 構成** (DAG):
 
 ```text
-Wave 1: A1 ADR-0018 → 1 並列 (sequential foundation)
+Wave 1: A1 ADR-0019 → 1 並列 (sequential foundation)
 Wave 2: A2 sources.fingerprint + migration 0017 → 1 (A1 依存)
 Wave 3: B1 core/platform + box_drive scanner → 1 (A2 依存)
 Wave 4: B2 mapper + connector + settings → 1 (B1 依存)
@@ -88,7 +88,7 @@ Wave 5: C1 CLI + closeout → 1 (B2 依存)
 
 ### Sub-issue A — Foundation
 
-- [ ] ADR-0018 Accepted + decisions-log.md entry
+- [ ] ADR-0019 Accepted + decisions-log.md entry
 - [ ] Migration 0017 で `sources.fingerprint TEXT NULL` 列を追加、`alembic upgrade head` で apply 可能 + `alembic downgrade -1` で revert 可能
 - [ ] `SourceObserved` に `fingerprint: str | None = None` field 追加 (schema_version 据え置き 1)
 - [ ] `SourceService.observe` に `fingerprint=None` keyword arg 追加
@@ -118,7 +118,7 @@ Wave 5: C1 CLI + closeout → 1 (B2 依存)
 - [ ] `tests/integration/test_phase9_lifecycle.py` が tmp dir e2e で 2-pass sync の差分検出 (modify / 追加検知 + 削除無視) を pin
 - [ ] M6 cold-start guard 順守 (`connectors/box_drive/*` + `core/platform.py` の module-level import が whitelist 範囲)
 - [ ] docs: README / `docs/box-drive-setup.md` / AGENTS.md / CLAUDE.md / principles.md / architecture.md / repository-structure.md / decisions-log.md
-- [ ] ADR-0018 Validation 追記 (test ファイルへの reference)
+- [ ] ADR-0019 Validation 追記 (test ファイルへの reference)
 - [ ] `time opshub --help` ≤ 300ms 維持 (M6 guard)
 
 ## 4. Open Questions
@@ -126,7 +126,7 @@ Wave 5: C1 CLI + closeout → 1 (B2 依存)
 Phase 9 着手時点で未確定、本 plan 内で確定すべきもの:
 
 1. **`url = file://...` vs `url = None`** — Box Drive は `file://` でローカルパスを開けるが、機密性のあるパスを projection に保持してよいかは ADR-0005 (External Content Min) の解釈次第。**現案**: `file://` を入れる（path は既に summary に入っているので二重露出にならず、`opshub source open <id>` の UX を保つ）。A1 ADR で確定
-2. **`fingerprint` の構成要素** — `f"{size}:{mtime_ns}"` を default。OS の clock skew や手動 `touch` で false positive のリスク。**現案**: size + mtime_ns で十分（agent が観測する観点では「mtime が動いた = 変更」で正解）。SHA-256 など内容 hash は本文 read を要するため ADR-0018 §不変条件 (b) 違反、選ばない
+2. **`fingerprint` の構成要素** — `f"{size}:{mtime_ns}"` を default。OS の clock skew や手動 `touch` で false positive のリスク。**現案**: size + mtime_ns で十分（agent が観測する観点では「mtime が動いた = 変更」で正解）。SHA-256 など内容 hash は本文 read を要するため ADR-0019 §不変条件 (b) 違反、選ばない
 3. **`root_path` 複数指定** — operator が Box Drive 外に「外部共有された Box フォルダ」を別パスでマウントするケース。**現案**: Phase 9 MVP は単一 `root_path` のみ。複数対応は `[connectors.box_drive.<name>]` 形式で Phase 9.x
 
 Phase 9 内では確定しなくてよい (Phase 9.x / 10 持ち越し):
@@ -147,9 +147,9 @@ Phase 9 完了直後の候補:
 - **xattr-based stable identity**: rename 保持が必要になった段階で
 - **`opshub source list --stale`**: sources projection の age による stale 検出
 - **`~/.config/opshub/excludes.yaml` 共通機構**: 全 connector 横断 (Phase 7 Box の event filtering / Phase 9 box_drive の path filtering 統合)
-- **Multi-machine sync** (principles.md §Open Q #5 closeout、Phase 10 候補): litestream / Turso / event-sourced export-import + ADR-0019
+- **Multi-machine sync** (principles.md §Open Q #5 closeout、Phase 10 候補): litestream / Turso / event-sourced export-import + 新 ADR (番号は Phase 10 着手時に採番、現時点での最新 ADR は 0019 = Local-filesystem-backed Connector)
 
-Phase 9.x / 10 着手時に連動して見直すべき docs: principles.md §1 (Local-first、FS-backed connector が増えた場合の前提整理) / §6 (External Content Min、`fingerprint` メタデータの保持範囲再確認) / ADR-0010 (Connector Contract、FS-backed pattern の Validation 拡張) / ADR-0018 (本 phase で新設、Phase 9.x で Validation 追記)。
+Phase 9.x / 10 着手時に連動して見直すべき docs: principles.md §1 (Local-first、FS-backed connector が増えた場合の前提整理) / §6 (External Content Min、`fingerprint` メタデータの保持範囲再確認) / ADR-0010 (Connector Contract、FS-backed pattern の Validation 拡張) / ADR-0019 (本 phase で新設、Phase 9.x で Validation 追記)。
 
 ## 6. 参考: Spike 不採用の根拠
 
@@ -170,5 +170,5 @@ Phase 9 は **spike なしで設計確定** している。各 open question を
 - ADR-0002 (Event-Sourced、§4 「新 field 追加は OK」backward-compat)
 - ADR-0005 (External Content Min、`stat` のみ + `open()` 禁止 不変条件)
 - ADR-0010 (Connector Contract、`Connector` Protocol 再利用 + auth layer を OS 依存に置換)
-- ADR-0018 (Local-filesystem-backed Connector、本 phase A1 で新設)
+- ADR-0019 (Local-filesystem-backed Connector、本 phase A1 で新設)
 - Phase 1 #3 / Phase 2 #23 / Phase 3 #43 / Phase 4 #62 / Phase 5 #81 / Phase 6 #99 / Phase 7 #113 / Phase 8 #128 (全 closed)
