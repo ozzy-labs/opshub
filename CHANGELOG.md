@@ -5,6 +5,23 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2](https://github.com/ozzy-labs/opshub/compare/v0.2.1...v0.2.2) (2026-05-22)
+
+
+### Added
+
+* **cli:** box_drive sync + phase 9 closeout ([#194](https://github.com/ozzy-labs/opshub/issues/194)) ([3d97643](https://github.com/ozzy-labs/opshub/commit/3d976431e27a14da7a4d3811044e396d2ddf6f77))
+* **connectors/box_drive:** mapper + connector + settings ([#193](https://github.com/ozzy-labs/opshub/issues/193)) ([90d3f49](https://github.com/ozzy-labs/opshub/commit/90d3f49d680a2bd6d16aef5ad749c1f084b344a2))
+* **core:** platform detection + box_drive scanner ([#191](https://github.com/ozzy-labs/opshub/issues/191)) ([ca4e1da](https://github.com/ozzy-labs/opshub/commit/ca4e1dadb722077712634feec57a6c4437e50103))
+* **sources:** add fingerprint column + migration 0017 ([#192](https://github.com/ozzy-labs/opshub/issues/192)) ([97929ed](https://github.com/ozzy-labs/opshub/commit/97929ed090fc8b0e6a4bd5e880b6fd677af26010))
+
+
+### Documentation
+
+* **adr:** adr-0019 local-filesystem-backed connector ([#190](https://github.com/ozzy-labs/opshub/issues/190)) ([8ff9c1a](https://github.com/ozzy-labs/opshub/commit/8ff9c1a416e686971f51709830c7b0429394e534))
+* **plan:** align phase 9 plan A1 row to actual adr-0019 ([#195](https://github.com/ozzy-labs/opshub/issues/195)) ([da353ef](https://github.com/ozzy-labs/opshub/commit/da353efc5e04e21db169cf0f260a005164167e8c))
+* **plan:** phase 9 plan ([#188](https://github.com/ozzy-labs/opshub/issues/188)) ([613a2f3](https://github.com/ozzy-labs/opshub/commit/613a2f3dcfcbb3d41ea4fdd1f65768230b1f4e0f))
+
 ## [0.2.1](https://github.com/ozzy-labs/opshub/compare/v0.2.0...v0.2.1) (2026-05-19)
 
 
