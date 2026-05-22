@@ -90,6 +90,14 @@ def test_phase3_migrations_create_expected_columns(head_engine: Engine) -> None:
         "summary": {"nullable": True},
         "observed_at": {"nullable": False},
         "updated_at": {"nullable": False},
+        # Phase 9 step A2 (migration 0017, ADR-0019 §決定 (d)): the
+        # ``box_drive`` connector's diff-detection token
+        # ``f"{size}:{mtime_ns}"``. ``NULL`` for every other
+        # connector — pinning the nullable contract here keeps the
+        # backward-compat guarantee inside the Phase 3 test surface
+        # so a future schema bump that drops the nullability would
+        # break ``head`` even before a fresh migration test runs.
+        "fingerprint": {"nullable": True},
     }
     assert set(sources_columns) == set(expected_sources), (
         f"sources column set mismatch; got {sorted(sources_columns)}"

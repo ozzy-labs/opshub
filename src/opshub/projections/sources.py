@@ -34,9 +34,16 @@ pair:
   *first* observation timestamp) are deliberately omitted from the
   ``DO UPDATE SET`` clause: on conflict we keep the original values so
   references that were minted against the first-observation ULID stay
-  valid. ``title`` / ``url`` / ``summary`` / ``updated_at`` are
-  refreshed because the external item's metadata can drift across
-  observations.
+  valid. ``title`` / ``url`` / ``summary`` / ``updated_at`` /
+  ``fingerprint`` are refreshed because the external item's metadata
+  can drift across observations.
+
+Phase 9 step A2 (ADR-0019 §決定 (d)) adds the ``fingerprint`` column
+to back the ``box_drive`` connector's diff-detection path. The
+projector writes ``event.fingerprint`` straight through — ``None``
+lands as ``NULL`` so the four pre-existing connectors (``github`` /
+``slack`` / ``ms365`` / ``box``), which never populate the field,
+remain bit-for-bit identical in the read model.
 
 :class:`SourceReferenced` is a deliberate no-op for this projection:
 the reference graph is not stored in ``sources_table``. When a Phase 4
@@ -78,6 +85,11 @@ sources_table: Table = Table(
     Column("summary", Text(), nullable=True),
     Column("observed_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    # Phase 9 step A2 (ADR-0019 §決定 (d)): ``f"{size}:{mtime_ns}"``
+    # for the ``box_drive`` FS-backed connector, ``NULL`` for the
+    # four Web-API-backed connectors. Mirrors migration
+    # ``0017_add_fingerprint_to_sources``.
+    Column("fingerprint", String, nullable=True),
     UniqueConstraint(
         "connector_name",
         "external_id",
@@ -142,6 +154,14 @@ class SourcesProjection:
         ``id`` and ``observed_at`` are intentionally absent from the
         ``set_`` mapping so the first-observation values survive
         subsequent re-observations (see module docstring).
+
+        Phase 9 step A2: ``fingerprint`` is written through on both the
+        INSERT and the UPDATE arm so the ``box_drive`` connector's
+        next scan picks up the latest ``f"{size}:{mtime_ns}"`` value
+        (ADR-0019 §決定 (d)). Connectors that never populate the
+        field always pass ``None``, which round-trips as ``NULL`` —
+        the column is nullable in migration ``0017`` precisely so the
+        four pre-existing connectors stay byte-identical.
         """
         stmt = sqlite_insert(sources_table).values(
             id=event.aggregate_id,
@@ -153,6 +173,7 @@ class SourcesProjection:
             summary=event.summary,
             observed_at=event.occurred_at,
             updated_at=event.occurred_at,
+            fingerprint=event.fingerprint,
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=["connector_name", "external_id"],
@@ -161,6 +182,7 @@ class SourcesProjection:
                 "url": stmt.excluded.url,
                 "summary": stmt.excluded.summary,
                 "updated_at": stmt.excluded.updated_at,
+                "fingerprint": stmt.excluded.fingerprint,
             },
         )
         conn.execute(stmt)

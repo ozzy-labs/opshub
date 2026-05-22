@@ -61,6 +61,33 @@ class SourceObserved(DomainEvent):
     Validation §3 calls this rule out explicitly ("全 connector で
     summary ≤ 200 chars enforce") and this constraint is the
     schema-layer half of that contract.
+
+    ``fingerprint`` (Phase 9 step A2, ADR-0019 §決定 (d))
+    -----------------------------------------------------
+    Added by the Phase 9 ``box_drive`` connector to suppress
+    :class:`SourceObserved` event noise across the 100k+ files that
+    typically sit under a Box Drive mount. The connector computes
+    ``f"{size}:{mtime_ns}"`` from :func:`os.stat` (no file body read —
+    ADR-0019 §不変条件 (b)) and the scanner compares the live
+    fingerprint against the value persisted in the ``sources``
+    projection (migration ``0017_add_fingerprint_to_sources``) to
+    skip files whose ``size`` and ``mtime_ns`` are both unchanged.
+
+    Every other connector (``github`` / ``slack`` / ``ms365`` /
+    ``box``) leaves the field at its default ``None`` — they observe
+    SaaS resources whose diff detection is driven by API-side sync
+    cursors, not local stat() metadata. ``None`` is written as
+    ``NULL`` by :class:`~opshub.projections.sources.SourcesProjection`
+    so the four pre-existing connectors are byte-identical after the
+    Phase 9 schema bump.
+
+    Adding ``fingerprint`` is a backward-compatible field addition
+    (ADR-0002 §4 "new optional fields may be added without bumping
+    schema_version"), so ``schema_version`` stays at ``1``. Historic
+    events deserialised by :class:`pydantic.TypeAdapter` against the
+    Phase 3 / Phase 7 stream pick up the default ``None`` and a
+    ``projections rebuild`` reproduces the ``NULL`` write through the
+    projector — no data migration is required.
     """
 
     event_type: Literal["source.observed"] = "source.observed"  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -71,6 +98,7 @@ class SourceObserved(DomainEvent):
     title: str = Field(min_length=1, max_length=500)
     url: str | None = None
     summary: str | None = Field(default=None, max_length=200)
+    fingerprint: str | None = None
 
 
 class SourceReferenced(DomainEvent):
