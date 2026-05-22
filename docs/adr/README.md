@@ -51,7 +51,7 @@ OpsHub では以下を ADR 化する。
 | `Deprecated` | 採用を取り下げ。後継 ADR を必須としない |
 | `Superseded by ADR-NNNN` | 新しい ADR で置き換え。新 ADR にリンク |
 
-Phase 1 着手前に主要 ADR (0001-0007 + 0012) を一括 `Accepted` に昇格させた。Phase 2 着手前に ADR-0009 (Multi-Agent Neutrality) を、Phase 2 step 5 で ADR-0013 (Lock Granularity) を、Phase 3 step A6 で ADR-0014 (SaaS Token Storage) を、Phase 3 step D (closeout) で ADR-0010 (Connector Contract) を、それぞれ実装で検証した上で Accepted に昇格させた。Phase 5 step A1 で ADR-0015 (LLM Usage Strategy) を Accepted で起票し、principles.md §Open Q #1 (LLM 利用方針) を closeout する (closeout 反映自体は Phase 5 D1)。Phase 6 step A1 で ADR-0016 (Action Loop and Structured Output) を Accepted で起票し、ADR-0015 §決定 (a) deferred (Local LLM backend) を本 ADR §決定 (h) で closeout する。Phase 8 step A1 で ADR-0017 (Knowledge Graph) を Accepted で起票し、`links` projection schema / 自動抽出 vs manual link / traversal depth / `--expand-graph` flag / `LinkDeleted` hard delete 等の 8 決定を pin する (principles.md §Open Q #5 Multi-machine sync は本 ADR では closeout せず Phase 9 候補)。
+Phase 1 着手前に主要 ADR (0001-0007 + 0012) を一括 `Accepted` に昇格させた。Phase 2 着手前に ADR-0009 (Multi-Agent Neutrality) を、Phase 2 step 5 で ADR-0013 (Lock Granularity) を、Phase 3 step A6 で ADR-0014 (SaaS Token Storage) を、Phase 3 step D (closeout) で ADR-0010 (Connector Contract) を、それぞれ実装で検証した上で Accepted に昇格させた。Phase 5 step A1 で ADR-0015 (LLM Usage Strategy) を Accepted で起票し、principles.md §Open Q #1 (LLM 利用方針) を closeout する (closeout 反映自体は Phase 5 D1)。Phase 6 step A1 で ADR-0016 (Action Loop and Structured Output) を Accepted で起票し、ADR-0015 §決定 (a) deferred (Local LLM backend) を本 ADR §決定 (h) で closeout する。Phase 8 step A1 で ADR-0017 (Knowledge Graph) を Accepted で起票し、`links` projection schema / 自動抽出 vs manual link / traversal depth / `--expand-graph` flag / `LinkDeleted` hard delete 等の 8 決定を pin する (principles.md §Open Q #5 Multi-machine sync は本 ADR では closeout せず Phase 9 候補)。Phase 9 step A1 で ADR-0019 (Local-filesystem-backed Connector) を Accepted で起票し、`Connector` Protocol 再利用 + auth を OS 依存に置換 / `stat()` のみで `open()` 禁止 / Identity = rel_path / `sources.fingerprint` 列で diff detection / 削除追跡なし / `root_path` platform default / Excludes は `opshub.toml` inline / Operator precondition は opshub 範囲外 / Watch mode は Phase 9.x 持ち越し の 9 決定を pin する。
 
 ## 4. ファイル命名
 
@@ -94,6 +94,7 @@ NNNN-kebab-case-title.md
 | 0016 | [Action Loop and Structured Output](0016-action-loop-and-structured-output.md) | Accepted |
 | 0017 | [Knowledge Graph](0017-knowledge-graph.md) | Accepted |
 | 0018 | [Slack Connector Token Principal](0018-slack-token-principal.md) | Accepted |
+| 0019 | [Local-filesystem-backed Connector (box_drive)](0019-local-filesystem-backed-connector.md) | Accepted |
 
 ## Open Questions
 
