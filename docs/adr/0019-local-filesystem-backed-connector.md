@@ -26,7 +26,7 @@ Phase 7 (epic #113) で OpsHub は GitHub / Slack / Microsoft 365 / Box の 4 co
 
 第四の論点は **削除追跡**である。Drive から file が消えた場合に SourceDeleted のような event を発行するか否か。Phase 9 MVP では追跡しない選択を取る。理由: (i) 削除検知は scan 開始時の `sources` projection 全 row と walk 結果の symmetric diff が必要で、scan 単純性を破壊する、(ii) event-sourced append-only の自然な帰結として「過去観測された source が現在の Drive に無い」状態は stale row として残せる、(iii) operator が炙り出したいケースは Phase 9.x `opshub source list --stale` で対応可能。Phase 9 MVP は scan-only / additive。
 
-第五の論点は **platform default**である。WSL2 で Box Drive を参照するには `mountvol B: \\?\Volume{GUID}\` + `wsl --shutdown` の operator setup が必要で (qiita 記事: https://qiita.com/himacreation/items/e375e010d670d756e754)、これ自体は OpsHub の自動化範囲外。一方で「設定済前提で `/mnt/b` を default」「macOS では `~/Box` を default」「Linux native は Box Drive client がない」を `core/platform.py` で判定する経路は必要。Windows native は opshub 全体の前提 (POSIX-only、`pyproject.toml` classifier `Operating System :: POSIX`) で対象外。
+第五の論点は **platform default**である。WSL2 で Box Drive を参照するには `mountvol B: \\?\Volume{GUID}\` + `wsl --shutdown` の operator setup が必要で ([qiita 記事](https://qiita.com/himacreation/items/e375e010d670d756e754))、これ自体は OpsHub の自動化範囲外。一方で「設定済前提で `/mnt/b` を default」「macOS では `~/Box` を default」「Linux native は Box Drive client がない」を `core/platform.py` で判定する経路は必要。Windows native は opshub 全体の前提 (POSIX-only、`pyproject.toml` classifier `Operating System :: POSIX`) で対象外。
 
 第六の論点は **Watch mode との関係**である。inotify / FSEvents / Microsoft CldAPI callback による push 駆動更新は理想だが、Phase 9 MVP では **scan mode** で identity / fingerprint 戦略を pin する。Watch mode を先に実装すると identity を rename event を保持する形に設計せざるを得ず、本 ADR の rel_path 一本 + rename = 旧停止+新発火 制限が表現できなくなる。scan mode で 1 vendor (box_drive) 分の運用知見を蓄えてから、Phase 9.x で filewatch backend を抽象化する順序を採択。
 
@@ -188,7 +188,7 @@ wsl --shutdown
 # WSL2 を起動し直すと /mnt/b が visible になる
 ```
 
-(qiita 参考記事: https://qiita.com/himacreation/items/e375e010d670d756e754)
+(qiita 参考記事: <https://qiita.com/himacreation/items/e375e010d670d756e754>)
 
 これは **opshub の自動化範囲外**。理由:
 
@@ -199,7 +199,7 @@ wsl --shutdown
 代わりに `docs/box-drive-setup.md` (C1 PR で新設) に以下を記載:
 
 - WSL2 operator 向け: `mountvol` 手順 + qiita 記事 link + 確認方法 (`ls /mnt/b` で Box workspace が見えれば OK)
-- macOS operator 向け: Box Drive を https://www.box.com/resources/downloads からインストール後、`ls ~/Box` で workspace が見える前提
+- macOS operator 向け: Box Drive を <https://www.box.com/resources/downloads> からインストール後、`ls ~/Box` で workspace が見える前提
 - Linux native operator 向け: 「Box Drive Linux client は提供されていない。VM / WSL2 経由を推奨」と明示
 
 採用理由:
@@ -336,4 +336,4 @@ scan 開始時の `sources` projection 全 row と walk 結果を symmetric diff
 - [ADR-0018: Slack Connector Token Principal](0018-slack-token-principal.md) — 直前 ADR、本 ADR の番号採番 (0019) の根拠
 - Phase 7 `box` connector — Web API 経路 (`source_type="box_event"`)、本 ADR の box_drive (`source_type="box_drive_file"`) と二重取り込み許容 (operator が独立に enable / disable 可能)
 - [Phase 9 Plan §1 確定済み事項 + §2.1 sub-issue A + §6 spike 不採用の根拠](../phase-9-plan.md)
-- 参考記事 (WSL2 → Box Drive mountvol 手順): https://qiita.com/himacreation/items/e375e010d670d756e754
+- 参考記事 (WSL2 → Box Drive mountvol 手順): <https://qiita.com/himacreation/items/e375e010d670d756e754>
