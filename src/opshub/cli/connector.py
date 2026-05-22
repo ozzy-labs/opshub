@@ -129,12 +129,21 @@ def connector_sync(name: str) -> None:
         pass
 
     try:
-        import opshub.connectors.box  # noqa: F401  # pyright: ignore[reportUnusedImport]
+        import opshub.connectors.box  # pyright: ignore[reportUnusedImport]
     except ImportError:
         # Box connector module imports cleanly without the extras (the
         # heavy ``boxsdk`` imports stay inside the auth / fetcher
         # constructors); this branch is defensive and would only trigger
         # if a future refactor adds a top-level SDK import.
+        pass
+
+    try:
+        import opshub.connectors.box_drive  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    except ImportError:
+        # Box Drive connector module imports cleanly with no third-party
+        # extras (Phase 9, ADR-0019 — the scanner is pure stdlib
+        # ``os.scandir``). This guard is defensive and would only fire
+        # if a future refactor adds a heavy top-level dependency.
         pass
     from opshub.connectors import discover_connectors
     from opshub.connectors.context import ConnectorContext
@@ -219,6 +228,14 @@ def auth_set(
     no use for a pre-baked token), which we surface as an explicit
     warning rather than silently dropping it.
 
+    The Phase 9 ``connector:box_drive`` target (ADR-0019) is rejected
+    with an actionable error: the local-filesystem-backed Box Drive
+    connector reads the host FS directly and has *no* token / OAuth
+    surface. Operators configure it via
+    ``[connectors.box_drive] root_path`` in ``opshub.toml`` (or rely
+    on the platform default), so accepting an ``auth set`` invocation
+    here would only mislead.
+
     Security: there is intentionally no ``auth get`` command — we never
     echo tokens to stdout. The env-var override is the documented
     escape hatch for testing / debugging.
@@ -258,6 +275,24 @@ def auth_set(
 
         run_box()
         return
+
+    if name == "connector:box_drive":
+        # Phase 9 (ADR-0019) ``box_drive`` connector has no token /
+        # OAuth surface at all — it reads a local Box Drive mount
+        # point on the host filesystem. Operators configure it via
+        # ``[connectors.box_drive] root_path`` in ``opshub.toml`` (or
+        # rely on the platform default: WSL2=/mnt/b, macOS=~/Box).
+        # Accepting an ``auth set`` invocation here would silently
+        # write a token nobody reads, so we fail-fast with an
+        # actionable pointer to the ADR + setup doc.
+        typer.echo(
+            "box_drive connector does not use OAuth or paste-code auth. "
+            "Configure root_path in opshub.toml under [connectors.box_drive] "
+            "(or rely on the platform default: WSL2=/mnt/b, macOS=~/Box). "
+            "See docs/adr/0019-local-filesystem-backed-connector.md for details.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
 
     if name == "github":
         from opshub.connectors.github.auth import GITHUB_PAT_SECRET_KEY
@@ -316,7 +351,7 @@ def auth_set(
             f"unknown auth target {name!r}; currently supported: "
             "github, connector:slack (or legacy slack), embedder:openai, "
             "embedder:voyage, llm:anthropic, llm:openai, connector:ms365, "
-            "connector:box",
+            "connector:box (connector:box_drive uses opshub.toml, not auth set)",
             err=True,
         )
         raise typer.Exit(code=2)

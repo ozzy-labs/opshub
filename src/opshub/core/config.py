@@ -275,26 +275,80 @@ class BoxConnectorSettings(BaseModel):
     client_id: str = ""
 
 
+class BoxDriveConnectorSettings(BaseModel):
+    """Box Drive (local-filesystem-backed) connector configuration (Phase 9, ADR-0019).
+
+    The ``box_drive`` connector reads a local Box Drive desktop client
+    mount point on the host filesystem rather than the Box Platform
+    API (the Phase 7 :class:`BoxConnectorSettings` covers that path).
+    Operator-facing IT policies sometimes block the SaaS API entirely;
+    ADR-0019 introduces this connector specifically so opshub still
+    has visibility into Box content under those constraints.
+
+    ``enabled = False`` is the default per ADR-0019 §決定 (a) — the
+    connector is opt-in so a fresh ``uv tool install`` never tries to
+    walk an arbitrary directory on first run.
+
+    ``root_path`` is the absolute path to the Box Drive mount point.
+    A ``None`` value (the default) delegates to
+    :func:`opshub.core.platform.box_drive_default_root_path` so WSL2
+    hosts pick up ``/mnt/b`` and macOS hosts pick up ``~/Box``
+    automatically. Linux native hosts have no default — the connector
+    raises :class:`ConfigError` with a pointer to
+    ``docs/box-drive-setup.md`` at first sync.
+
+    Structural safety caps mirror the scanner's defaults
+    (:class:`opshub.connectors.box_drive.scanner.BoxDriveScanner`):
+
+    * ``max_depth = 16`` — generous for typical Box Drive workspaces
+      (rarely more than 8 deep) and tight enough that a misconfigured
+      root cannot enumerate ``/`` indefinitely.
+    * ``max_files = 100_000`` — escape hatch when a single scan
+      exceeds the cap. Operators with very large workspaces raise this
+      in ``opshub.toml``; values past ~1M should prompt a Phase 9.x
+      chunked-scan discussion.
+    * ``follow_symlinks = False`` — Box Drive does not synthesise
+      symlinks of its own, so any link under the root is operator-made
+      and likely escapes the workspace. The safe default refuses to
+      follow them.
+    * ``exclude_globs = []`` — fnmatch / gitignore-style patterns
+      (``"**/.DS_Store"``, ``"**/secrets/**"``, ...) that the scanner
+      skips. Empty list means "no exclusions".
+    """
+
+    enabled: bool = False
+    root_path: Path | None = None
+    max_depth: int = 16
+    max_files: int = 100_000
+    follow_symlinks: bool = False
+    exclude_globs: list[str] = Field(default_factory=list)
+
+
 class ConnectorSettings(BaseModel):
-    """External SaaS connector configuration root.
+    """External SaaS / local-FS connector configuration root.
 
     Phase 7 introduces this section as the dedicated home for each
     connector's tuning (enable flag + OAuth metadata). Step B1 added
     the :class:`MS365ConnectorSettings` field, and step C1 adds
-    :class:`BoxConnectorSettings`; subsequent Phase 7 steps extend the
-    same shape.
+    :class:`BoxConnectorSettings`. Phase 9 step B2 (ADR-0019) adds
+    :class:`BoxDriveConnectorSettings` for the local-filesystem-backed
+    Box Drive connector — the first non-SaaS connector in opshub, so
+    its shape (``root_path`` / ``max_depth`` / ``max_files`` instead
+    of ``client_id`` / OAuth metadata) differs from the four
+    pre-existing connectors by design.
 
     The section is intentionally separate from :class:`LLMSettings` /
     :class:`EmbeddingSettings` so per-connector overrides like
     ``OPSHUB_CONNECTORS__MS365__CLIENT_ID=...`` or
-    ``OPSHUB_CONNECTORS__BOX__CLIENT_ID=...`` follow the documented
-    nested-env-var pattern without colliding with the LLM/embedding
-    namespaces.
+    ``OPSHUB_CONNECTORS__BOX_DRIVE__ROOT_PATH=/mnt/b`` follow the
+    documented nested-env-var pattern without colliding with the
+    LLM/embedding namespaces.
     """
 
     slack: SlackConnectorSettings = Field(default_factory=SlackConnectorSettings)
     ms365: MS365ConnectorSettings = Field(default_factory=MS365ConnectorSettings)
     box: BoxConnectorSettings = Field(default_factory=BoxConnectorSettings)
+    box_drive: BoxDriveConnectorSettings = Field(default_factory=BoxDriveConnectorSettings)
 
 
 class LLMSettings(BaseModel):
