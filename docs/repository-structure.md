@@ -79,7 +79,7 @@ opshub/
 
 ## 2. Python パッケージ構成 (src/opshub/)
 
-各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P5+8]` / `[P6]` / `[P6+8]` / `[P6.x]` / `[P7]` / `[P7.x]` / `[P8]` / `[P8.x]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで、`[P7]` は Phase 7 (Connectors Wave 2、Slack + Microsoft 365 + Box) で、`[P8]` は Phase 8 (Knowledge graph layer、ADR-0017 + `links` projection + 4 自動抽出 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration) で merge 済 (2026-05-17)。複合 tag (例: `[P5+8]` / `[P6+8]`) は当該 Phase で初出 + Phase 8 で `--expand-graph` 拡張等が入った module を示す。`[P6.x]` は Phase 6 完了後の継続作業 (`llama.cpp` direct binding / proposal scoring 等)、`[P7.x]` は Phase 7 完了後の継続作業 (additional connectors / common OAuth helper refactor / connector observability 等)、`[P8.x]` は Phase 8 完了後の継続作業 (connector-side automatic `SourceReferenced` 発行 / graph visualisation web UI / soft-delete 検討 等)、`[future]` は Phase 9 (multi-machine sync 等) 以降。
+各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P5+8]` / `[P6]` / `[P6+8]` / `[P6.x]` / `[P7]` / `[P7.x]` / `[P8]` / `[P8.x]` / `[P9]` / `[P9.x]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで、`[P7]` は Phase 7 (Connectors Wave 2、Slack + Microsoft 365 + Box) で、`[P8]` は Phase 8 (Knowledge graph layer、ADR-0017 + `links` projection + 4 自動抽出 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration) で merge 済 (2026-05-17)、`[P9]` は Phase 9 (Local-filesystem-backed Connector Layer、ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector + `core/platform.py` + `opshub connector sync box_drive`) で merge 済 (2026-05-23)。複合 tag (例: `[P5+8]` / `[P6+8]` / `[P1+2+3+9]`) は当該 Phase で初出 + 後続 Phase で拡張が入った module を示す。`[P6.x]` は Phase 6 完了後の継続作業 (`llama.cpp` direct binding / proposal scoring 等)、`[P7.x]` は Phase 7 完了後の継続作業 (additional connectors / common OAuth helper refactor / connector observability 等)、`[P8.x]` は Phase 8 完了後の継続作業 (connector-side automatic `SourceReferenced` 発行 / graph visualisation web UI / soft-delete 検討 等)、`[P9.x]` は Phase 9 完了後の継続作業 (watch mode (filewatch backend) / 追加 FS connector / xattr identity / `opshub source list --stale` / 共通 `excludes.yaml` 機構 等)、`[future]` は Phase 10 (multi-machine sync 等) 以降。
 
 ```text
 src/opshub/
@@ -116,9 +116,10 @@ src/opshub/
 │   ├── source.py                   # source add / list [future]
 │   └── connector.py                # list / sync / auth set (Phase 5 で `llm:<name>` 名前空間にも対応) [P1+2+3+5]
 ├── core/                           # 共通ユーティリティ [P1]
-│   ├── config.py                   # Pydantic Settings (Phase 5 で LLMSettings 追加、Phase 6 で OllamaLLMSettings + `ollama` backend literal 追加) [P1+2+3+4+5+6]
+│   ├── config.py                   # Pydantic Settings (Phase 5 で LLMSettings 追加、Phase 6 で OllamaLLMSettings + `ollama` backend literal 追加、Phase 7 で ConnectorSettings + per-connector settings 追加、Phase 9 で BoxDriveConnectorSettings 追加) [P1+2+3+4+5+6+7+9]
 │   ├── ids.py                      # ULID / UUID [P1]
 │   ├── time.py                     # tz-aware datetime helpers [P1]
+│   ├── platform.py                 # WSL2 / macOS / Linux 判定 helper (ADR-0019 §決定 (f)、`detect_platform()` / `box_drive_default_root_path()`) [P9]
 │   ├── logging.py                  # structlog [P1]
 │   ├── secrets.py                  # keyring-backed token storage (ADR-0014) [P1+2+3]
 │   ├── sanitise.py                 # API key / Bearer token 除去 (Phase 5 で extract) [P5]
@@ -137,7 +138,7 @@ src/opshub/
 │   │   ├── decision.py             # [P1+2]
 │   │   ├── coordination.py         # work_session / agent_run / lock [P1+2]
 │   │   ├── handoff.py              # [P1+2]
-│   │   ├── source.py               # SourceObserved / SourceReferenced (Phase 8 で `SourceReferenced` consumer 第一級化) [P1+2+3+8]
+│   │   ├── source.py               # SourceObserved / SourceReferenced (Phase 8 で `SourceReferenced` consumer 第一級化、Phase 9 で `SourceObserved.fingerprint: str | None = None` field 追加、backward-compat、schema_version 据え置き 1) [P1+2+3+8+9]
 │   │   ├── link.py                 # LinkCreated / LinkDeleted (Phase8Event、manual link CRUD) [P8]
 │   │   ├── connector.py            # ConnectorSyncStarted / Completed / Failed [P1+2+3]
 │   │   ├── file_ingest.py          # FileIngested [P1+2+3]
@@ -187,7 +188,7 @@ src/opshub/
 │   ├── agent_runs.py               # [P1+2]
 │   ├── locks.py                    # [P1+2]
 │   ├── handoffs.py                 # [P1+2]
-│   ├── sources.py                  # external source 現在状態 [P1+2+3]
+│   ├── sources.py                  # external source 現在状態 (Phase 9 で `fingerprint` 列を追加、migration 0017、ADR-0019 §決定 (d)) [P1+2+3+9]
 │   ├── connector_cursors.py        # connector 差分同期 cursor [P1+2+3]
 │   ├── ingested_files.py           # workspace file ingest の content_hash 追跡 [P1+2+3]
 │   ├── briefings.py                # LLM briefing 結果 (markdown + source_refs + cost trace、Phase 5 で実装済) [P5]
@@ -215,12 +216,17 @@ src/opshub/
 │   │   ├── fetcher.py              # httpx Graph client + 3 endpoint cursors (calendar / onedrive / outlook) [P7]
 │   │   ├── mapper.py               # 3 source_type mappers (ms365_calendar / ms365_onedrive / ms365_outlook) [P7]
 │   │   └── connector.py            # MS365Connector(sync) with per-endpoint isolation [P7]
-│   └── box/                        # Box connector (Phase 7 C1-C3) [P7]
-│       ├── __init__.py             # register_connector(BoxConnector()) side effect [P7]
-│       ├── auth.py                 # boxsdk OAuth2 + refresh-token keyring 保管 [P7]
-│       ├── fetcher.py              # Box Events API + stream_position cursor [P7]
-│       ├── mapper.py               # RawBoxEvent → SourceObserved (source_type=box_event) [P7]
-│       └── connector.py            # BoxConnector(sync) [P7]
+│   ├── box/                        # Box connector (Phase 7 C1-C3) [P7]
+│   │   ├── __init__.py             # register_connector(BoxConnector()) side effect [P7]
+│   │   ├── auth.py                 # boxsdk OAuth2 + refresh-token keyring 保管 [P7]
+│   │   ├── fetcher.py              # Box Events API + stream_position cursor [P7]
+│   │   ├── mapper.py               # RawBoxEvent → SourceObserved (source_type=box_event) [P7]
+│   │   └── connector.py            # BoxConnector(sync) [P7]
+│   └── box_drive/                  # Box Drive (FS-backed) connector (Phase 9 B1-B2、ADR-0019) [P9]
+│       ├── __init__.py             # register_connector(BoxDriveConnector()) side effect [P9]
+│       ├── scanner.py              # BoxDriveScanner: os.scandir() walk + stat() metadata only、`open()` 禁止 不変条件 (ADR-0019 §決定 (b)) [P9]
+│       ├── mapper.py               # ScannedFile → SourceObserved (source_type=box_drive_file、external_id=rel_path、fingerprint=f"{size}:{mtime_ns}") [P9]
+│       └── connector.py            # BoxDriveConnector(sync): settings → scanner → SourceService.observe (atomic UoW per file) [P9]
 ├── markdown/                       # workspace surface 生成 + ingest parser
 │   ├── render/                     # Jinja2 テンプレート [P1]
 │   ├── templates/                  # Jinja2 ファイル (per-renderer) [P1+2]

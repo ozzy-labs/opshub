@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) + Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須)) + Phase 7 (Connectors Wave 2、MVP = Slack + Microsoft 365 + Box、epic #113) + Phase 8 (Knowledge graph layer、MVP = ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、epic #128) complete (2026-05-17). 次の候補は Phase 9 (Multi-machine sync、principles §Open Q #5)。`llama.cpp` direct binding / briefing cache + narrow scope / connector-side automatic `SourceReferenced` 発行 / multi-machine sync は Phase 6.x / 7.x / 8.x / 9 以降。詳細は §9 (Phased Delivery) を参照。
+> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) + Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須)) + Phase 7 (Connectors Wave 2、MVP = Slack + Microsoft 365 + Box、epic #113) + Phase 8 (Knowledge graph layer、MVP = ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、epic #128) complete (2026-05-17) + Phase 9 (Local-filesystem-backed Connector Layer、MVP = ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (scanner + mapper + connector + settings) + `core/platform.py` + `opshub connector sync box_drive`、epic #187) complete (2026-05-23). 次の候補は Phase 10+ (Multi-machine sync、principles §Open Q #5)。`llama.cpp` direct binding / briefing cache + narrow scope / connector-side automatic `SourceReferenced` 発行 / watch mode (filewatch backend) / 追加 FS connector / multi-machine sync は Phase 6.x / 7.x / 8.x / 9.x / 10 以降。詳細は §9 (Phased Delivery) を参照。
 
 OpsHub の高レベルアーキテクチャ・データフロー・データモデル・用語を記述する。具体的な決定の根拠は対応 ADR を参照。
 
@@ -11,7 +11,7 @@ OpsHub の高レベルアーキテクチャ・データフロー・データモ�
 │  External Systems                                          │
 │  GitHub  Slack  Microsoft 365  Box  Office Files  ...      │
 └─────────────────┬──────────────────────────────────────────┘
-                  │ (Phase 3 ✅ GitHub 実装済 / Slack・MS365・Box は 3.x)
+                  │ (Phase 3 ✅ GitHub / Phase 7 ✅ Slack・MS365・Box / Phase 9 ✅ box_drive (FS scan、ADR-0019))
                   ▼
 ┌────────────────────────────────────────────────────────────┐
 │  Connector Layer  (src/opshub/connectors/*)                │
@@ -66,6 +66,18 @@ OpsHub の高レベルアーキテクチャ・データフロー・データモ�
 - 行わないこと: Task / Decision / Link の自動生成、projection 直書き、event の bypass
 
 Phase 3 実装状況: **GitHub connector が最初の具象実装** (`src/opshub/connectors/github/`、ADR-0010 で contract が検証され Accepted 昇格)。共通基盤 (`Connector` Protocol / `ConnectorContext` / `SourceService` / `connector_cursors` projection / `core.secrets` keychain backend) は完了。Slack / Microsoft 365 / Box は Phase 3.x で同じ contract に従って追加する。workspace 上の人手記述 `.md` は別経路 (`opshub workspace ingest` + `FileIngestService` + `ingested_files` projection、ADR-0005 整合) で event 化する。
+
+Phase 9 実装状況: **`box_drive` connector が最初の FS-backed 具象実装** (`src/opshub/connectors/box_drive/`、ADR-0019)。Phase 7 までの 4 connector が vendor Web API + OAuth に依存していたのに対し、`box_drive` は OS-level Box Drive 認証 + ローカル FS scan で同じ `Connector` Protocol に適合する。`source_type="box_drive_file"`、`fingerprint = f"{size}:{mtime_ns}"` 列 (`sources` projection、migration 0017) で差分検出。詳細は §2.11 を参照。
+
+5 connector の一覧:
+
+| Connector | 経路 | source_type | 認証 | Extras |
+|---|---|---|---|---|
+| GitHub | Web API (PyGithub) | `github_issue` / `github_pr` / etc. | PAT (`core/secrets` + keyring) | `[connectors-github]` |
+| Slack | Web API (slack-sdk) | `slack_message` | User Token (`xoxp-`) / Bot Token (`xoxb-`) | `[connectors-slack]` |
+| Microsoft 365 | Web API (msgraph) | `ms365_calendar` / `ms365_onedrive` / `ms365_outlook` | OAuth paste-code (msal) | `[connectors-msgraph]` |
+| Box | Web API (boxsdk) | `box_event` | OAuth paste-code (boxsdk) | `[connectors-box]` |
+| Box Drive (FS) | Local FS scan (`os.scandir()` + `stat()`、ADR-0019) | `box_drive_file` | なし (OS daemon に委譲、`opshub.toml` 設定のみ) | (extras 不要、stdlib のみ) |
 
 ### 2.2 Application Services
 
@@ -177,11 +189,64 @@ CLI: `opshub link {add,remove,list}` + `opshub graph {related,trace,expand}` + `
 
 詳細は [ADR-0017: Knowledge Graph](adr/0017-knowledge-graph.md) を参照。
 
-### 2.11 Workspace Generation Layer
+### 2.11 Local-filesystem-backed Connector Layer (Phase 9)
+
+ADR-0019 で **Local-filesystem-backed Connector pattern** を導入し、第一弾として
+`box_drive` connector を実装した。Box Drive デスクトップクライアントが OS に
+マウントしたローカル FS (`/mnt/b` on WSL2、`~/Box` on macOS) を直接 walk して
+metadata 経由で source を取り込む。Box Web API が使えない企業環境
+(developer app 登録不能 / OAuth grant 不可 / `api.box.com` egress 制限) でも
+Box content を operational memory に取り込めるようにする 5 つ目の connector
+category。
+
+**Web API 経由 (Phase 7 `box`) と FS 経由 (Phase 9 `box_drive`) の比較**:
+
+| 観点 | Phase 7 `box` connector | Phase 9 `box_drive` connector |
+|---|---|---|
+| 取得経路 | Box Platform API (`api.box.com`) | OS-mounted FS (`os.scandir()` + `stat()`) |
+| 認証 | OAuth refresh token (`core/secrets` + keyring、ADR-0014) | OS-level Box Drive client (Web Box ログイン) |
+| `source_type` | `box_event` | `box_drive_file` |
+| 取得対象 | Box の event stream entry | FS 上の file metadata |
+| Identity | Box item ID | `rel_path` (root_path 相対パス) |
+| 差分検出 | `stream_position` cursor | `sources.fingerprint = f"{size}:{mtime_ns}"` (migration 0017) |
+| Operator setup | OAuth paste-code | `mountvol B:` (WSL2) / Box Drive install (macOS)、`docs/box-drive-setup.md` 参照 |
+| Network egress | 必須 (`api.box.com`) | 不要 (OS daemon 経由) |
+| 配布 extras | `connectors-box` (boxsdk) | なし (stdlib のみ) |
+
+両 connector は **同じ Box content を異なる `source_type` で二重取り込みを
+許容する**。operator は独立に enable / disable 可能で、Phase 8 `links` projection の
+manual `link add` で束ねる経路が将来開いている (`source_type` 分離設計の利点)。
+
+**FS-backed pattern の構造的不変条件** (ADR-0019 §決定 (b)、§不変条件):
+
+- Source は `os.stat()` metadata のみ参照、`open()` / `read_text` /
+  `read_bytes` / magic bytes 検査 / shebang 検査 / file content hash を一切
+  実行しない。CldAPI (Microsoft) / File Provider Extension (macOS) の
+  placeholder hydration を防ぐため。
+- 本不変条件は scanner の `tests/unit/connectors/box_drive/test_scanner.py`
+  内 `test_scanner_never_opens_files` (`unittest.mock.patch("builtins.open",
+  side_effect=AssertionError("forbidden"))`) で構造的に pin される。
+- CldAPI non-hydration contract は
+  `tests/integration/test_box_drive_no_hydration.py` (`OPSHUB_BOX_DRIVE_TEST_ROOT`
+  env 設定時のみ実行 = real env opt-in) で持続検証する。
+
+**`Connector` Protocol freeze**: Phase 7 4 connector で確立した
+`Connector` Protocol (ADR-0010) を変えずに `auth layer を OS-level Box
+Drive 認証への依存に置換` する形で 5 つ目の connector category を 1 connector
+分の特殊化として閉じ込めた。`opshub connector auth set connector:box_drive` は
+actionable error で reject される (paste-code 不要、`opshub.toml` 設定を案内)。
+
+詳細は [ADR-0019: Local-filesystem-backed Connector](adr/0019-local-filesystem-backed-connector.md)
+と [docs/box-drive-setup.md](box-drive-setup.md) を参照。Phase 9.x の outlook
+は ADR-0019 §関連と principles.md §Open Questions を参照
+(watch mode / 追加 FS connector / xattr identity / `opshub source list --stale` /
+共通 `excludes.yaml` 機構)。
+
+### 2.12 Workspace Generation Layer
 
 projection を読み、markdown (tasks / briefings / reviews / handoffs / dashboards) を生成。read-only。Jinja2 で template 化。
 
-### 2.12 Agent Runtime Boundary
+### 2.13 Agent Runtime Boundary
 
 agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換え / event bypass は禁止。lefthook / CI で検出する。
 
@@ -213,7 +278,7 @@ agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換�
 | `agent_runs` | projection | Phase 1+2 (✅ 実装済) | agent 実行記録 |
 | `locks` | projection | Phase 1+2 (✅ 実装済) | coordination lock |
 | `handoffs` | projection | Phase 1+2 (✅ 実装済) | agent 間 / 人 - agent 間の引き継ぎ記録 |
-| `sources` | projection | Phase 1+2+3 (✅ 実装済) | external item の現在状態 |
+| `sources` | projection | Phase 1+2+3+9 (✅ 実装済) | external item の現在状態 (Phase 9 で `fingerprint` 列追加、`box_drive` の `f"{size}:{mtime_ns}"` 差分検出用、migration 0017 / ADR-0019 §決定 (d)) |
 | `connector_cursors` | projection | Phase 1+2+3 (✅ 実装済) | 差分同期チェックポイント |
 | `ingested_files` | projection | Phase 1+2+3 (✅ 実装済) | workspace inbox file ingest の content-hash 追跡 |
 | `briefings` | projection | Phase 5 (✅ 実装済) | LLM briefing 結果 (`id` / `topic` / `scope` / `markdown` / `source_refs` JSON / `model_id` / `model_version` / `tokens_in` / `tokens_out` / `generated_at`)、再生成は新 row として追記 (event-sourced trace 維持) |
@@ -331,7 +396,8 @@ Agent は以下を行わない。
 | 5 | Briefing layer (ADR-0015 + Pluggable LLM Anthropic / OpenAI + `opshub brief` + event-driven auto-embed 補助、✅ 2026-05-17 完了) | Local LLM backend / `links` projection 本実装 (Phase 6 / Phase 6.x) |
 | 6 | Action loop layer (ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain + `opshub propose` CLI、human-in-the-loop apply 必須、✅ 2026-05-17 完了) | `llama.cpp` direct binding / proposal scoring / multi-step plans (Phase 6.x) |
 | 7 | Connectors Wave 2 (Slack + Microsoft 365 + Box、ADR-0010 + ADR-0014 + ADR-0005 を再利用、✅ 2026-05-17 完了、epic #113) | additional connectors (Notion / Linear / Jira 等) / common OAuth helper refactor (Phase 7.x) |
-| 8 | Knowledge graph layer (ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、✅ 2026-05-17 完了、epic #128) | connector-side automatic `SourceReferenced` 発行 / graph visualisation web UI (Phase 8.x) / multi-machine sync (Phase 9) |
+| 8 | Knowledge graph layer (ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、✅ 2026-05-17 完了、epic #128) | connector-side automatic `SourceReferenced` 発行 / graph visualisation web UI (Phase 8.x) / multi-machine sync (Phase 10+) |
+| 9 | Local-filesystem-backed Connector Layer (ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (scanner + mapper + connector + settings) + `core/platform.py` (WSL2 / macOS 判定) + `opshub connector sync box_drive` 経路、✅ 2026-05-23 完了、epic #187) | watch mode (filewatch backend) / 追加 FS connector (OneDrive / Dropbox / Google Drive for desktop / iCloud) / xattr identity / `opshub source list --stale` / 共通 `excludes.yaml` 機構 (Phase 9.x) / multi-machine sync (Phase 10+) |
 
 詳細は [Principles 9 (Phased Delivery)](principles.md) 参照。
 
@@ -340,4 +406,4 @@ Agent は以下を行わない。
 1. 4.x で扱う `embeddings` テーブルのスキーマ (sqlite-vec への bind 方法を含む)
 2. `Decision` テーブルと `Task` テーブルの関係 (Decision は Task の親か別 entity か)
 3. `events` の partitioning / archive 戦略 (long-term 運用時)
-4. multi-machine 利用 (将来 sync を許す場合の競合解決) — principles.md §Open Q #5 と同件、Phase 9+ で別 plan (Phase 8 = Knowledge graph、epic #128 を先行)
+4. multi-machine 利用 (将来 sync を許す場合の競合解決) — principles.md §Open Q #5 と同件、Phase 10+ で別 plan (Phase 9 = Local-filesystem-backed Connector Layer、epic #187 を先行で 2026-05-23 完了)

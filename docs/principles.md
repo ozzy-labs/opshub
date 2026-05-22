@@ -85,6 +85,7 @@ CI でこの不変条件を検証する。
 | 6 | Action loop layer: ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須) | ✅ Complete (2026-05-17) |
 | 7 | Connectors Wave 2: Slack + Microsoft 365 + Box (3 SaaS connector を Phase 3 framework + ADR-0010 + ADR-0014 + ADR-0005 上で実装、epic #113) | ✅ Complete (2026-05-17) |
 | 8 | Knowledge graph layer: ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 (`ProposalApplied` / `BriefingGenerated.source_refs` / `ProposalRequested.briefing_id` / `SourceReferenced`) + manual link CRUD (`LinkCreated` / `LinkDeleted` events) + `LinkService` traversal (`related` / `trace` / `expand`) + `opshub link` + `opshub graph` CLI + `--expand-graph` integration (epic #128) | ✅ Complete (2026-05-17) |
+| 9 | Local-filesystem-backed Connector Layer: ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (Box Drive デスクトップクライアント経由のローカル FS scan、scanner + mapper + connector + settings) + `core/platform.py` (WSL2 / macOS 判定 helper) + `opshub connector sync box_drive` 経路 (epic #187) | ✅ Complete (2026-05-23) |
 
 各 phase で価値検証してから次へ進む。Phase をスキップしない。
 
@@ -96,12 +97,12 @@ Python 3.13+ / uv / Typer / SQLAlchemy Core / Pydantic v2 を採用。ただし 
 
 ## Open Questions
 
-> Phase 8 完了時点で残る Open Question は §5 (Multi-machine sync) のみ — Phase 9 候補で着手予定。
+> Phase 9 完了時点で残る Open Question は §5 (Multi-machine sync) のみ — Phase 10+ 候補に表現変更。
 > ADR-0015 §決定 (a) (Local LLM deferred) は Phase 6 A4 (Ollama) で closeout され、ADR-0016 §決定 (h) として記録された。
 
 検討中の項目 (本ドキュメントの今後の更新対象、番号は旧 Open Q list を継承):
 
-- **§5 Multi-machine sync** — operational memory を複数 host で共有する経路 (event log replication + projection rebuild on follower、または cloud-hosted sync server)。ADR-0002 (Event-Sourced Architecture) の append-only / replayable 不変条件と整合する設計は可能だが、conflict resolution (同 task に対する複数 host からの並行 update) と private data residency の評価が必要。Phase 9+ で別 ADR / 別 plan を検討。
+- **§5 Multi-machine sync** — operational memory を複数 host で共有する経路 (event log replication + projection rebuild on follower、または cloud-hosted sync server)。ADR-0002 (Event-Sourced Architecture) の append-only / replayable 不変条件と整合する設計は可能だが、conflict resolution (同 task に対する複数 host からの並行 update) と private data residency の評価が必要。Phase 10+ 候補 (Phase 9 = Local-filesystem-backed Connector Layer、epic #187 を先行で 2026-05-23 完了)。Phase 9 ADR-0019 が「FS-backed connector が 1 host 1 mount を前提に scan する」を pin したことで、multi-machine sync を「FS scan の host 跨ぎ」で代替する選択肢は self-defeating (Box Drive 自体が SaaS 経由の同期を行っているため二重同期になる) と確認済。本物の multi-machine sync は event log replication 経路で別 ADR / 別 plan を要する。
 
 ## 確定済み (旧 Open Question)
 
@@ -113,3 +114,4 @@ Python 3.13+ / uv / Typer / SQLAlchemy Core / Pydantic v2 を採用。ただし 
 - **Lock の粒度設計** (旧 Open Q #2) → ADR-0013 で `task:<id>` / `project:<id>` / `global:` の 3 階層 + fail-fast conflict semantics を採択 (Phase 2 step 5 で実装)
 - **SaaS token 保管方式** (旧 Open Q #3) → ADR-0014 で `keyring` library 経由の OS keychain を採択 (Phase 3 step A6 で実装)
 - **Local LLM backend** (旧 Open Q #4) → ADR-0016 §決定 (h) で Ollama daemon (OpenAI 互換 endpoint) を採択 (Phase 6 step A4 で実装)。`llama.cpp` direct binding は Phase 6.x 持ち越し
+- **FS-backed connector pattern** → ADR-0019 で Box Drive デスクトップクライアント経由のローカル FS scan を採択 (Phase 9 で実装)。`Connector` Protocol は変えず auth layer を OS-level 認証への依存に置換、`os.stat()` metadata のみ参照 (`open()` 禁止 不変条件)、Identity = `rel_path` (path-as-id)、Diff detection = `sources.fingerprint` 列 (`f"{size}:{mtime_ns}"`)、削除追跡なし (stale row は Phase 9.x 候補)、Operator precondition (`mountvol` / `wsl --shutdown`) は opshub 範囲外 (`docs/box-drive-setup.md`)、Watch mode は Phase 9.x 持ち越し。Phase 7 `box` connector (`source_type="box_event"`) と Phase 9 `box_drive` connector (`source_type="box_drive_file"`) は二重取り込み許容

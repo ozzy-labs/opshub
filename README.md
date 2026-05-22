@@ -81,7 +81,7 @@ rationale.
 
 ## What's in OpsHub today
 
-Phases 1–8 shipped (2026-05-17, v0.1.0):
+Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23:
 
 | Phase | Layer | Highlights |
 |---|---|---|
@@ -93,8 +93,9 @@ Phases 1–8 shipped (2026-05-17, v0.1.0):
 | 6 | Action loop | Structured output + Ollama backend + `propose` (human-in-the-loop) |
 | 7 | Connectors wave 2 | Slack + Microsoft 365 + Box |
 | 8 | Knowledge graph | `links` projection + auto-extraction + `graph` + `--expand-graph` |
+| 9 | Local-FS connectors | `box_drive` (Box Drive desktop client → local FS scan, ADR-0019) |
 
-Next: **Phase 9 (Multi-machine sync)** — see [`docs/principles.md`](docs/principles.md)
+Next: **Phase 10+ (Multi-machine sync)** — see [`docs/principles.md`](docs/principles.md)
 §Open Questions #5. Longer phase-by-phase narrative lives in
 [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery).
 
@@ -130,6 +131,7 @@ opshub connector auth set connector:ms365             # OAuth paste-code (Micros
 opshub connector sync ms365                           # incremental sync per endpoint
 opshub connector auth set connector:box               # OAuth paste-code (Box Events API)
 opshub connector sync box                             # incremental sync (Box stream_position cursor)
+opshub connector sync box_drive                       # Phase 9: scan local Box Drive mount (see docs/box-drive-setup.md)
 opshub connector list                                 # show registered connectors
 
 # Workspace + projections
@@ -190,6 +192,7 @@ opshub graph expand task:<task-id> --depth 2 --format dot
 - [`docs/principles.md`](docs/principles.md) — design principles (local-first, event-sourced, etc.)
 - [`docs/architecture.md`](docs/architecture.md) — layered architecture overview
 - [`docs/adr/`](docs/adr/README.md) — Architecture Decision Records
+- [`docs/box-drive-setup.md`](docs/box-drive-setup.md) — Phase 9 `box_drive` connector setup (WSL2 / macOS)
 - [`docs/upgrading.md`](docs/upgrading.md) — version migration notes (when applicable)
 - [`docs/release-notes-v0.1.0.md`](docs/release-notes-v0.1.0.md) — v0.1.0 narrative release notes
 - [`docs/RELEASE_RUNBOOK.md`](docs/RELEASE_RUNBOOK.md) — how to cut a release (maintainers)
