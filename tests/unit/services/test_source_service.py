@@ -191,6 +191,52 @@ def test_observe_uses_explicit_summary_when_provided() -> None:
     assert store.events[0].summary == "PR by ozzy, needs review"  # type: ignore[attr-defined]
 
 
+def test_observe_default_fingerprint_is_none() -> None:
+    """The four pre-existing connectors omit ``fingerprint`` and stay byte-identical.
+
+    Phase 9 step A2 (ADR-0019 §決定 (d)) adds a new optional keyword
+    ``fingerprint`` to :meth:`SourceService.observe`. Callers that
+    pre-date Phase 9 do not pass it, so the source service must
+    construct :class:`SourceObserved` with ``fingerprint=None`` —
+    backward-compat invariant for ``github`` / ``slack`` / ``ms365``
+    / ``box``.
+    """
+    store = InMemoryEventStore()
+    service = _make_service(store=store)
+
+    source_event, _ = service.observe(
+        connector_name="github",
+        external_id="owner/repo#42",
+        source_type="issue",
+        title="legacy connector",
+    )
+
+    assert source_event.fingerprint is None
+
+
+def test_observe_passes_fingerprint_through_to_event() -> None:
+    """The Phase 9 ``box_drive`` connector threads its ``size:mtime_ns`` token through.
+
+    ADR-0019 §決定 (d) Validation: ``SourceService.observe(...,
+    fingerprint=<token>)`` must land verbatim on
+    ``SourceObserved.fingerprint`` (the projector then persists it on
+    ``sources.fingerprint`` — covered separately by the projection
+    unit tests).
+    """
+    store = InMemoryEventStore()
+    service = _make_service(store=store)
+
+    source_event, _ = service.observe(
+        connector_name="box_drive",
+        external_id="docs/spec.md",
+        source_type="box_drive_file",
+        title="docs/spec.md",
+        fingerprint="100:1234567890",
+    )
+
+    assert source_event.fingerprint == "100:1234567890"
+
+
 def test_observe_re_observation_emits_fresh_event_with_new_ulid() -> None:
     """Re-observing the same external item appends a NEW SourceObserved event.
 

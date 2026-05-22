@@ -237,6 +237,118 @@ def test_source_observed_different_natural_key_inserts_separate_row(
     }
 
 
+# ---- fingerprint (Phase 9 step A2, ADR-0019 §決定 (d)) -------------------
+
+
+def test_source_observed_without_fingerprint_writes_null(engine: Engine) -> None:
+    """The four pre-existing connectors omit ``fingerprint`` and stay byte-identical.
+
+    ADR-0019 §決定 (d) Validation: the projector must persist
+    ``None`` as ``NULL`` so the ``github`` / ``slack`` / ``ms365`` /
+    ``box`` connectors — which never populate the field — round-trip
+    bit-for-bit identical to the Phase 8 read model.
+    """
+    projection = SourcesProjection()
+    occurred = datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC)
+    event = SourceObserved(
+        aggregate_id=new_ulid(),
+        occurred_at=occurred,
+        recorded_at=occurred,
+        actor="connector:github",
+        connector_name="github",
+        external_id="owner/repo#42",
+        source_type="issue",
+        title="legacy connector",
+    )
+    assert event.fingerprint is None, (
+        "default fingerprint must remain None — backward-compat invariant"
+    )
+
+    with engine.begin() as conn:
+        projection.apply(conn, event)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(sources_table)).mappings().one()
+    assert row["fingerprint"] is None, "None must round-trip as SQL NULL"
+
+
+def test_source_observed_with_fingerprint_writes_value(engine: Engine) -> None:
+    """The ``box_drive`` connector's ``f"{size}:{mtime_ns}"`` must persist verbatim.
+
+    Phase 9 step A2 pin: the projector copies ``event.fingerprint``
+    onto the row both on INSERT and the UPDATE arm of the upsert.
+    The string format itself (``"<size>:<mtime_ns>"``) is the
+    connector's contract — the projection just stores opaque text.
+    """
+    projection = SourcesProjection()
+    occurred = datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC)
+    fingerprint = "100:1234567890"
+    event = SourceObserved(
+        aggregate_id=new_ulid(),
+        occurred_at=occurred,
+        recorded_at=occurred,
+        actor="connector:box_drive",
+        connector_name="box_drive",
+        external_id="docs/spec.md",
+        source_type="box_drive_file",
+        title="docs/spec.md",
+        url="file:///mnt/b/docs/spec.md",
+        summary="path: docs/spec.md",
+        fingerprint=fingerprint,
+    )
+
+    with engine.begin() as conn:
+        projection.apply(conn, event)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(sources_table)).mappings().one()
+    assert row["fingerprint"] == fingerprint
+
+
+def test_source_observed_refresh_updates_fingerprint(engine: Engine) -> None:
+    """Re-observation must refresh ``fingerprint`` (set_ arm of the upsert).
+
+    The ``box_drive`` scanner relies on the latest stat() value being
+    persisted so the *next* scan can compare against it and skip
+    unchanged files (ADR-0019 §決定 (d) step 1). If the upsert kept
+    the original fingerprint frozen on UPDATE, the scanner would
+    never observe drift after the first sync.
+    """
+    projection = SourcesProjection()
+    t0 = datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(hours=1)
+    first = SourceObserved(
+        aggregate_id=new_ulid(),
+        occurred_at=t0,
+        recorded_at=t0,
+        actor="connector:box_drive",
+        connector_name="box_drive",
+        external_id="docs/spec.md",
+        source_type="box_drive_file",
+        title="docs/spec.md",
+        fingerprint="100:1000000000",
+    )
+    second = SourceObserved(
+        aggregate_id=new_ulid(),
+        occurred_at=t1,
+        recorded_at=t1,
+        actor="connector:box_drive",
+        connector_name="box_drive",
+        external_id="docs/spec.md",
+        source_type="box_drive_file",
+        title="docs/spec.md",
+        fingerprint="200:2000000000",
+    )
+
+    with engine.begin() as conn:
+        projection.apply(conn, first)
+        projection.apply(conn, second)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(sources_table)).mappings().one()
+    assert row["fingerprint"] == "200:2000000000"
+
+
 # ---- SourceReferenced and unrelated events --------------------------------
 
 

@@ -178,6 +178,7 @@ class SourceService:
         title: str,
         url: str | None = None,
         summary: str | None = None,
+        fingerprint: str | None = None,
     ) -> tuple[SourceObserved, ItemEnqueued]:
         """Record a fresh observation of an external item.
 
@@ -195,6 +196,17 @@ class SourceService:
           is always ``f"{connector_name}:{external_id}"`` so the inbox
           row carries the natural key back to the source.
 
+        ``fingerprint`` (Phase 9 step A2, ADR-0019 §決定 (d)) is the
+        ``f"{size}:{mtime_ns}"`` stat-derived diff-detection token
+        that the ``box_drive`` connector threads through so the
+        :class:`SourcesProjection` upsert can persist it on
+        ``sources.fingerprint`` (migration ``0017``). The four
+        pre-existing connectors (``github`` / ``slack`` / ``ms365`` /
+        ``box``) omit it and the default ``None`` round-trips as
+        ``NULL`` in the read model — backward-compat per ADR-0002 §4
+        ("new optional fields may be added without bumping
+        ``schema_version``").
+
         Returns the ``(source_event, inbox_event)`` tuple so callers
         can render both ULIDs without re-querying the store.
         """
@@ -207,6 +219,7 @@ class SourceService:
             title=title,
             url=url,
             summary=summary,
+            fingerprint=fingerprint,
         )
         # The inbox event borrows ``SourceService``'s configured actor.
         # In production the wiring helper passes the same actor to both
