@@ -88,3 +88,48 @@ def test_connector_sync_unknown_name_with_empty_registry_reports_none() -> None:
     assert "ghost" in result.stderr
     # "(none)" appears verbatim when the registry is empty.
     assert "(none)" in result.stderr
+
+
+def test_connector_list_includes_box_drive_after_import() -> None:
+    """Importing :mod:`opshub.connectors.box_drive` adds it to ``list`` output.
+
+    Phase 9 step B2 (ADR-0019) ships the box_drive connector with
+    side-effect registration. The autouse ``_reset_registry``
+    fixture wipes the registry, so we re-fire the side effect via
+    :func:`importlib.reload` and verify ``opshub connector list``
+    surfaces ``box_drive`` to the operator. This is the
+    cross-cutting check that prevents a future refactor from
+    silently dropping the registry call.
+    """
+    import importlib
+
+    import opshub.connectors.box_drive
+
+    importlib.reload(opshub.connectors.box_drive)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["connector", "list"])
+    assert result.exit_code == 0, result.stdout
+    lines = result.stdout.strip().splitlines()
+    assert "box_drive" in lines
+
+
+def test_connector_auth_set_rejects_box_drive() -> None:
+    """``auth set connector:box_drive`` exits 2 with an actionable hint.
+
+    ADR-0019 §決定 (a)(g): the box_drive connector reads a local
+    Box Drive mount point and has no token / OAuth surface. The CLI
+    must fail-fast with a pointer to ``opshub.toml`` configuration
+    rather than silently storing an unused token.
+    """
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["connector", "auth", "set", "connector:box_drive", "--token", "ignored"],
+    )
+    assert result.exit_code == 2
+    # The error message names the configuration key and the ADR so
+    # operators can self-correct without grepping the codebase.
+    assert "root_path" in result.stderr
+    assert "[connectors.box_drive]" in result.stderr
+    assert "0019" in result.stderr

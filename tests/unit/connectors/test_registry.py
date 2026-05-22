@@ -103,6 +103,11 @@ def _reseed_in_tree_connectors() -> None:
         "opshub.connectors.box.connector",
         "BoxConnector",
     )
+    _seed_connector(
+        "opshub.connectors.box_drive",
+        "opshub.connectors.box_drive.connector",
+        "BoxDriveConnector",
+    )
 
 
 def _seed_connector(package: str, module: str, class_name: str) -> None:
@@ -169,6 +174,30 @@ def test_unregister_all_empties_registry() -> None:
 def test_discover_returns_empty_list_when_nothing_registered() -> None:
     """Fresh process / fully-reset registry yields ``[]`` (Phase 3 MVP)."""
     assert discover_connectors() == []
+
+
+def test_box_drive_connector_registered_via_side_effect() -> None:
+    """Importing :mod:`opshub.connectors.box_drive` registers the connector.
+
+    Phase 9 step B2 (ADR-0019) ships the registration as a side
+    effect of the package ``__init__`` — matching the Phase 3 / 7
+    precedents. The ``_reset_registry`` fixture wipes the registry
+    on entry, so this test exercises the *manual* re-registration
+    path (the import side effect already fired earlier in the
+    process). The contract under test: a fresh
+    :class:`BoxDriveConnector` is the canonical instance that the
+    CLI driver discovers.
+    """
+    from opshub.connectors.box_drive.connector import BoxDriveConnector
+
+    # ``_reset_registry`` setup ran ``unregister_all`` immediately
+    # before this body, so the registry is empty here.
+    assert discover_connectors() == []
+
+    register_connector(BoxDriveConnector())
+    discovered = {c.name: c for c in discover_connectors()}
+    assert "box_drive" in discovered
+    assert isinstance(discovered["box_drive"], BoxDriveConnector)
 
 
 def test_github_connector_findable_after_registry_reset_fixture() -> None:
