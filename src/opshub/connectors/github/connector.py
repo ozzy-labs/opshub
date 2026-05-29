@@ -44,12 +44,21 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from opshub.connectors.base import SyncResult
-from opshub.connectors.github import api as github_api
 from opshub.connectors.github.auth import get_github_token
 from opshub.core.errors import ConfigError
 
 if TYPE_CHECKING:
+    # ``api`` pulls ``httpx`` (a ``connectors-github`` extra) at module
+    # level, so it is imported lazily inside :meth:`GitHubConnector.sync`
+    # to keep this package import-clean — an operator who installed only
+    # another connector's extra (e.g. ``connectors-slack``) must be able
+    # to ``import opshub.connectors.github`` (the registration side effect)
+    # without the ``httpx`` dependency. The ``_observe`` annotation below
+    # is the only compile-time use, resolved here under ``TYPE_CHECKING``
+    # (never executed at runtime thanks to ``from __future__ import
+    # annotations``).
     from opshub.connectors.context import ConnectorContext
+    from opshub.connectors.github import api as github_api
 
 __all__ = ["GitHubConnector"]
 
@@ -62,6 +71,13 @@ class GitHubConnector:
     name = "github"
 
     def sync(self, context: ConnectorContext) -> SyncResult:
+        # Lazy import: ``api`` imports ``httpx`` at module level, so we
+        # defer it to the one path that actually hits the GitHub API.
+        # This keeps ``import opshub.connectors.github`` working without
+        # the ``connectors-github`` extra installed (see the package
+        # docstring + the ``TYPE_CHECKING`` note above).
+        from opshub.connectors.github import api as github_api
+
         repo = os.environ.get(_REPO_ENV_VAR)
         if not repo or "/" not in repo:
             raise ConfigError(

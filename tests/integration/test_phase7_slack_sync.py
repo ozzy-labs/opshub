@@ -369,6 +369,67 @@ def test_slack_sync_records_failure_event_on_fetcher_error(
         engine.dispose()
 
 
+# ---------------------------------------------------------------------- github extra isolation
+
+
+def test_slack_sync_works_without_github_extra(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """Regression (#198): ``sync slack`` must not require the ``connectors-github`` extra.
+
+    The CLI driver imports *every* built-in connector to populate the
+    registry. The github package used to pull ``httpx`` (a
+    ``connectors-github`` extra) at *import* time — via
+    ``github/connector.py`` importing ``api`` at module level — so an
+    operator who installed only ``connectors-slack`` hit
+    ``ModuleNotFoundError: No module named 'httpx'`` on ``opshub
+    connector sync slack``.
+
+    We reproduce that environment hermetically: block ``httpx`` in
+    ``sys.modules`` and evict the already-imported github modules so the
+    CLI re-imports them fresh under the block. With the deferred-import
+    fix the github package is import-clean, so it still registers (the
+    assertion below proves we exercise the real fix, not just the CLI's
+    defensive ``ImportError`` swallow), and Slack sync completes 0.
+    """
+    import sys
+
+    # Simulate the ``connectors-github`` extra not being installed.
+    monkeypatch.setitem(sys.modules, "httpx", None)
+    # Evict cached github modules so the CLI's ``import
+    # opshub.connectors.github`` re-executes (and would re-pull httpx if
+    # the import were not deferred). monkeypatch restores them on exit.
+    for mod_name in list(sys.modules):
+        if mod_name == "opshub.connectors.github" or mod_name.startswith(
+            "opshub.connectors.github."
+        ):
+            monkeypatch.delitem(sys.modules, mod_name, raising=False)
+
+    _patch_slack_fetcher(
+        monkeypatch,
+        yields=[
+            (
+                "C1",
+                _raw_message(ts="1700000001.000100", text="hello"),
+                "1700000001.000100",
+            ),
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["connector", "sync", "slack"])
+    assert result.exit_code == 0, result.stdout
+
+    # The github package is import-clean, so it registers even with httpx
+    # absent — proving the deferred-import fix, not merely the CLI's
+    # defensive ImportError guard, is what makes Slack sync work.
+    from opshub.connectors import discover_connectors
+
+    assert "github" in {c.name for c in discover_connectors()}
+
+
 # ---------------------------------------------------------------------- summary truncation
 
 

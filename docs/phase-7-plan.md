@@ -38,7 +38,7 @@ Phase 6 完了時点で Phase 7 着手前に解消が必要な事項は **なし
 - 新規 connector の sync 経路は既存 `services/connector_sync_service.py` の `sync(name, ...)` を経由 (内部で fetcher + mapper を呼ぶ、新規 service を作らない)
 - 新規 connector の test は SDK or HTTP を fully mock (実 API 叩かない、Phase 3-6 と同規律)
 - 新規 extras は `[connectors-<name>]` 形式 (例: `[connectors-slack]`)、`pyproject.toml` に追加 + `uv.lock` 更新
-- Cold-start guard: `connectors/<name>/` の module-level import は `__future__` / `typing` / `pathlib` / stdlib のみ。SDK / httpx / msal 等は **関数内で遅延 import**
+- Cold-start guard / import-clean contract: `import opshub.connectors.<name>`（registration 副作用）の import chain が重い SDK を pull しないこと。SDK / httpx / msal 等は **関数内で遅延 import** する（SDK を wrap する submodule 例: `github/api.py` は自 module-level で SDK を import してよいが、`__init__` → `connector.py` の chain からは関数内 lazy import 経由でしか到達しないこと）。これは `opshub connector sync <name>` が built-in connector を全 import して registry を埋めるため、ある connector の extra 未導入が別 connector の sync を巻き込んで落とさないための不変条件（#198）。`tests/unit/connectors/test_import_clean.py` が全 connector SDK を `sys.modules` で遮断して各 package が import + register できることで担保する
 - CI recipe (`justfile` + `.github/workflows/ci.yaml`) には 3 connector extras (`--extra connectors-slack --extra connectors-ms365 --extra connectors-box`) を追加
 - 新規 source_type で recall / brief / propose が回ることを Phase 7 D1 integration test で pin
 - ADR-0005 (External Content Min) を厳守: body 全文取り込み禁止、summary は ~200 chars cap
@@ -101,7 +101,7 @@ Wave 4: D1 closeout (全 sub-issue 依存)
 - [ ] rate-limit / token expiry / API error の各失敗経路で `ConnectorFailed` event 記録 + projection rollback
 - [ ] CI で実 API 叩かない (SDK / HTTP fully mocked、`pytest.importorskip` で SDK 不在環境では skip)
 - [ ] 各 connector の extras 単体で install 可 (`uv sync --extra connectors-<name>`)
-- [ ] `connectors/<name>/` の module-level import が cold-start guard に違反しない (`tests/integration/test_cli_imports.py` 通過)
+- [ ] `connectors/<name>/` が import-clean (package import が重い SDK を pull しない、`tests/unit/connectors/test_import_clean.py` 通過)。CLI 層自体の cold-start guard は `tests/integration/test_cli_imports.py`（`opshub/cli/` のみ対象）
 - [ ] ADR-0005 遵守: body 全文を `sources.summary` に保存していないことを test で pin (summary 文字数 ≤ 200)
 
 ### Sub-issue D — Phase 7 closeout

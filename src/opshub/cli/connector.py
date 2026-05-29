@@ -100,15 +100,26 @@ def connector_sync(name: str) -> None:
     # as an import side effect (see ``opshub.connectors.<name>.__init__``).
     # Phase 3.x will replace this with entry-points / scan-based
     # discovery; for the MVP an explicit import per connector is honest
-    # and easy to audit. ``ImportError`` is swallowed for the optional
-    # connectors so an operator who skipped the ``[connectors-ms365]`` /
-    # ``[connectors-slack]`` / ``[connectors-box]`` extras still gets a
-    # working ``opshub connector sync github`` — the import only fails
-    # when the extras-bundled SDK is missing AND the connector module
-    # touches it at import time (which the MS365 / Box / Slack
-    # ``__init__`` do not, but the safety net keeps future
-    # contributors from breaking that).
-    import opshub.connectors.github  # pyright: ignore[reportUnusedImport]
+    # and easy to audit. ``ImportError`` is swallowed for every connector
+    # so an operator who installed only a subset of the
+    # ``[connectors-github]`` / ``[connectors-slack]`` / ``[connectors-ms365]`` /
+    # ``[connectors-box]`` extras can still sync the connector they *did*
+    # install — the import only fails when the extras-bundled SDK is
+    # missing AND the connector module touches it at import time. Each
+    # connector package is import-clean (heavy SDKs are deferred into
+    # method bodies), so these guards are defensive: they keep a future
+    # refactor that adds a top-level SDK import from breaking sync for the
+    # *other* connectors (the regression this guards against bit GitHub
+    # before its ``httpx`` import was deferred — see
+    # ``opshub.connectors.github``).
+    try:
+        import opshub.connectors.github  # pyright: ignore[reportUnusedImport]
+    except ImportError:
+        # GitHub connector module imports cleanly without the extras (the
+        # heavy ``httpx`` import is deferred into ``GitHubConnector.sync``);
+        # this branch is defensive and would only trigger if a future
+        # refactor re-introduces a top-level SDK import.
+        pass
 
     try:
         import opshub.connectors.slack  # pyright: ignore[reportUnusedImport]

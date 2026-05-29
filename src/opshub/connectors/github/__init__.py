@@ -7,9 +7,16 @@ re-exports :func:`get_github_token` and :data:`GITHUB_PAT_SECRET_KEY`
 so callers can write ``from opshub.connectors.github import
 get_github_token`` without reaching into the ``auth`` submodule.
 
-Heavy dependencies (httpx) are loaded by the connector / api submodules
-themselves; the import side effect here is limited to a single
-``register_connector`` call, which is cheap.
+Heavy dependencies (``httpx``, shipped in the ``connectors-github``
+extra) are deferred: ``connector.py`` imports the ``api`` submodule (the
+only ``httpx`` consumer) lazily inside :meth:`GitHubConnector.sync`, so
+importing this package pulls *no* third-party connector SDK. The import
+side effect here is limited to a single ``register_connector`` call,
+which is cheap. This keeps the package import-clean (matching the
+sibling Slack / MS365 / Box connectors and the cold-start guard) so an
+operator who installed only another connector's extra can still import
+``opshub.connectors.github`` for its registration side effect without
+the ``httpx`` dependency present.
 """
 
 from opshub.connectors._registry import register_connector
