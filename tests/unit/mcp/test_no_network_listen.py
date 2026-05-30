@@ -43,7 +43,13 @@ def _mcp_files() -> list[Path]:
     repo_root = Path(__file__).resolve().parents[3]
     mcp_dir = repo_root / "src" / "opshub" / "mcp"
     assert mcp_dir.is_dir(), f"expected {mcp_dir} to exist"
-    return sorted(p for p in mcp_dir.glob("*.py") if p.is_file())
+    # Use ``rglob`` so any future sub-package under ``opshub.mcp``
+    # (e.g. ``opshub.mcp.handlers`` for the Sub-D / Sub-E expansion of
+    # the agent-facing surface) is also static-analysed for the
+    # forbidden network listener imports. The original ``glob('*.py')``
+    # only covered the top-level files and would have silently let a
+    # ``opshub/mcp/transports/http.py`` slip in.
+    return sorted(p for p in mcp_dir.rglob("*.py") if p.is_file())
 
 
 def _imports_in(path: Path) -> set[str]:

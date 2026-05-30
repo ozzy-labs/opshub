@@ -169,3 +169,61 @@ async def test_decision_list_handler_respects_limit(engine: Engine) -> None:
     payload = _parse(await handler({"limit": 2}))
     rows = cast("list[dict[str, Any]]", payload["items"])
     assert len(rows) == 2
+
+
+# ---------------------------------------------------------------------- F
+# Phase 10 audit follow-up (Cluster 2): list handlers must surface
+# ADR-0022 §(d) ``truncated`` / ``next_offset`` pagination hints so an
+# agent can decide whether to issue a follow-up call without re-counting.
+
+
+async def test_decision_list_hint_truncated_when_limit_reached(engine: Engine) -> None:
+    """``truncated=True`` + ``next_offset=limit`` when the page is full."""
+    for i in range(3):
+        _seed_decision(
+            engine,
+            decision_id=f"01HDECISIONABC{i:012d}",
+            decision_text=f"decision-{i}",
+        )
+    handler = build_decision_list_handler(engine)
+    payload = _parse(await handler({"limit": 2}))
+    assert payload["truncated"] is True
+    assert payload["next_offset"] == 2
+
+
+async def test_decision_list_hint_not_truncated_when_limit_not_reached(
+    engine: Engine,
+) -> None:
+    """``truncated=False`` + ``next_offset=None`` when the page is partial."""
+    _seed_decision(
+        engine,
+        decision_id="01HDECISIONABC000000000000",
+        decision_text="only one",
+    )
+    handler = build_decision_list_handler(engine)
+    payload = _parse(await handler({"limit": 5}))
+    assert payload["truncated"] is False
+    assert payload["next_offset"] is None
+
+
+async def test_task_list_hint_truncated_when_limit_reached(engine: Engine) -> None:
+    """``task.list`` carries the same pagination hint envelope."""
+    for i in range(3):
+        _seed_task(engine, task_id=f"01HTASK{i:019d}", title=f"task-{i}")
+    handler = build_task_list_handler(engine)
+    payload = _parse(await handler({"limit": 2}))
+    assert payload["truncated"] is True
+    assert payload["next_offset"] == 2
+
+
+async def test_inbox_list_hint_not_truncated_when_partial(engine: Engine) -> None:
+    """``inbox.list`` carries the same pagination hint envelope."""
+    _seed_inbox(
+        engine,
+        item_id="01HINBOX000000000000000001",
+        summary="only one",
+    )
+    handler = build_inbox_list_handler(engine)
+    payload = _parse(await handler({"limit": 5}))
+    assert payload["truncated"] is False
+    assert payload["next_offset"] is None

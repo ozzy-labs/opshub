@@ -88,6 +88,15 @@ ADR-0016 §決定 (a) で `propose --auto-apply` を Phase 6.x 以降も禁止�
 - **第一義の表現**: MCP spec の tool `annotations` field (`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`)。MCP プロトコル native の宣言で agent host 横断に伝わる。
 - **第二義の表現**: opshub 側の static registry (`src/opshub/mcp/_registry.py` 相当、C2 PR で実装) に YAML 形式の policy table を持ち、tool 実装は registry から annotation を生成する。Microsoft Agent Governance Toolkit (2025) の policy-as-data 発想のみ流用し、Agent Mesh / DID / trust score 等の重量機構は単一 operator・単一ホストの opshub では却下する (§Alternatives #4)。
 
+#### Phase 10 C2 で出荷する surface = 4 read + 3 write のみ
+
+C2 (`opshub mcp serve` 初版) で実装する MCP tool は **以下の 7 つに限定**する:
+
+- read: `recall.search` / `task.list` / `inbox.list` / `decision.list`
+- write: `task.create` / `inbox.add` / `connector.sync`
+
+§(c) の表に列挙した残り (`search.body` / `brief.generate` / `source.show` / `source.list` / `graph.expand` / `task.update` / `task.complete` / `inbox.triage` / `decision.record` / `propose.apply` / `link.create` / `link.delete`) は **Sub-issue D (Agent Skills) / Sub-issue E (返信下書き) / 将来の別 ADR** で順次追加する。C2 時点では未実装 = registry に存在しないため、annotation 解釈の論点はその時点で再評価する (`propose.apply` の HITL 強制等)。この defer は Phase 10 plan §C2 DoD と一致する scope minimization の判断であり、本 ADR の他不変条件 (stdio 一択・token passthrough 禁止・要約返却・OTel naming) には影響しない。
+
 ### (d) Context 効率 (要約・関連抽出で返す)
 
 MCP tool は agent context window に流す前提で **要約・関連抽出**で返す。Full body や full event payload を default で返さない。

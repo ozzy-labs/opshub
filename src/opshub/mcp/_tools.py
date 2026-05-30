@@ -65,6 +65,29 @@ def _json_dump(payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _pagination_hint(item_count: int, limit: int) -> dict[str, object]:
+    """Return the ADR-0022 §(d) pagination hint envelope.
+
+    The hint pair ``truncated`` / ``next_offset`` lets an agent decide
+    whether to issue a follow-up call without re-counting on its side.
+    ``truncated`` is ``True`` when the handler returned exactly ``limit``
+    rows (i.e. the projection may hold more), and ``False`` otherwise.
+    ``next_offset`` mirrors ``truncated``: when truncated, the value is
+    ``limit`` so the next page can be requested via offset-based
+    queries; otherwise ``None`` (JSON ``null``) signals end-of-stream.
+
+    Phase 10 C2 list handlers do not yet accept an ``offset`` argument
+    (the agent surface mints fresh queries each turn). The next_offset
+    hint is forward-compatible: when ``offset`` is added later, the
+    same envelope keeps working.
+    """
+    truncated = item_count >= limit
+    return {
+        "truncated": truncated,
+        "next_offset": limit if truncated else None,
+    }
+
+
 # --------------------------------------------------------------------- recall
 
 
@@ -96,6 +119,12 @@ def build_recall_search_handler(engine: Engine) -> ToolHandler:
         _ = engine  # recall builder owns its own engine resolution
         service: RecallService = build_recall_service()
         hits: list[RecallHit] = service.recall(query, entity_type=entity_type, limit=limit)
+        # ``truncated_snippets`` is the **per-row** flag (snippets are
+        # capped at ``_SNIPPET_MAX_CHARS`` chars). The ``truncated`` /
+        # ``next_offset`` pair from :func:`_pagination_hint` is the
+        # ADR-0022 §(d) **page-level** hint — separate concept, kept
+        # alongside so an agent can distinguish "snippet was clipped"
+        # from "there are more hits behind this page".
         return _json_dump(
             {
                 "query": query,
@@ -111,6 +140,7 @@ def build_recall_search_handler(engine: Engine) -> ToolHandler:
                     for hit in hits
                 ],
                 "truncated_snippets": True,
+                **_pagination_hint(item_count=len(hits), limit=limit),
             }
         )
 
@@ -151,18 +181,20 @@ def build_task_list_handler(engine: Engine) -> ToolHandler:
         with engine.connect() as conn:
             rows = conn.execute(stmt).all()
 
+        items = [
+            {
+                "id": row.id,
+                "title": _truncate(row.title),
+                "state": row.state,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+            for row in rows
+        ]
         return _json_dump(
             {
                 "state_filter": state,
-                "items": [
-                    {
-                        "id": row.id,
-                        "title": _truncate(row.title),
-                        "state": row.state,
-                        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
-                    }
-                    for row in rows
-                ],
+                "items": items,
+                **_pagination_hint(item_count=len(items), limit=limit),
             }
         )
 
@@ -204,18 +236,20 @@ def build_inbox_list_handler(engine: Engine) -> ToolHandler:
         with engine.connect() as conn:
             rows = conn.execute(stmt).all()
 
+        items = [
+            {
+                "id": row.id,
+                "summary": _truncate(row.summary),
+                "state": row.state,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ]
         return _json_dump(
             {
                 "state_filter": state,
-                "items": [
-                    {
-                        "id": row.id,
-                        "summary": _truncate(row.summary),
-                        "state": row.state,
-                        "created_at": row.created_at.isoformat() if row.created_at else None,
-                    }
-                    for row in rows
-                ],
+                "items": items,
+                **_pagination_hint(item_count=len(items), limit=limit),
             }
         )
 
@@ -259,16 +293,18 @@ def build_decision_list_handler(engine: Engine) -> ToolHandler:
         with engine.connect() as conn:
             rows = conn.execute(stmt).all()
 
+        items = [
+            {
+                "id": row.id,
+                "text": _truncate(row.text),
+                "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
+            }
+            for row in rows
+        ]
         return _json_dump(
             {
-                "items": [
-                    {
-                        "id": row.id,
-                        "text": _truncate(row.text),
-                        "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
-                    }
-                    for row in rows
-                ],
+                "items": items,
+                **_pagination_hint(item_count=len(items), limit=limit),
             }
         )
 

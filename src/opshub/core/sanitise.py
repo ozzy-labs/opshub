@@ -13,12 +13,16 @@ Scope (intentionally narrow)
 This is a **defensive net**, not a full PII scrubber. The concrete
 embedder / LLM client implementations are still responsible for not
 raising exceptions that include the API key in the first place. The
-patterns covered here are the common bearer-token shapes:
+patterns covered here are the common bearer-token / API-key shapes:
 
 - ``sk-...`` — OpenAI / Anthropic style secret keys
-- ``ghp_...`` — GitHub personal access tokens (legacy fine-grained
-  tokens share the prefix family ``github_pat_`` which is not
-  matched here; PR-feedback can widen if needed)
+- ``ghp_...`` — GitHub personal access tokens (classic)
+- ``github_pat_...`` — GitHub fine-grained PATs
+- ``xoxp-`` / ``xoxb-`` / ``xoxa-`` / ``xoxr-`` / ``xoxs-`` — Slack
+  user / bot / app / refresh / session tokens
+- ``AKIA...`` — AWS access key id (16 char tail)
+- ``AIza...`` — Google API key (35 char tail)
+- ``eyJ...eyJ...`` — JWT (3-part base64url-encoded)
 - ``Bearer ...`` — HTTP ``Authorization`` headers
 
 Each match is rewritten to a fixed marker so the resulting message is
@@ -27,6 +31,11 @@ single opaque placeholder.
 
 ``core/sanitise`` MUST NOT import from any other ``opshub`` submodule —
 it lives at the foundation tier per ADR-0004.
+
+The expanded shape set is also consumed by :mod:`opshub.mcp._redact`
+(ADR-0022 §(b) Token Passthrough 禁止) so any token that slips into an
+MCP tool's output or exception message is redacted before the agent
+host's transcript records it.
 """
 
 from __future__ import annotations
@@ -40,6 +49,22 @@ __all__ = ["sanitise_error_message"]
 # these as module-level constants; they have moved here verbatim).
 _SK_KEY_RE = re.compile(r"sk-[A-Za-z0-9]{20,}")
 _GHP_KEY_RE = re.compile(r"ghp_[A-Za-z0-9]{30,}")
+# GitHub fine-grained PATs are documented as ``github_pat_<22>_<59>``
+# but the separator and lengths drift across docs; match the prefix +
+# 30+ chars of base62 + underscore for robustness.
+_GITHUB_PAT_RE = re.compile(r"github_pat_[A-Za-z0-9_]{30,}")
+# Slack tokens share the ``xox<letter>-`` prefix family (bot/user/app/
+# refresh/session). The body uses digits, letters, and ``-``.
+_SLACK_TOKEN_RE = re.compile(r"xox[pbars]-[A-Za-z0-9-]{10,}")
+# AWS access key id: exactly ``AKIA`` + 16 uppercase alnum. Pin the
+# bound so we do not over-match plain English ``AKIA`` runs.
+_AWS_ACCESS_KEY_RE = re.compile(r"AKIA[0-9A-Z]{16}")
+# Google API key: ``AIza`` + 35 chars of base64url alphabet.
+_GOOGLE_API_KEY_RE = re.compile(r"AIza[0-9A-Za-z\-_]{35}")
+# JWT: 3 base64url-encoded segments separated by ``.``. The first two
+# segments always start with ``eyJ`` (the JSON ``{`` encoded). We
+# anchor on that to avoid matching arbitrary dotted runs.
+_JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
 _BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9._~+/-]{20,}=*")
 
 
@@ -52,14 +77,26 @@ def sanitise_error_message(message: str) -> str:
     event log or surfaced in CLI output.
 
     Each token shape is rewritten to a fixed marker (``sk-***`` /
-    ``ghp_***`` / ``Bearer ***``) so the log line keeps its narrative
-    even when the secret is stripped. The function does **not**
-    truncate — callers that need a length cap (e.g. the Pydantic
-    ``Field`` 2000-char ceiling on
+    ``ghp_***`` / ``github_pat_***`` / ``xox*-***`` / ``AKIA***`` /
+    ``AIza***`` / ``[JWT REDACTED]`` / ``Bearer ***``) so the log line
+    keeps its narrative even when the secret is stripped. The function
+    does **not** truncate — callers that need a length cap (e.g. the
+    Pydantic ``Field`` 2000-char ceiling on
     :class:`~opshub.domain.events.embedding.EmbeddingFailed.error_message`)
     must trim before calling.
+
+    Ordering note: more specific shapes (``github_pat_``, JWT) are
+    redacted before the more permissive ones (``Bearer``) so a token
+    is not partially overwritten by a less informative marker.
     """
+    # Specific prefixes first so the JWT / GitHub PAT markers win over
+    # the catch-all ``Bearer`` pattern (a JWT can follow ``Bearer ``).
+    message = _JWT_RE.sub("[JWT REDACTED]", message)
+    message = _GITHUB_PAT_RE.sub("github_pat_***", message)
+    message = _SLACK_TOKEN_RE.sub(lambda m: m.group(0)[:5] + "***", message)
     message = _SK_KEY_RE.sub("sk-***", message)
     message = _GHP_KEY_RE.sub("ghp_***", message)
+    message = _AWS_ACCESS_KEY_RE.sub("AKIA***", message)
+    message = _GOOGLE_API_KEY_RE.sub("AIza***", message)
     message = _BEARER_RE.sub("Bearer ***", message)
     return message
