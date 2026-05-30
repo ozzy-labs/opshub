@@ -99,6 +99,15 @@ connectors-ms365 = ["msal>=1.30", "httpx>=0.27"]
 # different module (``box_sdk_gen``) incompatible with the paste-code
 # flow this connector relies on.
 connectors-box = ["boxsdk>=3.10,<4"]
+# Microsoft Teams connector (Phase 11 F5, ADR-0010 §改訂 (a)/(c)/(d) +
+# ADR-0014). ``msal`` is reserved for an out-of-process User Token
+# acquisition path (the operator runs MSAL device code flow once and
+# pastes the resulting token into ``opshub connector auth set
+# connector:teams``); ``httpx`` drives the Microsoft Graph
+# ``/me/chats/getAllMessages`` delta query and full-pass fallback. Both
+# stay in extras so the core install remains SDK-free (ADR-0001) — opt
+# in via ``uv sync --extra connectors-teams``.
+connectors-teams = ["msal>=1.30", "httpx>=0.27"]
 # SaaS token storage (Phase 3, ADR-0014). OS keychain backed (macOS Keychain /
 # Linux Secret Service / Windows Credential Locker). Connectors fetch their
 # PAT / OAuth tokens through ``opshub.core.secrets``.

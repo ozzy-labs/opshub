@@ -38,6 +38,19 @@ FAKE_JWT = (
     "eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiIxMjM0NTY3ODkwIn0." + "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV"
 )
 
+# Microsoft Graph User Token shape (Phase 11 Teams connector). Graph
+# bearers are JWTs; keep the three-segment shape but vary the body so
+# tests that need a "different token" can compare against
+# :data:`FAKE_JWT` without surface ambiguity.
+FAKE_GRAPH_USER_TOKEN = (
+    "eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiJ0ZWFtcy11c2VyIn0." + "TeamsGraphSignatureFakeForUnitTests"
+)
+FAKE_GRAPH_USER_TOKEN_FROM_SECRET = (
+    "eyJhbGciOiJIUzI1NiJ9."
+    + "eyJzdWIiOiJmcm9tLXNlY3JldCJ9."
+    + "TeamsGraphSignatureFromSecretFixture"
+)
+
 # Slack token family. Each prefix is ``xox<letter>-`` followed by 10+
 # allowed chars; split the ``xox`` to keep the source literal shorter
 # than the redactor's minimum match length.
