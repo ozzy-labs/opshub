@@ -85,7 +85,7 @@ jobs:
         # request leaves CI (Phase 7 plan §1 #6). The cold-start guard
         # still asserts ``boxsdk`` never leaks onto the ``opshub --help``
         # path.
-        run: uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra connectors-ms365 --extra connectors-box --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
+        run: uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra connectors-ms365 --extra connectors-box --extra mcp --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
 
       - name: Ruff (lint)
         run: uv run ruff check
