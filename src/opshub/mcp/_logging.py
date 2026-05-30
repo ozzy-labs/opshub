@@ -57,7 +57,16 @@ def new_call_id() -> str:
 
 
 def log_tool_call_start(logger: _Logger, *, tool_name: str, call_id: str) -> None:
-    """Emit the start record for an MCP ``execute_tool`` span."""
+    """Emit the start record for an MCP ``execute_tool`` span.
+
+    Event name vs OTel span name (intentional split): the structlog
+    event name is ``mcp.execute_tool`` (opshub-namespaced so log
+    aggregators can route it without colliding with other ``execute_tool``
+    producers), while the OTel GenAI span name is ``execute_tool``
+    (carried as ``gen_ai.operation.name`` in the structured payload so a
+    future ``mcp-otel`` exporter can promote the attribute to the OTel
+    span name without renaming the structlog event).
+    """
     logger.info(
         "mcp.execute_tool",
         **{

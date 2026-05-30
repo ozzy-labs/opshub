@@ -7,10 +7,12 @@ that slipped into a tool's output (e.g. an exception message captured
 by the wrapping handler in :mod:`opshub.mcp.server`).
 
 The module deliberately wraps :func:`opshub.core.sanitise.sanitise_error_message`
-rather than re-implementing the regex set. ``core/sanitise`` already
-covers the bearer-token shapes (``sk-…``, ``ghp_…``, ``Bearer …``);
-extending it benefits every existing caller too (embedding /
-briefing / connectors) so divergence is harder to introduce later.
+rather than re-implementing the regex set. ``core/sanitise`` covers
+the bearer-token / API-key family (``sk-…``, ``ghp_…``,
+``github_pat_…``, ``xox[pbars]-…``, ``AKIA…``, ``AIza…``, JWTs and
+``Bearer …``); extending it benefits every existing caller too
+(embedding / briefing / connectors) so divergence is harder to
+introduce later.
 
 Scope notes:
 

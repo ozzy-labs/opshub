@@ -126,10 +126,14 @@ async def dispatch_tool_call(
     Wraps the call with OTel GenAI start / complete records and the
     secret redactor (ADR-0022 §(b) / §(e)).
 
-    Exceptions are not caught here — the MCP server low-level handler
-    captures them and converts to ``CallToolResult(isError=true)``. We
-    only ensure the completion record is still emitted via ``try /
-    finally``.
+    Exceptions are re-raised so the MCP server low-level handler can
+    convert them to ``CallToolResult(isError=true)``. Before re-raising
+    we rewrap the exception message through
+    :func:`opshub.mcp._redact.redact_secrets`: the SDK serialises the
+    exception's ``str()`` into the ``isError`` payload, so a token that
+    slipped into ``ConnectorSyncFailed("Bearer xoxb-…")`` would otherwise
+    cross the MCP boundary verbatim. The completion record is still
+    emitted via ``try / finally``.
     """
     from opshub.core.errors import OpsHubError
     from opshub.core.logging import get_logger
@@ -158,7 +162,12 @@ async def dispatch_tool_call(
         return _to_text_content(redact_secrets(result_text))
     except Exception as exc:
         error_type = type(exc).__name__
-        raise
+        # Re-raise as ``OpsHubError`` with the message scrubbed so the
+        # SDK's ``isError`` payload never carries a raw token. The
+        # original exception is attached via ``raise ... from exc`` so
+        # the traceback (server-side only) keeps full context.
+        redacted_message = redact_secrets(str(exc))
+        raise OpsHubError(redacted_message) from exc
     finally:
         duration_ms = (time.perf_counter() - start) * 1000
         log_tool_call_complete(
