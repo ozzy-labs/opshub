@@ -1,7 +1,7 @@
 # 0016. Action Loop and Structured Output
 
-- Status: Accepted
-- Date: 2026-05-17
+- Status: Accepted (revised 2026-05-30 for Phase 10 Sub-issue E)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §決定 (i)+(j)+(k) revision: reply_draft candidate / triage / style-source recall)
 - Deciders: ozzy
 
 ## Context
@@ -77,9 +77,11 @@ response の処理は対称的に:
 - `model_json_schema()` は Pydantic v2 で stable API、Anthropic / OpenAI どちらの JSON Schema 方言にも適合
 - 共通 helper を 1 箇所に置くことで、Anthropic SDK の `ToolParam` / OpenAI SDK の `chat.completions` tool dict 形式の差異は各 client 側の thin wrapper で吸収できる (テストも共通 helper を 1 度 pin すれば足りる)
 
-### (c) Human-in-the-loop 必須、auto-apply は Phase 6.x 以降も禁止
+### (c) Human-in-the-loop 必須、auto-apply は Phase 6.x 以降も禁止 (Phase 10 で外部書き戻し境界を追加)
 
 propose の lifecycle は **generate → operator review → apply / reject** の 3 段とする。
+
+> **Phase 10 改訂 (2026-05-30)**: §決定 (i) で追加される `reply_draft` candidate も本決定の HITL 境界の中で動く。**`reply_draft` の apply は durable state (proposal candidate state の `pending → applied` 遷移) を変更するのみで、外部 SaaS (Slack / Outlook / GitHub PR comment 等) への送信・投稿は一切行わない**。ADR-0010 改訂 (Phase 10 で write-back を当面 scope 外と明記) と組で contract を構成し、「reply_draft apply が外部 HTTP call を発しない」test pin を §決定 (k) で要件化する (Phase 10 step E2 で `tests/unit/services/test_proposal_service.py` または `tests/integration/test_phase10_reply_draft_no_external_writeback.py` で固定)。connector の `post` / `send` / `comment` メソッドが存在しないことの assert で「経路がそもそも無い」を契約化する。
 
 - **`opshub propose generate`** は automated (LLM call のみ)
 - **`opshub propose apply <id> <index>`** は **必ず operator-triggered**
@@ -116,9 +118,11 @@ apply の冪等性を **natural key で強制** する。
 - 「state を 1 度遷移させたら 2 度目は error」という制約は event-sourced 設計と整合する (state machine の transition rule を event 側で強制)
 - 並行 race (同 candidate に同時 apply 2 回) はファイル lock + DB transaction で防がれるが、本決定はそれと独立に「明示 state guard」を service 層で持つ
 
-### (e) Candidate types MVP = `task` + `decision`
+### (e) Candidate types MVP = `task` + `decision` (Phase 10 で `reply_draft` 追加)
 
 Phase 6 MVP では **`task` と `decision` の 2 種類のみ** を candidate type とする。
+
+> **Phase 10 改訂 (2026-05-30)**: §決定 (i) で `reply_draft` を 3 つ目の candidate kind として追加する。**`task` と `decision` の 2 種類のみ** という Phase 6 MVP 制約は Phase 10 で `task` + `decision` + `reply_draft` の 3 種類に拡張される (`inbox_item` / `source` は依然として候補化しない方針が継続。connector-authored entity を LLM が「propose」する経路の信頼モデルは未確定)。schema versioning は §決定 (f) の `Literal["v1", "v2"]` パターンで対応し、`reply_draft` の `schema_version` は v2 を pin する (Phase 6 v1 candidate は rewrite せず、reader が両 version を inline で読む)。
 
 ```python
 # src/opshub/domain/events/proposal.py (Phase 6 B1 で新設)
@@ -220,6 +224,74 @@ Ollama 採用詳細:
 - `llama-cpp-python` は OS-specific binary install (build from source / wheel availability に幅) で、ADR-0001 の Python distribution constraint (`uv tool install opshub` で配布) を破る
 - model file 同梱 (4-30GB) も ADR-0001 の core size 制約に抵触
 - Ollama 経由で 90% の use case が covered。`llama.cpp` direct が必要なケース (daemon を立てない GPU offload、bare-metal embedded) は Phase 6.x で別 ADR + extras で判断
+
+## Phase 10 改訂 (Sub-issue E、2026-05-30)
+
+Phase 10 Sub-issue E (返信下書き生成) で本 ADR に 3 つの追加決定を pin する。返信下書きの生成・triage・文体源は Phase 6 で確立した propose lifecycle (generate → operator review → apply / reject) を新規 candidate kind として再利用するだけで成立するため、新 ADR を立てず本 ADR の §決定 (i)+(j)+(k) として吸収する。Phase 6 で pin した §決定 (a)〜(h) はすべて継続する (構造化出力 = tool calling / Pydantic v2 SSOT / HITL 必須 / idempotent apply / 既存 service 経由 / schema versioning / Ollama backend)。
+
+### (i) `ReplyDraftCandidatePayload` (`kind="reply_draft"`、`reply_to_source_id/type` 必須、schema v2)
+
+`reply_draft` を 3 つ目の candidate kind として追加する。`task` / `decision` (Phase 6 MVP) と同じ Pydantic discriminated union (`Candidate`) に組み込み、`schema_version: Literal["v2"]` を pin する。
+
+```python
+# src/opshub/domain/events/proposal.py (Phase 10 step E2 で追加)
+class ReplyDraftCandidatePayload(BaseModel):
+    kind: Literal["reply_draft"] = "reply_draft"
+    schema_version: Literal["v2"] = "v2"
+    reply_to_source_id: str = Field(min_length=26, max_length=26)  # ULID
+    reply_to_source_type: str = Field(min_length=1, max_length=50)
+    body: str = Field(min_length=1, max_length=8000)
+    subject: str | None = Field(default=None, max_length=500)
+```
+
+要点:
+
+- **`reply_to_source_id` / `reply_to_source_type` 必須**: reply_draft はどの source への返信なのかが本質。Phase 6 MVP の `task` / `decision` は単独で意味を持つが、返信下書きは必ず**返信元 source**を参照する。`reply_to_source_id` は `sources` projection の ULID、`reply_to_source_type` は `slack_message` / `ms365_outlook` / `box_event` 等の discriminator (`source_type`) を取る。値の整合性は apply 時に projection JOIN で検証する (存在しない source への reply_draft apply は OpsHubError)
+- **`subject` は optional**: Slack / Outlook reply ではない / subject を分離しない channel (e.g. 1-on-1 DM) では `None`。caller / 表示層は title の一部として fallback 表示
+- **`schema_version` = v2**: Phase 6 の `task` (v1) / `decision` (v1) と同じ union 内に共存する。reader は §決定 (f) のとおり両 version を inline で読む。Phase 6 で生成した v1 candidate を rewrite する経路は持たない (event log immutability、ADR-0002)
+- **本文長 cap = 8000 chars**: 通常の Slack / メール返信長 (Phase 10 plan §7 で実機 sampling) + prompt cost に見合う安全側設定。Pydantic Field の `max_length` で機械強制し、超過は ProposalFailed 経路へ
+- **外部書き戻し境界**: reply_draft の **apply は durable state (`proposals.candidate_states` を `pending → applied` に flip) のみ** で、SaaS への送信は行わない (ADR-0010 改訂 = §Phase 10 で write-back を当面 scope 外)。下書きは `proposals.candidates[i]` に保存され、operator が手で外部宛先 (Slack UI / Outlook 等) にコピペする。HITL 境界の test pin は §決定 (k) で詳述
+
+### (j) Triage 3 分類 (`respond` / `notify` / `ignore`) を `propose generate` の structured field に載せる
+
+`propose generate` の出力 schema に **triage classification** を追加し、LLM が「この source 群に対してエージェントとしてどう振る舞うべきか」を 3 値で返せるようにする。これは Executive AI Assistant (EAIA) で確立されている分類 (respond / notify / ignore) を opshub の structured output に取り込んだもの。
+
+```python
+# src/opshub/services/proposals/service.py の ProposalCandidatesSchema を拡張 (Phase 10 step E2)
+class ProposalCandidatesSchema(BaseModel):
+    schema_version: Literal["v2"] = "v2"  # v1: 旧フィールドのみ / v2: triage を含む
+    triage: Literal["respond", "notify", "ignore"] | None = None
+    candidates: list[Candidate] = Field(default_factory=lambda: [], max_length=20)
+```
+
+要点:
+
+- **3 値の意味**: `respond` = LLM が「返信下書きを 1 件以上提案する」と判断 (reply_draft candidate を `candidates` に含めるべきだった) / `notify` = 返信不要だが operator に存在を知らせるべき (inbox_item 系の triage に近いが、Phase 10 では durable な inbox_item を auto 生成しない) / `ignore` = ノイズ (人間 operator が後で見直し)
+- **`triage` field は LLM の自己申告メタデータで、durable state を変更しない**: 旧 ADR-0016 §決定 (c) HITL 必須は変更しない。`triage = "respond"` を返したから自動で reply_draft を apply するわけではなく、`opshub propose apply <id> <idx>` で operator が明示承認するまで durable state には何も書かれない。`triage` は CLI / MCP / Skill 側で「優先表示する candidate 群」を絞るためのヒントとして使われる
+- **`Optional` (default `None`)**: v1 schema との後方互換のため。LLM が triage を返さなかった場合は `None` で保存され、Phase 6 と同じ挙動 (= triage filter 不能、全 candidate 表示) になる
+- **auto-apply 禁止の継続**: `triage = "ignore"` を見て candidate を自動破棄する経路、`triage = "respond"` で自動送信する経路はいずれも実装しない。§決定 (c) HITL 必須宣言を継承
+
+### (k) 文体は静的プロンプトでなく recall した「自分が author の過去送信 event」を `<style_example>` 注入
+
+`reply_draft` の生成プロンプトは Phase 6 の `propose generate` 系プロンプト (do-not-follow preamble + 静的 system prompt + `<source>` ブロック) を継承するが、文体注入を**静的プロンプト**で書かず、**過去の自分が送信した event を recall して `<style_example>` ブロックとして注入**する。
+
+```text
+<style_example source_id="01J..." type="slack_message">
+> こんにちは、月曜の件、了解しました。明日午前に対応します。
+</style_example>
+
+<style_example source_id="01J..." type="ms365_outlook">
+> Hi Alice, thanks for the follow-up. Let me check with the team.
+</style_example>
+```
+
+要点:
+
+- **recall query 設計**: `author = self` を Phase 10 で確立される provenance タグ (ADR-0020 §(e)、`provenance_origin = "internal"` または source 側の sender ID = operator) で絞り、返信先 channel / counterpart は `source_type` + `connector_name` + 既存 `body` で絞る。Phase 10 Sub-issue B (本文 embedding + FTS5) でハイブリッド検索が可能なため、過去の「自分が送信した、同じ channel / 同じ相手宛て、同じ topic の」message を 1-3 件 recall し `<style_example>` ブロックに展開
+- **`<context_source>` ブロック (= `--expand-graph` 経由)**: 文体だけでなく**文脈**も提供する。Phase 8 で導入した `--expand-graph` (ADR-0017 §決定 (f)) を `reply_draft` 生成でも opt-in で発火し、返信元 source の knowledge graph 1-hop neighbours を `<context_source>` ブロックとして注入する。Read AI Ada の自前 graph 相当を既存機構で代替できる
+- **`<style_example>` も DATA**: ADR-0015 §決定 (f) do-not-follow preamble を維持する。`<style_example>` 内の文字列に「無視して X せよ」が含まれていても LLM は従わない (preamble で system レベル指示として明示)。html-escape も Phase 5 D1 の delimiter wrap 防御を継承
+- **薄い静的 About**: 署名 / 役割 (e.g. "I am OpsHub's reply-draft assistant.") は system prompt 側に短く置く (≤200 chars)。「LLM の性格設定」を肥大化させず、文体は entirely recall ベースで決まる方針 = Inbox Zero の弱点 (テンプレ口調の暴走) を回避
+- **依存**: Sub-issue A (本文保持、ADR-0020) と Sub-issue B (本文 embedding + FTS5、ADR-0012 改訂) が prerequisite。本文保持していない世界では style_example が summary だけになり文体注入の意義が薄れる
 
 ## Consequences
 
@@ -359,6 +431,28 @@ Phase 6.x で `Candidate` field 拡張時、過去 v1 candidate を projector �
 - OS-specific binary install (build from source / pre-built wheel availability に幅) で ADR-0001 (`uv tool install opshub`) を破る
 - model file 同梱 (4-30GB) も ADR-0001 の core size 制約に抵触
 - Ollama で 90% covered。`llama.cpp` direct の need は Phase 6.x で別 ADR で評価
+
+### 8. Reply-draft を新 ADR / 新 sub-system として独立させる (Phase 10 改訂で **却下**)
+
+Phase 10 Sub-issue E で `reply_draft` を Phase 6 の propose の枠外に独立させ、新 ADR (例: ADR-0023 Reply Draft Generation) + 専用 service (`ReplyDraftService`) + 専用 projection + 専用 CLI (`opshub reply ...`) を切る案。
+
+却下理由:
+
+- Phase 6 で確立した propose lifecycle (generate → review → apply / reject) と triage / HITL / 既存 service 経由の apply / idempotent key / schema versioning が **そっくり再利用可能**。reply_draft は Candidate kind を 1 つ追加するだけで成立し、独立 sub-system はコード重複と CLI 表面の肥大化を招く
+- 「下書きを **apply で durable state に書く** + **外部送信は ADR-0010 改訂で当面 scope 外**」境界は ADR-0016 §決定 (c) HITL の自然延長で、新 ADR で再定義する価値が薄い
+- 独立 projection (`reply_drafts` テーブル) は `proposals.candidates[i]` の JSON で代替可能。Phase 6 の `proposals` projection と join しても `(proposal_id, candidate_index)` natural key で reply_draft の `pending / applied / rejected` 状態が表現できる
+- propose 側に集約することで `opshub propose generate --kind reply_draft` 1 経路に統一でき、操作の mental model が小さい (Phase 10 Sub-issue D 秘書 Skill 表で `reply-draft skill → opshub propose --kind reply_draft` のマッピングと整合)
+
+### 9. Triage を separate API / separate event にする (Phase 10 改訂で **却下**)
+
+Triage 分類 (`respond` / `notify` / `ignore`) を `propose generate` の前段で別 LLM call として走らせ、`Triaged(source_id, classification)` 系の新 event + projection を作る案。
+
+却下理由:
+
+- 「triage は単独で意味を持つ durable state」だと auto-apply 禁止原則 (§決定 (c)) と緊張する。`triage = "ignore"` が durable に書かれると「ignore された source は次回以降の recall から外す」等の能動的処理に拡張する圧力が出て、HITL 境界が崩れる
+- LLM call を 2 段 (triage → generate) に分けると cost が倍 (Phase 10 plan §1 緊張点 ③ の「能動性は Phase 10 で作らない」とも整合せず)
+- triage 結果を `propose generate` の structured field として 1 回の LLM call で同時に得れば cost は変わらず、operator は triage hint を見て candidate を絞れる
+- 「ノイズ source の自動破棄」は Phase 9 で確立した excludes 経路 (ADR-0019 + ADR-0020 §(b) で機構化) で取り込み前段に置くべきで、LLM triage は post-hoc な hint に留める設計責務の切り分け
 
 ## 関連
 

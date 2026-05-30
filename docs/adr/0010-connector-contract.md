@@ -1,7 +1,7 @@
 # 0010. Connector Contract
 
-- Status: Accepted
-- Date: 2026-05-17
+- Status: Accepted (revised 2026-05-30 for Phase 10 Sub-issue E)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外)
 - Deciders: ozzy
 
 ## Context
@@ -41,8 +41,9 @@ Connector の **禁止事項**:
 2. **Projection table を直接更新しない** — 必ず Event Store 経由
 3. **Event を Application Service を経由せず append しない**
 4. **Vendor 固有 event 名を勝手に定義しない** — `domain/events/source.py` で集中管理
-5. **Full body を Operational Memory に書き込まない** — ADR-0005 違反
+5. **Full body を Operational Memory に書き込まない** — ADR-0005 違反 (**Phase 10 で撤回**、ADR-0020 で本文ローカル保持に転換。本項は ADR-0005 supersede 後は無効。本文取り込みは `SourceObserved.body` + `provenance_origin` / `provenance_trust` 経由で行う)
 6. **Lock を取得せず長時間 Task の状態を変更する操作を発火しない** — 必要なら Application Service が lock を取る
+7. **外部 SaaS への書き戻し (write-back) を実装しない** — **Phase 10 改訂で明示**。`post` / `send` / `comment` / `reply` 等の SaaS API への書き込みメソッドを connector に実装しない。Sub-issue E (返信下書き生成) は **下書き提示まで** で完結し、外送信は operator が手で行う (ADR-0016 §決定 (c) HITL 必須の延長)。詳細は §Phase 10 改訂を参照
 
 triage を経て Task / Decision / Link が生成される流れ:
 
@@ -129,6 +130,35 @@ Phase 3 で導入した Connector Contract は Phase 7 で 3 新規 connector (S
 - **CI mock 規律** — 全 connector test は SDK / HTTP fully mocked、実 API 非接続
 
 Contract の signature 変更は本 phase で発生せず (Phase 3 で確定済の `Connector` Protocol が 3 つの新 connector で適合)、ADR-0010 は Phase 7 で touch せず Phase 7.x 以降の Additional connectors / common OAuth helper refactor で再評価する。
+
+## Phase 10 改訂 (Sub-issue E、2026-05-30)
+
+Phase 10 Sub-issue E (返信下書き生成、ADR-0016 §決定 (i)) で connector contract に **write-back 非対応** を明示的な禁止事項として追記する (§禁止事項 7)。
+
+### 背景
+
+Phase 3-9 の connector はすべて **fetch (差分取り込み) only** で実装されており、SaaS API への書き込み (Slack message 送信 / Outlook メール送信 / GitHub PR コメント等) を行うメソッドは存在しない。Phase 10 で `reply_draft` candidate kind (ADR-0016 §決定 (i)) を導入し、LLM が「返信下書き」を生成可能になることで、「下書きをそのまま自動送信する経路を作るべきか」という設計圧力が新たに生じる。
+
+### 決定
+
+**Phase 10 では SaaS への書き戻し / 投稿 / 送信を実装しない**。reply_draft candidate の apply は `proposals.candidate_states` を `pending → applied` に flip するだけで完結し、生成された下書き本文は `proposals.candidates[i].body` に durable に保存される。operator が手で SaaS UI (Slack / Outlook 等) にコピペして送信する。
+
+理由:
+
+1. **Phase 10 緊張点 ③ の決定** (phase-10-plan.md §1.6): 「返信下書きの生成は作る、外部書き戻しは当面作らない」を Phase 10 着手時に確定済。本 ADR §禁止事項 7 はその実装層への落とし込み
+2. **HITL 境界の保全** (ADR-0016 §決定 (c)): LLM 生成テキストが durable state に書かれる前に operator review を 1 段挟む原則を、SaaS 送信に対しても適用 (= 送信前にも operator が確認する経路を保つ)。auto-send は prompt injection / hallucination が外部に伝播する経路を開く
+3. **構造的に経路が存在しないことの保証**: connector に `post` / `send` / `comment` / `reply` メソッドを実装しないことで「経路がそもそも無い」状態を維持する。CLI / MCP tool / Skill が誤って auto-send 経路を踏むリスクがゼロ
+4. **test pin の根拠**: Phase 10 step E2 で `tests/integration/test_phase10_reply_draft_no_external_writeback.py` (または unit test 相当) として、`opshub.connectors.*` モジュール内に `post` / `send` / `comment` / `reply` / `create_comment` 等のメソッドが存在しないことを assert する test を設置する。これは ADR-0016 §決定 (c) の HITL 境界を **コードベース上で機械的に保証** するための contract test
+
+### Phase 11 以降の再評価条件
+
+外部書き戻しを将来導入する場合は:
+
+1. 本 ADR を Superseded by する新 ADR
+2. ADR-0004 (Agent Runtime Boundary) を explicitly revisit
+3. ADR-0016 §決定 (c) HITL 必須宣言と整合する設計 (auto-send 禁止、送信前 operator 確認、送信履歴の event-sourced 記録) を新 ADR で pin
+
+これらすべてが揃った場合のみ。flag 1 つで緩める / 個別 connector が独自に実装する経路は許可しない (Phase 6 ADR-0016 §決定 (c) の auto-apply 禁止と同じ強度の宣言)。
 
 ## 関連
 
