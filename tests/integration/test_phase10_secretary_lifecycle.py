@@ -429,9 +429,14 @@ def test_phase10_secretary_lifecycle(
         specs = build_tool_specs_for_engine(engine)
         specs_by_name = {spec.name: spec for spec in specs}
 
-        # Sanity: the Phase 10 C2 surface advertises 7 tools (4 read,
-        # 3 write). A regression that drops one would surface here.
+        # Sanity: the Phase 10 C2 baseline plus the Step 1 widening
+        # (post Phase 10) surface advertises 15 tools (11 read, 4
+        # write). A regression that drops one would surface here.
+        # The Step 1 widening adds ``brief`` / ``graph.*`` / ``source.*``
+        # / ``embeddings.find_duplicates`` (read) and ``propose.generate``
+        # (HITL write).
         assert set(specs_by_name) == {
+            # Phase 10 C2 baseline.
             "recall.search",
             "task.list",
             "inbox.list",
@@ -439,6 +444,16 @@ def test_phase10_secretary_lifecycle(
             "task.create",
             "inbox.add",
             "connector.sync",
+            # Step 1 widening — read.
+            "brief",
+            "graph.related",
+            "graph.trace",
+            "graph.expand",
+            "source.list",
+            "source.get",
+            "embeddings.find_duplicates",
+            # Step 1 widening — HITL write.
+            "propose.generate",
         }
 
         # ---- 4. daily-brief script (read-only tool calls) --------------

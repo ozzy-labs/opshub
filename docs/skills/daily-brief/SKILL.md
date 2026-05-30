@@ -1,6 +1,6 @@
 ---
 name: daily-brief
-description: 「今日のまとめ」「状況教えて」「最近どうなってる」と聞かれたら、opshub MCP の recall.search / task.list / inbox.list / decision.list を順に叩いて当日 (or 直近 24h) の主要な動きを要約する。LLM 推論ループは外部ホスト (Claude Code 等) 側、本 skill は手順書のみで実処理を持たない。
+description: 「今日のまとめ」「状況教えて」「最近どうなってる」と聞かれたら、opshub MCP の brief (LLM 要約) または recall.search / task.list / inbox.list / decision.list を順に叩いて当日 (or 直近 24h) の主要な動きを要約する。LLM 推論ループは外部ホスト (Claude Code 等) 側、本 skill は手順書のみで実処理を持たない。
 ---
 
 # daily-brief — 今日の状況を opshub から組み立てて返す
@@ -17,6 +17,20 @@ opshub MCP server (`opshub mcp serve`、ADR-0022) 経由で当日の operational
 opshub 側で能動的に「日次まとめを送る」runtime は走らない (ADR-0004 §(a) 形A)。本 skill はリクエスト駆動で、ユーザーが問い合わせた瞬間にホストがツールを叩く。
 
 ## 呼び出し順 (MCP tool)
+
+### Step 0 (オプション): 一発要約は `brief` を使う
+
+LLM backend が configured なら、`brief` 一発で当日の Markdown 要約が返る。Step 1〜4 を回す前にこの 1 呼び出しを試して、戻り値の Markdown を素のまま提示できれば Step 1-4 は省略可能。
+
+```text
+tool: brief
+input:
+  topic: "today"        # ホストが当日トピックに置き換える
+  format: "md"
+  max_sources: 20
+```
+
+戻り値: `{"format":"md", "briefing_id":"...", "markdown":"...", "source_count": N}`. LLM 未設定 / token 不足の場合は失敗するので、その場合は Step 1〜4 に fallback。
 
 ### Step 1: 直近の重要シグナルを recall で拾う
 

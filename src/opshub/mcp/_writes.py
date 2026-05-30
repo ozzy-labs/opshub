@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 __all__ = [
     "build_connector_sync_handler",
     "build_inbox_add_handler",
+    "build_propose_generate_handler",
     "build_task_create_handler",
 ]
 
@@ -202,6 +203,124 @@ def build_connector_sync_handler(engine: Engine) -> ToolHandler:
                 "ok": True,
                 "connector": name,
                 "observed_count": result.observed_count,
+            }
+        )
+
+    return handler
+
+
+# ----------------------------------------------------------- propose.generate
+
+
+def build_propose_generate_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``propose.generate``.
+
+    HITL-boundary write tool (ADR-0022 §(c)). The handler delegates to
+    :class:`opshub.services.proposals.ProposalService`:
+
+    * topic-based mode (default): ``ProposalService.generate``
+    * reply-draft mode (``reply_to_source_id`` set):
+      ``ProposalService.generate_reply_draft``
+
+    The schema treats absent text fields as empty strings (``default: ""``)
+    so the MCP boundary stays ``additionalProperties: false`` while
+    accepting partial input. We coerce empty strings back to ``None``
+    inside the handler so the underlying service contract (``str | None``
+    for optional fields) is honoured.
+
+    The new :class:`Proposal` row is durable on the event log via
+    :class:`ProposalGenerated`, but apply (task / decision creation)
+    still requires an operator-driven ``opshub propose apply`` call —
+    the handler never invokes :meth:`ProposalService.apply`. Hosts
+    that honour the ``destructiveHint=true`` annotation will prompt the
+    operator before invoking; opshub does not double-prompt.
+
+    ``engine`` is accepted for symmetry; ``build_proposal_service``
+    owns its own engine resolution (same pattern as the other write
+    handlers).
+    """
+    _ = engine
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from opshub.cli._wiring import build_proposal_service
+        from opshub.core.errors import OpsHubError
+
+        # Schema-default empty strings are normalised back to ``None`` so
+        # the service's ``str | None`` contracts are honoured (a literal
+        # empty string would survive the schema, but the service uses
+        # truthiness for the optional-field guards).
+        def _nz(value: object) -> str | None:
+            if value is None:
+                return None
+            text = str(value)
+            return text if text else None
+
+        topic_raw = _nz(arguments.get("topic", ""))
+        reply_to_source_id = _nz(arguments.get("reply_to_source_id", ""))
+        from_briefing_id = _nz(arguments.get("from_briefing_id", ""))
+        expand_graph = bool(arguments.get("expand_graph", False))
+        max_candidates = int(arguments.get("max_candidates", 5))
+        max_tokens = int(arguments.get("max_tokens", 2000))
+
+        service = build_proposal_service("mcp:propose.generate")
+
+        if reply_to_source_id is not None:
+            # Reply-draft mode: topic / from_briefing_id are ignored by
+            # the service (the source row provides the context), but we
+            # surface a clear error when an operator passes both so a
+            # misconfigured agent host fails loud instead of silently
+            # discarding the topic.
+            if topic_raw is not None or from_briefing_id is not None:
+                raise OpsHubError(
+                    "reply_to_source_id is mutually exclusive with topic /"
+                    " from_briefing_id; supply only one mode per call"
+                )
+            proposal = service.generate_reply_draft(
+                reply_to_source_id,
+                max_candidates=max_candidates,
+                max_tokens=max_tokens,
+                expand_graph=expand_graph,
+            )
+        else:
+            if topic_raw is None:
+                raise OpsHubError(
+                    "propose.generate requires either ``topic`` or ``reply_to_source_id``"
+                )
+            proposal = service.generate(
+                topic_raw,
+                from_briefing_id=from_briefing_id,
+                max_candidates=max_candidates,
+                max_tokens=max_tokens,
+                expand_graph=expand_graph,
+            )
+
+        # Render candidates as plain dicts — the typed discriminated
+        # union (:class:`Candidate`) is a Pydantic model so
+        # ``model_dump`` gives a JSON-safe representation. Each row
+        # carries its ``kind`` so the host can branch on rendering.
+        candidate_payloads: list[dict[str, object]] = []
+        for index, candidate in enumerate(proposal.candidates):
+            dumped = candidate.model_dump(mode="json")
+            dumped["index"] = index
+            candidate_payloads.append(dumped)
+
+        return _json_dump(
+            {
+                "ok": True,
+                "proposal_id": proposal.proposal_id,
+                "topic": proposal.topic,
+                "scope": proposal.scope,
+                "briefing_id": proposal.briefing_id,
+                "candidates": candidate_payloads,
+                "model_id": proposal.model_id,
+                "model_version": proposal.model_version,
+                "tokens_in": proposal.tokens_in,
+                "tokens_out": proposal.tokens_out,
+                "generated_at": proposal.generated_at.isoformat(),
+                # Hint to the host: apply is HITL-only. The host should
+                # surface an "approve candidate #N" prompt and then call
+                # ``opshub propose apply`` via the operator's shell.
+                "hitl_apply_required": True,
             }
         )
 

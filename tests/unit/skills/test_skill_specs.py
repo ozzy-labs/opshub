@@ -141,7 +141,18 @@ def test_skill_mentions_mcp_or_cli_path(name: str) -> None:
 
     has_mcp_tool = bool(
         re.search(
-            r"\b(recall\.search|task\.list|inbox\.list|decision\.list|task\.create|inbox\.add|connector\.sync)\b",
+            # Phase 10 C2 baseline + Step 1 widening (brief, graph.*,
+            # source.*, embeddings.find_duplicates, propose.generate).
+            # Keep the alternation single-line so the regex compiles as
+            # one literal — ruff RUF003 / RUF002 don't apply in raw strings
+            # here but readability still suffers above ~120 chars.
+            r"\b("
+            r"recall\.search|task\.list|inbox\.list|decision\.list"
+            r"|task\.create|inbox\.add|connector\.sync"
+            r"|brief|graph\.related|graph\.trace|graph\.expand"
+            r"|source\.list|source\.get|embeddings\.find_duplicates"
+            r"|propose\.generate"
+            r")\b",
             text,
         )
     )

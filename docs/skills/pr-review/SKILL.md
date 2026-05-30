@@ -55,6 +55,29 @@ input:
 
 過去に「ここは Phase X.x で直す」と pin されている open task が無いか確認。レビュー指摘の重複を避ける。
 
+### Step 4 (任意): 関連 entity の graph を追う
+
+`recall.search` で hit した task / decision / source の周辺に何が紐付いているか確認するなら graph 系 tool が使える。指摘候補の根拠付けに使える。
+
+```text
+tool: graph.related
+input:
+  entity_type: "<task|decision|source>"
+  entity_id: "<ULID>"
+  direction: "both"
+  limit: 30
+```
+
+過去の意思決定が現在どの task / source に波及しているかを追うなら `graph.trace` (provenance 方向、backward) や `graph.expand` (双方向 N-hop) も有効。すべて read-only。
+
+```text
+tool: graph.trace
+input:
+  entity_type: "source"
+  entity_id: "<該当 PR の source ULID>"
+  depth: 3
+```
+
 ## 出力フォーマット (ホスト側)
 
 ```text

@@ -35,11 +35,11 @@ opshub 本体が **持たない** もの:
 
 | skill | 主な MCP tool | 自律範囲 | 書き込み tool (write) |
 |---|---|---|---|
-| daily-brief | `recall.search`, `task.list`, `inbox.list`, `decision.list` | 自律 OK | なし |
-| next-actions | `task.list`, `recall.search` (+ 人確認付き `task.create`) | read 自律 / write 人確認 | `task.create` (HITL) |
-| reply-draft | `recall.search` + CLI `propose generate --reply-to <source_id>` + CLI `propose apply` | apply 時は人確認 | CLI `propose apply` (HITL) |
-| pr-review | `recall.search`, `decision.list`, `task.list` | 自律 OK | なし (PR comment 投稿は skill 外) |
-| file-lookup | `recall.search` | 自律 OK | なし |
+| daily-brief | `brief` (LLM 要約一発) または `recall.search`, `task.list`, `inbox.list`, `decision.list` | 自律 OK | なし |
+| next-actions | `task.list`, `recall.search` (+ 人確認付き `task.create` / `propose.generate`) | read 自律 / write 人確認 | `task.create` / `propose.generate` (HITL) |
+| reply-draft | `recall.search` + MCP `propose.generate` (mode: `reply_to_source_id`) + CLI `propose apply` | generate / apply とも人確認 | `propose.generate` (HITL) / CLI `propose apply` (HITL) |
+| pr-review | `recall.search`, `decision.list`, `task.list`, `graph.related` / `graph.trace` | 自律 OK | なし (PR comment 投稿は skill 外) |
+| file-lookup | `recall.search`, `source.list`, `source.get` | 自律 OK | なし |
 
 skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。実際の配布は [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) リポから `@ozzylabs/skills` Renovate preset 経由で各ホストの `.claude/skills/` に届く (handbook ADR-0016)。
 

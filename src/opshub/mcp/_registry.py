@@ -46,12 +46,25 @@ class ReadCategory(StrEnum):
     All members map to ``annotations.readOnlyHint = true`` and
     ``annotations.destructiveHint = false`` (ADR-0022 §(c)). They are
     safe for an agent host to invoke without human confirmation.
+
+    Step 1 tool-surface widening (post Phase 10) extends the read
+    surface with briefing / graph traversal / source / duplicate
+    categories so the Tier 1 skill set (``daily-brief`` /
+    ``next-actions`` / ``pr-review`` / ``file-lookup``) can call MCP
+    tools directly instead of falling back to the CLI shell.
     """
 
     RECALL = "recall"
     TASK = "task"
     INBOX = "inbox"
     DECISION = "decision"
+    BRIEF = "brief"
+    GRAPH_RELATED = "graph.related"
+    GRAPH_TRACE = "graph.trace"
+    GRAPH_EXPAND = "graph.expand"
+    SOURCE_LIST = "source.list"
+    SOURCE_GET = "source.get"
+    EMBEDDINGS_FIND_DUPLICATES = "embeddings.find_duplicates"
 
 
 class WriteCategory(StrEnum):
@@ -67,11 +80,22 @@ class WriteCategory(StrEnum):
     (rate limit, audit log) and triggering it without operator intent
     is undesirable. ``open_world`` therefore stays ``true`` for sync
     to flag the external interaction.
+
+    ``propose.generate`` is the HITL-boundary write (Step 1 widening):
+    it mints a ``ProposalGenerated`` event durable on the log, but the
+    apply path that creates a task / decision still requires an
+    explicit operator-driven ``opshub propose apply`` call (ADR-0016
+    §決定 (c)). The classification keeps the MCP boundary honest —
+    proposal generation IS a state change (cost, audit) and must
+    surface with ``destructiveHint=true`` so a compliant host prompts
+    before invoking. ``open_world`` is ``true`` because the LLM round
+    trip leaves the local box (model provider audit).
     """
 
     TASK_CREATE = "task.create"
     INBOX_ADD = "inbox.add"
     CONNECTOR_SYNC = "connector.sync"
+    PROPOSE_GENERATE = "propose.generate"
 
 
 # Either a read or a write category.
@@ -365,6 +389,357 @@ def build_tool_specs(
             policy=_policy_for_write(open_world=True),
             category=WriteCategory.CONNECTOR_SYNC,
             handler=handlers["connector.sync"],
+        ),
+        # ------------------------------------------------------------------
+        # Step 1 widening — additional read tools (briefing + graph + source
+        # + duplicates) so the Tier 1 skill surfaces can call MCP directly.
+        # All entries reuse :func:`_policy_for_read` so the read-only invariants
+        # in ``tests/unit/mcp/test_registry_policy`` apply to the new surface
+        # uniformly.
+        # ------------------------------------------------------------------
+        ToolSpec(
+            name="brief",
+            title="Generate operational briefing",
+            description=(
+                "Generate a Markdown (or JSON) briefing for ``topic`` by recalling "
+                "related entities and asking the configured LLM backend to summarise. "
+                "Hits the LLM provider (open world / cost). Returns the briefing body "
+                "plus source references."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "Free-form topic to brief on.",
+                        "minLength": 1,
+                        "maxLength": 500,
+                    },
+                    "expand_graph": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "When true, walk 1-hop graph neighbours of each recall hit"
+                            " to widen the prompt context (ADR-0017 §(e)+(f))."
+                        ),
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["md", "json"],
+                        "default": "md",
+                        "description": (
+                            "Response shape. ``md`` returns the briefing markdown verbatim;"
+                            " ``json`` returns the full Briefing record (markdown + source_refs"
+                            " + cost)."
+                        ),
+                    },
+                    "max_sources": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 20,
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "minimum": 100,
+                        "maximum": 4000,
+                        "default": 1500,
+                    },
+                },
+                "required": ["topic"],
+                "additionalProperties": False,
+            },
+            # Brief calls the LLM provider; classified read because no
+            # durable entity is created beyond the BriefingGenerated event
+            # (mirrors the recall.search treatment of the embedder backend
+            # — observation only). open_world stays false because from the
+            # agent's perspective the result is a summary over local
+            # entities. Hosts should still treat LLM cost as caller-pays.
+            policy=_policy_for_read(),
+            category=ReadCategory.BRIEF,
+            handler=handlers["brief"],
+        ),
+        ToolSpec(
+            name="graph.related",
+            title="List 1-hop graph neighbours",
+            description=(
+                "Return links connected to an entity (1-hop). Direction filter "
+                "controls inbound / outbound / both. Read-only over the ``links`` projection."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "entity_id": {
+                        "type": "string",
+                        "description": "Entity ULID.",
+                        "minLength": 1,
+                        "maxLength": 200,
+                    },
+                    "entity_type": {
+                        "type": "string",
+                        "description": "Entity type label (e.g. 'task', 'decision', 'source').",
+                        "minLength": 1,
+                        "maxLength": 100,
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["both", "outbound", "inbound"],
+                        "default": "both",
+                        "description": (
+                            "Edge direction filter. 'outbound' = links FROM entity;"
+                            " 'inbound' = links TO entity; 'both' = union."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "default": 50,
+                    },
+                },
+                "required": ["entity_id", "entity_type"],
+                "additionalProperties": False,
+            },
+            policy=_policy_for_read(),
+            category=ReadCategory.GRAPH_RELATED,
+            handler=handlers["graph.related"],
+        ),
+        ToolSpec(
+            name="graph.trace",
+            title="Trace entity provenance backwards",
+            description=(
+                "Return backward-chain link paths up to ``depth`` hops (default 3,"
+                " hard ceiling 10 per ADR-0017 §(e)). Read-only."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "entity_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                    },
+                    "entity_type": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100,
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "default": 3,
+                    },
+                },
+                "required": ["entity_id", "entity_type"],
+                "additionalProperties": False,
+            },
+            policy=_policy_for_read(),
+            category=ReadCategory.GRAPH_TRACE,
+            handler=handlers["graph.trace"],
+        ),
+        ToolSpec(
+            name="graph.expand",
+            title="Expand bidirectional graph neighbourhood",
+            description=(
+                "Return the bidirectional N-hop subgraph rooted at the entity"
+                " (default depth 2, hard ceiling 5 per ADR-0017 §(e)). Read-only."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "entity_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                    },
+                    "entity_type": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100,
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 5,
+                        "default": 2,
+                    },
+                },
+                "required": ["entity_id", "entity_type"],
+                "additionalProperties": False,
+            },
+            policy=_policy_for_read(),
+            category=ReadCategory.GRAPH_EXPAND,
+            handler=handlers["graph.expand"],
+        ),
+        ToolSpec(
+            name="source.list",
+            title="List source rows",
+            description=(
+                "List rows from the ``sources`` projection, optionally filtered by"
+                " connector_name or source_type. Read-only."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "connector_name": {
+                        "type": "string",
+                        "description": "Restrict to one connector (e.g. 'github').",
+                        "minLength": 1,
+                        "maxLength": 100,
+                    },
+                    "source_type": {
+                        "type": "string",
+                        "description": "Restrict to one source_type label.",
+                        "minLength": 1,
+                        "maxLength": 100,
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "default": 50,
+                    },
+                },
+                "additionalProperties": False,
+            },
+            policy=_policy_for_read(),
+            category=ReadCategory.SOURCE_LIST,
+            handler=handlers["source.list"],
+        ),
+        ToolSpec(
+            name="source.get",
+            title="Get one source row",
+            description=(
+                "Fetch a single ``sources`` projection row by ULID. Returns the"
+                " truncated summary / title / url etc. Read-only."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "source_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                    },
+                },
+                "required": ["source_id"],
+                "additionalProperties": False,
+            },
+            policy=_policy_for_read(),
+            category=ReadCategory.SOURCE_GET,
+            handler=handlers["source.get"],
+        ),
+        ToolSpec(
+            name="embeddings.find_duplicates",
+            title="Find near-duplicate entities",
+            description=(
+                "Scan the active embedder backend's vector store for entity pairs"
+                " whose cosine similarity exceeds ``threshold``. Read-only."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "enum": ["task", "decision", "inbox_item", "source"],
+                        "default": "source",
+                        "description": "Entity family to scan (default 'source').",
+                    },
+                    "threshold": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 1.0,
+                        "default": 0.92,
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 20,
+                    },
+                },
+                "additionalProperties": False,
+            },
+            policy=_policy_for_read(),
+            category=ReadCategory.EMBEDDINGS_FIND_DUPLICATES,
+            handler=handlers["embeddings.find_duplicates"],
+        ),
+        # ------------------------------------------------------------------
+        # Step 1 widening — HITL-boundary write tool (proposal generation).
+        # ProposalGenerated lands on the durable event log; apply still
+        # requires operator-driven ``opshub propose apply`` (ADR-0016 §(c)).
+        # ------------------------------------------------------------------
+        ToolSpec(
+            name="propose.generate",
+            title="Generate proposal candidates (HITL)",
+            description=(
+                "Generate next-action proposal candidates for ``topic`` (or for a"
+                " specific inbox source via ``reply_to_source_id``, or seeded by a"
+                " prior briefing via ``from_briefing_id``). Calls the LLM and writes"
+                " a ProposalGenerated event; the apply step (task / decision creation)"
+                " still requires an operator-driven ``opshub propose apply`` call —"
+                " no auto-apply path exists (ADR-0016 §(c) HITL contract)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "default": "",
+                        "description": (
+                            "Free-form proposal subject. Empty when ``reply_to_source_id``"
+                            " is set (reply-draft mode)."
+                        ),
+                        "maxLength": 500,
+                    },
+                    "reply_to_source_id": {
+                        "type": "string",
+                        "default": "",
+                        "description": (
+                            "Source ULID to draft a reply for (Phase 10 reply-draft mode)."
+                            " Mutually exclusive with topic-based generation."
+                        ),
+                        "maxLength": 200,
+                    },
+                    "from_briefing_id": {
+                        "type": "string",
+                        "default": "",
+                        "description": (
+                            "Optional ULID of a previously generated briefing whose markdown"
+                            " seeds the LLM prompt as extra context."
+                        ),
+                        "maxLength": 200,
+                    },
+                    "expand_graph": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "Walk 1-hop graph neighbours of each recall hit to widen the"
+                            " prompt context (ADR-0017 §(e)+(f))."
+                        ),
+                    },
+                    "max_candidates": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "default": 5,
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "minimum": 200,
+                        "maximum": 4000,
+                        "default": 2000,
+                    },
+                },
+                "additionalProperties": False,
+            },
+            # LLM round-trip → open world; classified write because the
+            # ProposalGenerated event is durable on the log even though
+            # apply is HITL-only.
+            policy=_policy_for_write(open_world=True),
+            category=WriteCategory.PROPOSE_GENERATE,
+            handler=handlers["propose.generate"],
         ),
     ]
     return specs

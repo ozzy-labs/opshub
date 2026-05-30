@@ -40,6 +40,7 @@ def _stub_handler() -> Callable[[Mapping[str, Any]], Awaitable[str]]:
 
 
 _TOOL_NAMES: tuple[str, ...] = (
+    # Phase 10 C2 baseline.
     "recall.search",
     "task.list",
     "inbox.list",
@@ -47,6 +48,16 @@ _TOOL_NAMES: tuple[str, ...] = (
     "task.create",
     "inbox.add",
     "connector.sync",
+    # Step 1 widening (post Phase 10 / pre Phase 11): briefing, graph,
+    # source, duplicates, HITL propose. See PR-#xxx ("MCP tool widening").
+    "brief",
+    "graph.related",
+    "graph.trace",
+    "graph.expand",
+    "source.list",
+    "source.get",
+    "embeddings.find_duplicates",
+    "propose.generate",
 )
 
 
@@ -116,6 +127,40 @@ def test_registry_covers_phase_10_c2_surface(specs: list[Any]) -> None:
     assert actual == expected, (
         f"unexpected registry surface change: missing={expected - actual} extra={actual - expected}"
     )
+
+
+def test_propose_generate_is_hitl_write(specs: list[Any]) -> None:
+    """``propose.generate`` must surface as a destructive write tool.
+
+    HITL boundary: ProposalGenerated lands on the durable event log
+    (cost + audit) so hosts honouring ``destructiveHint=true`` will
+    require operator confirmation. ``open_world=true`` reflects the LLM
+    provider round-trip leaving the local box.
+    """
+    for spec in specs:
+        if spec.name == "propose.generate":
+            assert spec.policy.read_only is False
+            assert spec.policy.destructive is True
+            assert spec.policy.open_world is True
+            return
+    raise AssertionError("propose.generate spec missing from registry")
+
+
+def test_brief_is_read_only_local(specs: list[Any]) -> None:
+    """``brief`` is classified read despite calling the LLM provider.
+
+    Mirrors the recall.search precedent: an LLM call is "observation
+    only" from the agent host's perspective — no durable entity is
+    created beyond the BriefingGenerated event, and the host already
+    pays the cost. ``open_world`` stays false so the auto-approve
+    surface is unchanged from a host policy standpoint.
+    """
+    for spec in specs:
+        if spec.name == "brief":
+            assert spec.policy.read_only is True
+            assert spec.policy.destructive is False
+            return
+    raise AssertionError("brief spec missing from registry")
 
 
 def test_read_tools_are_idempotent(specs: list[Any]) -> None:
