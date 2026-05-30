@@ -249,3 +249,21 @@ Phase 10 Sub-issue E (返信下書き生成) は **既存 ADR の改訂** で吸
 | Tool poisoning 緩和を agent host 側に全任せ (opshub は何もしない) | opshub 側で policy-as-data 宣言 + 将来の confirmation / dry-run 経路を予約 | annotation を honor しない agent host で write tool が auto-approve され durable state が破壊される経路を opshub 側で一切防げない、「①コアの境界を ①コア側で守る」のは ADR-0004 確立済みの責務 (CLI / service 層 validation と同じ) | ADR-0022 |
 | MCP tool を CLI command 1:1 で機械生成 (低レベル粒度) | 読み取り系は CLI 同等粒度 (recall / search / brief)、秘書ユースケース粒度は Sub-issue D の Agent Skills で表現する二段構え | CLI は人間が叩く前提で sub-verb / flag が細かく agent の学習負荷が高い、秘書ユースケース粒度とずれて複数 tool 逐次呼び出しオーバーヘッドが大きい、MCP tool は ①コア operation を直接露出し組み立ては Skills で行う方が Phase 10 形A と整合 | ADR-0022 |
 | MCP tool 呼び出しを opshub event log に append | structlog の JSON ログに OTel GenAI naming (`execute_tool`) で出力、event log は durable state 遷移のみに保つ | event log は ①コアの durable state 遷移を記録する SSOT (ADR-0002) で ②→① boundary trace を混ぜると event semantics が二重化、replay 時に MCP 呼び出し event を実行/skip 判断が曖昧で event-sourced replayability が崩れる、OTel exporter は opt-in extras で将来予約 | ADR-0022 |
+
+## 20. Agent Runtime Boundary 改訂 (ADR-0004 Phase 10 form-A 吸収)
+
+Phase 10 Sub-issue D (秘書 Agent Skills) で、ADR-0004 (Agent Runtime Boundary) を改訂し **形A (opshub は MCP + Agent Skills のみ提供、頭脳=runtime は外部ホスト)** を吸収した。新 ADR を立てず ADR-0004 改訂で対応した方針は 2026-05-30 に確定。理由は Phase 10 設計セッション §1 #3b で形A が既に確定済みで、本 ADR-0004 の boundary 不変条件 (auditability / safety / coordination 等) を継承したまま MCP を agent の正規書き込み経路として並列追加すれば足りるため。新 ADR は概念的二重化となる。
+
+| 改訂節 | 変更点 |
+|---|---|
+| ADR-0004 §決定 (a) 形A 追加 | opshub は agent runtime (LLM 推論ループ / agent loop runner / 常駐 agent daemon) を持たない。提供する agent-facing surface は MCP サーバ (`opshub mcp serve` stdio) と Agent Skills (SKILL.md 標準) の 2 つに限定 |
+| ADR-0004 §決定 (b) MCP 並列追加 | agent の書き込み経路一覧に MCP server を 2 番目として追加 (CLI と並列)。MCP 経路でも auditability / safety / validation / 認証情報の境界の不変条件は ADR-0022 §決定 (b)(c)(e) で保たれる |
+| ADR-0004 §決定 (c) Agent Skills 配布 | 秘書 5 skill (daily-brief / next-actions / reply-draft / pr-review / file-lookup) は opshub 本体に同梱せず、`ozzy-labs/skills` リポに SKILL.md 実体を置き handbook ADR-0016 の `@ozzylabs/skills` Renovate preset 経由で配布。opshub 本体は仕様・catalog (`docs/secretary-agent.md`) と skill security scan ロジック (`tools/skill_scan.py`) のみ保持 |
+
+| 却下案 | 採用案 | 理由 |
+|---|---|---|
+| 秘書層の boundary を新 ADR で起票 | ADR-0004 §決定 (a)(b)(c) として改訂吸収 | 既存 boundary 不変条件と同根 (auditability / safety / coordination / replayability)、新 ADR は概念的二重化、改訂で historical context (Phase 1-9 の CLI-first → Phase 10 の MCP 並列追加) が同一 ADR に残る |
+| 形B: opshub に LangGraph / Claude Agent SDK 等の runtime を内蔵 | 形A (runtime を持たない) | runtime レイヤは資本投下と本番実績で固まる領域 (Phase 10 plan §10)、後発が勝つ見込み薄、vendor lock-in で ADR-0009 multi-agent neutrality と矛盾、外部ホストが既に runtime を持つため二重化 |
+| 形C: opshub 独自の軽量 agent runtime を実装 | 形A | scope creep (prompt 管理 / tool registry / retry / streaming / cancellation / concurrent run 管理が必要)、operational memory 責務と乖離、MCP が標準クライアント機構として収束済みで形A が最小コスト |
+| Agent Skills を opshub 本体に `share/skills/` 等で同梱し `opshub skills install` で配布 | `ozzy-labs/skills` preset 配布、opshub 本体は仕様 / catalog / scan ロジックのみ保持 | skill lifecycle と ①コア lifecycle が乖離、ozzy-labs エコシステムの skill 配布機構 (handbook ADR-0016) と二重化、複数ホスト間の skill 同期コスト、opshub install image 肥大化で M6 cold-start guard に影響 |
+| skill security scan を `ozzy-labs/skills` 側 CI にのみ実装 | opshub 本体側にも scan ロジック (`tools/skill_scan.py`) を実装し本リポ内 skill 仕様にも適用テスト | 仕様変更時の skill 構造変更を本リポでも検出可能にする、二段検査で悪意ある skill が外部ホスト `.claude/skills/` に到達する経路を抑制、scan ロジック自体を opshub 本体に置くことで `ozzy-labs/skills` 側の CI 設定変更 (別 PR) を待たずに本リポでの spec 起点の検査を開始できる |
