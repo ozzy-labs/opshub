@@ -51,6 +51,11 @@ skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference �
 - 過去の decision / task / proposal / event を踏まえた **文脈付き** の応答 (`--expand-graph` で知識グラフ拡張、ADR-0017)
 - 返信下書きを「自分の過去送信 event」の文体を recall して再現 (ADR-0016 §決定 (k))
 - 複数 agent host (Claude Code / Codex CLI / Gemini CLI / GitHub Copilot CLI) から **同一の MCP 面** を叩いて同じ記憶を共有
+- Phase 11 で追加された **MS Office 由来の文脈**を秘書の素材として使う:
+  - **Teams chat 本文** (`teams_message`、Microsoft Graph delta query 経由、[Teams setup](teams-setup.md))
+  - **Outlook 本文 deep retention** (Phase 10 で取り込み始めた summary に加え、Phase 11 で本文も `sources.body` に persist)
+  - **Office 文書本文** (`.docx`/`.xlsx`/`.pptx`、markitdown 経由、`box_drive` / `onedrive_drive` の `content_extraction = true` opt-in、[ADR-0025](adr/0025-office-document-content-extraction.md))
+  - file-lookup / daily-brief / pr-review / reply-draft の全 skill が新 `source_type` を recall / FTS5 で自動的に対象に含める (mapper が `sources.body` に persist する限り skill 側に追加の変更は不要)
 
 ### できないこと (構造的な禁止)
 

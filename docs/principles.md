@@ -10,6 +10,8 @@ Operational Memory の authoritative source はローカルに存在する。外
 
 Phase 10 で本文をローカル保持する設計 ([ADR-0020](adr/0020-full-local-content-retention.md)) に移行したことで、この方針はより強化された。要約だけを残す旧設計 (ADR-0005) では SaaS 側で本文が消えるとローカルの要約から元文脈を辿れないという「真の意味では local-first でない」抜け穴があった。本文を手元に持つことで、オフライン継続性・上流削除耐性・監査可能性が揃う (代償＝保存時暗号化と provenance タグの責務、§6 参照)。
 
+Phase 11 では SaaS デスクトップクライアントが OS に同期する **ローカル FS** を一級経路として扱う設計を汎化した ([ADR-0019](adr/0019-local-filesystem-backed-connector.md) §決定 (j))。Box Drive (`/mnt/b` on WSL2 / `~/Box` on macOS) に加え OneDrive Desktop (`/mnt/onedrive` on WSL2 / `~/OneDrive` on macOS) も同じ FS scan パターンで扱える。両者とも Web API egress が IT policy で塞がれている環境でも operational memory に取り込めるため、local-first の不変条件を「SaaS の Web API 経路が無くてもユースケースが成立する」レベルまで持ち上げる。
+
 ## 2. Event-Sourced
 
 state の authoritative layer は **append-only domain events**。projection (tables / markdown / vector index) は disposable であり、event 列から rebuildable。「何が起きたか」「なぜ起きたか」「誰が起こしたか」「どう変化したか」を保持する。
@@ -52,10 +54,12 @@ Claude Code / Codex CLI / Gemini CLI / GitHub Copilot CLI を平等に support �
 
 Phase 10 以降は次を保持する:
 
-- 外部 SaaS の本文 (Slack message body / GitHub issue/PR body / Outlook 本文 / Box ファイル抽出テキスト 等、connector が取れた範囲)
+- 外部 SaaS の本文 (Slack message body / GitHub issue/PR body / Outlook 本文 / Teams chat body / Office 文書抽出テキスト 等、connector が取れた範囲)
 - external IDs / URLs / metadata
 - 要約・抽出された action items
 - **provenance タグ** (`provenance_origin` ＝ external/internal、`provenance_trust` ＝ trusted/untrusted、[ADR-0020](adr/0020-full-local-content-retention.md) §(e))
+
+Phase 11 では「本文」の対象が Office 文書 (Word/Excel/PowerPoint) 由来のテキスト抽出結果まで広がる ([ADR-0025](adr/0025-office-document-content-extraction.md))。markitdown 経由で `.docx` / `.xlsx` / `.pptx` を markdown 化したテキストを `sources.body` に載せる。本文取り込みは local-FS-backed connector の `content_extraction = true` opt-in 経路でのみ発火し、抽出失敗は warning log + `body=None` の fail-safe で skip (§6 と同じ provenance タグ規律を継承)。
 
 保持に伴う安全策はセットで組み込む:
 
@@ -111,6 +115,7 @@ CI でこの不変条件を検証する。
 | 8 | Knowledge graph layer: ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 (`ProposalApplied` / `BriefingGenerated.source_refs` / `ProposalRequested.briefing_id` / `SourceReferenced`) + manual link CRUD (`LinkCreated` / `LinkDeleted` events) + `LinkService` traversal (`related` / `trace` / `expand`) + `opshub link` + `opshub graph` CLI + `--expand-graph` integration (epic #128) | ✅ Complete (2026-05-17) |
 | 9 | Local-filesystem-backed Connector Layer: ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (Box Drive デスクトップクライアント経由のローカル FS scan、scanner + mapper + connector + settings) + `core/platform.py` (WSL2 / macOS 判定 helper) + `opshub connector sync box_drive` 経路 (epic #187) | ✅ Complete (2026-05-23) |
 | 10 | Secretary Agent Platform: ADR-0020 (full local content retention、ADR-0005 supersede) + ADR-0021 (encryption at rest、SQLCipher + keyring) + ADR-0022 (MCP server surface、stdio + policy-as-data + redact + OTel naming) + ADR-0004 改訂 (形A: opshub は MCP + Agent Skills のみ提供、runtime なし) + ADR-0016 改訂 (`ReplyDraftCandidatePayload`) + ADR-0017 改訂 (`reply_draft_replies_to` / `referenced_in_reply_draft` link types) + ADR-0010 改訂 (write-back 明示禁止) + 本文ベース embedding + SQLite FTS5 + `opshub search` CLI + `opshub mcp serve` CLI + 秘書 5 Skills + `tools/skill_scan.py` (epic #203) | ✅ Complete (2026-05-31) |
+| 11 | MS Office 深掘り: ADR-0025 (Office Document Content Extraction、markitdown 経路、50 MB / 500K chars cap、source_type 3 種 `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`、fail-safe) + ADR-0019 改訂 (`content_extraction = true` opt-in 例外節 + onedrive_drive パターン汎化) + ADR-0010 改訂 (Teams connector 追加 + 本文抽出契約 + delta-link cursor + 失効時 full-pass fallback + Teams User Token principal) + `core/document_extract.py` + `connectors/teams/` (Graph delta query、User Token) + `connectors/onedrive_drive/` (FS scan、WSL2 `/mnt/onedrive` / macOS `~/OneDrive` platform default) + `connectors/box_drive` の Office content extraction hook + `connectors/ms365/mapper` の outlook body deep retention (epic #233) | ✅ Complete (2026-05-31) |
 
 各 phase で価値検証してから次へ進む。Phase をスキップしない。
 

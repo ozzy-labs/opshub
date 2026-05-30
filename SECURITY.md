@@ -58,6 +58,22 @@ Phase 10 ([ADR-0020](docs/adr/0020-full-local-content-retention.md), supersedes 
 - **Backups** — encrypted or not, the SQLite file under `$XDG_DATA_HOME/opshub/db/` is now the canonical store of your source body history. Treat it like you would your password vault.
 - **Multi-user / shared workstation operation is unchanged: out of scope.**
 
+### Phase 11 body retention — Office documents, Teams chat, Outlook deep body
+
+Phase 11 widens the body-retention surface to:
+
+- **Microsoft Teams chat bodies** ([ADR-0010](docs/adr/0010-connector-contract.md) §改訂 (a)) — chat messages ingested through Microsoft Graph delta query land in `sources.body` tagged `provenance_origin="external"` + `provenance_trust="untrusted"` (ADR-0020 §(e)). The `teams` connector uses **User Token (delegated permissions)** by default ([ADR-0010](docs/adr/0010-connector-contract.md) §改訂 (d)); a Bot Token (application permissions) is an alternative that grants tenant-wide chat access — operators must consider the privacy implication before opting in (`docs/teams-setup.md` "Bot Token" section).
+- **Outlook deep body** ([ADR-0010](docs/adr/0010-connector-contract.md) §改訂 (a) + Phase 11 F3) — the existing `ms365` connector's Outlook mapper now retains the full email body (head-truncated at 500K chars). Pre-Phase-11 rows with `body = NULL` continue to round-trip cleanly.
+- **Office document content extraction** ([ADR-0025](docs/adr/0025-office-document-content-extraction.md)) — when an operator opts in (`[connectors.box_drive] content_extraction = true` / `[connectors.onedrive_drive] content_extraction = true`), `.docx` / `.xlsx` / `.pptx` files on the scanned FS mount are extracted via markitdown and stored under new `source_type`s (`word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`). The opt-in narrows the ADR-0019 §不変条件 (b) `open()` ban to a single extractor path (ADR-0019 §決定 (b')) — diff path (`stat()`-only fingerprint) stays unchanged, so CldAPI / File Provider Extension hydration cost is bounded.
+
+Phase 11 operator responsibilities continue along the same axes as Phase 10:
+
+- **Encryption at rest** covers the new body classes transparently — the `[storage] encryption = true` switch already encrypts the entire SQLite DB, so Office body content and Teams chat bodies inherit the same protection without additional knobs.
+- **Ingest excludes** extend to Teams via the existing `channels` / `senders` selector (matched against `chat_id` / `chat_topic` / `sender_id`) and to FS-scan connectors via the existing `paths` selector (matched against `rel_path`). The same `~/.config/opshub/excludes.yaml` covers all 7 connectors.
+- **Teams token handling** — Microsoft Graph User Tokens are JWT-shaped bearers (not the `xoxp-` form Slack uses). Tokens flow through the existing `core/secrets` + keyring path (ADR-0014 reuse) with `OPSHUB_CONNECTOR_TEAMS_TOKEN` env override. The mapper never embeds the token in observed messages, and the MCP layer's `redact_secrets` continues to strip JWT-shaped fragments from tool returns ([ADR-0022](docs/adr/0022-mcp-server-surface.md) §(b)).
+- **Office extraction is `content_extraction = true` opt-in** — default-off keeps Phase 9/10 operators on the metadata-only FS scan path. Enabling it pulls only the markitdown sub-deps the extras declare (`mammoth` / `openpyxl` / `python-pptx`), so the cold-install footprint stays small.
+- **External write-back remains forbidden** ([ADR-0010](docs/adr/0010-connector-contract.md) §禁止事項 7). The Teams connector deliberately exposes no `send` / `post` / `reply` callable; reply-draft skill output is local only.
+
 ### In scope
 
 We treat the following as security issues:

@@ -89,7 +89,7 @@ opshub/
 
 ## 2. Python パッケージ構成 (src/opshub/)
 
-各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P5+8]` / `[P6]` / `[P6+8]` / `[P6.x]` / `[P7]` / `[P7.x]` / `[P8]` / `[P8.x]` / `[P9]` / `[P9.x]` / `[P10]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで、`[P7]` は Phase 7 (Connectors Wave 2、Slack + Microsoft 365 + Box) で、`[P8]` は Phase 8 (Knowledge graph layer、ADR-0017 + `links` projection + 4 自動抽出 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration) で merge 済 (2026-05-17)、`[P9]` は Phase 9 (Local-filesystem-backed Connector Layer、ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector + `core/platform.py` + `opshub connector sync box_drive`) で merge 済 (2026-05-23)、`[P10]` は Phase 10 (Secretary Agent Platform、ADR-0020 + ADR-0021 + ADR-0022 + ADR-0004/0016/0017/0010 改訂、本文ベース embedding + SQLite FTS5 + `opshub search` + `opshub mcp serve` + 秘書 5 Skills) で merge 済 (2026-05-31)。複合 tag (例: `[P5+8]` / `[P6+8]` / `[P1+2+3+9]` / `[P6+10]`) は当該 Phase で初出 + 後続 Phase で拡張が入った module を示す。`[P6.x]` は Phase 6 完了後の継続作業、`[P7.x]` は Phase 7 完了後、`[P8.x]` は Phase 8 完了後、`[P9.x]` は Phase 9 完了後、`[future]` は Phase 11 (MS Office 深掘り) / Phase 12 (multi-machine sync 等) 以降。
+各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P5+8]` / `[P6]` / `[P6+8]` / `[P6.x]` / `[P7]` / `[P7.x]` / `[P7+11]` / `[P8]` / `[P8.x]` / `[P9]` / `[P9+11]` / `[P9.x]` / `[P10]` / `[P11]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで、`[P7]` は Phase 7 (Connectors Wave 2、Slack + Microsoft 365 + Box) で、`[P8]` は Phase 8 (Knowledge graph layer、ADR-0017 + `links` projection + 4 自動抽出 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration) で merge 済 (2026-05-17)、`[P9]` は Phase 9 (Local-filesystem-backed Connector Layer、ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector + `core/platform.py` + `opshub connector sync box_drive`) で merge 済 (2026-05-23)、`[P10]` は Phase 10 (Secretary Agent Platform、ADR-0020 + ADR-0021 + ADR-0022 + ADR-0004/0016/0017/0010 改訂、本文ベース embedding + SQLite FTS5 + `opshub search` + `opshub mcp serve` + 秘書 5 Skills) で merge 済 (2026-05-31)、`[P11]` は Phase 11 (MS Office 深掘り、ADR-0025 + ADR-0019 改訂 + ADR-0010 改訂、`core/document_extract.py` + `connectors/teams/` + `connectors/onedrive_drive/` + `connectors/box_drive` Office 抽出 hook + `connectors/ms365/mapper` outlook body deep retention) で merge 済 (2026-05-31)。複合 tag (例: `[P5+8]` / `[P6+8]` / `[P1+2+3+9]` / `[P6+10]` / `[P7+11]` / `[P9+11]`) は当該 Phase で初出 + 後続 Phase で拡張が入った module を示す。`[P6.x]` は Phase 6 完了後の継続作業、`[P7.x]` は Phase 7 完了後、`[P8.x]` は Phase 8 完了後、`[P9.x]` は Phase 9 完了後、`[future]` は Phase 12 (multi-machine sync / 能動性段階 1-4 / 画像 OCR / 追加コネクタ) 以降。
 
 ```text
 src/opshub/
@@ -138,6 +138,7 @@ src/opshub/
 │   ├── slug.py                     # filename-safe slug for briefings/--save [P5]
 │   ├── encryption.py               # SQLCipher key resolver (ADR-0021、`require_db_key()` / `OPSHUB_DB_ENCRYPTION_KEY` env override + keyring) [P10]
 │   ├── excludes.py                 # 取り込み除外設定パーサ (ADR-0020 §(b)、`~/.config/opshub/excludes.yaml` を channel / sender / repo / path で評価) [P10]
+│   ├── document_extract.py         # Office 文書本文抽出 (ADR-0025、markitdown 経路、`extract_document(path)` + `ExtractResult` + `SOURCE_TYPE_BY_EXTENSION` SSOT、50 MB / 500K chars cap、fail-safe) [P11]
 │   └── errors.py                   # [P1]
 ├── db/                             # 永続化レイヤ [P1]
 │   ├── engine.py                   # SQLAlchemy Engine / Session [P1]
@@ -226,11 +227,11 @@ src/opshub/
 │   │   ├── fetcher.py              # slack_sdk WebClient + cursor pagination [P7]
 │   │   ├── mapper.py               # RawSlackMessage → SourceObserved (source_type=slack_message) [P7]
 │   │   └── connector.py            # SlackConnector(sync) [P7]
-│   ├── ms365/                      # Microsoft 365 connector (Phase 7 B1-B3) [P7]
+│   ├── ms365/                      # Microsoft 365 connector (Phase 7 B1-B3、Phase 11 で outlook body deep retention に拡張) [P7+11]
 │   │   ├── __init__.py             # register_connector(MS365Connector()) side effect [P7]
 │   │   ├── auth.py                 # msal paste-code OAuth + refresh-token keyring 保管 [P7]
 │   │   ├── fetcher.py              # httpx Graph client + 3 endpoint cursors (calendar / onedrive / outlook) [P7]
-│   │   ├── mapper.py               # 3 source_type mappers (ms365_calendar / ms365_onedrive / ms365_outlook) [P7]
+│   │   ├── mapper.py               # 3 source_type mappers (ms365_calendar / ms365_onedrive / ms365_outlook、Phase 11 で outlook body 取り込み + 500K chars truncate inline) [P7+11]
 │   │   └── connector.py            # MS365Connector(sync) with per-endpoint isolation [P7]
 │   ├── box/                        # Box connector (Phase 7 C1-C3) [P7]
 │   │   ├── __init__.py             # register_connector(BoxConnector()) side effect [P7]
@@ -238,11 +239,22 @@ src/opshub/
 │   │   ├── fetcher.py              # Box Events API + stream_position cursor [P7]
 │   │   ├── mapper.py               # RawBoxEvent → SourceObserved (source_type=box_event) [P7]
 │   │   └── connector.py            # BoxConnector(sync) [P7]
-│   └── box_drive/                  # Box Drive (FS-backed) connector (Phase 9 B1-B2、ADR-0019) [P9]
-│       ├── __init__.py             # register_connector(BoxDriveConnector()) side effect [P9]
-│       ├── scanner.py              # BoxDriveScanner: os.scandir() walk + stat() metadata only、`open()` 禁止 不変条件 (ADR-0019 §決定 (b)) [P9]
-│       ├── mapper.py               # ScannedFile → SourceObserved (source_type=box_drive_file、external_id=rel_path、fingerprint=f"{size}:{mtime_ns}") [P9]
-│       └── connector.py            # BoxDriveConnector(sync): settings → scanner → SourceService.observe (atomic UoW per file) [P9]
+│   ├── box_drive/                  # Box Drive (FS-backed) connector (Phase 9 B1-B2、ADR-0019。Phase 11 で content_extraction opt-in hook 追加 / Office 抽出経路) [P9+11]
+│   │   ├── __init__.py             # register_connector(BoxDriveConnector()) side effect [P9]
+│   │   ├── scanner.py              # BoxDriveScanner: os.scandir() walk + stat() metadata only、`open()` 禁止 不変条件 (ADR-0019 §決定 (b)、§決定 (b') opt-in 例外節で `content_extraction = true` 時のみ markitdown 経由 open 許可) [P9+11]
+│   │   ├── mapper.py               # ScannedFile → SourceObserved (source_type=box_drive_file / word_document / excel_spreadsheet / powerpoint_slide_deck、external_id=rel_path、fingerprint=f"{size}:{mtime_ns}") [P9+11]
+│   │   └── connector.py            # BoxDriveConnector(sync): settings → scanner → SourceService.observe (atomic UoW per file) [P9]
+│   ├── onedrive_drive/             # OneDrive Drive (FS-backed) connector (Phase 11 F4-b、ADR-0019 §決定 (j) パターン汎化、box_drive と同 contract) [P11]
+│   │   ├── __init__.py             # register_connector(OneDriveDriveConnector()) side effect [P11]
+│   │   ├── scanner.py              # OneDriveDriveScanner: 同 box_drive contract + `content_extraction` opt-in hook [P11]
+│   │   ├── mapper.py               # ScannedFile → SourceObserved (`connector_name="onedrive_drive"`、source_type 共通 4 種、`root_path` platform default = WSL2 `/mnt/onedrive` / macOS `~/OneDrive`) [P11]
+│   │   └── connector.py            # OneDriveDriveConnector(sync): box_drive と同 sync flow [P11]
+│   └── teams/                      # Microsoft Teams connector (Phase 11 F5、ADR-0010 改訂 (a)/(c)/(d)) [P11]
+│       ├── __init__.py             # register_connector(TeamsConnector()) side effect [P11]
+│       ├── auth.py                 # TeamsAuth: User Token resolver (`core/secrets` + keyring、`OPSHUB_CONNECTOR_TEAMS_TOKEN` env override、ADR-0014 再利用) [P11]
+│       ├── fetcher.py              # TeamsFetcher: Microsoft Graph `/me/chats/getAllMessages` delta + 失効時 `$filter=lastModifiedDateTime ge <iso>` full-pass fallback (ADR-0010 §改訂 (c)) [P11]
+│       ├── mapper.py               # RawTeamsChatMessage → SourceObserved (source_type=teams_message、HTML → plain text、ADR-0020 §(e) provenance) [P11]
+│       └── connector.py            # TeamsConnector(sync): auth → fetcher → mapper → SourceService.observe + excludes (channels / senders) [P11]
 ├── markdown/                       # workspace surface 生成 + ingest parser
 │   ├── render/                     # Jinja2 テンプレート [P1]
 │   ├── templates/                  # Jinja2 ファイル (per-renderer) [P1+2]

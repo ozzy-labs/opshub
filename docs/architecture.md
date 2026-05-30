@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) + Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須)) + Phase 7 (Connectors Wave 2、MVP = Slack + Microsoft 365 + Box、epic #113) + Phase 8 (Knowledge graph layer、MVP = ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、epic #128) complete (2026-05-17) + Phase 9 (Local-filesystem-backed Connector Layer、MVP = ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (scanner + mapper + connector + settings) + `core/platform.py` + `opshub connector sync box_drive`、epic #187) complete (2026-05-23) + **Phase 10 (Secretary Agent Platform、MVP = ADR-0020 (full local content retention、ADR-0005 supersede) + ADR-0021 (encryption at rest、SQLCipher + keyring) + ADR-0022 (MCP server surface、stdio + policy-as-data + redact + OTel naming) + ADR-0004 改訂 (形A) + ADR-0016/0017/0010 改訂 (reply_draft) + 本文ベース embedding + SQLite FTS5 + `opshub search` + `opshub mcp serve` + 秘書 5 Skills + `tools/skill_scan.py`、epic #203) complete (2026-05-31)**. 次の候補は Phase 11 (MS Office 深掘り = Teams + Outlook 本文 + Word/Excel/PowerPoint 抽出、Phase 10 plan §9 / §3 Sub-issue F)。`llama.cpp` direct binding / briefing cache + narrow scope / connector-side automatic `SourceReferenced` 発行 / watch mode (filewatch backend) / 追加 FS connector / multi-machine sync は Phase 6.x / 7.x / 8.x / 9.x / 11+ 以降。詳細は §9 (Phased Delivery) を参照。
+> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) + Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須)) + Phase 7 (Connectors Wave 2、MVP = Slack + Microsoft 365 + Box、epic #113) + Phase 8 (Knowledge graph layer、MVP = ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、epic #128) complete (2026-05-17) + Phase 9 (Local-filesystem-backed Connector Layer、MVP = ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (scanner + mapper + connector + settings) + `core/platform.py` + `opshub connector sync box_drive`、epic #187) complete (2026-05-23) + Phase 10 (Secretary Agent Platform、MVP = ADR-0020 (full local content retention、ADR-0005 supersede) + ADR-0021 (encryption at rest、SQLCipher + keyring) + ADR-0022 (MCP server surface、stdio + policy-as-data + redact + OTel naming) + ADR-0004 改訂 (形A) + ADR-0016/0017/0010 改訂 (reply_draft) + 本文ベース embedding + SQLite FTS5 + `opshub search` + `opshub mcp serve` + 秘書 5 Skills + `tools/skill_scan.py`、epic #203) complete (2026-05-31) + **Phase 11 (MS Office 深掘り、MVP = ADR-0025 (Office Document Content Extraction、markitdown 経路 + 50 MB / 500K chars cap + source_type 3 種) + ADR-0019 改訂 (`content_extraction = true` opt-in 例外節 + onedrive_drive パターン汎化) + ADR-0010 改訂 (Teams 追加 + 本文抽出契約 + delta-link cursor + 失効時 full-pass fallback + Teams User Token principal) + `core/document_extract.py` + `connectors/teams/` + `connectors/onedrive_drive/` + `connectors/box_drive` の Office 抽出 hook + `connectors/ms365/mapper` の outlook body deep retention、epic #233) complete (2026-05-31)**. 次の候補は Phase 12+ (multi-machine sync / 能動性段階 1-4 = cron 委譲 / 記憶キュレーション / 通知 / filewatch、画像 OCR、追加コネクタ Google Workspace / Notion / Jira)。`llama.cpp` direct binding / briefing cache + narrow scope / connector-side automatic `SourceReferenced` 発行 / watch mode (filewatch backend) / 追加 FS connector / multi-machine sync は Phase 6.x / 7.x / 8.x / 9.x / 11.x+ 以降。詳細は §9 (Phased Delivery) を参照。
 
 OpsHub の高レベルアーキテクチャ・データフロー・データモデル・用語を記述する。具体的な決定の根拠は対応 ADR を参照。
 
@@ -71,15 +71,17 @@ Phase 9 実装状況: **`box_drive` connector が最初の FS-backed 具象実�
 
 Phase 10 実装状況: **本文取り込み + provenance タグの拡張** ([ADR-0020](adr/0020-full-local-content-retention.md))。`SourceObserved` event に `body` / `provenance_origin` / `provenance_trust` の 3 フィールドが追加され、Slack / Box / GitHub / MS365 の各 connector mapper が要約だけでなく本文も取り込むようになった。連動して `sources` projection の `body` 列 (migration 0018) と FTS5 仮想テーブル `sources_fts` (migration 0019) が追加される。`box_drive` は ADR-0019 §不変条件 (b) で `open()` 禁止のため `body=None` のまま (FS scan は metadata のみ)。**取り込み除外設定** (`~/.config/opshub/excludes.yaml`) は channel / sender / repo / path で外部入力を弾き、保存時暗号化は SQLCipher で DB 丸ごと AES-256 (ADR-0021)。詳細は §8.1 を参照。
 
-5 connector の一覧:
+7 connector の一覧 (Phase 11 で Teams / OneDrive Drive を追加):
 
 | Connector | 経路 | source_type | 認証 | Extras |
 |---|---|---|---|---|
 | GitHub | Web API (PyGithub) | `github_issue` / `github_pr` / etc. | PAT (`core/secrets` + keyring) | `[connectors-github]` |
 | Slack | Web API (slack-sdk) | `slack_message` | User Token (`xoxp-`) / Bot Token (`xoxb-`) | `[connectors-slack]` |
-| Microsoft 365 | Web API (msgraph) | `ms365_calendar` / `ms365_onedrive` / `ms365_outlook` | OAuth paste-code (msal) | `[connectors-ms365]` |
+| Microsoft 365 | Web API (msgraph、Phase 11 で outlook 本文 deep retention) | `ms365_calendar` / `ms365_onedrive` / `ms365_outlook` | OAuth paste-code (msal) | `[connectors-ms365]` |
 | Box | Web API (boxsdk) | `box_event` | OAuth paste-code (boxsdk) | `[connectors-box]` |
-| Box Drive (FS) | Local FS scan (`os.scandir()` + `stat()`、ADR-0019) | `box_drive_file` | なし (OS daemon に委譲、`opshub.toml` 設定のみ) | (extras 不要、stdlib のみ) |
+| Box Drive (FS) | Local FS scan (`os.scandir()` + `stat()`、ADR-0019。Phase 11 で `content_extraction` opt-in 経路を追加し Office 文書 (`.docx`/`.xlsx`/`.pptx`) を markitdown 抽出) | `box_drive_file` / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` | なし (OS daemon に委譲、`opshub.toml` 設定のみ) | `[office]` (extraction 利用時) |
+| OneDrive Drive (FS) | Local FS scan (`os.scandir()` + `stat()`、ADR-0019 §決定 (j) パターン汎化。Phase 11 で box_drive と同パターン追加) | `box_drive_file` / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` | なし (OS daemon = OneDrive Desktop に委譲、`opshub.toml` 設定のみ) | `[office]` (extraction 利用時) |
+| Teams | Microsoft Graph delta query (`/me/chats/getAllMessages`、Phase 11 ADR-0010 改訂 (a)/(c)/(d)) | `teams_message` | User Token (delegated permissions、`Chat.Read`)、Bot Token は alternative | `[connectors-teams]` (msal + httpx) |
 
 ### 2.2 Application Services
 
@@ -295,6 +297,37 @@ MCP セットアップ手順は [docs/mcp-setup.md](mcp-setup.md) を参照。�
 
 詳細は [docs/secretary-agent.md](secretary-agent.md) を参照。
 
+### 2.11c Office Document Extraction Layer (Phase 11)
+
+[ADR-0025](adr/0025-office-document-content-extraction.md) で Word `.docx` / Excel `.xlsx` / PowerPoint `.pptx` の本文を Operational Memory へ取り込むための抽出層を導入した。本層は `src/opshub/core/document_extract.py` に閉じた 1 モジュール = `extract_document(path)` 1 関数で、Phase 11 F4 の box_drive / onedrive_drive scanner から呼ばれる。
+
+**抽出経路** ([ADR-0025](adr/0025-office-document-content-extraction.md) §決定 (a)):
+
+- **markitdown** (Microsoft 公式 多形式 → markdown 変換) を唯一の抽出 backend に固定。`[office]` extras (`uv sync --extra office`) で `markitdown[docx,xlsx,pptx]>=0.1` を pull する。
+- markitdown のインポートは `extract_document` の関数ボディ内に閉じ込め、cold-start path に extras が露出しないようにする (M6 guard ＝ `tests/integration/test_cold_start.py`、`opshub --help` ≤ 300 ms 維持)。
+
+**Size cap + fail-safe** ([ADR-0025](adr/0025-office-document-content-extraction.md) §決定 (b)/(c)):
+
+| 不変条件 | 値 | 振る舞い |
+|---|---|---|
+| ファイル size 上限 | 50 MB (`max_file_bytes`、`opshub.toml [office] max_file_size_mb` で override) | 超過時 `body=None` + `skip_reason="file too large"` + `structlog.warning` |
+| 抽出後 text 上限 | 500 000 chars (`max_chars`、`opshub.toml` 上書き可) | 超過時 head-truncate + `\n\n[truncated: original=<N> chars, limit=<M>]` 注記 |
+| 抽出失敗 | markitdown exception (corrupted / password-protected / unsupported) | `body=None` + `skip_reason="extraction failed: <class>"` + sanitised warning。SourceObserved は metadata のみで発行継続 |
+
+`extract_document` は **例外を漏らさない** (`ExtractResult.body is None` + `skip_reason` で結果を返す)。scanner の happy path は単一で済む。
+
+**source_type 細分** ([ADR-0025](adr/0025-office-document-content-extraction.md) §決定 (d)):
+
+| 拡張子 | `source_type` |
+|---|---|
+| `.docx` | `word_document` |
+| `.xlsx` | `excel_spreadsheet` |
+| `.pptx` | `powerpoint_slide_deck` |
+
+`SOURCE_TYPE_BY_EXTENSION` を `core/document_extract.py` 内に SSOT として置き、connector mapper はこの map を import する。文字列の二重定義を避けるため再定義禁止。
+
+**ADR-0019 §不変条件 (b) との緊張解消**: ADR-0019 §決定 (b') で「`[connectors.<name>] content_extraction = true` opt-in 時に限り `core/document_extract.extract_document(path)` 経路のみ `open()` 許可」と境界を狭める例外節を追加。default は `content_extraction = false` で FS scan は `stat()` 完結を維持 (Phase 9 不変)。
+
 ### 2.12 Workspace Generation Layer
 
 projection を読み、markdown (tasks / briefings / reviews / handoffs / dashboards) を生成。read-only。Jinja2 で template 化。
@@ -464,6 +497,7 @@ Agent は以下を行わない。
 | 8 | Knowledge graph layer (ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、✅ 2026-05-17 完了、epic #128) | connector-side automatic `SourceReferenced` 発行 / graph visualisation web UI (Phase 8.x) / multi-machine sync (Phase 10+) |
 | 9 | Local-filesystem-backed Connector Layer (ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (scanner + mapper + connector + settings) + `core/platform.py` (WSL2 / macOS 判定) + `opshub connector sync box_drive` 経路、✅ 2026-05-23 完了、epic #187) | watch mode (filewatch backend) / 追加 FS connector (OneDrive / Dropbox / Google Drive for desktop / iCloud) / xattr identity / `opshub source list --stale` (Phase 9.x) / multi-machine sync (Phase 12+) |
 | 10 | Secretary Agent Platform (ADR-0020 (full local content retention、ADR-0005 supersede) + ADR-0021 (encryption at rest、SQLCipher + keyring) + ADR-0022 (MCP server surface、stdio + policy-as-data + redact + OTel naming) + ADR-0004 改訂 (形A、opshub は MCP + Agent Skills のみ、runtime なし) + ADR-0016 改訂 (`ReplyDraftCandidatePayload`) + ADR-0017 改訂 (`reply_draft_replies_to` / `referenced_in_reply_draft` link types) + ADR-0010 改訂 (write-back 明示禁止) + 本文ベース embedding (migration 0018) + SQLite FTS5 (migration 0019) + `opshub search` CLI + `opshub mcp serve` CLI + 秘書 5 Skills (daily-brief / next-actions / reply-draft / pr-review / file-lookup) + `tools/skill_scan.py`、✅ 2026-05-31 完了、epic #203) | MS Office 深掘り (Teams + Outlook 本文 + Word/Excel/PowerPoint 抽出、ADR-0025 = Phase 11) / 能動性段階 1-4 (cron 委譲 / 記憶キュレーション / 通知 / filewatch、Phase 12+) / multi-machine sync (Phase 12+) |
+| 11 | MS Office 深掘り (ADR-0025 (Office Document Content Extraction、markitdown 経路 + 50 MB / 500K chars cap + source_type 3 種 `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` + fail-safe) + ADR-0019 改訂 (`content_extraction = true` opt-in 例外節 + onedrive_drive パターン汎化、§決定 (b') + (j)) + ADR-0010 改訂 (Teams connector + 本文抽出契約 + delta-link cursor + 失効時 full-pass fallback + Teams User Token principal) + `src/opshub/core/document_extract.py` + `connectors/teams/` (Graph delta + User Token) + `connectors/onedrive_drive/` (WSL2 `/mnt/onedrive` / macOS `~/OneDrive` platform default) + `connectors/box_drive` Office hook + `connectors/ms365/mapper` outlook body deep retention、✅ 2026-05-31 完了、epic #233) | 画像 OCR (PPT 内画像 / Office 図表、tesseract / pytesseract 経路、Phase 12+ defer) / 外部書き戻し (返信送信 = Teams 候補、新 ADR 要、Phase 12+) / 追加コネクタ (Google Workspace = markitdown 経路再利用 / Notion / Jira、Phase 12+) / multi-machine sync (Phase 12+) / 能動性段階 1-4 (Phase 12+) |
 
 詳細は [Principles 9 (Phased Delivery)](principles.md) 参照。
 
