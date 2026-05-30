@@ -391,3 +391,272 @@ def test_scanner_exposes_root_path(tmp_path: Path) -> None:
     """``root_path`` is exposed read-only for the connector to log / display."""
     scanner = BoxDriveScanner(root_path=tmp_path)
     assert scanner.root_path == tmp_path
+
+
+# ---------------------------------------------------------------------------
+# Phase 11 F4 — content_extraction opt-in (ADR-0019 §(b'), ADR-0025)
+# ---------------------------------------------------------------------------
+#
+# The opt-in tests that actually invoke ``extract_document`` against the
+# real fixtures use a per-test ``pytest.importorskip("markitdown")`` so a
+# local dev install without ``--extra office`` still runs the default-off
+# invariant tests above. The CI workflow opts into ``--extra office`` per
+# Phase 11 F2, so the full opt-in suite executes there.
+
+
+def test_scanner_content_extraction_off_yields_body_none_on_office_files(
+    tmp_path: Path,
+) -> None:
+    """``content_extraction=False`` (default) leaves ``body=None`` on every file.
+
+    ADR-0019 §(b') #1: the default-off path keeps Phase 9 behaviour
+    bit-for-bit. Even an Office file under the root must surface as a
+    plain :class:`ScannedFile` with ``body=None`` and no
+    ``office_source_type`` discriminator.
+    """
+    # File extension matters, content does not (the scanner does not
+    # read the file when content_extraction is off).
+    (tmp_path / "a.docx").write_text("not-really-docx")
+    (tmp_path / "b.txt").write_text("plain")
+
+    scanner = BoxDriveScanner(root_path=tmp_path)
+    results = {f.rel_path: f for f in scanner.scan(prior_fingerprints={})}
+
+    assert results["a.docx"].body is None
+    assert results["a.docx"].office_source_type is None
+    assert results["a.docx"].body_truncated is False
+    assert results["a.docx"].body_skip_reason is None
+    assert results["b.txt"].body is None
+    assert results["b.txt"].office_source_type is None
+
+
+def test_scanner_content_extraction_off_never_opens_office_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default-off path: even ``.docx`` triggers no ``open()`` (ADR-0019 §(b') #1).
+
+    The Phase 9 ``test_scanner_never_opens_files`` test covers
+    arbitrary file extensions; this one specifically pins that the
+    opt-in default of ``content_extraction=False`` keeps the
+    no-open invariant intact when the tree *does* contain Office
+    files — i.e. the scanner does not silently sniff extensions and
+    invoke the extractor.
+    """
+    (tmp_path / "report.docx").write_text("fake-docx")
+    (tmp_path / "data.xlsx").write_text("fake-xlsx")
+    (tmp_path / "deck.pptx").write_text("fake-pptx")
+
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError(
+            f"scanner called a file-content primitive with "
+            f"content_extraction=False (ADR-0019 §(b') #1 violation): "
+            f"args={args!r} kwargs={kwargs!r}"
+        )
+
+    monkeypatch.setattr("builtins.open", forbidden)
+    monkeypatch.setattr(Path, "open", forbidden)
+    monkeypatch.setattr(Path, "read_text", forbidden)
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+
+    scanner = BoxDriveScanner(root_path=tmp_path, content_extraction=False)
+    results = list(scanner.scan(prior_fingerprints={}))
+
+    rel_paths = sorted(f.rel_path for f in results)
+    assert rel_paths == ["data.xlsx", "deck.pptx", "report.docx"]
+
+
+def test_scanner_content_extraction_on_skips_non_office_extensions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opt-in path: non-Office extensions still skip ``open()`` (ADR-0019 §(b') #4).
+
+    The ADR-0019 §(b') exception is narrow: only files whose extension
+    is in :data:`SOURCE_TYPE_BY_EXTENSION` may be opened. A plain
+    text file under the opt-in root must NOT trigger ``open()``
+    even when ``content_extraction=True`` — that would re-open the
+    walk-time hydration surface the ADR specifically forbids.
+    """
+    (tmp_path / "plain.txt").write_text("hello")
+    (tmp_path / "data.json").write_text("{}")
+
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError(
+            f"scanner opened a non-Office file with content_extraction=True "
+            f"(ADR-0019 §(b') #4 violation): args={args!r} kwargs={kwargs!r}"
+        )
+
+    monkeypatch.setattr("builtins.open", forbidden)
+    monkeypatch.setattr(Path, "open", forbidden)
+    monkeypatch.setattr(Path, "read_text", forbidden)
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+
+    scanner = BoxDriveScanner(root_path=tmp_path, content_extraction=True)
+    results = list(scanner.scan(prior_fingerprints={}))
+
+    rel_paths = sorted(f.rel_path for f in results)
+    assert rel_paths == ["data.json", "plain.txt"]
+    # Every yielded file is non-Office, so body / office_source_type
+    # remain ``None``.
+    assert all(f.body is None for f in results)
+    assert all(f.office_source_type is None for f in results)
+
+
+# Fixture files committed under tests/fixtures/office/ — small real Office
+# documents built once via the F2 build recipe (ADR-0025 §Validation). We
+# copy them into ``tmp_path`` so the scanner sees a clean directory layout
+# without pollution from sibling tests.
+_FIXTURES_DIR = Path(__file__).resolve().parents[3] / "fixtures" / "office"
+_DOCX_FIXTURE = _FIXTURES_DIR / "sample.docx"
+_XLSX_FIXTURE = _FIXTURES_DIR / "sample.xlsx"
+_PPTX_FIXTURE = _FIXTURES_DIR / "sample.pptx"
+_CORRUPT_DOCX_FIXTURE = _FIXTURES_DIR / "corrupt.docx"
+
+
+def _copy_fixtures_into(target_dir: Path) -> None:
+    """Copy the F2 Office fixtures into ``target_dir`` for scanner tests.
+
+    Using a copy (not a symlink) keeps the scanner from following an
+    operator-introduced link by accident — the
+    :data:`BoxDriveScanner` defaults to ``follow_symlinks=False`` but
+    we want the test path identical to the production walk.
+    """
+    import shutil
+
+    for fixture in (_DOCX_FIXTURE, _XLSX_FIXTURE, _PPTX_FIXTURE):
+        shutil.copy2(fixture, target_dir / fixture.name)
+
+
+def test_scanner_content_extraction_on_extracts_office_bodies(tmp_path: Path) -> None:
+    """``content_extraction=True`` + Office file → ``body`` populated, source_type pinned.
+
+    Each of the three Office formats (.docx / .xlsx / .pptx) is
+    extracted by :func:`extract_document` and the markdown body is
+    threaded onto the :class:`ScannedFile`. The discriminator pinned
+    on the result matches the ADR-0025 §決定 (d) table.
+    """
+    pytest.importorskip("markitdown")
+    _copy_fixtures_into(tmp_path)
+
+    scanner = BoxDriveScanner(root_path=tmp_path, content_extraction=True)
+    results = {f.rel_path: f for f in scanner.scan(prior_fingerprints={})}
+
+    assert results["sample.docx"].body is not None
+    assert results["sample.docx"].office_source_type == "word_document"
+    assert results["sample.docx"].body_skip_reason is None
+
+    assert results["sample.xlsx"].body is not None
+    assert results["sample.xlsx"].office_source_type == "excel_spreadsheet"
+    assert results["sample.xlsx"].body_skip_reason is None
+
+    assert results["sample.pptx"].body is not None
+    assert results["sample.pptx"].office_source_type == "powerpoint_slide_deck"
+    assert results["sample.pptx"].body_skip_reason is None
+
+
+def test_scanner_content_extraction_failure_is_fail_safe(tmp_path: Path) -> None:
+    """A corrupt Office file surfaces ``body=None`` + ``skip_reason`` (ADR-0025 §決定 (c)).
+
+    The fail-safe contract is "never let one bad file stop the scan".
+    The scanner must still yield the file (with ``office_source_type``
+    populated because the extension matched) so the connector can
+    persist a :class:`SourceObserved` for it; the operator sees the
+    file in recall output even though the body is missing.
+    """
+    pytest.importorskip("markitdown")
+    import shutil
+
+    # Mix a healthy and a corrupt docx so the test asserts both shapes
+    # in one scan.
+    shutil.copy2(_DOCX_FIXTURE, tmp_path / "good.docx")
+    shutil.copy2(_CORRUPT_DOCX_FIXTURE, tmp_path / "bad.docx")
+
+    scanner = BoxDriveScanner(root_path=tmp_path, content_extraction=True)
+    results = {f.rel_path: f for f in scanner.scan(prior_fingerprints={})}
+
+    good = results["good.docx"]
+    bad = results["bad.docx"]
+
+    assert good.body is not None
+    assert good.office_source_type == "word_document"
+    assert good.body_skip_reason is None
+
+    # Corrupt file: yielded with discriminator set (extension matched),
+    # but body is None and skip_reason carries the failure tag.
+    assert bad.body is None
+    assert bad.office_source_type == "word_document"
+    assert bad.body_skip_reason is not None
+    assert bad.body_skip_reason.startswith("extraction failed")
+
+
+def test_scanner_content_extraction_on_opens_only_via_extractor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-0019 §(b') #5 invariant: only ``extract_document`` may open files.
+
+    With ``content_extraction=True``, the scanner is permitted to open
+    Office files — but ONLY through
+    :func:`opshub.core.document_extract.extract_document`. Magic-byte
+    sniffing, SHA hashing, blanket walk-time opens, etc. remain
+    forbidden. We pin this by replacing
+    :func:`extract_document` with a stub that returns a known result
+    *and* by sealing every other ``open``-capable primitive: the
+    scanner must reach the stub for every Office file without
+    tripping any of the sealed primitives.
+
+    A non-Office file is present too; it must not trigger any
+    ``open()`` either (#4 narrowness).
+    """
+    pytest.importorskip("markitdown")
+    _copy_fixtures_into(tmp_path)
+    (tmp_path / "plain.txt").write_text("non-office")
+
+    extractor_calls: list[Path] = []
+
+    from opshub.core.document_extract import ExtractResult
+
+    def fake_extract(path: Path, **_kwargs: Any) -> ExtractResult:
+        extractor_calls.append(path)
+        # Derive a plausible source_type from extension so the
+        # ScannedFile.office_source_type contract still holds.
+        suffix = path.suffix.lower()
+        if suffix == ".docx":
+            source_type = "word_document"
+        elif suffix == ".xlsx":
+            source_type = "excel_spreadsheet"
+        else:
+            source_type = "powerpoint_slide_deck"
+        return ExtractResult(
+            body=f"stub body for {path.name}",
+            truncated=False,
+            skip_reason=None,
+            source_type=source_type,  # type: ignore[arg-type]
+        )
+
+    monkeypatch.setattr("opshub.core.document_extract.extract_document", fake_extract)
+
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError(
+            f"scanner opened a file outside the extract_document() path "
+            f"(ADR-0019 §(b') #5 violation): args={args!r} kwargs={kwargs!r}"
+        )
+
+    monkeypatch.setattr("builtins.open", forbidden)
+    monkeypatch.setattr(Path, "open", forbidden)
+    monkeypatch.setattr(Path, "read_text", forbidden)
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+
+    scanner = BoxDriveScanner(root_path=tmp_path, content_extraction=True)
+    results = {f.rel_path: f for f in scanner.scan(prior_fingerprints={})}
+
+    # Every Office file was routed through the stub.
+    assert sorted(p.name for p in extractor_calls) == [
+        "sample.docx",
+        "sample.pptx",
+        "sample.xlsx",
+    ]
+    # Each Office file's body / source_type came from the stub.
+    assert results["sample.docx"].body == "stub body for sample.docx"
+    assert results["sample.docx"].office_source_type == "word_document"
+    # Non-Office file got no body and no discriminator.
+    assert results["plain.txt"].body is None
+    assert results["plain.txt"].office_source_type is None

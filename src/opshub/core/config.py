@@ -328,6 +328,25 @@ class BoxDriveConnectorSettings(BaseModel):
     * ``exclude_globs = []`` — fnmatch / gitignore-style patterns
       (``"**/.DS_Store"``, ``"**/secrets/**"``, ...) that the scanner
       skips. Empty list means "no exclusions".
+
+    Phase 11 F4 (ADR-0019 §(b') + ADR-0025) adds ``content_extraction``:
+
+    * ``content_extraction = False`` (default) — the connector retains
+      Phase 9 behaviour bit-for-bit: ``stat()``-only walk, no
+      ``open()`` / ``read_*`` calls anywhere, ``body=None`` on every
+      :class:`~opshub.domain.events.source.SourceObserved`. Upgrading
+      from Phase 9 to Phase 11 is therefore a no-op until the operator
+      opts in.
+    * ``content_extraction = True`` — the connector calls
+      :func:`opshub.core.document_extract.extract_document` for files
+      whose extension matches
+      :data:`opshub.core.document_extract.SOURCE_TYPE_BY_EXTENSION`
+      (``.docx`` / ``.xlsx`` / ``.pptx`` / legacy ``.doc`` / ``.xls`` /
+      ``.ppt``). The extracted markdown becomes ``body`` and the
+      ``source_type`` switches from ``"box_drive_file"`` to the
+      Office-specific discriminator (``"word_document"`` /
+      ``"excel_spreadsheet"`` / ``"powerpoint_slide_deck"``). All
+      other files keep the ``"box_drive_file"`` / ``body=None`` shape.
     """
 
     enabled: bool = False
@@ -336,6 +355,7 @@ class BoxDriveConnectorSettings(BaseModel):
     max_files: int = 100_000
     follow_symlinks: bool = False
     exclude_globs: list[str] = Field(default_factory=list)
+    content_extraction: bool = False
 
 
 class TeamsConnectorSettings(BaseModel):

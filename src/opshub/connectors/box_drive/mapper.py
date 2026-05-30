@@ -154,6 +154,15 @@ def map_scanned_file(
     summary = _build_summary(scanned.rel_path)
     abs_path = (root_path / scanned.rel_path).as_posix()
     occurred_at = datetime.fromtimestamp(scanned.mtime_ns / 1e9, tz=UTC)
+    # Phase 11 F4 (ADR-0019 §(b') + ADR-0025): when the scanner ran
+    # with ``content_extraction=True`` and the file is Office, the
+    # ``office_source_type`` field carries the discriminator
+    # (``"word_document"`` / ``"excel_spreadsheet"`` /
+    # ``"powerpoint_slide_deck"``) and ``body`` may carry the
+    # extracted markdown. Default-off / non-Office files keep the
+    # Phase 9 ``"box_drive_file"`` / ``body=None`` shape exactly so
+    # operators that did not opt in see byte-identical events.
+    source_type: str = scanned.office_source_type or SOURCE_TYPE
     # ``title`` carries the bare ``rel_path`` rather than a synthesised
     # ``"<event_type>: <name>"`` because Box Drive does not emit
     # discrete event types — every observation is a "this file's
@@ -165,17 +174,20 @@ def map_scanned_file(
         actor=actor,
         connector_name="box_drive",
         external_id=scanned.rel_path,
-        source_type=SOURCE_TYPE,
+        source_type=source_type,
         title=scanned.rel_path,
         url=f"file://{abs_path}",
         summary=summary,
         fingerprint=scanned.fingerprint,
-        # Phase 10 (ADR-0020): box_drive is structurally forbidden from
-        # reading file bodies (ADR-0019 §不変条件 (b)), so ``body`` is
-        # always ``None``. The observation is external in origin and the
-        # synced SaaS content is untrusted, so it still carries the
-        # provenance tags for downstream consistency.
-        body=None,
+        # Phase 10 (ADR-0020): box_drive's ``body`` is ``None`` by
+        # default (ADR-0019 §不変条件 (b)). Phase 11 F4 (ADR-0019 §(b')
+        # opt-in + ADR-0025) populates ``body`` only when the scanner
+        # was configured with ``content_extraction=True`` and the
+        # extractor succeeded on an Office file. The observation is
+        # external in origin and the synced SaaS content is
+        # untrusted, so it still carries the provenance tags for
+        # downstream consistency regardless of body presence.
+        body=scanned.body,
         provenance_origin="external",
         provenance_trust="untrusted",
     )

@@ -21,6 +21,20 @@ patches ``builtins.open`` and ``Path.open`` / ``read_text`` /
 ``read_bytes`` to raise on call, exercising a full ``scan()`` to prove
 the scanner never reaches a file-content code path even by accident.
 
+ADR-0019 §(b') Phase 11 改訂 — `content_extraction = true` opt-in 例外節.
+When the connector is configured with ``content_extraction=True``,
+the scanner relaxes the no-open invariant **only** for files whose
+extension matches :data:`opshub.core.document_extract.SOURCE_TYPE_BY_EXTENSION`
+(``.docx`` / ``.xlsx`` / ``.pptx`` / legacy ``.doc`` / ``.xls`` /
+``.ppt``) and only via :func:`extract_document` (which is the sole
+``open()`` entry point — magic-byte sniffing / SHA hashing / blanket
+walk-time opens stay forbidden). All non-Office files keep the
+stat-only pathway, so CldAPI / FSE hydration is constrained to the
+files the operator actively wants extracted (per ADR-0019 §(b') #4).
+The ``test_scanner_opens_only_via_extractor`` test pins this invariant
+under the opt-in path; ``test_scanner_never_opens_files`` continues
+to pin the default-off path.
+
 Identity = ``rel_path`` (root-relative POSIX-style path string), per
 ADR-0019 §決定 (c). Rename / move surfaces as "old path stops, new
 path starts" because the scanner has no way to correlate inodes across
@@ -45,9 +59,13 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
 
 from opshub.core.errors import ConfigError
 from opshub.core.logging import get_logger
+
+if TYPE_CHECKING:
+    from opshub.core.document_extract import OfficeSourceType
 
 _log = get_logger(__name__)
 
@@ -76,12 +94,54 @@ class ScannedFile:
         in ``opshub source show <id>`` output (ADR-0019 §決定 (d)
         rationale: hex hashes are opaque). The scanner sets this so all
         downstream code uses one canonical representation.
+    body:
+        Phase 11 F4 (ADR-0019 §(b') + ADR-0025): extracted markdown
+        body for Office files when ``content_extraction=True`` was
+        passed to the scanner constructor. ``None`` on every file
+        when the opt-in is off (default) and on non-Office files
+        even when the opt-in is on. ``None`` is also returned for
+        Office files whose extraction was skipped (file too large /
+        markitdown unavailable) or failed; the
+        :attr:`body_skip_reason` field carries the stable tag in
+        those cases.
+    office_source_type:
+        The Office discriminator
+        (``"word_document"`` / ``"excel_spreadsheet"`` /
+        ``"powerpoint_slide_deck"``) the mapper should stamp on the
+        :class:`~opshub.domain.events.source.SourceObserved` event
+        instead of the default ``"box_drive_file"``. ``None`` when
+        the file is not an Office document; the mapper falls back
+        to ``"box_drive_file"`` in that case. ADR-0025 §決定 (d) +
+        the authoritative
+        :data:`opshub.core.document_extract.SOURCE_TYPE_BY_EXTENSION`
+        table.
+    body_truncated:
+        ``True`` when the extracted markdown was head-truncated at
+        the configured ``max_chars`` cap (ADR-0025 §決定 (b-2)). The
+        truncation notice is already embedded in :attr:`body`; the
+        flag is a structured signal callers can surface separately
+        (e.g. a chip in ``opshub source show``). ``False`` on
+        non-Office files and successful within-limit extractions.
+    body_skip_reason:
+        Stable tag explaining why :attr:`body` is ``None`` after the
+        connector opted into content extraction. Values mirror
+        :class:`opshub.core.document_extract.ExtractResult` —
+        ``"file too large"`` / ``"unsupported format"`` /
+        ``"markitdown not installed"`` /
+        ``"extraction failed: <ExceptionClassName>"`` /
+        ``"stat failed: <ExceptionClassName>"``. ``None`` when
+        extraction succeeded, when ``content_extraction`` was off,
+        or when the file is not an Office document at all.
     """
 
     rel_path: str
     size: int
     mtime_ns: int
     fingerprint: str
+    body: str | None = None
+    office_source_type: OfficeSourceType | None = None
+    body_truncated: bool = False
+    body_skip_reason: str | None = None
 
 
 class BoxDriveScanner:
@@ -130,6 +190,7 @@ class BoxDriveScanner:
         max_depth: int = 16,
         follow_symlinks: bool = False,
         max_files: int = 100_000,
+        content_extraction: bool = False,
     ) -> None:
         """Construct a scanner pinned to ``root_path``.
 
@@ -160,6 +221,19 @@ class BoxDriveScanner:
             Soft ceiling on the number of files yielded. When the cap
             is reached the scan logs a warning and returns; subsequent
             calls re-walk from scratch. Default 100,000.
+        content_extraction:
+            Phase 11 F4 opt-in (ADR-0019 §(b'), ADR-0025). Default
+            ``False`` keeps the Phase 9 stat-only invariant intact
+            (no ``open()`` anywhere). Setting ``True`` activates the
+            ADR-0019 §(b') exception clause: files whose extension is
+            one of :data:`opshub.core.document_extract.SOURCE_TYPE_BY_EXTENSION`
+            keys (``.docx`` / ``.xlsx`` / ``.pptx`` / legacy ``.doc``
+            / ``.xls`` / ``.ppt``) are forwarded to
+            :func:`opshub.core.document_extract.extract_document` for
+            body extraction; all other files keep the stat-only
+            pathway. The extractor is the **sole** open() entry point
+            — magic-byte sniffing / SHA hashing / blanket walk-time
+            opens stay forbidden under both opt-in states.
         """
         if not root_path.exists():
             raise ConfigError(
@@ -174,6 +248,7 @@ class BoxDriveScanner:
         self._max_depth = max_depth
         self._follow_symlinks = follow_symlinks
         self._max_files = max_files
+        self._content_extraction = content_extraction
 
     @property
     def root_path(self) -> Path:
@@ -370,12 +445,84 @@ class BoxDriveScanner:
                     )
                     return
 
+                # Phase 11 F4 (ADR-0019 §(b'), ADR-0025): when content
+                # extraction is opted in, route Office documents
+                # through ``core.document_extract``. Non-Office files
+                # keep the Phase 9 stat-only path. ``_maybe_extract``
+                # returns ``(body, source_type, truncated,
+                # skip_reason)``; on the default-off path it returns
+                # all-``None`` / ``False`` without ever touching
+                # ``open()`` (the early ``if not self._content_extraction``
+                # guard makes that load-bearing).
+                body, office_source_type, body_truncated, body_skip_reason = self._maybe_extract(
+                    entry_path
+                )
+
                 yield ScannedFile(
                     rel_path=rel_path,
                     size=size,
                     mtime_ns=mtime_ns,
                     fingerprint=fingerprint,
+                    body=body,
+                    office_source_type=office_source_type,
+                    body_truncated=body_truncated,
+                    body_skip_reason=body_skip_reason,
                 )
+
+    def _maybe_extract(
+        self, path: Path
+    ) -> tuple[str | None, OfficeSourceType | None, bool, str | None]:
+        """Route Office files through :func:`extract_document` when opted in.
+
+        Returns ``(body, office_source_type, body_truncated,
+        body_skip_reason)``. On the default-off path
+        (``content_extraction=False``) this returns
+        ``(None, None, False, None)`` immediately — the early return
+        keeps the Phase 9 stat-only invariant load-bearing: no
+        ``open()`` is reached and no extension-table import is
+        performed, so a misconfigured operator that forgot the
+        ``[office]`` extras still gets the legacy behaviour without
+        a surprise ImportError.
+
+        On the opt-in path
+        (``content_extraction=True``) the extension is checked against
+        :data:`opshub.core.document_extract.SOURCE_TYPE_BY_EXTENSION`.
+        Non-Office files short-circuit at the dict lookup (no
+        ``open()`` either). Office files invoke
+        :func:`extract_document` which itself never raises — failures
+        surface as ``body=None`` + a stable ``body_skip_reason`` tag,
+        so a single broken document never stops the scan
+        (ADR-0025 §決定 (c) fail-safe contract).
+        """
+        if not self._content_extraction:
+            return (None, None, False, None)
+
+        # Lazy import — keeps the Phase 9 cold-start budget intact on
+        # the default-off path (ADR-0001 + ADR-0025 §決定 (a)). The
+        # ``document_extract`` module itself defers the heavy
+        # ``markitdown`` import inside :func:`extract_document`, so
+        # this import is cheap (stdlib + structlog factory).
+        from opshub.core.document_extract import (
+            SOURCE_TYPE_BY_EXTENSION,
+            extract_document,
+        )
+
+        office_source_type = SOURCE_TYPE_BY_EXTENSION.get(path.suffix.lower())
+        if office_source_type is None:
+            # Non-Office file under the opt-in path: keep the
+            # stat-only legacy behaviour for this entry (no
+            # ``open()`` even on the opt-in path) — ADR-0019 §(b') #4
+            # restricts the open to "extension matches + size cap"
+            # files only.
+            return (None, None, False, None)
+
+        result = extract_document(path)
+        return (
+            result.body,
+            result.source_type,
+            result.truncated,
+            result.skip_reason,
+        )
 
     def _is_excluded(self, rel_path: str) -> bool:
         """Return True when ``rel_path`` matches any configured exclude glob.

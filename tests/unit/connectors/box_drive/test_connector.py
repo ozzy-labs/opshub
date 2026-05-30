@@ -497,6 +497,131 @@ def test_sync_merges_shared_excludes_paths_into_scanner(
     assert all("secret" not in str(c["external_id"]) for c in service.calls)
 
 
+# ---------------------------------------------------------------------------
+# Phase 11 F4 — content_extraction opt-in (ADR-0019 §(b'), ADR-0025)
+# ---------------------------------------------------------------------------
+
+
+def test_sync_threads_content_extraction_flag_to_scanner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``[connectors.box_drive] content_extraction = true`` reaches the scanner.
+
+    The connector hydrates settings via
+    :class:`OpsHubSettings` and forwards ``cfg.content_extraction``
+    to :class:`BoxDriveScanner`. We pin the propagation by
+    monkeypatching the scanner constructor to capture the kwarg —
+    asserting on the scanner's *behaviour* (extraction happening or
+    not) would couple this connector test to the markitdown extra
+    install state, which the test suite must not depend on.
+    """
+    monkeypatch.setenv("OPSHUB_CONNECTORS__BOX_DRIVE__ROOT_PATH", str(tmp_path))
+    monkeypatch.setenv("OPSHUB_CONNECTORS__BOX_DRIVE__CONTENT_EXTRACTION", "true")
+
+    captured: dict[str, Any] = {}
+    from opshub.connectors.box_drive import scanner as scanner_mod
+
+    real_init = scanner_mod.BoxDriveScanner.__init__
+
+    def capturing_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(scanner_mod.BoxDriveScanner, "__init__", capturing_init)
+
+    service = _RecordingSourceService()
+    BoxDriveConnector().sync(_context(service))
+
+    assert captured.get("content_extraction") is True
+
+
+def test_sync_content_extraction_default_false_propagates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Default ``content_extraction = False`` reaches the scanner unchanged.
+
+    The Phase 9 → Phase 11 backward-compat contract (ADR-0019 §(b') #1)
+    requires that operators who do not opt in see the connector pass
+    ``content_extraction=False`` to the scanner. We pin that by
+    monkeypatching the scanner constructor and asserting on the kwarg
+    value rather than scanning real Office fixtures (decoupling the
+    test from the ``[office]`` extras).
+    """
+    monkeypatch.setenv("OPSHUB_CONNECTORS__BOX_DRIVE__ROOT_PATH", str(tmp_path))
+    monkeypatch.delenv("OPSHUB_CONNECTORS__BOX_DRIVE__CONTENT_EXTRACTION", raising=False)
+
+    captured: dict[str, Any] = {}
+    from opshub.connectors.box_drive import scanner as scanner_mod
+
+    real_init = scanner_mod.BoxDriveScanner.__init__
+
+    def capturing_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+        real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(scanner_mod.BoxDriveScanner, "__init__", capturing_init)
+
+    service = _RecordingSourceService()
+    BoxDriveConnector().sync(_context(service))
+
+    assert captured.get("content_extraction") is False
+
+
+def test_sync_office_observe_call_carries_body_and_source_type(
+    tmp_path: Path,
+) -> None:
+    """End-to-end (stub scanner): Office :class:`ScannedFile` → SourceObserved with body.
+
+    The mapper / connector composition must thread the scanner's
+    ``body`` + ``office_source_type`` through to the
+    :meth:`SourceService.observe` call. We stand up a stub scanner
+    yielding a Word document so the test stays decoupled from the
+    real ``markitdown`` install state but the
+    ``observe(..., body=..., source_type=...)`` keyword threading is
+    pinned end-to-end.
+    """
+    from opshub.connectors.box_drive import ScannedFile
+
+    office_file = ScannedFile(
+        rel_path="docs/spec.docx",
+        size=4096,
+        mtime_ns=1_700_000_000_000_000_000,
+        fingerprint="4096:1700000000000000000",
+        body="# Spec\n\nFull body.",
+        office_source_type="word_document",
+        body_truncated=False,
+        body_skip_reason=None,
+    )
+    plain_file = ScannedFile(
+        rel_path="notes/todo.txt",
+        size=42,
+        mtime_ns=1_700_000_000_000_000_000,
+        fingerprint="42:1700000000000000000",
+        body=None,
+        office_source_type=None,
+    )
+
+    scanner = _StubScanner(root_path=tmp_path, yields=[office_file, plain_file])
+    connector = _connector_with_stub(scanner)
+
+    service = _RecordingSourceService()
+    result = connector.sync(_context(service))
+
+    assert result.observed_count == 2
+    office_call = next(c for c in service.calls if c["external_id"] == "docs/spec.docx")
+    plain_call = next(c for c in service.calls if c["external_id"] == "notes/todo.txt")
+
+    assert office_call["source_type"] == "word_document"
+    assert office_call["body"] == "# Spec\n\nFull body."
+    assert office_call["provenance_origin"] == "external"
+    assert office_call["provenance_trust"] == "untrusted"
+
+    assert plain_call["source_type"] == "box_drive_file"
+    assert plain_call["body"] is None
+    assert plain_call["provenance_origin"] == "external"
+    assert plain_call["provenance_trust"] == "untrusted"
+
+
 def test_box_drive_subpackage_registers_connector() -> None:
     """Importing :mod:`opshub.connectors.box_drive` registers the connector.
 
