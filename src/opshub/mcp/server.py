@@ -61,14 +61,22 @@ def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
     """
     from opshub.mcp._registry import build_tool_specs
     from opshub.mcp._tools import (
+        build_brief_handler,
         build_decision_list_handler,
+        build_embeddings_find_duplicates_handler,
+        build_graph_expand_handler,
+        build_graph_related_handler,
+        build_graph_trace_handler,
         build_inbox_list_handler,
         build_recall_search_handler,
+        build_source_get_handler,
+        build_source_list_handler,
         build_task_list_handler,
     )
     from opshub.mcp._writes import (
         build_connector_sync_handler,
         build_inbox_add_handler,
+        build_propose_generate_handler,
         build_task_create_handler,
     )
 
@@ -80,6 +88,15 @@ def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
         "task.create": build_task_create_handler(engine),
         "inbox.add": build_inbox_add_handler(engine),
         "connector.sync": build_connector_sync_handler(engine),
+        # Step 1 widening (additional read tools + HITL propose).
+        "brief": build_brief_handler(engine),
+        "graph.related": build_graph_related_handler(engine),
+        "graph.trace": build_graph_trace_handler(engine),
+        "graph.expand": build_graph_expand_handler(engine),
+        "source.list": build_source_list_handler(engine),
+        "source.get": build_source_get_handler(engine),
+        "embeddings.find_duplicates": build_embeddings_find_duplicates_handler(engine),
+        "propose.generate": build_propose_generate_handler(engine),
     }
     return build_tool_specs(handlers=handlers)
 

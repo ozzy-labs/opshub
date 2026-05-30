@@ -188,6 +188,15 @@ async def test_recall_search_schema_rejects_unknown_field() -> None:
         "task.create",
         "inbox.add",
         "connector.sync",
+        # Step 1 widening.
+        "brief",
+        "graph.related",
+        "graph.trace",
+        "graph.expand",
+        "source.list",
+        "source.get",
+        "embeddings.find_duplicates",
+        "propose.generate",
     )
     specs = build_tool_specs(handlers=dict.fromkeys(tool_names, _stub))
     recall = next(s for s in specs if s.name == "recall.search")
