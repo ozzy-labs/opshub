@@ -226,7 +226,7 @@ Phase 10 Sub-issue E (返信下書き生成) は **既存 ADR の改訂** で吸
 
 | 改訂 ADR | 変更点 |
 |---|---|
-| ADR-0016 §決定 (i)+(j)+(k) 追加 | `ReplyDraftCandidatePayload`(`kind="reply_draft"`、`reply_to_source_id/type` 必須、schema v2) / triage 3 分類 (`respond`/`notify`/`ignore`) を `propose generate` の structured field に追加 (auto-apply はせず hint のみ) / 文体は静的プロンプトでなく recall した「自分が author の過去送信 event」を `<style_example>` 注入 + 文脈は `--expand-graph` で `<context_source>` 注入 |
+| ADR-0016 §決定 (i)+(j)+(k) 追加 | `ReplyDraftCandidatePayload`(`kind="reply_draft"`、`reply_to_source_id/type` 必須、schema v2) / triage 3 分類 (`respond`/`notify`/`ignore`) を `propose generate` の structured field に追加 (generate-time の prompt-hint signal にとどめ、persist しない / `Proposal` / `ProposalGenerated` event には triage を載せない / auto-apply 経路は構造的に閉じる、Phase 10 監査 Round 2 で明確化) / 文体は静的プロンプトでなく recall した「自分が author の過去送信 event」を `<style_example>` 注入 + 文脈は `--expand-graph` で `<context_source>` 注入 |
 | ADR-0017 §決定 (b) 改訂 | link_type enum に `reply_draft_replies_to` / `referenced_in_reply_draft` の 2 種追加 (auto-extracted 全 7 種に拡張)。新 event 発行はせず ADR-0017 §決定 (c) pure derived state projector パターンを踏襲 |
 | ADR-0010 §禁止事項 7 追加 + §Phase 10 改訂節 | 外部 SaaS への書き戻し (write-back) を当面 scope 外と明示。`post` / `send` / `comment` / `reply` 等のメソッドを connector に実装しない契約。`tests/` で経路非存在を contract test として pin |
 

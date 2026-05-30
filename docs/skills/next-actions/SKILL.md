@@ -23,7 +23,7 @@ opshub MCP server (`opshub mcp serve`、ADR-0022) 経由で「次にやること
 ```text
 tool: task.list
 input:
-  status: "active"
+  state: "active"
   limit: 50
 ```
 
@@ -50,13 +50,14 @@ input:
 tool: task.create
 input:
   title: "<text>"
-  priority: P2   # ホスト側で推定
+  body: "<optional context>"   # 任意。priority は MCP schema 上は持たないため body / title に inline
 ```
 
 このとき:
 
 - `task.create` は write tool (`destructiveHint=true`)。ホストは必ず人確認 (HITL) を取る
 - 確認なしで auto-call しないこと (ADR-0004 §(b) / ADR-0022 §(c))。tool poisoning 攻撃面 (auto-approve 84% / HITL <5%) の非対称が直撃する
+- MCP schema は `title` (必須) と `body` (任意) のみ受け付ける (`src/opshub/mcp/_registry.py` の Phase 10 surface)。`priority` 等の付加メタデータは body 文中に inline するか、apply 後にホストが `opshub task` CLI で更新する経路にする
 
 ## 出力フォーマット (ホスト側)
 

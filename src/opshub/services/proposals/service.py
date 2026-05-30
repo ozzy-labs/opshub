@@ -186,14 +186,22 @@ class ProposalCandidatesSchema(BaseModel):
     constructs an instance from the tool-call arguments before
     returning a :class:`~opshub.llm.client.StructuredResponse`.
 
-    Phase 10 step E2 (ADR-0016 §決定 (j)): the ``triage`` field
-    surfaces the LLM's three-way classification (``respond`` /
-    ``notify`` / ``ignore``) as a structured hint. Auto-apply is
-    **not** triggered by any triage value (§決定 (c) HITL contract
-    remains: durable state only flips via operator-driven
+    Phase 10 step E2 (ADR-0016 §決定 (j), revised in Phase 10 audit
+    Round 2): the ``triage`` field receives the LLM's three-way
+    classification (``respond`` / ``notify`` / ``ignore``) as a
+    **generate-time prompt-hint signal only** — it is validated at the
+    structured-output boundary and then **discarded**. Neither
+    :class:`Proposal` nor :class:`~opshub.domain.events.ProposalGenerated`
+    carries a triage field, so the value cannot be observed after
+    generate returns. Auto-apply is structurally impossible: the apply
+    path has no triage to branch on (§決定 (c) HITL contract holds —
+    durable state only flips via operator-driven
     ``opshub propose apply``). ``triage=None`` keeps the schema
     backward-compatible with Phase 6 callers that have no triage
-    awareness.
+    awareness. Pinned by
+    ``tests/unit/services/proposals/test_proposal_schema.py``
+    (``test_proposal_service_does_not_persist_triage`` +
+    ``test_proposal_service_apply_does_not_consult_triage_field``).
     """
 
     # ``default_factory=lambda: []`` (rather than ``default_factory=list``)
