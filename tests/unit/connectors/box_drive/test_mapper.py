@@ -198,13 +198,121 @@ def test_map_scanned_file_forwards_fingerprint(tmp_path: Path) -> None:
 
 
 def test_map_scanned_file_body_none_provenance_tagged() -> None:
-    """ADR-0020: box_drive never reads file bodies, so ``body`` is ``None``.
+    """ADR-0020: box_drive's default body is ``None``.
 
     The observation is still external in origin, so the provenance tags
     are stamped (external / untrusted) for downstream consistency with
     the SaaS connectors.
+
+    Phase 11 F4 (ADR-0019 §(b')) keeps this contract for the default-off
+    path: a :class:`ScannedFile` without ``body`` /
+    ``office_source_type`` still maps to ``body=None``.
     """
     event = map_scanned_file(_scanned(), root_path=Path("/mnt/b"))
     assert event.body is None
     assert event.provenance_origin == "external"
     assert event.provenance_trust == "untrusted"
+
+
+# ---------------------------------------------------------------------------
+# Phase 11 F4 — content_extraction opt-in (ADR-0019 §(b'), ADR-0025)
+# ---------------------------------------------------------------------------
+
+
+def test_map_scanned_file_with_office_source_type_overrides_default(
+    tmp_path: Path,
+) -> None:
+    """An ``office_source_type`` on the :class:`ScannedFile` overrides the default.
+
+    ADR-0025 §決定 (d): when the scanner extracted an Office document,
+    the discriminator on the resulting :class:`SourceObserved` must
+    switch from ``"box_drive_file"`` to the format-specific tag
+    (``"word_document"`` / ``"excel_spreadsheet"`` /
+    ``"powerpoint_slide_deck"``). The provenance tags stay the same
+    (external / untrusted).
+    """
+    from opshub.connectors.box_drive import ScannedFile
+
+    scanned = ScannedFile(
+        rel_path="docs/report.docx",
+        size=1024,
+        mtime_ns=1_700_000_000_000_000_000,
+        fingerprint="1024:1700000000000000000",
+        body="# Report\n\nExtracted body.",
+        office_source_type="word_document",
+        body_truncated=False,
+        body_skip_reason=None,
+    )
+
+    event = map_scanned_file(scanned, root_path=tmp_path)
+
+    assert event.source_type == "word_document"
+    assert event.body == "# Report\n\nExtracted body."
+    # connector_name / external_id stay the same — the connector is
+    # still box_drive, only the source_type discriminator changes.
+    assert event.connector_name == "box_drive"
+    assert event.external_id == "docs/report.docx"
+    # Provenance still external+untrusted (ADR-0020 §(e)) — operator
+    # opted into extraction but the body itself is SaaS-sourced.
+    assert event.provenance_origin == "external"
+    assert event.provenance_trust == "untrusted"
+
+
+def test_map_scanned_file_office_extraction_failure_yields_body_none(
+    tmp_path: Path,
+) -> None:
+    """An Office file whose extraction failed surfaces with ``body=None``.
+
+    ADR-0025 §決定 (c) fail-safe: the scanner still yields the file
+    with the Office discriminator (extension matched), but ``body``
+    is ``None`` because the extractor failed / skipped. The mapper
+    must thread the ``None`` through verbatim — never substitute the
+    rel_path or any other fallback that would leak as ``body`` text.
+    """
+    from opshub.connectors.box_drive import ScannedFile
+
+    scanned = ScannedFile(
+        rel_path="docs/big.xlsx",
+        size=999_999_999,
+        mtime_ns=1_700_000_000_000_000_000,
+        fingerprint="999999999:1700000000000000000",
+        body=None,
+        office_source_type="excel_spreadsheet",
+        body_truncated=False,
+        body_skip_reason="file too large",
+    )
+
+    event = map_scanned_file(scanned, root_path=tmp_path)
+
+    assert event.body is None
+    assert event.source_type == "excel_spreadsheet"
+    assert event.provenance_origin == "external"
+    assert event.provenance_trust == "untrusted"
+
+
+def test_map_scanned_file_office_source_type_none_falls_back_to_default(
+    tmp_path: Path,
+) -> None:
+    """A :class:`ScannedFile` without an Office tag keeps ``box_drive_file``.
+
+    Non-Office files (the bulk of any Box Drive scan) yield
+    :class:`ScannedFile` records whose ``office_source_type`` is
+    ``None``. The mapper must fall back to :data:`SOURCE_TYPE` =
+    ``"box_drive_file"`` so the projection key shape stays compatible
+    with Phase 9.
+    """
+    from opshub.connectors.box_drive import ScannedFile
+
+    scanned = ScannedFile(
+        rel_path="notes/random.txt",
+        size=10,
+        mtime_ns=1_700_000_000_000_000_000,
+        fingerprint="10:1700000000000000000",
+        body=None,
+        office_source_type=None,
+    )
+
+    event = map_scanned_file(scanned, root_path=tmp_path)
+
+    assert event.source_type == SOURCE_TYPE == "box_drive_file"
+    assert event.body is None

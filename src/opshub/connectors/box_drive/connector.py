@@ -237,6 +237,12 @@ class BoxDriveConnector:
             max_depth=cfg.max_depth,
             follow_symlinks=cfg.follow_symlinks,
             max_files=cfg.max_files,
+            # Phase 11 F4 (ADR-0019 §(b') + ADR-0025): forward the
+            # operator opt-in to the scanner so Office documents are
+            # routed through ``core.document_extract`` only when
+            # ``[connectors.box_drive] content_extraction = true``.
+            # Default ``False`` keeps Phase 9 behaviour bit-for-bit.
+            content_extraction=cfg.content_extraction,
         )
 
     @staticmethod
