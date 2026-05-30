@@ -131,9 +131,10 @@ async def test_dispatch_redacts_secrets_in_exception_message() -> None:
     before re-raising.
     """
     from opshub.mcp.server import dispatch_tool_call
+    from tests._secrets import FAKE_SLACK_BOT_TOKEN_ALT, FAKE_SLACK_BOT_TOKEN_SHORT
 
     leaking_messages = [
-        "401 from slack: xoxb-1234567890-9876543210-abcdefghij",
+        f"401 from slack: {FAKE_SLACK_BOT_TOKEN_ALT}",
         "401 from openai: sk-abcdefghijklmnopqrstuvwxyz123456",
         "401 from github: ghp_abcdef0123456789ABCDEF0123456789abcd",
         "401 from upstream: Authorization: Bearer abc.def.ghi.jkl.mno.pqr.stu.vwx.yz1234567890",
@@ -150,7 +151,7 @@ async def test_dispatch_redacts_secrets_in_exception_message() -> None:
         raised_text = str(excinfo.value)
         # The original token must not survive.
         for token_fragment in (
-            "xoxb-1234567890",
+            FAKE_SLACK_BOT_TOKEN_SHORT,
             "sk-abcdefghijklmnopqrstuvwxyz123456",
             "ghp_abcdef0123456789ABCDEF0123456789abcd",
             "abc.def.ghi.jkl.mno.pqr.stu.vwx.yz1234567890",

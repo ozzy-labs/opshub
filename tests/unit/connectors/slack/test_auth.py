@@ -113,15 +113,16 @@ def test_init_loads_from_secrets_when_not_supplied(
     # ``from opshub.core.secrets import get_secret`` so we must patch
     # the source module, not the slack auth module.
     import opshub.core.secrets as secrets_module
+    from tests._secrets import FAKE_SLACK_USER_TOKEN_FROM_SECRET
 
     def _stub(_key: str) -> str:
-        return "xoxp-from-secret"
+        return FAKE_SLACK_USER_TOKEN_FROM_SECRET
 
     monkeypatch.setattr(secrets_module, "get_secret", _stub)
 
     auth = SlackAuth()
 
-    assert auth.token == "xoxp-from-secret"
+    assert auth.token == FAKE_SLACK_USER_TOKEN_FROM_SECRET
 
 
 def test_init_raises_when_token_missing(

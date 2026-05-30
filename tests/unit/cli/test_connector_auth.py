@@ -159,10 +159,20 @@ def test_auth_set_connector_slack_alias_writes_to_same_key(
     silently store under different keys and the SlackAuth reader would
     see only one of them.
     """
+    from tests._secrets import FAKE_SLACK_USER_TOKEN_NAMESPACED
+
     runner = CliRunner()
     r_legacy = runner.invoke(app, ["connector", "auth", "set", "slack", "--token", "xoxp-legacy"])
     r_namespaced = runner.invoke(
-        app, ["connector", "auth", "set", "connector:slack", "--token", "xoxp-namespaced"]
+        app,
+        [
+            "connector",
+            "auth",
+            "set",
+            "connector:slack",
+            "--token",
+            FAKE_SLACK_USER_TOKEN_NAMESPACED,
+        ],
     )
 
     assert r_legacy.exit_code == 0, r_legacy.stdout
@@ -170,7 +180,7 @@ def test_auth_set_connector_slack_alias_writes_to_same_key(
     # Both writes target the same key, so the second write (via the
     # namespaced form) overwrites the first — that's the pin: not
     # "two distinct keys for two surfaces" but "one key, two aliases".
-    assert get_secret(SLACK_TOKEN_SECRET_KEY) == "xoxp-namespaced"
+    assert get_secret(SLACK_TOKEN_SECRET_KEY) == FAKE_SLACK_USER_TOKEN_NAMESPACED
 
 
 def test_auth_set_slack_uses_distinct_key_from_github(

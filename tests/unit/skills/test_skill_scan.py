@@ -25,6 +25,8 @@ from tools.skill_scan import (
     scan_skill_text,
 )
 
+from tests._secrets import FAKE_AWS_ACCESS_KEY, FAKE_SLACK_BOT_TOKEN_LETTERS
+
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
@@ -141,8 +143,8 @@ run this:
         "sk-abc123def456ghi789jklmnop",
         "sk-ant-api-key-abc123def456ghi789jkl",
         "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
-        "xoxb-1234567890-abcdefghij-klmnopqrstuvwxyz",
-        "AKIAIOSFODNN7EXAMPLE",
+        FAKE_SLACK_BOT_TOKEN_LETTERS,
+        FAKE_AWS_ACCESS_KEY,
         "Authorization: Bearer aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "-----BEGIN PRIVATE KEY-----",
     ],

@@ -14,6 +14,19 @@ from __future__ import annotations
 import pytest
 
 from opshub.core.sanitise import sanitise_error_message
+from tests._secrets import (
+    FAKE_AWS_ACCESS_KEY,
+    FAKE_GITHUB_PAT,
+    FAKE_GOOGLE_API_KEY,
+    FAKE_JWT,
+    FAKE_SLACK_APP_TOKEN,
+    FAKE_SLACK_BOT_TOKEN,
+    FAKE_SLACK_LEGACY_TOKEN,
+    FAKE_SLACK_REFRESH_TOKEN,
+    FAKE_SLACK_USER_TOKEN,
+    NON_BOUNDARY_AWS,
+    NON_BOUNDARY_GOOGLE,
+)
 
 
 def test_redacts_sk_key_shape() -> None:
@@ -119,22 +132,20 @@ def test_redacts_github_fine_grained_pat() -> None:
     Previously only the classic ``ghp_`` prefix was matched, leaving
     fine-grained PATs (issued from 2022 onwards) to slip through.
     """
-    message = (
-        "GitHub returned 401 for github_pat_11ABCDEFG0_abcdefghijklmnopqrstuvwxyz1234567890ABCDEF"
-    )
+    message = f"GitHub returned 401 for {FAKE_GITHUB_PAT}"
     out = sanitise_error_message(message)
-    assert "github_pat_11ABCDEFG0_abcdefghijklmnopqrstuvwxyz1234567890ABCDEF" not in out
+    assert FAKE_GITHUB_PAT not in out
     assert "github_pat_***" in out
 
 
 @pytest.mark.parametrize(
     "token",
     [
-        "xoxp-1234567890-1234567890-abcdefghij",
-        "xoxb-1234567890-1234567890-abcdefghij",
-        "xoxa-2-abcdefghijklmnopqrstuvwxyz",
-        "xoxr-1234567890-1234567890-abcdefghij",
-        "xoxs-1234567890-1234567890-abcdefghij",
+        FAKE_SLACK_USER_TOKEN,
+        FAKE_SLACK_BOT_TOKEN,
+        FAKE_SLACK_APP_TOKEN,
+        FAKE_SLACK_REFRESH_TOKEN,
+        FAKE_SLACK_LEGACY_TOKEN,
     ],
 )
 def test_redacts_slack_token_family(token: str) -> None:
@@ -148,30 +159,25 @@ def test_redacts_slack_token_family(token: str) -> None:
 
 def test_redacts_aws_access_key_id() -> None:
     """``AKIA`` + 16 uppercase alnum is the AWS access key id shape."""
-    message = "aws 403 for AKIAIOSFODNN7EXAMPLE"
+    message = f"aws 403 for {FAKE_AWS_ACCESS_KEY}"
     out = sanitise_error_message(message)
-    assert "AKIAIOSFODNN7EXAMPLE" not in out
+    assert FAKE_AWS_ACCESS_KEY not in out
     assert "AKIA***" in out
 
 
 def test_redacts_google_api_key() -> None:
     """``AIza`` + 35 chars of base64url alphabet is the Google API key."""
-    message = "google returned 403 for AIzaSyA-1234567890abcdefghijklmnopqrstu"
+    message = f"google returned 403 for {FAKE_GOOGLE_API_KEY}"
     out = sanitise_error_message(message)
-    assert "AIzaSyA-1234567890abcdefghijklmnopqrstu" not in out
+    assert FAKE_GOOGLE_API_KEY not in out
     assert "AIza***" in out
 
 
 def test_redacts_jwt() -> None:
     """3-part ``eyJ...eyJ...`` JWTs (header.payload.signature)."""
-    jwt = (
-        "eyJhbGciOiJIUzI1NiJ9."
-        "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0."
-        "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
-    )
-    message = f"failed to validate {jwt}"
+    message = f"failed to validate {FAKE_JWT}"
     out = sanitise_error_message(message)
-    assert jwt not in out
+    assert FAKE_JWT not in out
     assert "[JWT REDACTED]" in out
 
 
@@ -183,32 +189,27 @@ def test_redacts_bearer_with_jwt_does_not_partially_overwrite() -> None:
     skipped. The implementation applies the JWT pass before the bearer
     pass so the JWT-specific marker wins.
     """
-    jwt = (
-        "eyJhbGciOiJIUzI1NiJ9."
-        "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0."
-        "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
-    )
-    message = f"Authorization: Bearer {jwt}"
+    message = f"Authorization: Bearer {FAKE_JWT}"
     out = sanitise_error_message(message)
-    assert jwt not in out
+    assert FAKE_JWT not in out
 
 
 def test_redacts_all_expanded_shapes_in_one_message() -> None:
     """A combined error mentioning every expanded shape is fully scrubbed."""
     message = (
-        "boom: github_pat_11ABCDEFG0_abcdefghijklmnopqrstuvwxyz1234567890ABCDEF; "
-        "xoxb-1234567890-1234567890-abcdefghij; "
-        "AKIAIOSFODNN7EXAMPLE; "
-        "AIzaSyA-1234567890abcdefghijklmnopqrstu; "
-        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV"
+        f"boom: {FAKE_GITHUB_PAT}; "
+        f"{FAKE_SLACK_BOT_TOKEN}; "
+        f"{FAKE_AWS_ACCESS_KEY}; "
+        f"{FAKE_GOOGLE_API_KEY}; "
+        f"{FAKE_JWT}"
     )
     out = sanitise_error_message(message)
     forbidden_fragments = [
-        "github_pat_11ABCDEFG0_abcdefghijklmnopqrstuvwxyz1234567890ABCDEF",
-        "xoxb-1234567890-1234567890-abcdefghij",
-        "AKIAIOSFODNN7EXAMPLE",
-        "AIzaSyA-1234567890abcdefghijklmnopqrstu",
-        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV",
+        FAKE_GITHUB_PAT,
+        FAKE_SLACK_BOT_TOKEN,
+        FAKE_AWS_ACCESS_KEY,
+        FAKE_GOOGLE_API_KEY,
+        FAKE_JWT,
     ]
     for fragment in forbidden_fragments:
         assert fragment not in out
@@ -226,17 +227,16 @@ def test_redacts_all_expanded_shapes_in_one_message() -> None:
 
 
 def test_aws_key_inside_longer_identifier_is_not_redacted() -> None:
-    """``XAKIAIOSFODNN7EXAMPLE`` (no boundary) must stay intact.
+    """An ``X``-prefixed AKIA-like identifier (no word boundary) must stay intact.
 
     Before Round 2 Cluster B M4 the regex matched the embedded
-    ``AKIA<16>`` slice even when the prefix sat in the middle of a
+    AKIA-style slice even when the prefix sat in the middle of a
     longer alnum identifier. The ``\\b`` anchor now requires the
-    ``AKIA`` to start at a word boundary, eliminating that false
+    AKIA prefix to start at a word boundary, eliminating that false
     positive class for arbitrary identifiers.
     """
-    embedded = "XAKIAIOSFODNN7EXAMPLE"
-    out = sanitise_error_message(f"saw {embedded} in audit log")
-    assert embedded in out
+    out = sanitise_error_message(f"saw {NON_BOUNDARY_AWS} in audit log")
+    assert NON_BOUNDARY_AWS in out
     assert "AKIA***" not in out
 
 
@@ -248,9 +248,8 @@ def test_google_key_inside_url_path_is_not_redacted() -> None:
     redacting an unrelated identifier that happens to contain
     ``AIza`` mid-string.
     """
-    embedded = "XAIzaSyA1234567890abcdefghijklmnopqrstuvw"
-    out = sanitise_error_message(f"https://example.com/path/{embedded}/more")
-    assert embedded in out
+    out = sanitise_error_message(f"https://example.com/path/{NON_BOUNDARY_GOOGLE}/more")
+    assert NON_BOUNDARY_GOOGLE in out
     assert "AIza***" not in out
 
 
@@ -261,15 +260,13 @@ def test_google_key_at_word_boundary_is_still_redacted() -> None:
     still hits the marker — the anchor only suppresses false matches
     inside longer alnum runs.
     """
-    real_key = "AIzaSyA-1234567890abcdefghijklmnopqrstu"
-    out = sanitise_error_message(f"https://example.com/path?key={real_key}")
-    assert real_key not in out
+    out = sanitise_error_message(f"https://example.com/path?key={FAKE_GOOGLE_API_KEY}")
+    assert FAKE_GOOGLE_API_KEY not in out
     assert "AIza***" in out
 
 
 def test_aws_key_at_word_boundary_is_still_redacted() -> None:
     """A real AWS access key id at a boundary remains redacted."""
-    real_key = "AKIAIOSFODNN7EXAMPLE"
-    out = sanitise_error_message(f"saw '{real_key}' in audit log")
-    assert real_key not in out
+    out = sanitise_error_message(f"saw '{FAKE_AWS_ACCESS_KEY}' in audit log")
+    assert FAKE_AWS_ACCESS_KEY not in out
     assert "AKIA***" in out
