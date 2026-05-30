@@ -287,7 +287,7 @@ MCP セットアップ手順は [docs/mcp-setup.md](mcp-setup.md) を参照。�
    |---|---|---|---|
    | `daily-brief` | 「今日のまとめ / 状況」 | `recall.search` + `task.list` + `inbox.list` + `decision.list` | 自律 OK |
    | `next-actions` | 「次に何 / やること」 | `task.list` + `recall.search` (+ HITL `task.create`) | read 自律 / write 人確認 |
-   | `reply-draft` | 「返信案 / 下書き」 | `recall.search` + CLI `propose generate --kind reply_draft` + CLI `propose apply` | apply 時は人確認 |
+   | `reply-draft` | 「返信案 / 下書き」 | `recall.search` + CLI `propose generate --reply-to <source_id>` + CLI `propose apply` | apply 時は人確認 |
    | `pr-review` | 「PR レビューして」 | `recall.search` + `decision.list` + `task.list` | 自律 OK |
    | `file-lookup` | 「Box / ファイル確認」 | `recall.search` (FTS5 横断) | 自律 OK |
 

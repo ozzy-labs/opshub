@@ -33,11 +33,11 @@ opshub 本体が **持たない** もの:
 
 ## Skills 一覧
 
-| skill | 主な MCP tool | 自律範囲 | 写真 (write) |
+| skill | 主な MCP tool | 自律範囲 | 書き込み tool (write) |
 |---|---|---|---|
 | daily-brief | `recall.search`, `task.list`, `inbox.list`, `decision.list` | 自律 OK | なし |
 | next-actions | `task.list`, `recall.search` (+ 人確認付き `task.create`) | read 自律 / write 人確認 | `task.create` (HITL) |
-| reply-draft | `recall.search` + CLI `propose generate --kind reply_draft` + CLI `propose apply` | apply 時は人確認 | CLI `propose apply` (HITL) |
+| reply-draft | `recall.search` + CLI `propose generate --reply-to <source_id>` + CLI `propose apply` | apply 時は人確認 | CLI `propose apply` (HITL) |
 | pr-review | `recall.search`, `decision.list`, `task.list` | 自律 OK | なし (PR comment 投稿は skill 外) |
 | file-lookup | `recall.search` | 自律 OK | なし |
 
@@ -88,7 +88,7 @@ opshub 本体リポでは `docs/skills/<name>/SKILL.md` が reference 仕様と�
 
 `tools/skill_scan.py` で 4 カテゴリ (プロンプトインジェクション / コマンドインジェクション / ハードコード鍵 / データ持ち出し) + frontmatter の隠しユニコード / 「ignore previous instructions」類のパターン検出を行う。
 
-- 本リポ内 (`docs/skills/<name>/SKILL.md`) の仕様には test (`tests/unit/skills/test_skill_security.py`) で適用済
+- 本リポ内 (`docs/skills/<name>/SKILL.md`) の仕様には test (`tests/unit/skills/test_skill_specs.py`) で適用済
 - `ozzy-labs/skills` 側 CI への組み込みは別 PR (本 PR の scope 外)
 - 検出ルールは scope 縮小設計 (高 precision / 中 recall)。誤検出は `# skill-scan: allow <category>` コメントで局所的に suppress 可能
 
