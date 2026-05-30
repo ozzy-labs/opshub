@@ -43,6 +43,7 @@ if TYPE_CHECKING:
         LockService,
         ProposalService,
         RecallService,
+        SearchService,
         SourceService,
         TaskService,
         WorkSessionService,
@@ -63,6 +64,7 @@ __all__ = [
     "build_lock_service",
     "build_proposal_service",
     "build_recall_service",
+    "build_search_service",
     "build_session_service",
     "build_source_service",
     "build_task_service",
@@ -367,6 +369,25 @@ def build_recall_service() -> RecallService:
         vector_store=build_vector_store(settings, engine),
         engine=engine,
     )
+
+
+def build_search_service() -> SearchService:
+    """Wire a :class:`SearchService` against the configured engine.
+
+    Phase 10 step B2 (Sub-issue B, ADR-0012 改訂版 §4 + ADR-0020):
+    full-text search over ``sources.body`` lives behind the new
+    ``opshub search`` CLI. The service is engine-only (no embedder,
+    no vector store) so the wiring is trivial.
+
+    Like every other wiring helper here, the heavy imports stay
+    inside the function body so ``opshub --help`` cold start does
+    not pay for them (ADR-0001 lazy-import rule).
+    """
+    # Lazy import: keep CLI cold start fast (ADR-0001).
+    from opshub.services import SearchService
+
+    engine = build_engine()
+    return SearchService(engine=engine)
 
 
 def build_briefing_service(actor: str = "cli:brief") -> BriefingService:

@@ -290,6 +290,56 @@ def test_embeddings_rebuild_with_entity_type_filter(
         engine.dispose()
 
 
+def test_embeddings_rebuild_with_purge_drops_existing_rows_then_re_embeds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--purge`` drops the prior embedding and re-embeds from scratch.
+
+    Phase 10 step B2 (ADR-0012 改訂版 §4): the operator runs
+    ``opshub embeddings rebuild --purge`` after the embed input
+    switches from ``summary`` to ``COALESCE(body, summary)`` so the
+    stale summary-based vector is replaced even though
+    ``(model_id, model_version)`` did not change. The stdout reports
+    the purge count alongside the rebuild outcome.
+    """
+    db_path = _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_EMBEDDING__BACKEND", "local")
+    _install_stub_embedder(monkeypatch, _StubEmbedder())
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0, init_result.stdout
+
+    engine = _open_db(db_path)
+    try:
+        _seed_task(engine, title="task to re-embed")
+    finally:
+        engine.dispose()
+
+    # First rebuild lands one embedding.
+    runner.invoke(app, ["embeddings", "rebuild"])
+
+    engine = _open_db(db_path)
+    try:
+        assert _embeddings_row_count(engine) == 1
+    finally:
+        engine.dispose()
+
+    # Purge + rebuild reports a purge count and lands the row again.
+    result = runner.invoke(app, ["embeddings", "rebuild", "--purge"])
+    assert result.exit_code == 0, result.stdout
+    assert "purged 1 existing embedding(s)" in result.stdout
+    assert "embedded 1" in result.stdout
+
+    engine = _open_db(db_path)
+    try:
+        # The metadata table still holds exactly one row — the purge
+        # dropped the old one and the rebuild wrote the new one.
+        assert _embeddings_row_count(engine) == 1
+    finally:
+        engine.dispose()
+
+
 def test_embeddings_rebuild_with_limit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """``--limit 2`` caps the number of rows embedded across entity types."""
     db_path = _isolate_env(monkeypatch, tmp_path)

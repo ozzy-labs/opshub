@@ -59,20 +59,43 @@ def embeddings_rebuild(
         "-n",
         help="Cap the number of entities to embed in this run.",
     ),
+    purge: bool = typer.Option(
+        False,
+        "--purge",
+        help=(
+            "Drop existing embeddings for the scope before re-embedding. "
+            "Use this after Phase 10 step B2 (body-based embedding, "
+            "ADR-0012 改訂版 §4) to force re-embed from sources.body."
+        ),
+    ),
 ) -> None:
     """Embed every entity that lacks a current (model_id, model_version) embedding.
 
-    Idempotent: re-running on the same data is a no-op until the
-    configured backend / model is changed. The ``rebuild_run_id``
-    surfaces the ULID of the bracketing
+    Idempotent by default: re-running on the same data is a no-op
+    until the configured backend / model is changed. The
+    ``rebuild_run_id`` surfaces the ULID of the bracketing
     :class:`~opshub.domain.events.embedding.EmbeddingRebuildRequested`
     event so the run can be correlated with downstream logs.
+
+    ``--purge`` (Phase 10 step B2): drops the existing
+    ``(model_id, model_version)`` embeddings for the scope before the
+    rebuild kicks in. Use this when the embed input shape changed but
+    the model identity did not — the canonical case is migrating from
+    ``sources.summary`` to ``COALESCE(sources.body, sources.summary)``
+    (ADR-0012 改訂版 §4). Without ``--purge`` the rebuild's
+    ``NOT EXISTS`` filter sees the entity as "already embedded" and
+    keeps the stale summary-based vector.
     """
     # Lazy imports: keep CLI cold start fast (ADR-0001).
     from opshub.cli._wiring import build_embedding_service
 
     service = build_embedding_service()
+    purged = 0
+    if purge:
+        purged = service.purge_embeddings(entity_type=entity_type)
     result = service.embed_pending(entity_type=entity_type, limit=limit)
+    if purge:
+        typer.echo(f"purged {purged} existing embedding(s) before rebuild")
     typer.echo(
         f"rebuild_run_id={result.rebuild_run_id}: "
         f"embedded {result.embedded_count}, "
