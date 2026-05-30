@@ -451,6 +451,52 @@ def test_sync_uses_private_engine_attribute_as_fallback(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------- registry
 
 
+def test_sync_merges_shared_excludes_paths_into_scanner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ADR-0020 §(b): shared ``excludes.yaml`` ``paths`` reach the scanner.
+
+    The connector merges its inline ``[connectors.box_drive] exclude_globs``
+    with the shared ``paths`` selector from ``excludes.yaml`` and hands
+    the combined list to :class:`BoxDriveScanner`. A file matching the
+    shared rule must be skipped before any ``observe`` call lands.
+
+    Pins the ``merged_with_paths``-equivalent in-connector merger so a
+    regression that silently drops the shared list does not get past
+    review (Phase 10 audit Cluster 3 §A).
+    """
+    # Set up a tiny box-drive root with one "secret" file and one safe file.
+    secrets_dir = tmp_path / "drive" / "secrets"
+    secrets_dir.mkdir(parents=True)
+    (secrets_dir / "key.pem").write_text("PRIVATE")
+    (tmp_path / "drive" / "report.md").write_text("public report body")
+    monkeypatch.setenv("OPSHUB_CONNECTORS__BOX_DRIVE__ROOT_PATH", str(tmp_path / "drive"))
+
+    # Point ``load_excludes`` at a config dir whose ``excludes.yaml``
+    # excludes anything under ``secrets/``.
+    cfg_dir = tmp_path / "opshub-config"
+    cfg_dir.mkdir()
+    (cfg_dir / "excludes.yaml").write_text(
+        "paths:\n  - '**/secrets/**'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("opshub.core.excludes.default_config_dir", lambda: cfg_dir)
+    # ``OpsHubSettings.config_dir`` is the resolution path the connector
+    # passes into ``load_excludes(config_dir=...)``; mirror it so both
+    # call sites resolve to the same place.
+    monkeypatch.setenv("OPSHUB_CONFIG_DIR", str(cfg_dir))
+
+    service = _RecordingSourceService()
+    result = BoxDriveConnector().sync(_context(service))
+
+    # Only the non-secret file is observed; the scanner short-circuits
+    # on the shared glob before the connector ever sees it.
+    assert result.observed_count == 1
+    assert len(service.calls) == 1
+    assert service.calls[0]["external_id"] == "report.md"
+    assert all("secret" not in str(c["external_id"]) for c in service.calls)
+
+
 def test_box_drive_subpackage_registers_connector() -> None:
     """Importing :mod:`opshub.connectors.box_drive` registers the connector.
 

@@ -63,7 +63,7 @@ the only exception detail surfaced is the exception type name (e.g.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from opshub.connectors.base import SyncResult
 from opshub.connectors.ms365 import mapper as ms365_mapper
@@ -79,6 +79,7 @@ if TYPE_CHECKING:
 
     from opshub.connectors.context import ConnectorContext
     from opshub.connectors.ms365.fetcher import MS365Fetcher
+    from opshub.core.excludes import ExcludeRules
     from opshub.domain.events.source import SourceObserved
 
 __all__ = ["MS365Connector"]
@@ -129,6 +130,7 @@ class MS365Connector:
         from opshub.connectors.ms365.auth import MS365Auth
         from opshub.connectors.ms365.fetcher import MS365Fetcher
         from opshub.core.config import OpsHubSettings
+        from opshub.core.excludes import load_excludes
 
         settings = OpsHubSettings()
         ms365_settings = settings.connectors.ms365
@@ -147,14 +149,25 @@ class MS365Connector:
             authority=ms365_settings.authority,
         )
         fetcher = MS365Fetcher(auth)
+        # Phase 10 (ADR-0020 §(b)): shared ingest excludes. MS365 honours
+        # the ``senders`` selector for Calendar (organiser email) and
+        # Outlook (from address), and the ``paths`` selector for OneDrive
+        # (item path). Excluded items are skipped, but the per-endpoint
+        # cursor still advances past them so the connector does not
+        # re-scan them forever. ``load_excludes()`` resolves the file
+        # path via ``default_config_dir()`` directly to avoid threading
+        # a potentially-mocked ``OpsHubSettings.config_dir`` — see the
+        # slack connector for the MagicMock-yaml.safe_load infinite-loop
+        # rationale (Phase 10 audit Cluster 3).
+        excludes = load_excludes()
         observed_count = 0
         try:
             if ms365_settings.calendar_enabled:
-                observed_count += self._sync_calendar(context, fetcher)
+                observed_count += self._sync_calendar(context, fetcher, excludes)
             if ms365_settings.onedrive_enabled:
-                observed_count += self._sync_onedrive(context, fetcher)
+                observed_count += self._sync_onedrive(context, fetcher, excludes)
             if ms365_settings.outlook_enabled:
-                observed_count += self._sync_outlook(context, fetcher)
+                observed_count += self._sync_outlook(context, fetcher, excludes)
         finally:
             # The fetcher owns an ``httpx.Client`` socket pool. Closing
             # it deterministically here (rather than relying on GC) is
@@ -165,7 +178,9 @@ class MS365Connector:
 
     # ----- per-endpoint syncs --------------------------------------------
 
-    def _sync_calendar(self, context: ConnectorContext, fetcher: MS365Fetcher) -> int:
+    def _sync_calendar(
+        self, context: ConnectorContext, fetcher: MS365Fetcher, excludes: ExcludeRules
+    ) -> int:
         """Sync ``/me/calendar/events``. Returns the observed count."""
 
         def factory(since: str | None) -> Iterator[tuple[Any, str]]:
@@ -177,14 +192,33 @@ class MS365Connector:
             # sites without introducing a generic helper class.
             return fetcher.fetch_calendar_events(since_iso=since)
 
+        def exclude_calendar(raw: Any) -> bool:
+            # ADR-0020 §(b): organiser email is the closest Calendar
+            # analogue to "sender" — the meeting initiator's address.
+            # Graph nests it under ``organizer.emailAddress.address``.
+            raw_dict = cast("dict[str, Any]", getattr(raw, "raw", {}))
+            organizer = raw_dict.get("organizer")
+            if not isinstance(organizer, dict):
+                return False
+            email = cast("dict[str, Any]", organizer).get("emailAddress")
+            if not isinstance(email, dict):
+                return False
+            address = cast("dict[str, Any]", email).get("address")
+            if not isinstance(address, str):
+                return False
+            return excludes.excludes_sender(address)
+
         return self._run_endpoint(
             context,
             cursor_key=CURSOR_CALENDAR,
             iterator_factory=factory,
             mapper_fn=ms365_mapper.map_calendar_event,
+            should_skip=exclude_calendar,
         )
 
-    def _sync_onedrive(self, context: ConnectorContext, fetcher: MS365Fetcher) -> int:
+    def _sync_onedrive(
+        self, context: ConnectorContext, fetcher: MS365Fetcher, excludes: ExcludeRules
+    ) -> int:
         """Sync ``/me/drive/root/delta``. Returns the observed count."""
 
         def factory(since: str | None) -> Iterator[tuple[Any, str]]:
@@ -194,24 +228,41 @@ class MS365Connector:
             # connector's purposes.
             return fetcher.fetch_onedrive_changes(delta_link=since)
 
+        def exclude_onedrive(raw: Any) -> bool:
+            # ADR-0020 §(b): OneDrive items carry a reconstructed
+            # ``path`` (``<parentReference.path>/<name>``); the
+            # ``paths`` selector matches gitignore-style globs against
+            # it (mirrors box_drive's path-based exclusion).
+            return excludes.excludes_path(getattr(raw, "path", None))
+
         return self._run_endpoint(
             context,
             cursor_key=CURSOR_ONEDRIVE,
             iterator_factory=factory,
             mapper_fn=ms365_mapper.map_onedrive_item,
+            should_skip=exclude_onedrive,
         )
 
-    def _sync_outlook(self, context: ConnectorContext, fetcher: MS365Fetcher) -> int:
+    def _sync_outlook(
+        self, context: ConnectorContext, fetcher: MS365Fetcher, excludes: ExcludeRules
+    ) -> int:
         """Sync ``/me/messages``. Returns the observed count."""
 
         def factory(since: str | None) -> Iterator[tuple[Any, str]]:
             return fetcher.fetch_outlook_messages(since_iso=since)
+
+        def exclude_outlook(raw: Any) -> bool:
+            # ADR-0020 §(b): the ``sender`` address is the canonical
+            # "from" identifier on Outlook messages — already lifted
+            # to a top-level string by the fetcher's normaliser.
+            return excludes.excludes_sender(getattr(raw, "sender", None))
 
         return self._run_endpoint(
             context,
             cursor_key=CURSOR_OUTLOOK,
             iterator_factory=factory,
             mapper_fn=ms365_mapper.map_outlook_message,
+            should_skip=exclude_outlook,
         )
 
     # ----- shared driver --------------------------------------------------
@@ -223,6 +274,7 @@ class MS365Connector:
         cursor_key: str,
         iterator_factory: IteratorFactory,
         mapper_fn: MapperFn,
+        should_skip: Callable[[Any], bool] | None = None,
     ) -> int:
         """Drive one endpoint group: load cursor → iterate → observe → save cursor.
 
@@ -260,6 +312,13 @@ class MS365Connector:
             iterator = iterator_factory(cursor)
             new_cursor = cursor
             for item, advanced_cursor in iterator:
+                # ADR-0020 §(b): excluded items still advance the cursor
+                # (otherwise the connector would re-fetch them every run)
+                # but are never observed — the body never enters the
+                # event log.
+                new_cursor = advanced_cursor
+                if should_skip is not None and should_skip(item):
+                    continue
                 event = mapper_fn(item)
                 source_service.observe(
                     connector_name="ms365",
@@ -274,7 +333,6 @@ class MS365Connector:
                     provenance_origin=event.provenance_origin,
                     provenance_trust=event.provenance_trust,
                 )
-                new_cursor = advanced_cursor
                 observed += 1
         except ConnectorFailedError as exc:
             # Sanitise: only the exception type name reaches the event

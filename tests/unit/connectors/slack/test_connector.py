@@ -22,6 +22,7 @@ indirectly via the fetcher).
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -403,6 +404,88 @@ def test_sync_with_empty_channels_warns_and_returns_no_op(
 
 
 # ---------------------------------------------------------------------- sync: no yields
+
+
+def _patch_excludes_yaml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, body: str) -> None:
+    """Write an ``excludes.yaml`` and point ``default_config_dir`` at it.
+
+    ``load_excludes()`` resolves the file through
+    :func:`opshub.core.config.default_config_dir` (imported into
+    ``opshub.core.excludes`` at module top); monkeypatching that name
+    on the excludes module is the documented way to redirect resolution
+    for tests (see also :func:`tests.unit.core.test_excludes` for the
+    ``config_dir=`` kwarg pattern; here we exercise the no-arg call
+    site the Phase 10 audit Cluster 3 mandates).
+    """
+    cfg_dir = tmp_path / "opshub-config"
+    cfg_dir.mkdir()
+    (cfg_dir / "excludes.yaml").write_text(body, encoding="utf-8")
+    monkeypatch.setattr("opshub.core.excludes.default_config_dir", lambda: cfg_dir)
+
+
+def test_sync_skips_excluded_channel_but_advances_cursor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ADR-0020 §(b): a message in an excluded channel is never observed.
+
+    The cursor still advances past the message so the connector does
+    not re-fetch it forever. Pins the "skip but advance" semantics
+    explicitly — a regression that early-``continue``\\s without
+    updating the cursor dict would re-fetch the excluded channel on
+    every sync.
+    """
+    _patch_excludes_yaml(monkeypatch, tmp_path, body="channels:\n  - C-secret\n")
+    _patch_settings(monkeypatch, channels=["C1", "C-secret"])
+    _patch_auth(monkeypatch)
+    public_msg = _raw_message(channel_id="C1", ts="ts-1", text="public")
+    secret_msg = _raw_message(channel_id="C-secret", ts="ts-2", text="leaked")
+    _patch_fetcher(
+        monkeypatch,
+        yields=[
+            ("C1", public_msg, "ts-1"),
+            ("C-secret", secret_msg, "ts-2"),
+        ],
+    )
+
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=None))
+
+    # Only the public channel's message reaches the source service.
+    assert result.observed_count == 1
+    assert len(service.calls) == 1
+    assert service.calls[0]["external_id"] == "C1:ts-1"
+    # Both channels' cursors advance (skip-but-advance contract).
+    assert result.new_cursor is not None
+    assert _load_cursors(result.new_cursor) == {"C1": "ts-1", "C-secret": "ts-2"}
+
+
+def test_sync_skips_excluded_sender_but_advances_cursor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ADR-0020 §(b): a message from an excluded sender is never observed.
+
+    Same "skip but advance" semantics as the channel-exclude path.
+    """
+    _patch_excludes_yaml(monkeypatch, tmp_path, body="senders:\n  - U-bot\n")
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch)
+    bot_msg = _raw_message(channel_id="C1", ts="ts-bot", user_id="U-bot", text="noise")
+    human_msg = _raw_message(channel_id="C1", ts="ts-human", user_id="U1", text="real")
+    _patch_fetcher(
+        monkeypatch,
+        yields=[
+            ("C1", bot_msg, "ts-bot"),
+            ("C1", human_msg, "ts-human"),
+        ],
+    )
+
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=None))
+
+    assert result.observed_count == 1
+    assert service.calls[0]["external_id"] == "C1:ts-human"
+    assert result.new_cursor is not None
+    assert _load_cursors(result.new_cursor) == {"C1": "ts-human"}
 
 
 def test_sync_with_no_yields_preserves_cursor(monkeypatch: pytest.MonkeyPatch) -> None:

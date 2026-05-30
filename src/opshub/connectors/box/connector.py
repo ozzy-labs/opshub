@@ -94,18 +94,36 @@ class BoxConnector:
 
         See module docstring for the cursor / failure contract.
         """
+        # Phase 10 (ADR-0020 §(b)): shared ingest excludes. Box honours
+        # the ``senders`` selector against the actor (Box user id) and
+        # the ``paths`` selector against the item path. An excluded
+        # event is still advanced past on the cursor — Box's
+        # ``next_stream_position`` advances once per page, so skipping
+        # the observe call alone is enough; the cursor moves regardless.
+        # ``load_excludes()`` resolves the file path via
+        # ``default_config_dir()`` directly to avoid threading
+        # potentially-mocked ``OpsHubSettings.config_dir`` — see the
+        # slack connector for the MagicMock-yaml.safe_load infinite-loop
+        # rationale (Phase 10 audit Cluster 3).
+        from opshub.core.excludes import load_excludes
+
+        excludes = load_excludes()
         fetcher = self._build_fetcher()
         observed_count = 0
         new_cursor: str | None = context.cursor_value
         for raw_event, position in self._iter_events(fetcher, stream_position=context.cursor_value):
-            self._observe(context, raw_event)
-            observed_count += 1
             # Box's contract: every event on the same page carries the
             # *same* ``next_stream_position``. We assign on each loop
             # iteration anyway so a future paginated fetcher does not
             # need a separate "did we ever observe?" tracker — the loop
             # post-condition is simply "the last position we saw".
             new_cursor = position
+            if excludes.excludes_sender(raw_event.actor_id) or excludes.excludes_path(
+                raw_event.item_path
+            ):
+                continue
+            self._observe(context, raw_event)
+            observed_count += 1
         return SyncResult(observed_count=observed_count, new_cursor=new_cursor)
 
     def _build_fetcher(self) -> BoxFetcher:

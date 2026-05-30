@@ -43,7 +43,7 @@ ADR-0005 (External Content Minimization) を **Superseded** とし、opshub は 
 
 ADR-0005 で言及されていた `~/.config/opshub/excludes.yaml`、および Phase 9 で `box_drive` の `opshub.toml` inline だった `exclude_globs` を、**全 connector 横断の共通 excludes 機構** に統合する。本文保持の第一の安全策は「機密本文をそもそも取り込まない」ことであり、connector ごとにバラバラな除外設定では運用ポリシーを一元管理できない。
 
-excludes は `channel` / `sender` / `repo` / `path` の 4 種の selector を持ち、各 connector が自身の取り込み経路で「観測する前に」除外判定する。box_drive の `[connectors.box_drive] exclude_globs` は本機構の `path` selector に統合する (移行は ADR-0021 と同 PR、pre-userbase につき互換維持の dual-read は設けない)。
+excludes は `channel` / `sender` / `repo` / `path` の 4 種の selector を持ち、各 connector が自身の取り込み経路で「観測する前に」除外判定する。box_drive の inline `[connectors.box_drive] exclude_globs` は当面、本機構の shared `excludes.yaml` の `paths` selector に **merge** する (`ExcludeRules.merged_with_paths` 経由)。pre-userbase 段階のため、inline 設定を完全廃止して shared-only に統合するのは将来の cleanup ADR に委ねる。dual-read による互換維持期間 (deprecation window) は設けず、shared-only 化が決まった時点で inline 経路を即時撤去する。
 
 ### (c) 保存時暗号化 (詳細は ADR-0021)
 
@@ -52,6 +52,8 @@ excludes は `channel` / `sender` / `repo` / `path` の 4 種の selector を持
 ### (d) 認証情報の本文からの分離 + backward-compat
 
 本文ストアにトークン / 認証情報が混入しないことを test で pin する (DoD)。credentials は引き続き keyring (ADR-0014) で別管理し、`body` フィールドには載せない。既存 source 行 (`body = NULL`) は挙動不変。
+
+**例外: ファイル参照 connector の `body` 不保持** — OneDrive item (MS365) と Box event / Box Drive scan のように「ファイル本体ではなくメタデータ (path / actor / event_type) のみを観測する」connector は、`body = NULL` を維持する。これらは ADR-0019 §不変条件 (b) (FS scan は本文を読まない) と同じ posture を SaaS API 側で踏襲しているため、本文抽出は将来の **file-extraction connector (Phase 11+)** へ分離する。本 ADR §(a) の retention 方針は「観測経路に本文があれば持つ」原則であり、参照しか持たない経路は対象外とする (provenance タグは引き続き `external` / `untrusted` で stamp する)。
 
 ### (e) provenance タグ (poisoning 緩和の中核)
 
