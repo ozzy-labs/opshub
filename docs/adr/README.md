@@ -95,6 +95,9 @@ NNNN-kebab-case-title.md
 | 0017 | [Knowledge Graph](0017-knowledge-graph.md) | Accepted |
 | 0018 | [Slack Connector Token Principal](0018-slack-token-principal.md) | Accepted |
 | 0019 | [Local-filesystem-backed Connector (box_drive)](0019-local-filesystem-backed-connector.md) | Accepted |
+| 0020 | [Full Local Content Retention](0020-full-local-content-retention.md) | Accepted |
+| 0021 | [Encryption at Rest](0021-encryption-at-rest.md) | Accepted |
+| 0022 | [MCP Server Surface](0022-mcp-server-surface.md) | Accepted |
 
 ## Open Questions
 
