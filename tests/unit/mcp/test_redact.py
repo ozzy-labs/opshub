@@ -3,6 +3,17 @@
 from __future__ import annotations
 
 from opshub.mcp._redact import redact_secrets
+from tests._secrets import (
+    FAKE_AWS_ACCESS_KEY,
+    FAKE_GITHUB_PAT,
+    FAKE_GOOGLE_API_KEY,
+    FAKE_JWT,
+    FAKE_SLACK_APP_TOKEN,
+    FAKE_SLACK_BOT_TOKEN,
+    FAKE_SLACK_LEGACY_TOKEN,
+    FAKE_SLACK_REFRESH_TOKEN,
+    FAKE_SLACK_USER_TOKEN,
+)
 
 
 def test_redact_sk_style_keys() -> None:
@@ -46,57 +57,49 @@ def test_redact_handles_multiple_tokens_in_one_string() -> None:
 
 
 def test_redact_github_fine_grained_pat() -> None:
-    text = (
-        "GitHub returned 401 for github_pat_11ABCDEFG0_abcdefghijklmnopqrstuvwxyz1234567890ABCDEF"
-    )
-    assert "github_pat_11ABCDEFG0_abcdefghijklmnopqrstuvwxyz1234567890ABCDEF" not in redact_secrets(
-        text
-    )
+    text = f"GitHub returned 401 for {FAKE_GITHUB_PAT}"
+    assert FAKE_GITHUB_PAT not in redact_secrets(text)
 
 
 def test_redact_slack_xoxb_token() -> None:
-    text = "Slack 401: xoxb-1234567890-1234567890-abcdefghij"
-    assert "xoxb-1234567890-1234567890-abcdefghij" not in redact_secrets(text)
+    text = f"Slack 401: {FAKE_SLACK_BOT_TOKEN}"
+    assert FAKE_SLACK_BOT_TOKEN not in redact_secrets(text)
 
 
 def test_redact_slack_xoxp_token() -> None:
-    text = "Slack 401: xoxp-1234567890-1234567890-abcdefghij"
-    assert "xoxp-1234567890-1234567890-abcdefghij" not in redact_secrets(text)
+    text = f"Slack 401: {FAKE_SLACK_USER_TOKEN}"
+    assert FAKE_SLACK_USER_TOKEN not in redact_secrets(text)
 
 
 def test_redact_slack_xoxa_token() -> None:
-    text = "Slack 401: xoxa-2-abcdefghijklmnopqrstuvwxyz"
-    assert "xoxa-2-abcdefghijklmnopqrstuvwxyz" not in redact_secrets(text)
+    text = f"Slack 401: {FAKE_SLACK_APP_TOKEN}"
+    assert FAKE_SLACK_APP_TOKEN not in redact_secrets(text)
 
 
 def test_redact_slack_xoxr_token() -> None:
-    text = "Slack 401: xoxr-1234567890-1234567890-abcdefghij"
-    assert "xoxr-1234567890-1234567890-abcdefghij" not in redact_secrets(text)
+    text = f"Slack 401: {FAKE_SLACK_REFRESH_TOKEN}"
+    assert FAKE_SLACK_REFRESH_TOKEN not in redact_secrets(text)
 
 
 def test_redact_slack_xoxs_token() -> None:
-    text = "Slack 401: xoxs-1234567890-1234567890-abcdefghij"
-    assert "xoxs-1234567890-1234567890-abcdefghij" not in redact_secrets(text)
+    text = f"Slack 401: {FAKE_SLACK_LEGACY_TOKEN}"
+    assert FAKE_SLACK_LEGACY_TOKEN not in redact_secrets(text)
 
 
 def test_redact_aws_access_key_id() -> None:
-    text = "aws denied access for AKIAIOSFODNN7EXAMPLE"
-    assert "AKIAIOSFODNN7EXAMPLE" not in redact_secrets(text)
+    text = f"aws denied access for {FAKE_AWS_ACCESS_KEY}"
+    assert FAKE_AWS_ACCESS_KEY not in redact_secrets(text)
 
 
 def test_redact_google_api_key() -> None:
-    # Google API keys are exactly ``AIza`` + 35 chars; the body below
+    # Google API keys are exactly ``AIza`` + 35 chars; the fake fixture
     # honours that wire-format length so the ``\b``-anchored regex
-    # (Round 2 Cluster B M4) matches without overrun.
-    text = "google returned 403 for AIzaSyA-1234567890abcdefghijklmnopqrstu"
-    assert "AIzaSyA-1234567890abcdefghijklmnopqrstu" not in redact_secrets(text)
+    # (Round 2 Cluster B M4) matches without overrun. Built from parts
+    # in ``tests/_secrets.py`` so the literal never lives in source.
+    text = f"google returned 403 for {FAKE_GOOGLE_API_KEY}"
+    assert FAKE_GOOGLE_API_KEY not in redact_secrets(text)
 
 
 def test_redact_jwt() -> None:
-    jwt = (
-        "eyJhbGciOiJIUzI1NiJ9."
-        "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
-        "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
-    )
-    text = f"failed to validate {jwt}"
-    assert jwt not in redact_secrets(text)
+    text = f"failed to validate {FAKE_JWT}"
+    assert FAKE_JWT not in redact_secrets(text)

@@ -592,10 +592,12 @@ def test_observe_does_not_put_token_in_body_store() -> None:
     a secret, so a future refactor that tried to stash one would fail
     type-check / this assertion.
     """
+    from tests._secrets import FAKE_SLACK_BOT_TOKEN_MARKER
+
     store = InMemoryEventStore()
     service = _make_service(store=store)
 
-    token = "xoxb-SECRET-TOKEN-DO-NOT-STORE"
+    token = FAKE_SLACK_BOT_TOKEN_MARKER
     source_event, inbox_event = service.observe(
         connector_name="slack",
         external_id="C1:1.0",
