@@ -41,7 +41,7 @@ Connector の **禁止事項**:
 2. **Projection table を直接更新しない** — 必ず Event Store 経由
 3. **Event を Application Service を経由せず append しない**
 4. **Vendor 固有 event 名を勝手に定義しない** — `domain/events/source.py` で集中管理
-5. **Full body を Operational Memory に書き込まない** — ADR-0005 違反 (**Phase 10 で撤回**、ADR-0020 で本文ローカル保持に転換。本項は ADR-0005 supersede 後は無効。本文取り込みは `SourceObserved.body` + `provenance_origin` / `provenance_trust` 経由で行う)
+5. **Full body を Operational Memory に書き込まない** — ADR-0005 違反 (**Phase 10 で撤回**、ADR-0020 で本文ローカル保持に転換。本項は ADR-0005 supersede 後は無効。本文取り込みは `SourceObserved.body` + `provenance_origin` / `provenance_trust` 経由で行う)。see §禁止事項 7 for the Phase 10 HITL boundary (write-back)
 6. **Lock を取得せず長時間 Task の状態を変更する操作を発火しない** — 必要なら Application Service が lock を取る
 7. **外部 SaaS への書き戻し (write-back) を実装しない** — **Phase 10 改訂で明示**。`post` / `send` / `comment` / `reply` 等の SaaS API への書き込みメソッドを connector に実装しない。Sub-issue E (返信下書き生成) は **下書き提示まで** で完結し、外送信は operator が手で行う (ADR-0016 §決定 (c) HITL 必須の延長)。詳細は §Phase 10 改訂を参照
 

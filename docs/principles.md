@@ -70,6 +70,14 @@ Phase 10 以降は次を保持する:
 
 → [ADR-0020: Full Local Content Retention](adr/0020-full-local-content-retention.md) (supersedes [ADR-0005](adr/0005-external-content-minimization.md)) / [ADR-0021: Encryption at Rest](adr/0021-encryption-at-rest.md)
 
+### 6.4 横断検索と本文ベース embedding
+
+本文をローカルに保持する設計 (§6 本文 + ADR-0020 §決定 (a)) は、横断検索の二経路をシンプルに成立させる。
+
+- (i) **本文を持つから hybrid search が成立** — `sources.body` (NULL なら `summary` に fallback) を SSOT に、vector recall (sqlite-vec) と FTS5 (`sources_fts`) の両方が同じ本文列を index 化できる。要約のみだった Phase 1-9 の時代は recall の細部・固有名詞・依頼の機微が summary 段階で抜け落ちており、秘書ユースケース (返信下書き / 本文検索) で再要約・上流再取得を強いられていた ([ADR-0012](adr/0012-embedding-strategy.md) §4 改訂 / Alternative #8)。
+- (ii) **`opshub recall` (semantic) と `opshub search` (exact/token) の役割分担** — `recall` は vector 類似度で「意味が近い」を引く (semantic、語彙ゆれに強い)。`search` は FTS5 で「キーワードが含まれる」を引く (exact / token、固有名詞・引用句に強い)。両者は補完関係で、エージェント host (MCP tool 経由 `recall.search`) はまず semantic recall を引き、外したら FTS で取り直すフォールバック動線を取れる ([ADR-0022](adr/0022-mcp-server-surface.md) §(a)/(d))。
+- (iii) 本文を持つ前提が両経路を裏打ちする ([ADR-0020](adr/0020-full-local-content-retention.md) §決定 (a) / §(d) backward-compat、[ADR-0012](adr/0012-embedding-strategy.md) §4 改訂版)。
+
 ## 7. Connector Contract
 
 Connector は以下の経路のみを行う。

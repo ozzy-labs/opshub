@@ -69,17 +69,16 @@ api-embedding-openai = ["openai"]
 api-embedding-voyage = ["voyage-ai"]
 connectors-github   = ["httpx", "PyGithub"]
 connectors-slack    = ["slack-sdk"]
-connectors-msgraph  = ["msgraph-sdk"]
+connectors-ms365    = ["msal", "httpx"]
 connectors-box      = ["boxsdk"]
 dev                 = ["pytest", "pytest-xdist", "mypy", "pyright", "ruff", ...]
-all                 = ["opshub[vector,local-embedding,api-embedding-openai,connectors-github,connectors-slack]"]
 ```
 
 これにより:
 
 - core install (`uv tool install opshub`) は ~10MB (sqlite-vec ~500KB 含む)
 - API embedder を使うユーザーは `uv tool install 'opshub[api-embedding-openai]'`
-- フルスタックは `uv tool install 'opshub[all]'`
+- 必要な extras のみを明示指定する (例: `uv tool install 'opshub[connectors-github,connectors-slack,secrets]'`)。Phase 4 時代に用意していた `all` bundle は Phase 5-10 で追加された extras 群と乖離していたため削除済 (Phase 10 監査 follow-up)
 - 単一バイナリ配布の道 (PyInstaller / Nuitka) は core 限定で残る
 
 ### 配布チャネル

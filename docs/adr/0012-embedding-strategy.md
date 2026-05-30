@@ -280,6 +280,8 @@ Phase 4 sub-issue A-D (PR #63-#74) で 3 backend (local sentence-transformers, O
 
 Event-driven 自動 embed (projector hook) / briefing 自動生成 (LLM 呼び出し) / `links` projection 本実装は Phase 5 以降の outlook (`docs/phase-4-plan.md` §6)。
 
+> 注: Phase 10 step B2 で source の embed 元は `COALESCE(body, summary)` に改訂された。§4 / Alternative #8 参照。
+
 ### Phase 4.x follow-up (PR #75) validation
 
 Phase 4 MVP の `recall(query, *, k, entity_types=None)` だけでは「rowid を起点にした類似検索」が表現できず、Phase 5+ の duplicate detection / 関連 entity 推薦で必要になることが判明。PR #75 で `VectorStore` Protocol に `recall_by_rowid(rowid: int, *, k: int, entity_types: tuple[str, ...] | None = None) -> list[tuple[int, float]]` を追加し、`tests/unit/vectors/test_protocol_freeze.py` で再 freeze。`SqliteVecStore` の具象実装と `services/embedding_service.py::find_duplicates` 経路が同 method を経由することを `tests/integration/test_phase4_lifecycle.py::test_find_duplicates_e2e` で pin。Protocol 拡張のみで signature 変更は発生せず、本 ADR §1 (抽象境界) と整合。

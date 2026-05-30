@@ -37,7 +37,7 @@ DB 暗号鍵は keyring service `"opshub"` の専用 key (`db:encryption_key`) �
 
 - **新規 DB (ファイル未作成) かつ鍵未設定** — `opshub init` が CSPRNG (`secrets.token_hex`) で鍵を生成し keyring に保管する。生成した鍵で DB を初期化。
 - **既存の暗号化 DB かつ鍵不在** — 復号不能。actionable error (`db:encryption_key が見つかりません。OPSHUB_DB_ENCRYPTION_KEY env var を設定するか keyring を確認してください`) で fail-fast し、誤って新規平文 DB を作らない。
-- **暗号化無効 (opt-out)** — `[storage] encryption = false` で平文 DB を許容する (CI / 一時環境 / 暗号化を望まない operator 向け)。本文を保持する以上 default は `encryption = true`。
+- **暗号化無効 (opt-out)** — `[storage] encryption = false` で平文 DB を許容する (CI / 一時環境 / 暗号化を望まない operator 向け)。default は `encryption = false` (opt-in)。本文を保持する以上 sensitive workload を扱う operator は明示的に opt-in する。cold-install footprint を保つため SQLCipher 依存は extras (`encryption`) で隔離 (§(d))。
 
 ### (c) 列暗号化は却下
 
@@ -89,7 +89,7 @@ SQLCipher native binding (`sqlcipher3-binary` 等) は `[project.optional-depend
 却下理由:
 
 - excludes (ADR-0020 §(b)) は「取り込まない」前段の防御で、取り込んだ本文の保存時保護にはならない。機密判定が完全でない以上、保存時暗号化は別レイヤーとして必須。
-- 本文を保持する以上、ディスク平文を許容しない default が秘書プラットフォームの信頼性要件。
+- 本文を保持する以上、保存時暗号化を opt-in で備えること自体が秘書プラットフォームの信頼性要件 (default は §(b) のとおり `encryption = false`、sensitive workload を扱う operator は明示的に opt-in する)。
 
 ## 関連
 
