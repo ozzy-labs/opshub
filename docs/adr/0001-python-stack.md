@@ -101,6 +101,8 @@ PyPI publish は **OIDC Trusted Publishers** を使う (`PYPI_TOKEN` legacy は�
 
 Typer subcommand を `app.command()` の関数内 import で遅延ロードする。top-level で重い依存 (`sentence-transformers` / `sqlite-vec` / connector SDK) を import しない。`opshub` cold start ~200ms を ~120ms 程度に抑える前提条件。
 
+同じ規律は connector package にも及ぶ: `import opshub.connectors.<name>`（registry への registration 副作用）の import chain は重い SDK / httpx / msal 等を pull してはならない（"import-clean" 契約）。`opshub connector sync <name>` は built-in connector を全 import して registry を埋めるため、ある connector の extra 未導入が別 connector の sync を巻き込んで落とす事故を防ぐ（#198、phase-7-plan §「Cold-start guard / import-clean contract」参照）。SDK を実際に使う submodule は関数内 lazy import 経由でのみ到達させる。
+
 ## Consequences
 
 ### Positive
