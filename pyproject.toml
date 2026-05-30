@@ -86,7 +86,6 @@ llm-ollama = ["httpx>=0.27"]
 # Connectors (Phase 3).
 connectors-github = ["httpx>=0.27", "PyGithub>=2.3"]
 connectors-slack = ["slack-sdk>=3.30"]
-connectors-msgraph = ["msgraph-sdk>=1.0"]
 # Microsoft 365 connector (Phase 7 step B1, ADR-0010 + ADR-0014). ``msal``
 # drives the OAuth 2.0 authorization-code (paste-code) flow and refresh
 # token handling; ``httpx`` is reserved for the Microsoft Graph API
@@ -129,13 +128,6 @@ dev = [
   "mypy>=1.11",
   "pyright>=1.1.380",
 ]
-# Convenience: install everything a Phase 4 user typically wants.
-# The self-reference must use the *distribution* name (``ozzylabs-opshub``),
-# not the Python import name (``opshub``) — uv resolves this against PyPI.
-all = [
-  "ozzylabs-opshub[vector,local-embedding,api-embedding-openai,connectors-github,connectors-slack,secrets]",
-]
-
 [project.scripts]
 opshub = "opshub.cli.app:main"
 

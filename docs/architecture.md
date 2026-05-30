@@ -77,7 +77,7 @@ Phase 10 実装状況: **本文取り込み + provenance タグの拡張** ([ADR
 |---|---|---|---|---|
 | GitHub | Web API (PyGithub) | `github_issue` / `github_pr` / etc. | PAT (`core/secrets` + keyring) | `[connectors-github]` |
 | Slack | Web API (slack-sdk) | `slack_message` | User Token (`xoxp-`) / Bot Token (`xoxb-`) | `[connectors-slack]` |
-| Microsoft 365 | Web API (msgraph) | `ms365_calendar` / `ms365_onedrive` / `ms365_outlook` | OAuth paste-code (msal) | `[connectors-msgraph]` |
+| Microsoft 365 | Web API (msgraph) | `ms365_calendar` / `ms365_onedrive` / `ms365_outlook` | OAuth paste-code (msal) | `[connectors-ms365]` |
 | Box | Web API (boxsdk) | `box_event` | OAuth paste-code (boxsdk) | `[connectors-box]` |
 | Box Drive (FS) | Local FS scan (`os.scandir()` + `stat()`、ADR-0019) | `box_drive_file` | なし (OS daemon に委譲、`opshub.toml` 設定のみ) | (extras 不要、stdlib のみ) |
 
@@ -260,7 +260,7 @@ Phase 10 C2 で出荷した tool 一覧 (`src/opshub/mcp/_registry.py`):
 
 | Kind | Name | 目的 |
 |---|---|---|
-| read | `recall.search` | 横断 semantic / FTS recall (tasks / decisions / inbox / sources) |
+| read | `recall.search` | semantic recall (vector、tasks / decisions / inbox / sources)。FTS5 は `opshub search` CLI で提供、両者は補完関係 (principles §6.4) |
 | read | `task.list` | tasks projection 取得 (state filter 可) |
 | read | `inbox.list` | inbox_items projection 取得 |
 | read | `decision.list` | decisions projection 取得 |
@@ -289,7 +289,7 @@ MCP セットアップ手順は [docs/mcp-setup.md](mcp-setup.md) を参照。�
    | `next-actions` | 「次に何 / やること」 | `task.list` + `recall.search` (+ HITL `task.create`) | read 自律 / write 人確認 |
    | `reply-draft` | 「返信案 / 下書き」 | `recall.search` + CLI `propose generate --kind reply_draft` + CLI `propose apply` | apply 時は人確認 |
    | `pr-review` | 「PR レビューして」 | `recall.search` + `decision.list` + `task.list` | 自律 OK |
-   | `file-lookup` | 「Box / ファイル確認」 | `recall.search` (FTS5 横断) | 自律 OK |
+   | `file-lookup` | 「Box / ファイル確認」 | `recall.search` (semantic recall) + `opshub search` CLI (FTS5) | 自律 OK |
 
 3. **skill security scan** (`tools/skill_scan.py`) — プロンプトインジェクション / コマンドインジェクション / ハードコード鍵 / データ持ち出し の 4 カテゴリ + frontmatter の隠しユニコード / 「ignore previous instructions」類のパターン検出。`ozzy-labs/skills` CI で skill 配信前にチェックする。
 
