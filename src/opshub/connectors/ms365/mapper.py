@@ -177,6 +177,14 @@ def map_onedrive_item(raw: RawOneDriveItem, *, actor: str = DEFAULT_ACTOR) -> So
     * ``url`` ← ``raw.web_url``.
     * ``occurred_at`` ← parsed ``raw.last_modified_iso`` (tz-aware UTC).
     * Source type is pinned to :data:`ONEDRIVE_SOURCE_TYPE`.
+
+    Phase 10 (ADR-0020 §(d) exception): OneDrive items are *file
+    references*; the connector does not read the file body itself, so
+    ``body`` stays ``None`` — body retention via a file-extraction
+    connector lives in Phase 11+, mirroring the ``box_drive`` FS-scan
+    posture (ADR-0019 §不変条件 (b)). The provenance tags
+    (``external`` / ``untrusted``) are still stamped for cross-connector
+    consistency with the SaaS family.
     """
     return _build_source_observed(
         external_id=raw.id,

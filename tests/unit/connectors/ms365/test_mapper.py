@@ -56,7 +56,11 @@ def _calendar(
     web_link: str = "https://outlook.office.com/calendar/item/abc",
     last_modified_iso: str = "2026-05-17T08:30:00Z",
     event_id: str = "evt-1",
+    raw_body_content: str | None = "Full event description body",
 ) -> RawCalendarEvent:
+    raw: dict[str, object] = {"id": event_id}
+    if raw_body_content is not None:
+        raw["body"] = {"contentType": "text", "content": raw_body_content}
     return RawCalendarEvent(
         id=event_id,
         subject=subject,
@@ -65,7 +69,7 @@ def _calendar(
         attendees_count=attendees,
         web_link=web_link,
         last_modified_iso=last_modified_iso,
-        raw={"id": event_id},
+        raw=raw,
     )
 
 
@@ -95,7 +99,11 @@ def _outlook(
     received_iso: str = "2026-05-16T15:45:00Z",
     web_link: str = "https://outlook.office.com/mail/inbox/id/abc",
     message_id: str = "msg-1",
+    raw_body_content: str | None = "Full Outlook message body verbatim from Graph",
 ) -> RawOutlookMessage:
+    raw: dict[str, object] = {"id": message_id}
+    if raw_body_content is not None:
+        raw["body"] = {"contentType": "html", "content": raw_body_content}
     return RawOutlookMessage(
         id=message_id,
         subject=subject,
@@ -103,7 +111,7 @@ def _outlook(
         sender=sender,
         received_iso=received_iso,
         web_link=web_link,
-        raw={"id": message_id},
+        raw=raw,
     )
 
 
@@ -112,7 +120,7 @@ def _outlook(
 
 def test_map_calendar_event_basic_conversion() -> None:
     """All Phase 7 plan §2.2 B3 fields land on :class:`SourceObserved`."""
-    raw = _calendar()
+    raw = _calendar(raw_body_content="Weekly sync agenda body")
     event = map_calendar_event(raw)
     assert event.source_type == CALENDAR_SOURCE_TYPE
     assert event.connector_name == "ms365"
@@ -121,6 +129,13 @@ def test_map_calendar_event_basic_conversion() -> None:
     assert event.summary == "2026-05-17T09:00:00Z - 2026-05-17T10:00:00Z (3 attendees)"
     assert event.url == "https://outlook.office.com/calendar/item/abc"
     assert event.actor == DEFAULT_ACTOR
+    # Phase 10 (ADR-0020): the full body lifted from ``raw.body.content``
+    # is retained alongside the ≤200-char summary, and tagged as
+    # external + untrusted so downstream agent context treats it as
+    # reference material (poisoning / indirect prompt-injection mitigation).
+    assert event.body == "Weekly sync agenda body"
+    assert event.provenance_origin == "external"
+    assert event.provenance_trust == "untrusted"
 
 
 def test_map_calendar_event_occurred_at_is_utc_aware() -> None:
@@ -170,6 +185,15 @@ def test_map_onedrive_item_basic_conversion() -> None:
     assert event.title == "design-doc.md"
     assert event.summary == "/drive/root:/Projects/design-doc.md"
     assert event.url == "https://onedrive.live.com/?id=abc"
+    # Phase 10 (ADR-0020): OneDrive items are file *references* — the
+    # connector does not read the file body itself (that belongs to a
+    # future file-extraction connector, Phase 11+ — same posture as
+    # box_drive's ADR-0019 §不変条件 (b)). ``body`` stays ``None`` but
+    # the provenance tags still mark the observation as external +
+    # untrusted for cross-connector consistency.
+    assert event.body is None
+    assert event.provenance_origin == "external"
+    assert event.provenance_trust == "untrusted"
 
 
 def test_map_onedrive_item_occurred_at_is_utc_aware() -> None:
@@ -191,13 +215,18 @@ def test_map_onedrive_item_truncates_long_path() -> None:
 
 
 def test_map_outlook_message_basic_conversion() -> None:
-    raw = _outlook()
+    raw = _outlook(raw_body_content="Full Outlook message body verbatim from Graph")
     event = map_outlook_message(raw)
     assert event.source_type == OUTLOOK_SOURCE_TYPE
     assert event.external_id == "msg-1"
     assert event.title == "Re: deployment plan"
     assert event.summary == "Sounds good — proceeding tomorrow."
     assert event.url == "https://outlook.office.com/mail/inbox/id/abc"
+    # Phase 10 (ADR-0020): the full body lifted from ``raw.body.content``
+    # is retained verbatim, and tagged as external + untrusted.
+    assert event.body == "Full Outlook message body verbatim from Graph"
+    assert event.provenance_origin == "external"
+    assert event.provenance_trust == "untrusted"
 
 
 def test_map_outlook_message_occurred_at_is_utc_aware() -> None:

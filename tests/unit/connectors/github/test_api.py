@@ -626,3 +626,73 @@ def test_title_short_preserved_verbatim() -> None:
 
     assert items[0].title == "issue #42"
     assert not items[0].title.endswith("…")
+
+
+# ---------------------------------------------------------------------------
+# ADR-0020 (Full Local Content Retention): body field retained verbatim
+# ---------------------------------------------------------------------------
+
+
+def test_normalise_issue_retains_full_body() -> None:
+    """ADR-0020: the issue body is retained verbatim in :attr:`GitHubItem.body`.
+
+    The ≤200-char ``summary`` is the recognition preview; ``body``
+    carries the full markdown so body-based search (Sub-issue B) and
+    propose / reply-draft (Sub-issue E) have something to work from.
+    A pathologically long body — well past the summary cap — must
+    survive without truncation on the ``body`` field.
+    """
+    long_body = "First line preview\n\n" + ("paragraph body " * 50)
+    assert len(long_body) > SUMMARY_MAX_CHARS  # > 200 chars (sanity)
+    payload = _issue_payload(1, body=long_body)
+    routes = {
+        ("GET", "/repos/owner/repo/issues"): httpx.Response(200, json=[payload]),
+    }
+    with _client(routes) as client:
+        items = list(list_issues_since("owner/repo", None, token=_TOKEN, client=client))
+
+    assert len(items) == 1
+    item = items[0]
+    # ``body`` is the full markdown verbatim — no truncation, no ellipsis.
+    assert item.body == long_body
+    # ``summary`` is the first non-empty line clamped to the cap.
+    assert item.summary is not None
+    assert len(item.summary) <= SUMMARY_MAX_CHARS
+
+
+def test_normalise_pull_retains_full_body() -> None:
+    """ADR-0020: PR descriptions are likewise retained verbatim on ``body``."""
+    long_body = "PR opener\n\n" + ("details paragraph " * 40)
+    assert len(long_body) > SUMMARY_MAX_CHARS  # sanity
+    payload = _pr_payload(7, updated_at="2026-05-15T12:00:00Z", body=long_body)
+    routes = {
+        ("GET", "/repos/owner/repo/pulls"): httpx.Response(200, json=[payload]),
+    }
+    with _client(routes) as client:
+        items = list(list_pulls_since("owner/repo", None, token=_TOKEN, client=client))
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.body == long_body
+    assert item.summary is not None
+    assert len(item.summary) <= SUMMARY_MAX_CHARS
+
+
+def test_normalise_issue_body_none_when_missing() -> None:
+    """A missing / empty body normalises to ``None`` on ``body`` (not ``""``).
+
+    Mirrors the summary path: an unambiguous "no body" marker keeps
+    downstream "has a body" / FTS index checks simple.
+    """
+    payload_none = _issue_payload(1, body=None)
+    payload_empty = _issue_payload(2, body="")
+    routes = {
+        ("GET", "/repos/owner/repo/issues"): httpx.Response(
+            200, json=[payload_none, payload_empty]
+        ),
+    }
+    with _client(routes) as client:
+        items = list(list_issues_since("owner/repo", None, token=_TOKEN, client=client))
+
+    assert len(items) == 2
+    assert all(it.body is None for it in items)

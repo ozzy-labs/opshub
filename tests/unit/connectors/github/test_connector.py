@@ -17,7 +17,9 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -55,7 +57,10 @@ class _RecordingSourceService:
     """Test double for :class:`SourceService` that records ``observe`` calls.
 
     Mirrors the field signature used by the real service so a connector
-    that drifts on argument names trips a TypeError immediately.
+    that drifts on argument names trips a TypeError immediately. Phase 10
+    (ADR-0020) added ``body`` / ``provenance_origin`` / ``provenance_trust``
+    keywords — the double accepts (and records) all three so the
+    connector contract is pinned end-to-end here.
     """
 
     def __init__(self) -> None:
@@ -70,6 +75,9 @@ class _RecordingSourceService:
         title: str,
         url: str | None = None,
         summary: str | None = None,
+        body: str | None = None,
+        provenance_origin: str | None = None,
+        provenance_trust: str | None = None,
     ) -> None:
         self.calls.append(
             {
@@ -79,6 +87,9 @@ class _RecordingSourceService:
                 "title": title,
                 "url": url,
                 "summary": summary,
+                "body": body,
+                "provenance_origin": provenance_origin,
+                "provenance_trust": provenance_trust,
             }
         )
 
@@ -109,7 +120,12 @@ def _context(
         source_service=service,
         cursor_value=cursor_value,
         secrets=None,
-        logger=None,
+        # ``warning()`` needs to be callable on the excludes-repo skip
+        # path (Phase 10 audit Cluster 3). The original tests passed
+        # ``None`` because no logger surface was exercised; we use a
+        # MagicMock now so both the legacy paths and the new exclude
+        # path satisfy the connector's attribute access.
+        logger=MagicMock(),
     )
     return ctx, service
 
@@ -155,3 +171,90 @@ def test_empty_first_sync_keeps_none_cursor(
 
     assert result.observed_count == 0
     assert result.new_cursor is None
+
+
+def test_sync_skips_when_repo_in_excludes(
+    monkeypatch: pytest.MonkeyPatch,
+    github_env: None,
+    tmp_path: Path,
+) -> None:
+    """ADR-0020 §(b): an ``owner/repo`` in ``excludes.yaml`` triggers no observe.
+
+    The connector must short-circuit before fetching — listing primitives
+    are not even consulted. The prior cursor stays untouched (no progress,
+    no movement) so flipping the exclude back off resumes exactly where
+    the last real sync left off.
+    """
+    from unittest.mock import MagicMock
+
+    from opshub.connectors.github import api as github_api
+
+    # Write an excludes.yaml under a tmp config dir and point
+    # ``default_config_dir`` at it so ``load_excludes()`` resolves there.
+    cfg_dir = tmp_path / "opshub-config"
+    cfg_dir.mkdir()
+    (cfg_dir / "excludes.yaml").write_text(
+        "repos:\n  - owner/repo\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "opshub.core.excludes.default_config_dir",
+        lambda: cfg_dir,
+    )
+
+    # Listing primitives must not run; trip a clear AssertionError if they do.
+    forbidden = MagicMock(side_effect=AssertionError("listing called for excluded repo"))
+    monkeypatch.setattr(github_api, "list_issues_since", forbidden)
+    monkeypatch.setattr(github_api, "list_pulls_since", forbidden)
+    monkeypatch.setattr(github_api, "list_notifications", forbidden)
+
+    prior_cursor = "2026-05-15T10:20:30Z"
+    ctx, service = _context(cursor_value=prior_cursor)
+    result = GitHubConnector().sync(ctx)
+
+    assert result.observed_count == 0
+    assert result.new_cursor == prior_cursor
+    assert service.calls == []
+
+
+def test_sync_forwards_body_and_provenance_to_source_service(
+    monkeypatch: pytest.MonkeyPatch,
+    github_env: None,
+) -> None:
+    """ADR-0020: ``GitHubItem.body`` reaches ``observe(body=..., provenance_*=...)``.
+
+    The connector must thread the full body (untruncated) plus
+    ``provenance_origin="external"`` + ``provenance_trust="untrusted"``
+    so the agent / LLM context treats SaaS-origin bodies as reference
+    material, never instructions (indirect prompt-injection mitigation
+    per ADR-0020 §(e)).
+    """
+    from opshub.connectors.github import api as github_api
+    from opshub.connectors.github.api import GitHubItem
+
+    long_body = "Full issue body — paragraph " * 20
+    fake_issue = GitHubItem(
+        source_type="issue",
+        external_id="owner/repo#1",
+        title="issue #1",
+        url="https://github.com/owner/repo/issues/1",
+        summary="Full issue body — paragraph",
+        updated_at=datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC),
+        body=long_body,
+    )
+
+    def _yield_one_issue(*_args: object, **_kwargs: object) -> Iterator[GitHubItem]:
+        yield fake_issue
+
+    monkeypatch.setattr(github_api, "list_issues_since", _yield_one_issue)
+    monkeypatch.setattr(github_api, "list_pulls_since", _empty_iter)
+    monkeypatch.setattr(github_api, "list_notifications", _empty_iter)
+
+    ctx, service = _context(cursor_value=None)
+    GitHubConnector().sync(ctx)
+
+    assert len(service.calls) == 1
+    call = service.calls[0]
+    assert call["body"] == long_body
+    assert call["provenance_origin"] == "external"
+    assert call["provenance_trust"] == "untrusted"

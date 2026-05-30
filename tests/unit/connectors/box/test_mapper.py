@@ -176,3 +176,20 @@ def test_map_event_uses_custom_actor() -> None:
     observed = map_event(raw, actor="cli:test-suite")
 
     assert observed.actor == "cli:test-suite"
+
+
+def test_map_event_body_none_provenance_tagged() -> None:
+    """ADR-0020: Box *events* describe file activity, not content.
+
+    Mirrors ``box_drive``'s
+    :func:`tests.unit.connectors.box_drive.test_mapper.test_map_scanned_file_body_none_provenance_tagged`
+    posture: there is no file body to retain (the event payload is
+    metadata only), so ``body`` is ``None``. The observation is still
+    external in origin, so the provenance tags are stamped (external /
+    untrusted) for cross-connector consistency with the SaaS family.
+    """
+    observed = map_event(_raw_event())
+
+    assert observed.body is None
+    assert observed.provenance_origin == "external"
+    assert observed.provenance_trust == "untrusted"
