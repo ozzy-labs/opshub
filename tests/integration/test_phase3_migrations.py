@@ -98,6 +98,15 @@ def test_phase3_migrations_create_expected_columns(head_engine: Engine) -> None:
         # so a future schema bump that drops the nullability would
         # break ``head`` even before a fresh migration test runs.
         "fingerprint": {"nullable": True},
+        # Phase 10 step A1 (migration 0018, ADR-0020): full local body
+        # retention + provenance tagging. All three columns are
+        # nullable so historical Phase 3-9 rows continue to load
+        # without a backfill step; connectors populate them on the
+        # next sync. Pinning them here keeps the Phase 3 column-set
+        # test on the wider Phase 10 sources schema.
+        "body": {"nullable": True},
+        "provenance_origin": {"nullable": True},
+        "provenance_trust": {"nullable": True},
     }
     assert set(sources_columns) == set(expected_sources), (
         f"sources column set mismatch; got {sorted(sources_columns)}"

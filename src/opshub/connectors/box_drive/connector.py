@@ -204,8 +204,13 @@ class BoxDriveConnector:
         # Phase 10 (ADR-0020 §(b)): the shared ``excludes.yaml`` ``paths``
         # selector augments the connector's inline ``exclude_globs`` so an
         # operator can migrate inline globs to the shared file at their
-        # own pace. Both lists feed the scanner's path matcher.
-        shared_paths = list(load_excludes(config_dir=settings.config_dir).paths)
+        # own pace. Both lists feed the scanner's path matcher. Call
+        # ``load_excludes()`` with no arguments so the helper resolves
+        # ``default_config_dir()`` itself — matches the other four
+        # connectors (github / slack / msgraph / box) and avoids the
+        # ``OpsHubSettings`` mock pitfall where a ``MagicMock`` for
+        # ``settings.config_dir`` would propagate into the loader.
+        shared_paths = list(load_excludes().paths)
         exclude_globs = list(cfg.exclude_globs) + shared_paths
         root_path: Path | None = cfg.root_path
         if root_path is None:

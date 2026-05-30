@@ -130,7 +130,7 @@ Phase 1–8 を出荷済み（2026-05-17, v0.1.0）。Phase 9 出荷 2026-05-23�
 | 7 | Connectors wave 2 | Slack + Microsoft 365 + Box |
 | 8 | Knowledge graph | `links` projection + 自動抽出 + `graph` + `--expand-graph` |
 | 9 | Local-FS connectors | `box_drive` (Box Drive デスクトップ → ローカル FS scan、ADR-0019) |
-| 10 | Secretary agent platform | 本文ローカル保持 (ADR-0020) + 保存時暗号化 (ADR-0021) + MCP server (ADR-0022) + `opshub search` (FTS5) + `opshub mcp serve` + 秘書 5 Skills + reply-draft (ADR-0016 §決定 (i)) |
+| 10 | Secretary agent platform | 本文ローカル保持 (ADR-0020) + 保存時暗号化 (ADR-0021) + MCP server (ADR-0022) + `opshub search` (FTS5) + `opshub mcp serve` + 秘書 5 Skills + reply-draft (ADR-0016 §決定 (i)) + ADR-0004 改訂 (形A: runtime をコアに持たない) + ADR-0010 改訂 (write-back 禁止) + ADR-0017 改訂 (reply_draft link types) |
 
 次は **Phase 11 (MS Office 深掘り — Teams + Outlook 本文 + Word/Excel/PowerPoint 抽出)** — [`docs/phase-10-plan.md`](docs/phase-10-plan.md) §9 を参照。Phase 12+ 候補: multi-machine sync / 能動性 (cron 委譲)。phase ごとの詳細は [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery) に。
 

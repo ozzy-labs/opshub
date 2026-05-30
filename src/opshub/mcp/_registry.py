@@ -8,7 +8,7 @@ once here in plain Python data so the same descriptors drive both:
 1. the MCP ``list_tools`` response (the ``annotations`` field carries
    ``readOnlyHint`` / ``destructiveHint`` / ``idempotentHint`` /
    ``openWorldHint`` exactly as ADR-0022 §(c) prescribes);
-2. the in-process dispatch from :func:`opshub.mcp.server.handle_call_tool`.
+2. the in-process dispatch from :func:`opshub.mcp.server.dispatch_tool_call`.
 
 A registry instead of `@server.tool()` decorators sprinkled across
 modules makes the security posture auditable — a CI guard

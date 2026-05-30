@@ -94,12 +94,14 @@ opshub/
    [project.optional-dependencies]
    github = ["PyGithub>=2"]
    slack = ["slack-sdk>=3"]
-   msgraph = ["msgraph-sdk>=1"]
+   connectors-ms365 = ["msgraph-sdk>=1"]
    box = ["boxsdk>=3"]
-   all = ["opshub[github,slack,msgraph,box]"]
    ```
 
-   ユーザーは `pip install "opshub[github,slack]"` で必要分のみ install
+   ユーザーは `pip install "opshub[github,slack]"` で必要分のみ install。
+   Phase 10 監査 follow-up で `msgraph` extras と `all` bundle は廃止し、現状の
+   `pyproject.toml` の extras 名 (`connectors-ms365`) に揃えた。`all` bundle
+   は本リポでは提供せず、operator は必要な connector extras を明示的に列挙する。
 3. **import の循環チェック** — `import-linter` または ruff の `TID` rule で connector → core の単方向依存を強制
 4. **テスト境界** — connector テストはディレクトリ単位で実行可能にする (`pytest tests/connectors/github/`)
 

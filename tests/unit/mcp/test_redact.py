@@ -85,8 +85,11 @@ def test_redact_aws_access_key_id() -> None:
 
 
 def test_redact_google_api_key() -> None:
-    text = "google returned 403 for AIzaSyA-1234567890abcdefghijklmnopqrstuvw"
-    assert "AIzaSyA-1234567890abcdefghijklmnopqrstuvw" not in redact_secrets(text)
+    # Google API keys are exactly ``AIza`` + 35 chars; the body below
+    # honours that wire-format length so the ``\b``-anchored regex
+    # (Round 2 Cluster B M4) matches without overrun.
+    text = "google returned 403 for AIzaSyA-1234567890abcdefghijklmnopqrstu"
+    assert "AIzaSyA-1234567890abcdefghijklmnopqrstu" not in redact_secrets(text)
 
 
 def test_redact_jwt() -> None:

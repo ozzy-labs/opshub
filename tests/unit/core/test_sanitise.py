@@ -156,9 +156,9 @@ def test_redacts_aws_access_key_id() -> None:
 
 def test_redacts_google_api_key() -> None:
     """``AIza`` + 35 chars of base64url alphabet is the Google API key."""
-    message = "google returned 403 for AIzaSyA-1234567890abcdefghijklmnopqrstuvw"
+    message = "google returned 403 for AIzaSyA-1234567890abcdefghijklmnopqrstu"
     out = sanitise_error_message(message)
-    assert "AIzaSyA-1234567890abcdefghijklmnopqrstuvw" not in out
+    assert "AIzaSyA-1234567890abcdefghijklmnopqrstu" not in out
     assert "AIza***" in out
 
 
@@ -199,7 +199,7 @@ def test_redacts_all_expanded_shapes_in_one_message() -> None:
         "boom: github_pat_11ABCDEFG0_abcdefghijklmnopqrstuvwxyz1234567890ABCDEF; "
         "xoxb-1234567890-1234567890-abcdefghij; "
         "AKIAIOSFODNN7EXAMPLE; "
-        "AIzaSyA-1234567890abcdefghijklmnopqrstuvw; "
+        "AIzaSyA-1234567890abcdefghijklmnopqrstu; "
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV"
     )
     out = sanitise_error_message(message)
@@ -207,8 +207,69 @@ def test_redacts_all_expanded_shapes_in_one_message() -> None:
         "github_pat_11ABCDEFG0_abcdefghijklmnopqrstuvwxyz1234567890ABCDEF",
         "xoxb-1234567890-1234567890-abcdefghij",
         "AKIAIOSFODNN7EXAMPLE",
-        "AIzaSyA-1234567890abcdefghijklmnopqrstuvw",
+        "AIzaSyA-1234567890abcdefghijklmnopqrstu",
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV",
     ]
     for fragment in forbidden_fragments:
         assert fragment not in out
+
+
+# ---------------------------------------------------------------------- C
+# Phase 10 audit Round 2 Cluster B (M4): word-boundary anchors on the
+# prefix-anchored token shapes. The ``AKIA`` / ``AIza`` / ``ghp_`` /
+# ``github_pat_`` / ``sk-`` / ``xox*-`` markers now require ``\b`` on
+# both sides so a leading identifier prefix (URL path component,
+# concatenated symbol) does not cause a false-positive match that
+# eats unrelated text. The regexes pin the documented wire-format
+# shapes — embedded substrings inside a longer alnum identifier
+# remain untouched.
+
+
+def test_aws_key_inside_longer_identifier_is_not_redacted() -> None:
+    """``XAKIAIOSFODNN7EXAMPLE`` (no boundary) must stay intact.
+
+    Before Round 2 Cluster B M4 the regex matched the embedded
+    ``AKIA<16>`` slice even when the prefix sat in the middle of a
+    longer alnum identifier. The ``\\b`` anchor now requires the
+    ``AKIA`` to start at a word boundary, eliminating that false
+    positive class for arbitrary identifiers.
+    """
+    embedded = "XAKIAIOSFODNN7EXAMPLE"
+    out = sanitise_error_message(f"saw {embedded} in audit log")
+    assert embedded in out
+    assert "AKIA***" not in out
+
+
+def test_google_key_inside_url_path_is_not_redacted() -> None:
+    """A URL path component starting with ``...XAIza...`` must survive.
+
+    A real Google API key surfaces at a word boundary (URL query
+    parameter, JSON value, log token). The ``\\b`` anchor avoids
+    redacting an unrelated identifier that happens to contain
+    ``AIza`` mid-string.
+    """
+    embedded = "XAIzaSyA1234567890abcdefghijklmnopqrstuvw"
+    out = sanitise_error_message(f"https://example.com/path/{embedded}/more")
+    assert embedded in out
+    assert "AIza***" not in out
+
+
+def test_google_key_at_word_boundary_is_still_redacted() -> None:
+    """The boundary-preserving behaviour must NOT regress true positives.
+
+    A real ``AIza`` key delimited by spaces / quotes / URL boundary
+    still hits the marker — the anchor only suppresses false matches
+    inside longer alnum runs.
+    """
+    real_key = "AIzaSyA-1234567890abcdefghijklmnopqrstu"
+    out = sanitise_error_message(f"https://example.com/path?key={real_key}")
+    assert real_key not in out
+    assert "AIza***" in out
+
+
+def test_aws_key_at_word_boundary_is_still_redacted() -> None:
+    """A real AWS access key id at a boundary remains redacted."""
+    real_key = "AKIAIOSFODNN7EXAMPLE"
+    out = sanitise_error_message(f"saw '{real_key}' in audit log")
+    assert real_key not in out
+    assert "AKIA***" in out

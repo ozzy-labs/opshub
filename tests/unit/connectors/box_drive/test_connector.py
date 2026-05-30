@@ -480,11 +480,11 @@ def test_sync_merges_shared_excludes_paths_into_scanner(
         "paths:\n  - '**/secrets/**'\n",
         encoding="utf-8",
     )
+    # The connector now calls ``load_excludes()`` with no arguments
+    # (Round 2 Cluster B M1 — matches github / slack / msgraph / box),
+    # so patching ``default_config_dir`` on the loader is enough; no
+    # ``OPSHUB_CONFIG_DIR`` env shim is needed.
     monkeypatch.setattr("opshub.core.excludes.default_config_dir", lambda: cfg_dir)
-    # ``OpsHubSettings.config_dir`` is the resolution path the connector
-    # passes into ``load_excludes(config_dir=...)``; mirror it so both
-    # call sites resolve to the same place.
-    monkeypatch.setenv("OPSHUB_CONFIG_DIR", str(cfg_dir))
 
     service = _RecordingSourceService()
     result = BoxDriveConnector().sync(_context(service))

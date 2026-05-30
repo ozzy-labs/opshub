@@ -52,8 +52,11 @@ vector = ["sqlite-vec", "numpy"]
 local-embedding = ["sentence-transformers"]
 api-embedding-openai = ["openai"]
 api-embedding-voyage = ["voyage-ai"]
-all = ["opshub[vector,local-embedding,api-embedding-openai]"]
 ```
+
+> Phase 10 監査 follow-up: かつての `all = ["opshub[vector,local-embedding,api-embedding-openai]"]`
+> bundle は本リポでは廃止し、operator が必要な extras を明示的に列挙する方式に統一した。
+> ADR-0007 §軽減策 2 と同方針。
 
 install パターン:
 
