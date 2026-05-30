@@ -83,7 +83,7 @@ CLI は廃止しない。人間も従来どおり CLI を叩けるが、基本�
   |---|---|---|---|
   | daily-brief | 「今日のまとめ/状況」 | `brief`(read) | 自律OK |
   | next-actions | 「次に何を/やること」 | `task list`+`brief` | 自律OK |
-  | reply-draft | 「返信案/下書き」 | `propose --kind reply_draft`(外送信なし) | 下書き保存=確認 |
+  | reply-draft | 「返信案/下書き」 | `propose generate --reply-to <source_id>`(外送信なし) | 下書き保存=確認 |
   | pr-review | 「PR レビューして」 | `recall`/GitHub source query(read) | 自律OK |
   | file-lookup | 「Box/ファイル確認」 | `search`(本文横断) | 自律OK |
 
@@ -96,7 +96,7 @@ CLI は廃止しない。人間も従来どおり CLI を叩けるが、基本�
 新規に要るのは4点に集約（文体・文脈・HITL は既存機構で賄える）:
 
 - (a) **`ReplyDraftCandidatePayload`**（`kind="reply_draft"`、`reply_to_source_id/type` 必須、schema v1→v2 で両 version 読み分け）
-- (b) **`reply_drafts/prompts.py`**: do-not-follow preamble（ADR-0015 §決定 f 継承）＋薄い静的 About（署名/役割）＋ `<style_example>`（recall: author=self を返信先 channel/相手で絞る）＋ `<context_source>`（`--expand-graph`）
+- (b) **`reply_draft_prompts.py`**: do-not-follow preamble（ADR-0015 §決定 f 継承）＋薄い静的 About（署名/役割）＋ `<style_example>`（recall: author=self を返信先 channel/相手で絞る）＋ `<context_source>`（`--expand-graph`）。実装は `src/opshub/services/proposals/reply_draft_prompts.py` のフラットモジュール（`reply_drafts/` サブパッケージにはしていない）
 - (c) **link_type 2種**（`reply_draft_replies_to` / `referenced_in_reply_draft`、ADR-0017 enum 拡張・純派生）
 - (d) **外部書き戻しを しない 境界の test pin**（write-back 経路が存在しないこと）
 - triage（respond/notify/ignore）は `propose generate` の前段 or structured field。auto-apply はしない（durable state 変更は operator の apply のみ）

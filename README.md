@@ -202,7 +202,7 @@ opshub propose generate "next steps"                  # LLM proposes task/decisi
 opshub propose generate "next steps" --from-briefing <id>
 opshub propose generate "next steps" --format json
 opshub propose generate "next steps" --expand-graph   # 1-hop graph expansion for proposals
-opshub propose generate --reply-to <source-id>        # Phase 10: reply-draft mode (ADR-0016 §決定 (i))
+opshub propose generate "" --reply-to <source-id>     # Phase 10: reply-draft mode (topic is ignored; ADR-0016 §決定 (i))
 opshub propose list                                   # recent proposals (markdown table)
 opshub propose list --state pending --limit 10        # filter: pending / applied / rejected
 opshub propose apply <proposal-id> <candidate-index>  # operator approval → creates entities (reply-draft saves locally, never sends)

@@ -99,3 +99,5 @@ CI では追加で `uv sync --locked` と `uv run mypy src` を実行する。
 | GitHub Copilot | `AGENTS.md` + `.agents/skills/`       |
 
 `.agents/skills/` and `.claude/skills/` are distributed from [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) via the `@ozzylabs/skills` Renovate preset, not from `commons` (see [ADR-0016](https://github.com/ozzy-labs/handbook/blob/main/adr/0016-create-skills-repo.md)).
+
+秘書 5 Skill（daily-brief / next-actions / reply-draft / pr-review / file-lookup）の catalog は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。Codex / Copilot CLI も MCP 経由で同じ surface を叩ける。
