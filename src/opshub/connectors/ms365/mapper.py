@@ -72,6 +72,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from opshub.core.errors import ConnectorFailedError
+from opshub.core.logging import get_logger
 from opshub.core.time import now_utc
 from opshub.domain.events.source import SourceObserved
 
@@ -86,6 +87,7 @@ if TYPE_CHECKING:
 __all__ = [
     "CALENDAR_SOURCE_TYPE",
     "DEFAULT_ACTOR",
+    "MAX_OUTLOOK_BODY_CHARS",
     "ONEDRIVE_SOURCE_TYPE",
     "OUTLOOK_SOURCE_TYPE",
     "SUMMARY_MAX_CHARS",
@@ -93,6 +95,9 @@ __all__ = [
     "map_onedrive_item",
     "map_outlook_message",
 ]
+
+
+_log = get_logger(__name__)
 
 
 #: ``source_type`` value emitted for Calendar event mappings. Pinned as
@@ -120,6 +125,27 @@ SUMMARY_MAX_CHARS = 200
 #: does not own the append path; the constant lives here so unit tests
 #: that bypass the CLI can build events with the same provenance.
 DEFAULT_ACTOR = "connector:ms365"
+
+#: Phase 11 OQ2 (plan §3 F3): hard ceiling on retained Outlook body
+#: characters. Microsoft 365 mailboxes accept individual messages up to
+#: 150 MB after MIME encoding, which decodes to multi-megabyte HTML
+#: bodies on the long tail (forwarded thread chains, marketing
+#: newsletters with embedded base64 images, full-body quote replies).
+#: Storing those verbatim would balloon the projection row, push large
+#: untrusted blobs through every recall / embedding pass, and inflate
+#: backup / sync payloads.
+#:
+#: 500_000 chars is the same operator-visible cap planned for the
+#: future ``core/text_limits`` shared facility (Sub F2). F3 ships the
+#: cap inline as a module constant ahead of that shared mechanism so
+#: Outlook ingestion is not blocked on the broader refactor; the
+#: constant name / value will line up cleanly with the shared facility
+#: when F2 lands so the migration is a single-symbol redirect.
+#:
+#: Operator overrides are intentionally deferred to F2 — Phase 11 plan
+#: §3 F3 pins this as a module constant and notes the shared mechanism
+#: as the proper home for ``opshub.toml`` plumbing.
+MAX_OUTLOOK_BODY_CHARS = 500_000
 
 # Internal: ellipsis character used to mark truncated summaries. Picking
 # U+2026 (single char) over ASCII "..." (three chars) preserves more of
@@ -211,7 +237,30 @@ def map_outlook_message(raw: RawOutlookMessage, *, actor: str = DEFAULT_ACTOR) -
     * ``url`` ← ``raw.web_link``.
     * ``occurred_at`` ← parsed ``raw.received_iso`` (tz-aware UTC).
     * Source type is pinned to :data:`OUTLOOK_SOURCE_TYPE`.
+
+    Body retention (Phase 10 / 11):
+
+    The Graph ``body.content`` (HTML or plain text, depending on the
+    ``contentType`` Microsoft reports) is preserved verbatim onto
+    ``SourceObserved.body``. HTML is **not** stripped here — the
+    untrusted provenance tags (``external`` / ``untrusted``) downstream
+    treat the content as reference material, and the secretary skills
+    decide on rendering / sanitisation. Stripping at mapper time would
+    irreversibly lose markup that later passes might need (anchor
+    links, embedded reply-quote boundaries).
+
+    Phase 11 OQ2: messages whose body exceeds
+    :data:`MAX_OUTLOOK_BODY_CHARS` are truncated **inline** at the
+    mapper layer and tagged with a ``[outlook body truncated: N / M
+    chars]`` suffix so downstream consumers can detect partial bodies
+    deterministically. A warning is logged with the message id and
+    original / retained sizes so operators can spot pathological
+    senders without inspecting the projection. F2's shared
+    ``core/text_limits`` facility will eventually subsume this; until
+    then the cap is fixed at module-constant value.
     """
+    body = _body_from_raw(raw.raw)
+    body = _truncate_outlook_body(body, message_id=raw.id)
     return _build_source_observed(
         external_id=raw.id,
         source_type=OUTLOOK_SOURCE_TYPE,
@@ -222,8 +271,10 @@ def map_outlook_message(raw: RawOutlookMessage, *, actor: str = DEFAULT_ACTOR) -
         actor=actor,
         # Phase 10 (ADR-0020): retain the full message body (Graph
         # ``body.content``, fetched via the extended ``$select``). The
-        # ≤200-char summary still comes from ``bodyPreview``.
-        body=_body_from_raw(raw.raw),
+        # ≤200-char summary still comes from ``bodyPreview``. Phase 11
+        # OQ2: outsize bodies are truncated above to keep projection /
+        # recall rows bounded.
+        body=body,
     )
 
 
@@ -246,6 +297,48 @@ def _body_from_raw(raw: dict[str, Any]) -> str | None:
     if not isinstance(content, str) or not content.strip():
         return None
     return content
+
+
+def _truncate_outlook_body(body: str | None, *, message_id: str) -> str | None:
+    """Clip ``body`` to :data:`MAX_OUTLOOK_BODY_CHARS` with an audit suffix.
+
+    ``None`` passes through unchanged so the projection still stores
+    ``NULL`` for messages without a body. Bodies at or below the cap
+    are returned unchanged.
+
+    Over-cap bodies get clipped to ``MAX_OUTLOOK_BODY_CHARS`` and a
+    deterministic suffix is appended:
+
+    ``"\\n\\n[outlook body truncated: <kept> / <original> chars]"``
+
+    The bracket marker matches the F2 (``core/text_limits``) shape that
+    Phase 11 plan §3 F3 anticipates, so a future migration is a single
+    constant redirect rather than a payload-shape change. Keeping the
+    marker inside the body itself (rather than a sidecar field) means
+    every consumer that reads ``SourceObserved.body`` — projection,
+    recall, secretary skills — sees the truncation cue without needing
+    extra plumbing.
+
+    Emits a structured warning (``mapper.outlook.body_truncated``) with
+    ``message_id``, ``original_chars``, ``kept_chars`` so operators can
+    spot pathological senders or threads through the project's
+    structlog setup; the message id alone is sufficient to look up the
+    offending row via ``opshub source show``.
+    """
+    if body is None:
+        return None
+    if len(body) <= MAX_OUTLOOK_BODY_CHARS:
+        return body
+    original_chars = len(body)
+    head = body[:MAX_OUTLOOK_BODY_CHARS]
+    suffix = f"\n\n[outlook body truncated: {MAX_OUTLOOK_BODY_CHARS} / {original_chars} chars]"
+    _log.warning(
+        "mapper.outlook.body_truncated",
+        message_id=message_id,
+        original_chars=original_chars,
+        kept_chars=MAX_OUTLOOK_BODY_CHARS,
+    )
+    return head + suffix
 
 
 def _build_source_observed(
