@@ -59,12 +59,15 @@ class LinkCreated(DomainEvent):
     but the ULID remains the primary identity for audit / delete.
 
     ``link_type`` is a free-form string. ADR-0017 §決定 (b) pins a
-    5-value initial enum (``applied_to`` / ``referenced_in_briefing``
-    / ``generated_from_briefing`` / ``references`` / ``manual``) for
-    auto-extracted links; manual callers may use any value but the
-    CLI surfaces a warning when the value falls outside the
-    recommended enum so the operator stays aware that auto-extracted
-    links use a fixed vocabulary.
+    7-value enum for auto-extracted links — 5 values from Phase 8 B2
+    (``applied_to`` / ``referenced_in_briefing`` /
+    ``generated_from_briefing`` / ``references`` / ``manual``) plus 2
+    values added in Phase 10 step E2 (``reply_draft_replies_to`` /
+    ``referenced_in_reply_draft``) for the reply-draft candidate
+    flow (ADR-0016 §決定 (i)+(j)+(k)). Manual callers may use any
+    value but the CLI surfaces a warning when the value falls outside
+    the recommended enum so the operator stays aware that
+    auto-extracted links use a fixed vocabulary.
 
     ``source_event_id`` is optional and lets a future caller
     cross-reference the originating event for an auto-extracted link.

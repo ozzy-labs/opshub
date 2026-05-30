@@ -218,7 +218,19 @@ ADR-0012 (Embedding Strategy) §4 の「embed 対象」を Phase 10 (Sub-issue B
 | 別 vector store (body 用 / summary 用) を並列運用 | 単一 vector store で `COALESCE` fallback | ADR-0012 §Alternative #4 (複数 vector store 並列) と同根の却下理由 (ADR-0002 単一 SQLite 原則 / backup / replay 対象増)、fallback chain で同じ index に同居させても entity ごとに最大 1 vector のため `(model_id, model_version)` UNIQUE 制約は壊れない | ADR-0012 改訂版 §4 |
 | Body 長文を chunk + max pool で複数 vector 化 | 単純 head-truncation (Phase 10 MVP)、chunk 戦略は Phase 11+ で再評価 | Phase 10 step B2 の MVP scope を絞るため head-truncation で先行、chunk + pool は Open Q #2 で briefing 長文化と合わせて Phase 11+ で評価 | ADR-0012 §Open Q #2、改訂版 §4 |
 | `provenance_trust=untrusted` 本文は embed 対象外 | 信頼度を問わず embed、agent context に流す段階で防御 | recall 性能と poisoning 防御を同じ層で混ぜると recall 取りこぼしが恒久化、ADR-0015 §決定 (f) do-not-follow preamble + ADR-0020 §(e) provenance タグで context 注入段階で防御層を分離するほうが責務として清潔 | ADR-0012 改訂版 §4、ADR-0020 §(e) |
-| Body 切替時に既存 vector を invalidate しない (model_id 一致で skip) | `embeddings rebuild --rebuild-body` 等の経路で強制 re-embed | `model_id` / `model_version` は同じでも embed 元 text が summary→body に変わると vector の意味が変わる、operator が明示的に rebuild する経路を `embeddings rebuild` に乗せて backend 切替経路と同じ運用に統一 | ADR-0012 改訂版 §4、Phase 10 plan §3-B |
+| Body 切替時に既存 vector を invalidate しない (model_id 一致で skip) | `opshub embeddings rebuild --purge` で強制 re-embed | `model_id` / `model_version` は同じでも embed 元 text が summary→body に変わると vector の意味が変わる、operator が明示的に rebuild する経路を `embeddings rebuild` に乗せて backend 切替経路と同じ運用に統一 | ADR-0012 改訂版 §4、Phase 10 plan §3-B |
+
+## 19. MCP Server Surface (ADR-0022)
+
+| 却下案 | 採用案 | 理由 | 参照 |
+|---|---|---|---|
+| HTTP / Streamable HTTP transport も並列にサポート | stdio 一択・ネットワーク listen 禁止 | ネットワーク攻撃面 (confused deputy / SSRF / session hijack) が乗り本文保持 (ADR-0020) で増えた機密データ露出リスクと非両立、opshub は単一 operator・単一マシン (ADR-0002 / ADR-0003) で multi-host 要件が現時点で存在しない、将来 multi-machine sync 要件化時に別 ADR で議論可能 | ADR-0022 |
+| Token Passthrough を許容 (tool 引数で SaaS トークンを受ける) | tool 引数で受けず opshub 内部で keyring (ADR-0014) から取得、戻り値から redact | トークンが LLM context / MCP 呼び出しログ / agent host transcript に流れ込み prompt injection / transcript 流出経路で漏洩、Anthropic MCP security best practices および MCP spec の "Token Passthrough is forbidden" 規定に反する、ADR-0014 で既に keyring 経由のトークン管理を確立済み | ADR-0022 |
+| read / write tool 区別なし (全 tool を同一 namespace + 同一 annotation で expose) | read (自律 OK) / write (人確認推奨) を tool name namespace と MCP annotation (`readOnlyHint` / `destructiveHint`) で分離 | tool poisoning auto-approve 攻撃成功率 84% vs human-in-the-loop <5% の非対称が反映されず本文保持で拡大した indirect prompt injection 面が durable state 改変に直結、agent host が auto-approve 判断する手がかりがなく安全側 = UX 崩壊 / 緩い側 = 攻撃面最大化、宣言的境界が Phase 10 形A と整合 | ADR-0022 |
+| Microsoft Agent Governance Toolkit 全体 / Agent Mesh / DID / trust score を導入 | policy-as-data (annotation で宣言) の発想のみ流用、重量機構は却下 | opshub は単一 operator・単一マシンの operational memory (ADR-0002 / ADR-0003) で multi-agent mesh / 分散 trust 機構の前提が成立しない、Agent Mesh / DID は agent 間 trust 協調機構で単一ホストでは過剰機構 (ADR-0001 配布制約とも非両立)、将来 multi-host 化で再評価 | ADR-0022 |
+| Tool poisoning 緩和を agent host 側に全任せ (opshub は何もしない) | opshub 側で policy-as-data 宣言 + 将来の confirmation / dry-run 経路を予約 | annotation を honor しない agent host で write tool が auto-approve され durable state が破壊される経路を opshub 側で一切防げない、「①コアの境界を ①コア側で守る」のは ADR-0004 確立済みの責務 (CLI / service 層 validation と同じ) | ADR-0022 |
+| MCP tool を CLI command 1:1 で機械生成 (低レベル粒度) | 読み取り系は CLI 同等粒度 (recall / search / brief)、秘書ユースケース粒度は Sub-issue D の Agent Skills で表現する二段構え | CLI は人間が叩く前提で sub-verb / flag が細かく agent の学習負荷が高い、秘書ユースケース粒度とずれて複数 tool 逐次呼び出しオーバーヘッドが大きい、MCP tool は ①コア operation を直接露出し組み立ては Skills で行う方が Phase 10 形A と整合 | ADR-0022 |
+| MCP tool 呼び出しを opshub event log に append | structlog の JSON ログに OTel GenAI naming (`execute_tool`) で出力、event log は durable state 遷移のみに保つ | event log は ①コアの durable state 遷移を記録する SSOT (ADR-0002) で ②→① boundary trace を混ぜると event semantics が二重化、replay 時に MCP 呼び出し event を実行/skip 判断が曖昧で event-sourced replayability が崩れる、OTel exporter は opt-in extras で将来予約 | ADR-0022 |
 
 ## 19a. Reply Draft Generation (ADR-0016 / ADR-0017 / ADR-0010 Phase 10 改訂)
 
@@ -232,23 +244,11 @@ Phase 10 Sub-issue E (返信下書き生成) は **既存 ADR の改訂** で吸
 
 | 却下案 | 採用案 | 理由 |
 |---|---|---|
-| Reply-draft を新 ADR / 新 sub-system (`ReplyDraftService` + 専用 projection + `opshub reply ...` CLI) として独立 | Phase 6 propose lifecycle に `reply_draft` candidate kind を 1 つ追加して吸収 (ADR-0016 §決定 (i)) | Phase 6 で確立した generate→review→apply / triage / HITL / 既存 service 経由 / idempotent key / schema versioning が再利用可能、独立 sub-system は重複と CLI 表面の肥大化、`opshub propose --kind reply_draft` 1 経路で mental model が小さい (Sub-issue D 秘書 Skill 表とも整合) |
+| Reply-draft を新 ADR / 新 sub-system (`ReplyDraftService` + 専用 projection + `opshub reply ...` CLI) として独立 | Phase 6 propose lifecycle に `reply_draft` candidate kind を 1 つ追加して吸収 (ADR-0016 §決定 (i)) | Phase 6 で確立した generate→review→apply / triage / HITL / 既存 service 経由 / idempotent key / schema versioning が再利用可能、独立 sub-system は重複と CLI 表面の肥大化、`opshub propose generate --reply-to <source_id>` 1 経路で mental model が小さい (Sub-issue D 秘書 Skill 表とも整合) |
 | Triage を separate API / separate event (`Triaged(source_id, classification)` + projection) に分離 | `propose generate` の structured output schema に `triage: Literal["respond","notify","ignore"] \| None` を載せる | LLM call の 1 段化で cost 倍を回避、triage を durable state にすると auto-apply 禁止原則 (ADR-0016 §決定 (c)) と緊張、「ノイズ source の自動破棄」は ADR-0020 §(b) excludes 経路の責務、LLM triage は post-hoc hint に留める |
 | 文体を静的システムプロンプトに書く (Inbox Zero 流) | `author = self` 過去送信 event を recall して `<style_example>` ブロックとして注入、文脈は `--expand-graph` で `<context_source>` 注入 | テンプレ口調の暴走 (Inbox Zero の弱点) を回避、Sub-issue A 本文保持 + Sub-issue B 本文 embedding / FTS5 で hybrid recall が可能になった前提を活かす、Read AI Ada の自前 graph 相当を ADR-0017 §決定 (f) `--expand-graph` で代替 |
 | 外部書き戻し (auto-send) を flag 1 つで有効化できる経路を Phase 10 で予約 | Phase 10 では実装しない、connector contract で経路の存在自体を禁止 (ADR-0010 §禁止事項 7) + test pin で「`post`/`send`/`comment`/`reply` メソッドが存在しないこと」を機械的に保証 | ADR-0016 §決定 (c) HITL 必須の延長、auto-send は prompt injection / hallucination が外部に伝播する経路を開く、構造的に経路が存在しない方が安全、将来再導入には新 ADR + ADR-0004 revisit + ADR-0016 §決定 (c) 整合の 3 要件すべてを要求 |
 | Reply-draft 用に専用 projection (`reply_drafts` テーブル) を新設 | `proposals.candidates[i]` の JSON で代替、`(proposal_id, candidate_index)` natural key で reply_draft 状態を管理 | ADR-0002 single-source-of-truth (projection は increase せず) と整合、Phase 6 で確立した propose lifecycle を全継承、operator は `opshub propose list` / `apply` / `reject` の既存 verb で reply_draft も触れる |
-
-## 19. MCP Server Surface (ADR-0022)
-
-| 却下案 | 採用案 | 理由 | 参照 |
-|---|---|---|---|
-| HTTP / Streamable HTTP transport も並列にサポート | stdio 一択・ネットワーク listen 禁止 | ネットワーク攻撃面 (confused deputy / SSRF / session hijack) が乗り本文保持 (ADR-0020) で増えた機密データ露出リスクと非両立、opshub は単一 operator・単一マシン (ADR-0002 / ADR-0003) で multi-host 要件が現時点で存在しない、将来 multi-machine sync 要件化時に別 ADR で議論可能 | ADR-0022 |
-| Token Passthrough を許容 (tool 引数で SaaS トークンを受ける) | tool 引数で受けず opshub 内部で keyring (ADR-0014) から取得、戻り値から redact | トークンが LLM context / MCP 呼び出しログ / agent host transcript に流れ込み prompt injection / transcript 流出経路で漏洩、Anthropic MCP security best practices および MCP spec の "Token Passthrough is forbidden" 規定に反する、ADR-0014 で既に keyring 経由のトークン管理を確立済み | ADR-0022 |
-| read / write tool 区別なし (全 tool を同一 namespace + 同一 annotation で expose) | read (自律 OK) / write (人確認推奨) を tool name namespace と MCP annotation (`readOnlyHint` / `destructiveHint`) で分離 | tool poisoning auto-approve 攻撃成功率 84% vs human-in-the-loop <5% の非対称が反映されず本文保持で拡大した indirect prompt injection 面が durable state 改変に直結、agent host が auto-approve 判断する手がかりがなく安全側 = UX 崩壊 / 緩い側 = 攻撃面最大化、宣言的境界が Phase 10 形A と整合 | ADR-0022 |
-| Microsoft Agent Governance Toolkit 全体 / Agent Mesh / DID / trust score を導入 | policy-as-data (annotation で宣言) の発想のみ流用、重量機構は却下 | opshub は単一 operator・単一マシンの operational memory (ADR-0002 / ADR-0003) で multi-agent mesh / 分散 trust 機構の前提が成立しない、Agent Mesh / DID は agent 間 trust 協調機構で単一ホストでは過剰機構 (ADR-0001 配布制約とも非両立)、将来 multi-host 化で再評価 | ADR-0022 |
-| Tool poisoning 緩和を agent host 側に全任せ (opshub は何もしない) | opshub 側で policy-as-data 宣言 + 将来の confirmation / dry-run 経路を予約 | annotation を honor しない agent host で write tool が auto-approve され durable state が破壊される経路を opshub 側で一切防げない、「①コアの境界を ①コア側で守る」のは ADR-0004 確立済みの責務 (CLI / service 層 validation と同じ) | ADR-0022 |
-| MCP tool を CLI command 1:1 で機械生成 (低レベル粒度) | 読み取り系は CLI 同等粒度 (recall / search / brief)、秘書ユースケース粒度は Sub-issue D の Agent Skills で表現する二段構え | CLI は人間が叩く前提で sub-verb / flag が細かく agent の学習負荷が高い、秘書ユースケース粒度とずれて複数 tool 逐次呼び出しオーバーヘッドが大きい、MCP tool は ①コア operation を直接露出し組み立ては Skills で行う方が Phase 10 形A と整合 | ADR-0022 |
-| MCP tool 呼び出しを opshub event log に append | structlog の JSON ログに OTel GenAI naming (`execute_tool`) で出力、event log は durable state 遷移のみに保つ | event log は ①コアの durable state 遷移を記録する SSOT (ADR-0002) で ②→① boundary trace を混ぜると event semantics が二重化、replay 時に MCP 呼び出し event を実行/skip 判断が曖昧で event-sourced replayability が崩れる、OTel exporter は opt-in extras で将来予約 | ADR-0022 |
 
 ## 20. Agent Runtime Boundary 改訂 (ADR-0004 Phase 10 form-A 吸収)
 

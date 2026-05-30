@@ -200,11 +200,17 @@ async def serve_stdio(*, server_name: str = "opshub", server_version: str = "0.0
 
     server: Server = Server(server_name)
 
-    @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
+    # mcp SDK 1.27 ships untyped low-level ``Server`` decorators
+    # (`list_tools()` / `call_tool()`). The ``unused-ignore`` rider
+    # keeps mypy --strict quiet on Python versions / SDK builds where
+    # the upstream type info has already started to land, so the
+    # ignore self-deletes once mcp adds full stubs upstream
+    # (Round 2 Cluster B L1).
+    @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator,unused-ignore]
     async def _list_tools() -> list[Any]:  # pyright: ignore[reportUnusedFunction]
         return [_to_mcp_tool(spec) for spec in specs]
 
-    @server.call_tool()  # type: ignore[untyped-decorator]
+    @server.call_tool()  # type: ignore[untyped-decorator,unused-ignore]
     async def _call_tool(  # pyright: ignore[reportUnusedFunction]
         name: str, arguments: dict[str, Any] | None
     ) -> list[Any]:

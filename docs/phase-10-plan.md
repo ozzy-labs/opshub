@@ -1,6 +1,6 @@
 # Phase 10 Implementation Plan
 
-> Status: Draft (起票骨子 / planning skeleton). Last reviewed: 2026-05-30. Scope: **Secretary Agent Platform — 秘書コア (Sub-issue A〜E)**。opshub を「ローカルファーストな秘書エージェント・プラットフォーム」へ拡張する。三層モデル（人間 → 秘書エージェント → opshub コマンド）の確立、エージェント向けツール面（MCP）の新設、秘書 Agent Skills の追加（形A＝runtime なし）、本文ローカル保持への転換（ADR-0005 見直し）、横断検索、返信下書き生成。**既存コネクタ（Slack/Box/GitHub/MS365 一部）の上で「動く秘書」を完成させる**ことが Phase 10 の到達点。
+> Status: Phase 10 complete (2026-05-31). Sub-issue F deferred to Phase 11. Last reviewed: 2026-05-31. Scope: **Secretary Agent Platform — 秘書コア (Sub-issue A〜E)**。opshub を「ローカルファーストな秘書エージェント・プラットフォーム」へ拡張する。三層モデル（人間 → 秘書エージェント → opshub コマンド）の確立、エージェント向けツール面（MCP）の新設、秘書 Agent Skills の追加（形A＝runtime なし）、本文ローカル保持への転換（ADR-0005 見直し）、横断検索、返信下書き生成。**既存コネクタ（Slack/Box/GitHub/MS365 一部）の上で「動く秘書」を完成させる**ことが Phase 10 の到達点。
 >
 > **MS Office 深掘り（Teams 新コネクタ＋Word/Excel/PowerPoint 文書抽出 = Sub-issue F）は Phase 11 に分離**（コネクタ拡張波・Phase 7 と同性質）。秘書の枠組みを先に作る方が Office を載せる受け皿が整い手戻りが少ないため。Phase 11 は Phase 10 完了直後に続ける前提。
 >

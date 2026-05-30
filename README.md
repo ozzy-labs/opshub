@@ -131,7 +131,7 @@ Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23. Phase 10 
 | 7 | Connectors wave 2 | Slack + Microsoft 365 + Box |
 | 8 | Knowledge graph | `links` projection + auto-extraction + `graph` + `--expand-graph` |
 | 9 | Local-FS connectors | `box_drive` (Box Drive desktop client → local FS scan, ADR-0019) |
-| 10 | Secretary agent platform | Full local body retention (ADR-0020) + encryption at rest (ADR-0021) + MCP server (ADR-0022) + `opshub search` (FTS5) + `opshub mcp serve` + secretary 5 Skills + reply-draft (ADR-0016 §決定 (i)) |
+| 10 | Secretary agent platform | Full local body retention (ADR-0020) + encryption at rest (ADR-0021) + MCP server (ADR-0022) + `opshub search` (FTS5) + `opshub mcp serve` + secretary 5 Skills + reply-draft (ADR-0016 §決定 (i)) + ADR-0004 revision (form-A: no agent runtime in core) + ADR-0010 revision (write-back ban) + ADR-0017 revision (reply_draft link types) |
 
 Next: **Phase 11 (MS Office deep-dive — Teams + Outlook body + Word/Excel/PowerPoint extraction)** — see [`docs/phase-10-plan.md`](docs/phase-10-plan.md) §9. Phase 12+ candidates: multi-machine sync, proactive secretary (cron-delegated commands). Longer phase-by-phase narrative lives in
 [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery).

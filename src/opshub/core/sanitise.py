@@ -47,24 +47,38 @@ __all__ = ["sanitise_error_message"]
 # Token-shape regexes. Kept module-level so they compile once on first
 # import and survive across calls (the embedding service used to hold
 # these as module-level constants; they have moved here verbatim).
-_SK_KEY_RE = re.compile(r"sk-[A-Za-z0-9]{20,}")
-_GHP_KEY_RE = re.compile(r"ghp_[A-Za-z0-9]{30,}")
+#
+# Word-boundary anchors (``\b``) are used on the prefix-anchored token
+# shapes (``AKIA`` / ``AIza`` / ``github_pat_`` / ``ghp_`` / ``sk-`` /
+# ``xox*-``) so a longer surrounding identifier (URL path component,
+# concatenated symbol, etc.) does not collapse into the marker. The
+# trailing ``\b`` then pins the documented length without bleeding
+# into adjacent alnum runs (Round 2 Cluster B M4 — Phase 10 audit
+# follow-up). ``Bearer`` keeps the leading whitespace anchor because
+# the ``Authorization: Bearer <token>`` shape already self-delimits.
+_SK_KEY_RE = re.compile(r"\bsk-[A-Za-z0-9]{20,}\b")
+_GHP_KEY_RE = re.compile(r"\bghp_[A-Za-z0-9]{30,}\b")
 # GitHub fine-grained PATs are documented as ``github_pat_<22>_<59>``
 # but the separator and lengths drift across docs; match the prefix +
 # 30+ chars of base62 + underscore for robustness.
-_GITHUB_PAT_RE = re.compile(r"github_pat_[A-Za-z0-9_]{30,}")
+_GITHUB_PAT_RE = re.compile(r"\bgithub_pat_[A-Za-z0-9_]{30,}\b")
 # Slack tokens share the ``xox<letter>-`` prefix family (bot/user/app/
 # refresh/session). The body uses digits, letters, and ``-``.
-_SLACK_TOKEN_RE = re.compile(r"xox[pbars]-[A-Za-z0-9-]{10,}")
+_SLACK_TOKEN_RE = re.compile(r"\bxox[pbars]-[A-Za-z0-9-]{10,}\b")
 # AWS access key id: exactly ``AKIA`` + 16 uppercase alnum. Pin the
-# bound so we do not over-match plain English ``AKIA`` runs.
-_AWS_ACCESS_KEY_RE = re.compile(r"AKIA[0-9A-Z]{16}")
-# Google API key: ``AIza`` + 35 chars of base64url alphabet.
-_GOOGLE_API_KEY_RE = re.compile(r"AIza[0-9A-Za-z\-_]{35}")
+# bound so we do not over-match plain English ``AKIA`` runs, and
+# anchor with ``\b`` so the prefix is not absorbed into a longer
+# surrounding identifier.
+_AWS_ACCESS_KEY_RE = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
+# Google API key: ``AIza`` + 35 chars of base64url alphabet. ``\b``
+# avoids matching ``...something/AIza...`` style URL-path false
+# positives where the surrounding identifier would otherwise eat
+# into the marker.
+_GOOGLE_API_KEY_RE = re.compile(r"\bAIza[0-9A-Za-z\-_]{35}\b")
 # JWT: 3 base64url-encoded segments separated by ``.``. The first two
 # segments always start with ``eyJ`` (the JSON ``{`` encoded). We
 # anchor on that to avoid matching arbitrary dotted runs.
-_JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 _BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9._~+/-]{20,}=*")
 
 
