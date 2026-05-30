@@ -35,6 +35,7 @@ from opshub.connectors.ms365.fetcher import (
 from opshub.connectors.ms365.mapper import (
     CALENDAR_SOURCE_TYPE,
     DEFAULT_ACTOR,
+    MAX_OUTLOOK_BODY_CHARS,
     ONEDRIVE_SOURCE_TYPE,
     OUTLOOK_SOURCE_TYPE,
     SUMMARY_MAX_CHARS,
@@ -241,6 +242,93 @@ def test_map_outlook_message_truncates_long_body_preview() -> None:
     assert event.summary is not None
     assert len(event.summary) <= SUMMARY_MAX_CHARS
     assert event.summary.endswith("…")
+
+
+def test_map_outlook_message_includes_body_and_provenance() -> None:
+    """Phase 11 F3: body + external/untrusted provenance ride along on the event.
+
+    Reaffirms the Phase 10 ADR-0020 contract from the perspective of
+    the F3 work item — the secretary-skill body retention pattern
+    applies to Outlook just like Slack / GitHub / Calendar.
+    """
+    raw = _outlook(raw_body_content="<p>full body</p>")
+    event = map_outlook_message(raw)
+    assert event.body == "<p>full body</p>"
+    assert event.provenance_origin == "external"
+    assert event.provenance_trust == "untrusted"
+
+
+def test_map_outlook_message_html_body_preserved() -> None:
+    """HTML bodies are retained verbatim — no tag stripping at the mapper.
+
+    Sanitisation belongs to the secretary skills downstream (the
+    provenance tag flags the body as untrusted reference material).
+    Stripping at mapper time would irreversibly lose anchor links,
+    reply-quote boundaries, and other markup that later passes may
+    need.
+    """
+    html = "<html><body><p>Hello <b>world</b></p><a href='https://x'>link</a></body></html>"
+    event = map_outlook_message(_outlook(raw_body_content=html))
+    assert event.body == html  # no tags stripped, no whitespace collapsed
+
+
+def test_map_outlook_message_truncates_large_body() -> None:
+    """Phase 11 OQ2 (F3 inline): bodies > MAX_OUTLOOK_BODY_CHARS are clipped.
+
+    The clip preserves the head of the message (where reply chains
+    usually carry the most recent context) and appends a deterministic
+    marker so downstream consumers see the truncation cue without
+    extra plumbing. The kept prefix matches the original head byte for
+    byte; the marker reports both the retained and original sizes.
+    """
+    over = MAX_OUTLOOK_BODY_CHARS + 1_234
+    huge_body = "x" * over
+    event = map_outlook_message(_outlook(raw_body_content=huge_body))
+    assert event.body is not None
+    # Marker carries kept + original counts so operators can detect
+    # partial bodies deterministically (matches the F2 ``core/text_limits``
+    # shape Phase 11 plan §3 F3 anticipates).
+    expected_suffix = (
+        f"\n\n[outlook body truncated: {MAX_OUTLOOK_BODY_CHARS} / {over} chars]"
+    )
+    assert event.body.endswith(expected_suffix)
+    # The retained body is exactly ``MAX_OUTLOOK_BODY_CHARS`` of head +
+    # the suffix — no characters from the tail leak in.
+    head, _ = event.body.rsplit(expected_suffix, 1)
+    assert head == "x" * MAX_OUTLOOK_BODY_CHARS
+
+
+def test_map_outlook_message_body_at_cap_not_truncated() -> None:
+    """Exactly ``MAX_OUTLOOK_BODY_CHARS`` is the boundary — no truncation marker.
+
+    Pins the off-by-one boundary so a future change to ``> vs >=``
+    cannot quietly start truncating bodies that fit exactly.
+    """
+    exact_body = "y" * MAX_OUTLOOK_BODY_CHARS
+    event = map_outlook_message(_outlook(raw_body_content=exact_body))
+    assert event.body == exact_body  # no marker appended
+
+
+def test_map_outlook_message_backward_compat_meta_only() -> None:
+    """No ``body`` in the Graph payload still produces a valid event.
+
+    Existing rows captured before the Phase 11 F3 ``$select`` expansion
+    will lack ``body`` on the preserved raw dict; the mapper must
+    surface ``body=None`` rather than raise, so the projection stores
+    NULL and downstream paths fall back to summary-only recall.
+    """
+    raw = _outlook(raw_body_content=None)
+    event = map_outlook_message(raw)
+    # All metadata fields still populate normally.
+    assert event.source_type == OUTLOOK_SOURCE_TYPE
+    assert event.external_id == "msg-1"
+    assert event.title == "Re: deployment plan"
+    assert event.summary == "Sounds good — proceeding tomorrow."
+    # Body retention falls back to NULL; provenance tags still apply
+    # for cross-connector consistency.
+    assert event.body is None
+    assert event.provenance_origin == "external"
+    assert event.provenance_trust == "untrusted"
 
 
 # ----- shared edge cases ---------------------------------------------------
