@@ -55,8 +55,8 @@ Phase 9 (Local-filesystem-backed Connector Layer、epic #187) は 2026-05-23 に
 | Git-backed (markdown + commit を event 代わり) | SQLite append-only events | 構造化クエリに不向き、粒度制御困難 | ADR-0002 |
 | CQRS + 別 DB | 単一 SQLite | over-engineering | ADR-0002 |
 | `markdown 主体 + SQLite 索引` (初期検討) | Event Store + Projections + Workspace surface | より principled、Brief 採用 | ADR-0002, 0003 |
-| Full body をローカル保持 | 最小化 (ID / URL / summary / metadata) | 機密 / TOS / 容量 / agent context 効率 | ADR-0005 |
-| Encrypted local body 保持 | 最小化 | 機密性は担保できるが TOS / 容量問題は残る | ADR-0005 |
+| Full body をローカル保持 | 最小化 (ID / URL / summary / metadata) | 機密 / TOS / 容量 / agent context 効率 | ADR-0005 (Phase 10 で **撤回**、§16 参照) |
+| Encrypted local body 保持 | 最小化 | 機密性は担保できるが TOS / 容量問題は残る | ADR-0005 (Phase 10 で **撤回**、§16 / §17 参照) |
 
 ## 4. 言語 / スタック
 
@@ -189,3 +189,21 @@ Phase 9 (Local-filesystem-backed Connector Layer、epic #187) は 2026-05-23 に
 | `mountvol` / `wsl --shutdown` 等の OS setup を opshub が自動化 | OS setup は opshub 範囲外、`docs/box-drive-setup.md` (C1 PR で新設) に外出し | `mountvol` は Windows PowerShell elevation 要、`\\?\Volume{GUID}\` の GUID 判定が opshub から不能 (Windows レジストリ参照要)、WSL2 再起動を opshub が trigger するのは UX 上問題 (他 process 巻き込み)、Phase 1-8 で確立した「opshub は SQLite + events + projection + CLI」境界と整合 | ADR-0019 |
 | `~/.config/opshub/excludes.yaml` 共通機構を Phase 9 で実装 | Phase 9 は `opshub.toml` inline (`[connectors.box_drive] exclude_globs`)、共通機構は Phase 9.x | 共通機構を先に作ると 4 既存 connector の filter logic 同期移行で scope 肥大化、`opshub.toml` inline は config が 1 ファイル集約で operator UX 良好、Phase 9.x で導入時は両 sources を merge 経路で migration 可能 | ADR-0019 |
 | `connector:box_drive` keyring key で OS Box Drive token を保管 | keyring 不使用、OS-level Box Drive 認証への依存に置換 (`opshub connector auth set box_drive` は actionable error で reject) | Box Drive は OS daemon が token を保持する経路で operator が Web Box ログイン済前提、opshub 側で token を二重管理する経路を持たない、ADR-0014 SaaS token storage は Web API 経路用 (Phase 7 4 connector) と切り分け | ADR-0019 |
+
+## 16. Full Local Content Retention (ADR-0020、ADR-0005 supersede)
+
+| 却下案 | 採用案 | 理由 | 参照 |
+|---|---|---|---|
+| ADR-0005 維持 (summary のみ保持を継続) | 本文をローカル保持 (ADR-0005 を Superseded) | Phase 10 の返信下書き / 本文検索が summary では成立しない、storage / context 懸念は Phase 4-8 設計 (recall で絞り込み context に full body を流さない) で別解済み、残る機密懸念は暗号化 + excludes + provenance で対処すべき問題で本文を持たないのは過剰制約 | ADR-0020 |
+| 本文は別 content store (event は参照のみ) | 本文を `SourceObserved.body` に載せ event を SSOT に、projection (`sources.body`) へ materialise | event log だけで本文を再構築できなくなり ADR-0002 replayability 違反、別 store 消失で本文永久喪失、event ↔ body store の二重整合が append-only の単純性を破壊、個人スケールでは event payload に載せる単純解で十分 | ADR-0020 |
+| ユーザーが source 単位で full / minimal を選ぶフラグ | excludes (観測前遮断) + 暗号化 (保存時) + provenance (利用時) の 3 層で統一 | 「何が機密か」を source 単位で判断するのは非現実的、schema が full / minimal で分岐し複雑化 (ADR-0005 §Alternatives #3 と同根) | ADR-0020 |
+| provenance タグなしで本文保持 (緩和層を持たない) | sources に出自・信頼度タグを追加し低信頼外部本文を agent context へ渡す際に明示 | 外部本文をそのまま agent context へ流すと間接プロンプトインジェクションで秘書が乗っ取られる、本文保持に転換する以上攻撃面縮小を偶発的 (本文を持たない) から明示的 (出自・信頼度で区別) に設計し直すのは必須 | ADR-0020 |
+
+## 17. Encryption at Rest (ADR-0021)
+
+| 却下案 | 採用案 | 理由 | 参照 |
+|---|---|---|---|
+| アプリ層の列暗号化 (`sources.body` / event payload 列のみ) | SQLCipher で DB 丸ごと AES-256 暗号化 | 本文は event payload + projection + FTS index + embedding 一時データに波及し平文露出面を実装者が網羅し続ける必要がある (1 箇所漏れで平文がディスクに落ちる)、暗号化列は FTS で index できず本文検索 (Sub-issue B) と両立不能、DB 丸ごとなら波及先すべてが透過的に守られる | ADR-0021 |
+| OS / FS レベル暗号化に委ねる (FileVault / LUKS / dm-crypt) | opshub が DB 単位の SQLCipher 暗号化を提供、鍵は keyring | operator 環境依存で opshub が保証できない (WSL2 / 非暗号化外部ボリューム / 一時マウント)、「opshub が本文を保持するなら保存時暗号化を提供する」責任境界、DB 単位の鍵なら opshub が鍵ライフサイクルを制御でき粒度が適切 | ADR-0021 |
+| 暗号化なし + 機密本文を excludes で除外して運用回避 | excludes (取り込まない前段) と保存時暗号化 (取り込んだ本文の保護) を別レイヤーで両立 | excludes は取り込み前の防御で取り込んだ本文の保存時保護にならない、機密判定が完全でない以上保存時暗号化は別レイヤーとして必須、本文保持で default は `encryption = true` | ADR-0021 |
+| DB 暗号鍵を専用の鍵管理 (新規 secret store) で保管 | ADR-0014 の keyring 経路を再利用 (`db:encryption_key` + `OPSHUB_DB_ENCRYPTION_KEY` env override) | DB 鍵も SaaS token も同じ keyring 経路で operator のメンタルモデルを一元化、opshub が鍵をディスク平文に書かない原則を継承、新規 secret store は重複 | ADR-0021 |
