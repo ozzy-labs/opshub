@@ -5,6 +5,39 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3](https://github.com/ozzy-labs/opshub/compare/v0.2.2...v0.2.3) (2026-05-30)
+
+
+### Added
+
+* **connectors:** integrate excludes in ms365/box + body/provenance test coverage ([#226](https://github.com/ozzy-labs/opshub/issues/226)) ([a6e09ae](https://github.com/ozzy-labs/opshub/commit/a6e09aee2502d1bb3ee6b422cca7e44182f447b9))
+* **mcp:** error-path redact + token shape expansion + pagination + test hardening ([#223](https://github.com/ozzy-labs/opshub/issues/223)) ([838501b](https://github.com/ozzy-labs/opshub/commit/838501bdba770ecd8ad65b62efe2302f6695bdda))
+* **mcp:** stdio mcp server + tool schema ([#215](https://github.com/ozzy-labs/opshub/issues/215)) ([afc4288](https://github.com/ozzy-labs/opshub/commit/afc428876522e03985eb1dadd29b1158c0e541a3))
+* **propose:** add reply-draft candidate kind ([#217](https://github.com/ozzy-labs/opshub/issues/217)) ([585faee](https://github.com/ozzy-labs/opshub/commit/585faee606061413eec5c467c6f5b81191ab734e))
+* **search:** body-based embedding + sqlite fts5 + search command ([#214](https://github.com/ozzy-labs/opshub/issues/214)) ([0f2d624](https://github.com/ozzy-labs/opshub/commit/0f2d624e1f4fa57b6f22320a966a1f67197d2d28))
+* **skills:** add secretary agent skill specs and security scan ([#219](https://github.com/ozzy-labs/opshub/issues/219)) ([dbef400](https://github.com/ozzy-labs/opshub/commit/dbef4007c812bfdf1ff08df8cbb30fc8d67589dc))
+* store full content locally with at-rest encryption and excludes ([#211](https://github.com/ozzy-labs/opshub/issues/211)) ([47cf539](https://github.com/ozzy-labs/opshub/commit/47cf53965b1e5996462e047d9293e292325d811b))
+
+
+### Fixed
+
+* **ci:** mypy strict (types stubs + decorator ignores) after phase 10 audit ([#227](https://github.com/ozzy-labs/opshub/issues/227)) ([a8460c1](https://github.com/ozzy-labs/opshub/commit/a8460c1043c37df5496d19ce8a40c0bc8a936a80))
+* **connectors/github:** defer httpx import so slack sync works without github extra ([#200](https://github.com/ozzy-labs/opshub/issues/200)) ([c00c0c7](https://github.com/ozzy-labs/opshub/commit/c00c0c7940ab82085a488bb5304bd4f6ddb1f9fb)), closes [#198](https://github.com/ozzy-labs/opshub/issues/198)
+* **skills,adr:** align skill MCP calls with schema + clarify triage as generate-time hint ([#228](https://github.com/ozzy-labs/opshub/issues/228)) ([0a5bb38](https://github.com/ozzy-labs/opshub/commit/0a5bb386399aba42fdc41f982127a6b2efd41540))
+* **tests:** rebuild secret-shaped test fixtures from parts to silence scanners ([#230](https://github.com/ozzy-labs/opshub/issues/230)) ([b40cd29](https://github.com/ozzy-labs/opshub/commit/b40cd2907038a9b4b05177f68a622f66a47dfeca))
+
+
+### Documentation
+
+* **adr:** adr-0012 revise embed target to body (phase 10) ([#212](https://github.com/ozzy-labs/opshub/issues/212)) ([d6d2528](https://github.com/ozzy-labs/opshub/commit/d6d252889b859a30ec33a3afc906f0dd20d021d4))
+* **adr:** adr-0020 full local content retention / adr-0021 encryption at rest ([#210](https://github.com/ozzy-labs/opshub/issues/210)) ([18d6a8e](https://github.com/ozzy-labs/opshub/commit/18d6a8ed8df47f480a74277b2e3145410ba72a52))
+* **adr:** adr-0022 mcp server surface ([#213](https://github.com/ozzy-labs/opshub/issues/213)) ([e26d2b0](https://github.com/ozzy-labs/opshub/commit/e26d2b03ebb915d3ce51d435425b07ac7a153722))
+* **adr:** revise adr-0004 for phase 10 form-a absorption ([#218](https://github.com/ozzy-labs/opshub/issues/218)) ([5edfca5](https://github.com/ozzy-labs/opshub/commit/5edfca5121602075b647e3a685b36d5de0371eab))
+* **adr:** revise adr-0016/0017/0010 for phase 10 reply-draft ([#216](https://github.com/ozzy-labs/opshub/issues/216)) ([8f05a6f](https://github.com/ozzy-labs/opshub/commit/8f05a6f4d0a1b62293f6c369b5ae487f07f31b09))
+* align skill / README / secretary docs with actual CLI surface ([#222](https://github.com/ozzy-labs/opshub/issues/222)) ([874acf2](https://github.com/ozzy-labs/opshub/commit/874acf232be3c0f3e21401aa77899605486adc5c))
+* phase 10 audit alignment (adr + principles + architecture + extras cleanup) ([#225](https://github.com/ozzy-labs/opshub/issues/225)) ([1086791](https://github.com/ozzy-labs/opshub/commit/1086791a38f0749eba2fd9e8a2c3b844ef32e36a))
+* **plan:** add Phase 10 secretary-agent platform plan ([#202](https://github.com/ozzy-labs/opshub/issues/202)) ([c64d2d4](https://github.com/ozzy-labs/opshub/commit/c64d2d49a666c62ee78696ef908d55417135e038))
+
 ## [0.2.2](https://github.com/ozzy-labs/opshub/compare/v0.2.1...v0.2.2) (2026-05-22)
 
 
