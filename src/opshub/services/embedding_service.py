@@ -56,7 +56,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Table, select, text
+from sqlalchemy import ColumnElement, Table, func, select, text
 
 from opshub.core.ids import new_ulid
 from opshub.core.sanitise import sanitise_error_message
@@ -100,25 +100,54 @@ class EntitySource:
     """Mapping from entity type → text-extraction column.
 
     Each instance says "for ``entity_type=X``, embed the value in
-    ``text_column`` from the projection ``Table``, keyed by ``id_column``".
-    The service iterates :data:`_SOURCES` so adding a new embeddable
-    entity in Phase 4.x is one entry there.
+    ``text_column`` from the projection ``Table``, keyed by
+    ``id_column``". The service iterates :data:`_SOURCES` so adding a
+    new embeddable entity in Phase 4.x is one entry there.
+
+    Phase 10 step B2 (ADR-0012 改訂版 §4) introduces an optional
+    ``fallback_text_column`` so an entity can declare a **fallback
+    chain** for embedding text. The canonical use case is ``source``:
+    the embed input is ``COALESCE(body, summary)`` — ADR-0020 §決定
+    (a) holds the full body in ``sources.body``, but Phase 3-9 rows
+    (and the ``box_drive`` connector which never reads file contents,
+    ADR-0019 §不変条件 (b)) land with ``body = NULL`` and must fall
+    back to ``summary`` so backward-compat (ADR-0020 §(d)) is
+    preserved without any special-casing in the service body.
+
+    When ``fallback_text_column`` is ``None``, the entity has no
+    fallback and the SQL is exactly the pre-Phase-10 ``SELECT
+    <text_column>`` shape.
     """
 
     entity_type: str
     table_name: str  # diagnostic / log breadcrumb
     id_column: str
     text_column: str
+    fallback_text_column: str | None = None
 
 
-# Phase 4 entity → text column mapping. The columns match the projection
+# Entity → text column mapping. The columns match the projection
 # tables registered in :mod:`opshub.projections` (verified against the
 # table declarations in PR #45 / PR #4 / PR #11 / PR #5).
+#
+# Phase 10 step B2 (ADR-0012 改訂版 §4 + ADR-0020): the ``source``
+# entry embeds ``COALESCE(body, summary)`` so the new ``sources.body``
+# column (migration 0018) is the embed source whenever the connector
+# populated it. Historic rows + the ``box_drive`` connector (which
+# never reads file bodies) keep landing with ``body = NULL`` and the
+# COALESCE falls through to ``summary``, preserving the Phase 4
+# behaviour.
 _SOURCES: tuple[EntitySource, ...] = (
     EntitySource("task", "tasks", "id", "title"),
     EntitySource("decision", "decisions", "id", "text"),
     EntitySource("inbox_item", "inbox_items", "id", "summary"),
-    EntitySource("source", "sources", "id", "summary"),
+    EntitySource(
+        "source",
+        "sources",
+        "id",
+        "body",
+        fallback_text_column="summary",
+    ),
 )
 
 
@@ -296,6 +325,77 @@ class EmbeddingService:
             return False
         return outcome == "embedded"
 
+    def purge_embeddings(self, *, entity_type: str | None = None) -> int:
+        """Drop ``embeddings`` rows + vec0 vectors for the given scope.
+
+        Phase 10 step B2 (ADR-0012 改訂版 §4): the embed input for
+        ``source`` switched from ``summary`` to ``COALESCE(body,
+        summary)``. Existing embeddings written before Phase 10 carry
+        the same ``(model_id, model_version)`` as the new path, so the
+        :meth:`embed_pending` ``NOT EXISTS`` filter would skip them
+        even though the underlying text has changed (summary → body).
+        Operators reach this purge first so the next ``embed_pending``
+        re-embeds the affected entity family from the new text source.
+
+        Delegates the actual deletion to
+        :meth:`VectorStore.delete`, which on the canonical
+        :class:`~opshub.vectors.sqlite_vec_store.SqliteVecStore`
+        implementation drops the matching ``embeddings`` metadata row
+        **and** every ``embeddings_vec_*`` vec0 row in lock-step
+        (sqlite_vec_store.py L309-340). Driving the delete through
+        the Protocol — rather than emitting a second metadata DELETE
+        here — avoids double-counting (the metadata row is already
+        gone by the time we'd see it) and keeps the vec0 lock-step
+        guarantee a single-owner property of the VectorStore.
+
+        Parameters
+        ----------
+        entity_type:
+            If set, restrict the purge to one entity family. ``None``
+            purges every supported entity family (broad sledgehammer
+            for backend / embed-strategy switches).
+
+        Returns
+        -------
+        int
+            Number of ``embeddings`` metadata rows deleted (summed
+            across :meth:`VectorStore.delete` return values). Zero
+            when the scope held no rows for the active model.
+        """
+        sources = self._sources(entity_type)
+        if not sources:
+            return 0
+        # Collect the (entity_type, entity_id) pairs first so we do
+        # not interleave a delete iterator with the read cursor. The
+        # SELECT is scoped to the active ``(model_id, model_version)``
+        # so a purge after a backend switch leaves alternative-model
+        # vectors untouched.
+        targets: list[tuple[str, str]] = []
+        with self._engine.connect() as conn:
+            for source in sources:
+                rows = conn.execute(
+                    text(
+                        "SELECT entity_id FROM embeddings "
+                        "WHERE entity_type = :et "
+                        "  AND model_id = :mid "
+                        "  AND model_version = :mv"
+                    ).bindparams(
+                        et=source.entity_type,
+                        mid=self._embedder.model_id,
+                        mv=self._embedder.model_version,
+                    ),
+                ).all()
+                targets.extend((source.entity_type, str(r[0])) for r in rows)
+        if not targets:
+            return 0
+        deleted = 0
+        for ety, eid in targets:
+            # ``VectorStore.delete`` returns the count of metadata
+            # rows deleted. Accumulating its return value gives us the
+            # purge count to surface to the operator.
+            deleted += self._vector_store.delete(entity_type=ety, entity_id=eid)
+        return deleted
+
     def embed_pending(
         self,
         *,
@@ -383,6 +483,14 @@ class EmbeddingService:
         result is exactly the rows that the current backend has not
         yet embedded.
 
+        Phase 10 step B2: when :class:`EntitySource` declares a
+        ``fallback_text_column``, the SELECT projects
+        ``COALESCE(text_column, fallback_text_column)`` so an entity
+        whose primary column is NULL falls through to the secondary
+        column (``source.body`` → ``source.summary``, ADR-0012 改訂版
+        §4). The COALESCE expression sits on the SQLAlchemy side so
+        the SQL stays statically composed.
+
         The ``embeddings`` table is **not** registered on
         :data:`opshub.db.schema.metadata` (matching the SqliteVecStore
         precedent in PR #67) so the subquery is expressed via raw
@@ -392,7 +500,7 @@ class EmbeddingService:
         """
         source_table = _TABLE_BY_ENTITY_TYPE[source.entity_type]
         id_col = source_table.c[source.id_column]
-        text_col = source_table.c[source.text_column]
+        text_expr = self._text_expr(source, source_table)
         # ``NOT EXISTS`` keeps the predicate well-formed even when the
         # ``embeddings`` row count is zero (the first rebuild on a
         # fresh database). Bind params keep the SQL value-safe.
@@ -407,13 +515,38 @@ class EmbeddingService:
             __mid=self._embedder.model_id,
             __mv=self._embedder.model_version,
         )
-        stmt = select(id_col, text_col).where(not_exists_sql)
+        stmt = select(id_col, text_expr).where(not_exists_sql)
         with self._engine.connect() as conn:
             for row in conn.execute(stmt):
                 # SQLAlchemy returns ``Any`` for column values; the
                 # projection schemas constrain id_column to ``str`` and
                 # text_column to ``str | None``.
                 yield str(row[0]), (None if row[1] is None else str(row[1]))
+
+    @staticmethod
+    def _text_expr(source: EntitySource, source_table: Table) -> ColumnElement[str]:
+        """Return the embed-input SQL expression for ``source``.
+
+        With no fallback declared the expression is the bare
+        ``text_column`` (Phase 4 shape, byte-for-byte identical SQL).
+        With a fallback declared the expression is
+        ``COALESCE(text_column, fallback_text_column)`` so a NULL
+        primary text falls through to the secondary text (Phase 10
+        step B2, ADR-0012 改訂版 §4).
+
+        Returned as a SQLAlchemy ``ColumnElement[str]`` so the caller
+        can pass it straight into :func:`sqlalchemy.select` with the
+        same static type as the bare ``Column`` it replaces.
+        """
+        primary: ColumnElement[str] = source_table.c[source.text_column]
+        if source.fallback_text_column is None:
+            return primary
+        fallback: ColumnElement[str] = source_table.c[source.fallback_text_column]
+        # ``func.coalesce`` returns ``Function[Any]``; cast to
+        # ``ColumnElement[str]`` so the static type lines up with the
+        # bare-column branch above. The SQL itself stays
+        # ``COALESCE(<primary>, <fallback>)`` regardless.
+        return func.coalesce(primary, fallback).label("text_expr")
 
     def _fetch_pending_text(self, source: EntitySource, entity_id: str) -> str | None:
         """Return the entity's text iff a current-backend embedding is missing.
@@ -440,7 +573,7 @@ class EmbeddingService:
         """
         source_table = _TABLE_BY_ENTITY_TYPE[source.entity_type]
         id_col = source_table.c[source.id_column]
-        text_col = source_table.c[source.text_column]
+        text_expr = self._text_expr(source, source_table)
         not_exists_sql = text(
             "NOT EXISTS (SELECT 1 FROM embeddings "
             "WHERE embeddings.entity_type = :__et "
@@ -452,7 +585,7 @@ class EmbeddingService:
             __mid=self._embedder.model_id,
             __mv=self._embedder.model_version,
         )
-        stmt = select(text_col).where(id_col == entity_id).where(not_exists_sql)
+        stmt = select(text_expr).where(id_col == entity_id).where(not_exists_sql)
         with self._engine.connect() as conn:
             row = conn.execute(stmt).first()
         if row is None:

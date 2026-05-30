@@ -31,6 +31,7 @@ from opshub.services.lock_service import LockRow, LockService
 from opshub.services.projector import NoOpProjector, Projector
 from opshub.services.proposals import Proposal, ProposalService
 from opshub.services.recall_service import RecallHit, RecallService
+from opshub.services.search_service import SearchHit, SearchService
 from opshub.services.source_service import SourceService
 from opshub.services.task_service import TaskService
 from opshub.services.work_session_service import WorkSessionRow, WorkSessionService
@@ -66,6 +67,8 @@ __all__ = [
     "ProposalService",
     "RecallHit",
     "RecallService",
+    "SearchHit",
+    "SearchService",
     "SourceService",
     "TaskService",
     "WorkSessionRow",

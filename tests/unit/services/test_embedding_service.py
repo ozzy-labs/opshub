@@ -158,6 +158,7 @@ class _RecordingVectorStore:
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
         self.upserted: list[StoredEmbedding] = []
+        self.deleted_targets: list[tuple[str, str]] = []
 
     def upsert(self, embeddings: list[StoredEmbedding]) -> None:
         with self._engine.begin() as conn:
@@ -205,9 +206,26 @@ class _RecordingVectorStore:
         del entity_type
         return 0
 
-    def delete(self, *, entity_type: str, entity_id: str) -> int:  # pragma: no cover
-        del entity_type, entity_id
-        return 0
+    def delete(self, *, entity_type: str, entity_id: str) -> int:
+        # Phase 10 step B2: ``EmbeddingService.purge_embeddings``
+        # invokes ``VectorStore.delete`` for every embedded entity it
+        # purges and sums its return value into the purge total. The
+        # stub mirrors the canonical
+        # :class:`~opshub.vectors.sqlite_vec_store.SqliteVecStore`
+        # delete shape: drop the metadata row(s) via the same engine
+        # the upsert path wrote them on, return the rowcount. The
+        # vec0 virtual tables are unused in this suite — see the
+        # integration tests for that lock-step.
+        self.deleted_targets.append((entity_type, entity_id))
+        with self._engine.begin() as conn:
+            result = conn.execute(
+                text(
+                    "DELETE FROM embeddings "
+                    "WHERE entity_type = :et AND entity_id = :eid"
+                ),
+                {"et": entity_type, "eid": entity_id},
+            )
+            return int(result.rowcount or 0)
 
 
 class _FailingVectorStore:
@@ -327,8 +345,21 @@ def _seed_inbox_item(engine: Engine, *, summary: str) -> str:
     return item_id
 
 
-def _seed_source(engine: Engine, *, summary: str | None, external_id: str) -> str:
-    """Insert one :data:`sources_table` row."""
+def _seed_source(
+    engine: Engine,
+    *,
+    summary: str | None,
+    external_id: str,
+    body: str | None = None,
+) -> str:
+    """Insert one :data:`sources_table` row.
+
+    Phase 10 step B2: the optional ``body`` kwarg defaults to None so
+    every legacy test path keeps inserting summary-only rows. New
+    Phase 10 tests pass ``body`` explicitly to exercise the
+    ``COALESCE(body, summary)`` fallback in
+    :class:`EmbeddingService._iter_pending`.
+    """
     source_id = new_ulid()
     now = now_utc()
     with engine.begin() as conn:
@@ -343,6 +374,7 @@ def _seed_source(engine: Engine, *, summary: str | None, external_id: str) -> st
                 summary=summary,
                 observed_at=now,
                 updated_at=now,
+                body=body,
             )
         )
     return source_id
@@ -766,3 +798,169 @@ def test_embed_pending_idempotent_second_run_is_noop(migrated_engine: Engine) ->
     assert second.embedded_count == 0
     assert second.skipped_count == 0
     assert embedder.calls == []
+
+
+# ---- Phase 10 body-based embedding (ADR-0012 改訂版 §4) -------------------
+
+
+def test_source_embed_prefers_body_over_summary(migrated_engine: Engine) -> None:
+    """When a source has both ``body`` and ``summary``, body wins.
+
+    Phase 10 step B2 (ADR-0012 改訂版 §4): the ``source`` entry on
+    :data:`opshub.services.embedding_service._SOURCES` switched to
+    ``COALESCE(body, summary)``. Verify the embedder receives the
+    full body text — not the shorter summary — when both are
+    populated.
+    """
+    embedder = _StubEmbedder()
+    _seed_source(
+        migrated_engine,
+        summary="short summary",
+        body="the full body text retained per ADR-0020",
+        external_id="repo#with-body",
+    )
+
+    service = _make_service(migrated_engine, embedder=embedder)
+    result = service.embed_pending(entity_type="source")
+
+    assert result.embedded_count == 1
+    # The embedder saw the body, not the summary.
+    assert embedder.calls == ["the full body text retained per ADR-0020"]
+
+
+def test_source_embed_falls_back_to_summary_when_body_null(
+    migrated_engine: Engine,
+) -> None:
+    """A source with ``body=NULL`` falls back to ``summary`` (backward-compat).
+
+    Phase 3-9 rows and the ``box_drive`` connector (ADR-0019
+    §不変条件 (b)) always land with ``body = NULL``. ADR-0012
+    改訂版 §4 + ADR-0020 §(d) require the embed path to fall
+    through to ``summary`` so historic data keeps producing
+    vectors.
+    """
+    embedder = _StubEmbedder()
+    _seed_source(
+        migrated_engine,
+        summary="summary-only legacy row",
+        body=None,
+        external_id="repo#legacy",
+    )
+
+    service = _make_service(migrated_engine, embedder=embedder)
+    result = service.embed_pending(entity_type="source")
+
+    assert result.embedded_count == 1
+    assert embedder.calls == ["summary-only legacy row"]
+
+
+def test_source_with_both_body_and_summary_null_is_skipped(
+    migrated_engine: Engine,
+) -> None:
+    """No body and no summary → skipped (no useful vector)."""
+    embedder = _StubEmbedder()
+    _seed_source(
+        migrated_engine,
+        summary=None,
+        body=None,
+        external_id="repo#blank",
+    )
+
+    service = _make_service(migrated_engine, embedder=embedder)
+    result = service.embed_pending(entity_type="source")
+
+    assert result.embedded_count == 0
+    assert result.skipped_count == 1
+    assert embedder.calls == []
+
+
+def test_source_embed_one_if_pending_uses_body_fallback(
+    migrated_engine: Engine,
+) -> None:
+    """The single-row hook path honours the same body fallback.
+
+    :meth:`EmbeddingService.embed_one_if_pending` is the Phase 5
+    step C1 auto-embed hook entry. It reads through
+    :meth:`_fetch_pending_text`, which must apply the same
+    ``COALESCE(body, summary)`` shape as :meth:`embed_pending`.
+    """
+    embedder = _StubEmbedder()
+    source_id = _seed_source(
+        migrated_engine,
+        summary="short",
+        body="full body via hook",
+        external_id="repo#hook",
+    )
+
+    service = _make_service(migrated_engine, embedder=embedder)
+    embedded = service.embed_one_if_pending("source", source_id)
+
+    assert embedded is True
+    assert embedder.calls == ["full body via hook"]
+
+
+# ---- purge_embeddings (Phase 10 step B2) ---------------------------------
+
+
+def test_purge_embeddings_clears_scoped_metadata_rows(
+    migrated_engine: Engine,
+) -> None:
+    """``purge_embeddings`` drops existing rows for the scope.
+
+    Phase 10 step B2: when the embed-input shape changes
+    (summary → body) but ``model_id`` / ``model_version`` stay the
+    same, operators run ``opshub embeddings rebuild --purge`` to
+    force re-embed. The purge step must clear the affected entity
+    family — verified via the metadata-table row count.
+    """
+    embedder = _StubEmbedder()
+    _seed_source(
+        migrated_engine,
+        summary="initial",
+        body=None,
+        external_id="repo#purge",
+    )
+
+    service = _make_service(migrated_engine, embedder=embedder)
+    first = service.embed_pending(entity_type="source")
+    assert first.embedded_count == 1
+
+    purged = service.purge_embeddings(entity_type="source")
+    assert purged == 1
+
+    # The next rebuild re-embeds the row (the NOT EXISTS predicate
+    # now sees zero rows for the active model).
+    embedder.calls = []
+    second = service.embed_pending(entity_type="source")
+    assert second.embedded_count == 1
+    assert embedder.calls == ["initial"]
+
+
+def test_purge_embeddings_no_scope_clears_every_entity_family(
+    migrated_engine: Engine,
+) -> None:
+    """``entity_type=None`` purges every supported entity family."""
+    embedder = _StubEmbedder()
+    _seed_task(migrated_engine, title="t1")
+    _seed_source(
+        migrated_engine,
+        summary="s1",
+        body=None,
+        external_id="repo#all",
+    )
+
+    service = _make_service(migrated_engine, embedder=embedder)
+    first = service.embed_pending()
+    assert first.embedded_count == 2
+
+    purged = service.purge_embeddings()
+    assert purged == 2
+
+
+def test_purge_embeddings_no_op_when_nothing_embedded(
+    migrated_engine: Engine,
+) -> None:
+    """An empty purge is a zero-cost no-op (returns 0)."""
+    embedder = _StubEmbedder()
+    service = _make_service(migrated_engine, embedder=embedder)
+    assert service.purge_embeddings(entity_type="source") == 0
