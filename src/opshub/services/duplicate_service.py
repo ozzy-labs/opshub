@@ -45,7 +45,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select, text
+from sqlalchemy import ColumnElement, func, select, text
 
 from opshub.core.errors import ConfigError
 from opshub.projections.decisions import decisions_table
@@ -64,25 +64,33 @@ if TYPE_CHECKING:
 __all__ = ["DuplicatePair", "DuplicateService"]
 
 
-# Per-entity (table, embedded-text column) mapping. The embedded-text
-# column must match what :class:`~opshub.services.embedding_service.EmbeddingService`
-# fed to the :class:`Embedder` — otherwise re-embedding here would
-# produce a query vector unrelated to the stored vectors. The mapping
-# below mirrors :data:`opshub.services.embedding_service._SOURCES`:
+# Per-entity (table, embedded-text column, optional fallback column)
+# mapping. The embedded-text column must match what
+# :class:`~opshub.services.embedding_service.EmbeddingService` fed to
+# the :class:`Embedder` — otherwise re-embedding here would produce
+# a query vector unrelated to the stored vectors. The mapping below
+# mirrors :data:`opshub.services.embedding_service._SOURCES`:
 #
 # * tasks       → title
 # * decisions   → text
 # * inbox_items → summary
-# * sources     → summary
+# * sources     → ``COALESCE(body, summary)``
+#
+# Phase 10 step B2 (ADR-0012 改訂版 §4 + ADR-0020): the ``source``
+# entry switched to a ``body``-first fallback chain so the displayed
+# text in :class:`DuplicatePair` reflects the same content the
+# embedder saw at rebuild time. Phase 3-9 rows and the ``box_drive``
+# connector land with ``body = NULL`` and fall through to ``summary``,
+# preserving the Phase 4 behaviour byte-for-byte.
 #
 # ``sources`` is the default scope (`entity_type="source"`) because
 # duplicates from connectors are the most common operational concern
 # (Phase 4 plan §3 機能 §6).
-_ENTITY_TEXT_COLUMNS: dict[str, tuple[str, str]] = {
-    "task": ("tasks", "title"),
-    "decision": ("decisions", "text"),
-    "inbox_item": ("inbox_items", "summary"),
-    "source": ("sources", "summary"),
+_ENTITY_TEXT_COLUMNS: dict[str, tuple[str, str, str | None]] = {
+    "task": ("tasks", "title", None),
+    "decision": ("decisions", "text", None),
+    "inbox_item": ("inbox_items", "summary", None),
+    "source": ("sources", "body", "summary"),
 }
 
 
@@ -284,9 +292,24 @@ class DuplicateService:
         :func:`sqlalchemy.text` and bound parameters.
         """
         source_table = _TABLE_BY_ENTITY_TYPE[entity_type]
-        _, text_column = _ENTITY_TEXT_COLUMNS[entity_type]
+        _, text_column, fallback_column = _ENTITY_TEXT_COLUMNS[entity_type]
         id_col = source_table.c["id"]
-        text_col = source_table.c[text_column]
+        # Phase 10 step B2 (ADR-0012 改訂版 §4): when the entry
+        # declares a fallback column, project
+        # ``COALESCE(<primary>, <fallback>)`` so the displayed text
+        # matches what :class:`EmbeddingService` fed the embedder at
+        # rebuild time (``sources.body`` → ``sources.summary`` for
+        # historical / NULL-body rows). Without the fallback the
+        # source-scope ``DuplicatePair.text_a`` would render as
+        # ``None`` for Phase 3-9 rows even though the embedded
+        # similarity is meaningful.
+        primary_col: ColumnElement[str] = source_table.c[text_column]
+        text_col: ColumnElement[str]
+        if fallback_column is None:
+            text_col = primary_col
+        else:
+            fallback_col: ColumnElement[str] = source_table.c[fallback_column]
+            text_col = func.coalesce(primary_col, fallback_col).label("text_expr")
         # Mirror :meth:`EmbeddingService._iter_pending` but invert the
         # predicate: we want the entities the active backend HAS
         # embedded, so EXISTS rather than NOT EXISTS.

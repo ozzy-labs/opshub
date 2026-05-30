@@ -208,6 +208,7 @@ def _seed_source_with_embedding(
     external_id: str,
     model_id: str,
     model_version: str,
+    body: str | None = None,
 ) -> str:
     """Insert one source row + one matching ``embeddings`` metadata row.
 
@@ -215,6 +216,12 @@ def _seed_source_with_embedding(
     decide which entities are in scope, so the test fixture must
     write both halves — otherwise the entity is invisible to the
     scan.
+
+    Phase 10 step B2: the optional ``body`` kwarg defaults to None
+    so every legacy test path keeps inserting summary-only rows. New
+    Phase 10 tests pass ``body`` explicitly to exercise the
+    ``COALESCE(body, summary)`` fallback in
+    :data:`opshub.services.duplicate_service._ENTITY_TEXT_COLUMNS`.
     """
     source_id = new_ulid()
     now = now_utc()
@@ -230,9 +237,10 @@ def _seed_source_with_embedding(
                 summary=summary,
                 observed_at=now,
                 updated_at=now,
+                body=body,
             )
         )
-        if summary is not None:
+        if summary is not None or body is not None:
             # Real production wouldn't write the embeddings row for an
             # empty summary either (the embedding service skips them).
             # We mirror that here so the "skip without text" case
@@ -565,6 +573,112 @@ def test_find_duplicates_unknown_entity_type_raises_config_error(
     service = _make_service(migrated_engine)
     with pytest.raises(ConfigError, match="unknown entity_type"):
         service.find_duplicates(entity_type="invalid")
+
+
+def test_find_duplicates_source_pair_text_prefers_body(
+    migrated_engine: Engine,
+) -> None:
+    """Phase 10 step B2: source pair text is ``body`` when populated.
+
+    The :data:`opshub.services.duplicate_service._ENTITY_TEXT_COLUMNS`
+    mapping for ``source`` switched to ``COALESCE(body, summary)`` to
+    match the new :data:`EmbeddingService._SOURCES` shape (ADR-0012
+    改訂版 §4). Verify the duplicate pair's ``text_a`` / ``text_b``
+    surface the body text when both rows have it populated — they
+    must match the text the embedder saw at rebuild time, not the
+    shorter summary.
+    """
+    embedder = _StubEmbedder()
+    a_id = _seed_source_with_embedding(
+        migrated_engine,
+        summary="alpha short",
+        body="alpha full body retained per ADR-0020",
+        external_id="repo#body-a",
+        model_id=embedder.model_id,
+        model_version=embedder.model_version,
+    )
+    b_id = _seed_source_with_embedding(
+        migrated_engine,
+        summary="beta short",
+        body="beta full body retained per ADR-0020",
+        external_id="repo#body-b",
+        model_id=embedder.model_id,
+        model_version=embedder.model_version,
+    )
+    store = _ScriptedVectorStore(
+        scripted_hits=[
+            [
+                RecallHit(
+                    entity_type="source",
+                    entity_id=b_id,
+                    score=_similarity_to_score(0.97),
+                    vector=(0.0,),
+                ),
+            ],
+            [],
+        ]
+    )
+
+    service = _make_service(migrated_engine, embedder=embedder, vector_store=store)
+    pairs = service.find_duplicates(threshold=0.90)
+
+    assert len(pairs) == 1
+    pair = pairs[0]
+    assert {pair.entity_id_a, pair.entity_id_b} == {a_id, b_id}
+    # Both displayed texts come from ``body`` — the fallback chain
+    # picked the primary column.
+    texts = {pair.text_a, pair.text_b}
+    assert texts == {
+        "alpha full body retained per ADR-0020",
+        "beta full body retained per ADR-0020",
+    }
+
+
+def test_find_duplicates_source_text_falls_back_to_summary_when_body_null(
+    migrated_engine: Engine,
+) -> None:
+    """A pair with ``body=NULL`` displays the ``summary`` (backward-compat).
+
+    Phase 3-9 / ``box_drive`` rows never carry a body. The COALESCE
+    fallback must preserve the Phase 4 display behaviour for them.
+    """
+    embedder = _StubEmbedder()
+    _seed_source_with_embedding(
+        migrated_engine,
+        summary="alpha summary fallback",
+        body=None,
+        external_id="repo#fb-a",
+        model_id=embedder.model_id,
+        model_version=embedder.model_version,
+    )
+    b_id = _seed_source_with_embedding(
+        migrated_engine,
+        summary="beta summary fallback",
+        body=None,
+        external_id="repo#fb-b",
+        model_id=embedder.model_id,
+        model_version=embedder.model_version,
+    )
+    store = _ScriptedVectorStore(
+        scripted_hits=[
+            [
+                RecallHit(
+                    entity_type="source",
+                    entity_id=b_id,
+                    score=_similarity_to_score(0.96),
+                    vector=(0.0,),
+                ),
+            ],
+            [],
+        ]
+    )
+
+    service = _make_service(migrated_engine, embedder=embedder, vector_store=store)
+    pairs = service.find_duplicates(threshold=0.90)
+
+    assert len(pairs) == 1
+    texts = {pairs[0].text_a, pairs[0].text_b}
+    assert texts == {"alpha summary fallback", "beta summary fallback"}
 
 
 def test_find_duplicates_skips_entities_without_text(
