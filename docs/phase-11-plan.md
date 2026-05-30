@@ -49,7 +49,7 @@ Office 抽出は markitdown 経由で多形式統一、ローカル FS（Box Dri
 |---|---|---|---|
 | **ADR-0025** | 新規 | Office Document Content Extraction | markitdown 採用根拠（多形式統一・markdown 出力・Microsoft 公式）/ 50 MB+500K chars cap / 細分 source_type 3 種 / Excel 10K+50K cells 上限 / PPT 本文+ノート / 画像 OCR Phase 12+ defer / 抽出失敗 fail-safe policy（warning log + body=None）/ ADR-0019 との緊張解消 |
 | **ADR-0019** | 改訂 | Local-FS-backed Connector | (a) §不変条件 (b) `open()` ban に `[connectors.<name>] content_extraction = true` opt-in 例外節（明示的 extractor lib 経路のみ open 許可、CldAPI/FSE hydration 抑制ガイドライン継続）/ (b) §パターン汎化節に onedrive_drive 追加、`root_path` platform default 表に **WSL2 `/mnt/onedrive`** / **macOS `~/OneDrive`** を追記 |
-| **ADR-0010** | 改訂 | Connector Contract | (a) Teams 新コネクタ追加 / (b) 本文抽出契約（連続 stat → 抽出 → SourceObserved with body）/ (c) delta-link cursor + 失効時 full-pass fallback 義務 / (d) Teams User Token principal を明記（Bot Token は alternative） |
+| **ADR-0010** | 改訂 | Connector Contract | **Phase 10 改訂（write-back ban）に追加で**：(a) Teams 新コネクタ追加 / (b) 本文抽出契約（連続 stat → 抽出 → SourceObserved with body）/ (c) delta-link cursor + 失効時 full-pass fallback 義務 / (d) Teams User Token principal を明記（Bot Token は alternative） |
 
 ---
 
@@ -77,9 +77,10 @@ Office 抽出は markitdown 経由で多形式統一、ローカル FS（Box Dri
 
 ### Sub-issue F3: Outlook 本文 deep retention (#236)
 
+- **依存: F1 のみ**（Outlook body は plain text/HTML、markitdown 抽出層 = F2 を経由しない）
 - `src/opshub/connectors/ms365/mapper.py` の `map_outlook_message` を本文取り込みに拡張
 - 既存 outlook source の backward-compat（body=None で従来挙動）
-- 巨大メール（500K chars 超）の truncate（OQ2 共通機構）
+- 巨大メール（500K chars 超）の truncate は F3 内 inline 実装（F2 の `core/text_limits` 共通機構化は並行進行、統合は将来 PR）
 - tests: 本文取り込み / provenance / 既存挙動非破壊 / truncate
 
 **PR F3** `feat(connectors/ms365): outlook body deep retention`
@@ -94,6 +95,7 @@ Office 抽出は markitdown 経由で多形式統一、ローカル FS（Box Dri
 
 ### Sub-issue F5: Teams connector (#238)
 
+- **依存: F1 のみ**（Teams body は chat text、抽出層 = F2 を経由しない）
 - `connectors/teams/` connector 一式（auth + fetcher + mapper + connector + settings）
 - Teams User Token を keyring 経由（ADR-0014 再利用、`OPSHUB_CONNECTOR_TEAMS_TOKEN` env override）
 - Graph delta query（`/me/chats/getAllMessages` または `/teams/{id}/channels/{id}/messages/delta`）
@@ -119,13 +121,15 @@ Office 抽出は markitdown 経由で多形式統一、ローカル FS（Box Dri
 ### Wave 配置（依存 DAG）
 
 ```text
-Wave 1: F1                       ← entry
-Wave 2: F2                       ← F1
-Wave 3: F3 / F4 / F5（3 並列）   ← F2 + F1
-Wave 4: F6                       ← F2-F5
+Wave 1: F1                         ← entry
+Wave 2: F2 / F3 / F5（3 並列）    ← F1
+Wave 3: F4                         ← F2
+Wave 4: F6                         ← F2-F5
 ```
 
-drive 例: `/drive #234 -> #235 -> #236,#237,#238 -> #239`（F3/F4/F5 が Wave 3 並列で最大効率）
+drive 例: `/drive #234 -> #235,#236,#238 -> #237 -> #239`（Wave 2 で F2/F3/F5 が3並列、最大効率）
+
+**最適化の根拠（2026-05-31 audit）**：F3（Outlook body）と F5（Teams chat body）は markitdown 抽出層を経由しないため F2 に依存しない。OQ2 の 500K chars truncate は F3 内 inline 実装で F2 を待たず先行可能。F4 のみ document_extract（F2）が必須なため Wave 3。
 
 ---
 
@@ -183,6 +187,8 @@ drive 例: `/drive #234 -> #235 -> #236,#237,#238 -> #239`（F3/F4/F5 が Wave 3
 - [ ] e2e lifecycle test pass（test_phase11_office_lifecycle.py）
 - [ ] M6 guard / `opshub --help` ≤ 300ms 維持、暗号化平文リーク検出 CI 常駐継続
 - [ ] AGENTS.md / CLAUDE.md Status 行 Phase 11 complete
+- [ ] **`docs/phase-11-plan.md` Status header を `Phase 11 complete (YYYY-MM-DD)` に更新**（Phase 10 Round 2 R2-CROSS-06 教訓）
+- [ ] **F6 マージ後、main の CI workflow が green であることを確認**（mypy strict + targeted pytest、Phase 10 #221 hotfix 経験を踏まえた事前確認）
 
 ---
 
@@ -241,10 +247,10 @@ drive 例: `/drive #234 -> #235 -> #236,#237,#238 -> #239`（F3/F4/F5 が Wave 3
 
 ### 7.4 e2e lifecycle テスト
 
-- **`tests/integration/test_phase11_office_lifecycle.py`**: meeting-prep 相当シナリオを台本 MCP クライアントで再現
-  1. Teams + Outlook + .docx を取り込み（tmp dir fixture）
-  2. MCP search で「●●会議」関連トピック検索 → 関連 source hit
-  3. recall + expand-graph で thread + 関連文書集約
+- **`tests/integration/test_phase11_office_lifecycle.py`**: **Office データ統合シナリオ**（meeting-prep 等の skill は Phase 11 scope 外、§9 outlook 参照）を台本 MCP クライアントで再現。本テストは Phase 11 データパイプライン（Teams + Outlook 本文 + Office 文書抽出）の MCP 経由動作確認に限定。
+  1. Teams + Outlook + .docx/.xlsx/.pptx を取り込み（tmp dir fixture、markitdown 経由抽出）
+  2. MCP `search` / `recall.search` で「●●会議」関連トピック検索 → Teams / Outlook / Office source hit
+  3. MCP `recall.search` + `graph.related`/`graph.expand`（Step 1 widening 済）で thread + 関連文書集約
   4. write-back 経路が呼べないこと（write-back 非存在）を確認
 - 形A につき opshub 内に頭脳はないので **MCP クライアントが台本どおりツール呼び出し列を再現** して MCP 面と ①コアを検証（実エージェント・実 LLM は不要）
 
