@@ -163,6 +163,59 @@ def test_null_body_rows_are_never_returned(migrated_engine: Engine) -> None:
 # ---- filter ---------------------------------------------------------------
 
 
+def test_search_returns_hits_from_multiple_connectors_when_unfiltered(
+    migrated_engine: Engine,
+) -> None:
+    """No ``connector_name`` filter → matches surface from every connector.
+
+    Phase 10 step B2 (Sub-issue B, ADR-0012 改訂版 §4 + ADR-0020):
+    the FTS5 index is keyed off ``sources.body`` regardless of which
+    connector produced the row. A query for a shared token must
+    surface hits from github + slack + box side-by-side so the secretary
+    skill (file-lookup / daily-brief) can cross-correlate evidence
+    across SaaS sources without per-connector fan-out.
+
+    Pin: seed identical tokens across three connectors; the unfiltered
+    search returns all three rows, the connector set covers github /
+    slack / box, and ``connector_name="slack"`` narrows back to one.
+    """
+    shared_token = "phase10releasenotes"
+    github_id = _seed_source(
+        migrated_engine,
+        body=f"PR review for the {shared_token} milestone",
+        connector_name="github",
+        source_type="pr",
+        external_id="repo#pr-321",
+    )
+    slack_id = _seed_source(
+        migrated_engine,
+        body=f"channel thread about the {shared_token} announcement",
+        connector_name="slack",
+        source_type="slack_message",
+        external_id="C100:msg-9",
+    )
+    box_id = _seed_source(
+        migrated_engine,
+        body=f"design doc covering the {shared_token} rollout plan",
+        connector_name="box_drive",
+        source_type="box_file",
+        external_id="box:file-7",
+    )
+    service = SearchService(engine=migrated_engine)
+
+    hits = service.search(shared_token)
+
+    hit_ids = {h.entity_id for h in hits}
+    hit_connectors = {h.connector_name for h in hits}
+    assert hit_ids == {github_id, slack_id, box_id}
+    assert hit_connectors == {"github", "slack", "box_drive"}
+
+    # The connector filter still works on top of a multi-connector
+    # match set — narrowing to ``slack`` drops the github + box rows.
+    slack_only = service.search(shared_token, connector_name="slack")
+    assert {h.entity_id for h in slack_only} == {slack_id}
+
+
 def test_connector_filter_restricts_results(migrated_engine: Engine) -> None:
     """``connector_name='slack'`` returns Slack hits only."""
     _seed_source(
