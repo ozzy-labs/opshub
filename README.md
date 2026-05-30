@@ -74,7 +74,8 @@ Once you wire OpsHub into an agent host over MCP (see [Connect an agent host](#c
 | "What should I do next?" / "今日のまとめ" | `daily-brief` / `next-actions` | Top signals from the last 24h + active tasks + untriaged inbox |
 | "Draft a reply to that Slack thread" / "返信案考えて" | `reply-draft` | LLM-generated draft grounded in your past sending style (you copy-paste — OpsHub never sends) |
 | "Review PR #123" | `pr-review` | Pulls related decisions / tasks / past discussion so the agent can review with context |
-| "Find that Box file about X" / "Box にあったあの資料" | `file-lookup` | Full-text + semantic search across Slack / Box / GitHub / MS365 / Box Drive |
+| "Find that Box file about X" / "Word/Excel/PPT 探して" | `file-lookup` | Full-text + semantic search across Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive (incl. Office body extraction, Phase 11) |
+| "Summarise that Teams thread" / "Teams スレッド要約して" | `daily-brief` / `file-lookup` | Body-based recall over Teams chat history (Phase 11) |
 
 The five secretary skills ship through [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) via the `@ozzylabs/skills` Renovate preset (handbook ADR-0016). See [`docs/secretary-agent.md`](docs/secretary-agent.md) for the full catalog and what OpsHub deliberately does not do (no write-back to SaaS, no always-on runtime, no auto-apply).
 
@@ -118,7 +119,7 @@ rationale.
 
 ## What's in OpsHub today
 
-Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23. Phase 10 shipped 2026-05-31:
+Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23. Phase 10 + Phase 11 shipped 2026-05-31:
 
 | Phase | Layer | Highlights |
 |---|---|---|
@@ -132,8 +133,9 @@ Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23. Phase 10 
 | 8 | Knowledge graph | `links` projection + auto-extraction + `graph` + `--expand-graph` |
 | 9 | Local-FS connectors | `box_drive` (Box Drive desktop client → local FS scan, ADR-0019) |
 | 10 | Secretary agent platform | Full local body retention (ADR-0020) + encryption at rest (ADR-0021) + MCP server (ADR-0022) + `opshub search` (FTS5) + `opshub mcp serve` + secretary 5 Skills + reply-draft (ADR-0016 §決定 (i)) + ADR-0004 revision (form-A: no agent runtime in core) + ADR-0010 revision (write-back ban) + ADR-0017 revision (reply_draft link types) |
+| 11 | MS Office deep-dive | Office content extraction (ADR-0025, markitdown for `.docx`/`.xlsx`/`.pptx`, 50 MB / 500K chars cap, fail-safe) + ADR-0019 revision (`content_extraction` opt-in exception + `onedrive_drive` pattern generalisation) + ADR-0010 revision (Teams connector + body-extraction contract + delta-link cursor + invalidated-token fallback + Teams User Token principal) + new `teams` connector (Microsoft Graph chat delta + `Chat.Read`) + new `onedrive_drive` connector (FS scan, WSL2 `/mnt/onedrive` / macOS `~/OneDrive`) + `box_drive` Office extraction hook + Outlook body deep retention |
 
-Next: **Phase 11 (MS Office deep-dive — Teams + Outlook body + Word/Excel/PowerPoint extraction)** — see [`docs/phase-10-plan.md`](docs/phase-10-plan.md) §9. Phase 12+ candidates: multi-machine sync, proactive secretary (cron-delegated commands). Longer phase-by-phase narrative lives in
+Next: **Phase 12+ candidates** — multi-machine sync, proactive secretary (cron-delegated commands), image OCR (PPT figures / slide images), additional connectors (Google Workspace via markitdown reuse / Notion / Jira), external write-back (Teams reply send with HITL). Longer phase-by-phase narrative lives in
 [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery).
 
 ## Commands
@@ -169,6 +171,9 @@ opshub connector sync ms365                           # incremental sync per end
 opshub connector auth set connector:box               # OAuth paste-code (Box Events API)
 opshub connector sync box                             # incremental sync (Box stream_position cursor)
 opshub connector sync box_drive                       # Phase 9: scan local Box Drive mount (see docs/box-drive-setup.md)
+opshub connector sync onedrive_drive                  # Phase 11: scan local OneDrive Desktop mount (see docs/onedrive-drive-setup.md)
+opshub connector auth set connector:teams             # Phase 11: store Microsoft Graph User Token (Chat.Read, see docs/teams-setup.md)
+opshub connector sync teams                           # Phase 11: Graph chat delta + invalidated-token fallback
 opshub connector list                                 # show registered connectors
 
 # Workspace + projections
@@ -232,6 +237,8 @@ opshub mcp serve                                       # stdio MCP server — ag
 | `llm-anthropic` / `llm-openai` | API LLM backends | Small |
 | `llm-ollama` | Ollama daemon client | Small |
 | `connectors-github` / `connectors-slack` / `connectors-ms365` / `connectors-box` | SaaS connectors | Small |
+| `connectors-teams` | Microsoft Teams connector (Phase 11, msal + httpx) | Small |
+| `office` | Office document content extraction (Phase 11, markitdown for `.docx`/`.xlsx`/`.pptx`, ADR-0025) | Small |
 | `secrets` | OS keyring backend | Small |
 | `encryption` | SQLCipher-backed at-rest encryption (Phase 10, ADR-0021) | Small |
 | `mcp` | MCP server SDK for `opshub mcp serve` (Phase 10, ADR-0022) | Small |
@@ -245,6 +252,8 @@ opshub mcp serve                                       # stdio MCP server — ag
 - [`docs/mcp-setup.md`](docs/mcp-setup.md) — Phase 10 MCP setup for agent hosts (Claude Code etc.)
 - [`docs/adr/`](docs/adr/README.md) — Architecture Decision Records
 - [`docs/box-drive-setup.md`](docs/box-drive-setup.md) — Phase 9 `box_drive` connector setup (WSL2 / macOS)
+- [`docs/onedrive-drive-setup.md`](docs/onedrive-drive-setup.md) — Phase 11 `onedrive_drive` connector setup (WSL2 / macOS)
+- [`docs/teams-setup.md`](docs/teams-setup.md) — Phase 11 `teams` connector setup (Azure app registration + User Token)
 - [`docs/upgrading.md`](docs/upgrading.md) — version migration notes (when applicable)
 - [`docs/release-notes-v0.1.0.md`](docs/release-notes-v0.1.0.md) — v0.1.0 narrative release notes
 - [`docs/RELEASE_RUNBOOK.md`](docs/RELEASE_RUNBOOK.md) — how to cut a release (maintainers)

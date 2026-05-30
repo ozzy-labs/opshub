@@ -1,6 +1,6 @@
 # Phase 11 Implementation Plan
 
-> Status: Draft (起票後骨子). Last reviewed: 2026-05-31. Scope: **MS Office 深掘り** = Teams 新コネクタ＋Outlook 本文 deep retention＋Word/Excel/PowerPoint 文書抽出。Phase 10 plan §3 Sub-issue F / §9 outlook で forecast 済みの内容を実装。形A（runtime なし）・能動性なし・外部書き戻しなしを Phase 10 から継承。
+> Status: Phase 11 complete (2026-05-31). Sub-issue F1-F6 すべて merged。Last reviewed: 2026-05-31. Scope: **MS Office 深掘り** = Teams 新コネクタ＋Outlook 本文 deep retention＋Word/Excel/PowerPoint 文書抽出。Phase 10 plan §3 Sub-issue F / §9 outlook で forecast 済みの内容を実装。形A（runtime なし）・能動性なし・外部書き戻しなしを Phase 10 から継承。
 >
 > Sub-issue は **F1〜F6 の6つ**（親 epic #233、子 #234〜#239）。新規 ADR は 1本（ADR-0025）+ 改訂 2本（ADR-0019 / ADR-0010）に縮退（Phase 10 の3新規+4改訂から半減）。本 plan が SSOT であり、各 sub-issue body は要点抜粋。
 >

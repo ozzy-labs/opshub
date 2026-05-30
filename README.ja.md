@@ -73,7 +73,8 @@ opshub propose apply <proposal-id> 0                  # オペレーター承認
 | 「今日のまとめ」「次に何やる?」 | `daily-brief` / `next-actions` | 直近 24h の主要シグナル + active task + 未処理 inbox |
 | 「あの Slack スレッドに返信案考えて」 | `reply-draft` | LLM が過去の自分の送信文体を踏まえて下書きを生成（送信は手動・OpsHub は外送信しない） |
 | 「PR #123 をレビューして」 | `pr-review` | 関連 decision / task / 過去議論を引いてレビュー観点を提示 |
-| 「Box にあった X の資料」 | `file-lookup` | Slack / Box / GitHub / MS365 / Box Drive を本文ベースで横断検索 |
+| 「Box にあった X の資料」「Word / Excel / PPT 探して」 | `file-lookup` | Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive を本文ベースで横断検索（Phase 11 で Office 文書本文も対象） |
+| 「Teams スレッド要約して」 | `daily-brief` / `file-lookup` | Phase 11 で取り込んだ Teams chat 本文に対する横断 recall |
 
 5 つの秘書 Skill は [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) リポから `@ozzylabs/skills` Renovate preset 経由で各ホストに配布されます (handbook ADR-0016)。Skills カタログと「できること / できないこと」（外部書き戻し / 常駐 / auto-apply はしない）の詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。
 
@@ -117,7 +118,7 @@ ollama serve && ollama pull llama3.2:3b
 
 ## OpsHub に今あるもの
 
-Phase 1–8 を出荷済み（2026-05-17, v0.1.0）。Phase 9 出荷 2026-05-23。Phase 10 出荷 2026-05-31:
+Phase 1–8 を出荷済み（2026-05-17, v0.1.0）。Phase 9 出荷 2026-05-23。Phase 10・Phase 11 出荷 2026-05-31:
 
 | Phase | レイヤ | ハイライト |
 |---|---|---|
@@ -131,8 +132,9 @@ Phase 1–8 を出荷済み（2026-05-17, v0.1.0）。Phase 9 出荷 2026-05-23�
 | 8 | Knowledge graph | `links` projection + 自動抽出 + `graph` + `--expand-graph` |
 | 9 | Local-FS connectors | `box_drive` (Box Drive デスクトップ → ローカル FS scan、ADR-0019) |
 | 10 | Secretary agent platform | 本文ローカル保持 (ADR-0020) + 保存時暗号化 (ADR-0021) + MCP server (ADR-0022) + `opshub search` (FTS5) + `opshub mcp serve` + 秘書 5 Skills + reply-draft (ADR-0016 §決定 (i)) + ADR-0004 改訂 (形A: runtime をコアに持たない) + ADR-0010 改訂 (write-back 禁止) + ADR-0017 改訂 (reply_draft link types) |
+| 11 | MS Office 深掘り | Office 文書本文抽出 (ADR-0025、markitdown 経路で `.docx`/`.xlsx`/`.pptx`、50 MB / 500K chars cap、fail-safe) + ADR-0019 改訂 (`content_extraction` opt-in 例外節 + `onedrive_drive` パターン汎化) + ADR-0010 改訂 (Teams connector + 本文抽出契約 + delta-link cursor + 失効時 full-pass fallback + Teams User Token principal) + 新 `teams` connector (Microsoft Graph chat delta + `Chat.Read`) + 新 `onedrive_drive` connector (FS scan、WSL2 `/mnt/onedrive` / macOS `~/OneDrive`) + `box_drive` の Office 抽出 hook + Outlook 本文 deep retention |
 
-次は **Phase 11 (MS Office 深掘り — Teams + Outlook 本文 + Word/Excel/PowerPoint 抽出)** — [`docs/phase-10-plan.md`](docs/phase-10-plan.md) §9 を参照。Phase 12+ 候補: multi-machine sync / 能動性 (cron 委譲)。phase ごとの詳細は [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery) に。
+次は **Phase 12+ 候補** — multi-machine sync / 能動性段階 1-4 (cron 委譲 / 記憶キュレーション / 通知 / filewatch) / 画像 OCR (PPT 内画像 / Office 図表) / 追加コネクタ (Google Workspace = markitdown 経路再利用 / Notion / Jira) / 外部書き戻し (Teams 返信送信 + HITL、要 新 ADR)。phase ごとの詳細は [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery) に。
 
 ## コマンド
 
@@ -166,6 +168,10 @@ opshub connector auth set connector:ms365             # OAuth paste-code (Micros
 opshub connector sync ms365                           # endpoint ごとの差分同期
 opshub connector auth set connector:box               # OAuth paste-code (Box Events API)
 opshub connector sync box                             # 差分同期 (Box stream_position cursor)
+opshub connector sync box_drive                       # Phase 9: ローカル Box Drive mount を scan (docs/box-drive-setup.md)
+opshub connector sync onedrive_drive                  # Phase 11: ローカル OneDrive Desktop mount を scan (docs/onedrive-drive-setup.md)
+opshub connector auth set connector:teams             # Phase 11: Microsoft Graph User Token を OS keychain に保存 (Chat.Read、docs/teams-setup.md)
+opshub connector sync teams                           # Phase 11: Graph chat delta + 失効時 fallback
 opshub connector list                                 # 登録済 connector を表示
 
 # Workspace + projections
@@ -229,6 +235,8 @@ opshub mcp serve                                       # stdio MCP server — �
 | `llm-anthropic` / `llm-openai` | API LLM backend | 小 |
 | `llm-ollama` | Ollama daemon クライアント | 小 |
 | `connectors-github` / `connectors-slack` / `connectors-ms365` / `connectors-box` | SaaS connector | 小 |
+| `connectors-teams` | Microsoft Teams connector (Phase 11、msal + httpx) | 小 |
+| `office` | Office 文書本文抽出 (Phase 11、markitdown で `.docx`/`.xlsx`/`.pptx`、ADR-0025) | 小 |
 | `secrets` | OS keyring backend | 小 |
 | `encryption` | SQLCipher backed の保存時暗号化 (Phase 10、ADR-0021) | 小 |
 | `mcp` | `opshub mcp serve` 用 MCP server SDK (Phase 10、ADR-0022) | 小 |
@@ -242,6 +250,8 @@ opshub mcp serve                                       # stdio MCP server — �
 - [`docs/mcp-setup.md`](docs/mcp-setup.md) — Phase 10 エージェント host 向け MCP セットアップ
 - [`docs/adr/`](docs/adr/README.md) — Architecture Decision Records
 - [`docs/box-drive-setup.md`](docs/box-drive-setup.md) — Phase 9 `box_drive` connector setup (WSL2 / macOS)
+- [`docs/onedrive-drive-setup.md`](docs/onedrive-drive-setup.md) — Phase 11 `onedrive_drive` connector setup (WSL2 / macOS)
+- [`docs/teams-setup.md`](docs/teams-setup.md) — Phase 11 `teams` connector setup (Azure app 登録 + User Token)
 - [`docs/upgrading.md`](docs/upgrading.md) — バージョン移行ノート (該当時のみ)
 - [`docs/release-notes-v0.1.0.md`](docs/release-notes-v0.1.0.md) — v0.1.0 ナラティブリリースノート
 - [`docs/RELEASE_RUNBOOK.md`](docs/RELEASE_RUNBOOK.md) — リリースの切り方 (maintainer 向け)
