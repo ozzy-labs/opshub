@@ -1,7 +1,7 @@
 # 0012. Embedding Strategy
 
-- Status: Accepted
-- Date: 2026-05-17
+- Status: Accepted (revised 2026-05-30 for Phase 10)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §4 revision: embed target = body)
 - Deciders: ozzy
 
 ## Context
@@ -81,22 +81,30 @@ api_key_env = "OPENAI_API_KEY"
 
 デフォルト backend は **Phase 4 着手時に決定** する (本 ADR の Open Question 1)。Phase 1-3 では `backend = "disabled"` (embedding 機能 OFF) が default。
 
-### 4. Embed 対象 (ADR-0005 整合)
+### 4. Embed 対象 (ADR-0020 整合、Phase 10 で改訂)
 
-**Embed する**:
+> **改訂履歴**: 当初版 (2026-05-17) は ADR-0005 (External Content Minimization) 整合で「`sources.summary` を embed、full body は embed しない」を pin していた。Phase 10 で ADR-0020 (Full Local Content Retention) が ADR-0005 を Superseded し、`sources.body` が SSOT として保持されるようになったため、本節を**本文ベース**に改訂する (2026-05-30、Alternative #4 採用)。
 
-- `tasks.summary` / `tasks.description`
-- `decisions.text` / `decisions.rationale`
+**Embed する** (本文優先・summary フォールバック):
+
+- `tasks.title` (Phase 4 実装で `summary` ではなく `title` を使用、§Validation 参照)
+- `decisions.text`
 - `inbox_items.summary`
-- `sources.summary` (full body ではなく要約)
-- `briefings.content` (生成済 markdown briefing)
+- `sources.body` (本文が NULL の場合は `sources.summary` にフォールバック; Phase 3-9 の historical row および `box_drive` の FS-only row は body=NULL のため自然に summary が使われる)
+- `briefings.content` (生成済 markdown briefing、Phase 5+ で event 駆動 auto-embed 対象)
 - `extracted_action_items.text`
 
 **Embed しない**:
 
-- `events.payload` の生データ (event 列を直接検索する用途なし)
-- external SaaS の full body (ADR-0005 で保持していない)
-- code / binary / 機密文書
+- `events.payload` の生データ (event 列を直接検索する用途なし、ADR-0002 で projection 経由が原則)
+- code / binary / 機密文書 (excludes で取り込み前段遮断、ADR-0020 §(b))
+
+**運用ルール**:
+
+- Body 採用は **fallback chain** で実装する: `COALESCE(body, summary)`。新規 connector 取り込みは `body` 充填、historical row は `summary` のまま自然に動作 (ADR-0020 §(d) backward-compat)。
+- Body→summary に切り替えた entity は `embeddings rebuild` で再計算が必要 (`model_id` / `model_version` 一致でも text 差分は projection に現れないため `--rebuild-body` 経路で強制 re-embed する; 詳細は Sub-issue B2)。
+- `provenance_trust = "untrusted"` の本文も embed 対象には含む (検索の recall 性能を優先)。LLM context に渡す段階で ADR-0015 §決定 (f) do-not-follow preamble + ADR-0020 §(e) provenance タグで poisoning 緩和する責務に分離。
+- Embed 対象の text は本文長 cap (= embedder の max token) を超過したら **head-truncation** する (Phase 10 step B2 の単純実装、chunk + max pool は §Open Q #2 で Phase 11+)。
 
 ### 5. `embeddings` projection schema (Phase 1 で骨格作成)
 
@@ -146,7 +154,7 @@ projection と JOIN できる前提を活かし、**vector + SQL filter の hybr
 2. **配布が軽い状態を維持** — core dep が ML フリーなので、Homebrew / PyInstaller / Docker の道が閉じない
 3. **backend 乗り換えコストが小さい** — `Embedder` interface に閉じているので、`OpenAI → BGE-M3` 等の移行が config 変更 + rebuild で完結
 4. **モデル進化に追従可能** — `model_id` + `model_version` 列で増分 re-embed と新旧並列保持が可能
-5. **ADR-0005 違反の予防** — embed 対象を summary 系に限定するルールが Phase 1 から interface に現れる
+5. **本文と embedding source の整合** — Phase 10 改訂後は ADR-0020 §決定 (a) の `sources.body` を embed 元として直接参照し、`COALESCE(body, summary)` の fallback で historical row が壊れない (Phase 1 当初版は ADR-0005 整合で summary のみだった、§4 改訂履歴参照)
 6. **Phase 4 着手前から `embeddings` テーブル骨格があるため、event 駆動 refresh の hook 配線を Phase 2-3 で先回り可能**
 
 ### Negative / Trade-offs
@@ -222,6 +230,21 @@ projection と JOIN できる前提を活かし、**vector + SQL filter の hybr
 - 切り替えロジックが複雑
 - 代わりに本案 (Pluggable + 設定駆動) で十分柔軟
 
+### 8. Body から embed、保管は summary のみ (Phase 10 で **採用**)
+
+> 当初版 (2026-05-17) では「embed は summary、保管も summary」(§4 の ADR-0005 整合) を採択していたため、本案は **却下** 扱いだった。Phase 10 で ADR-0020 (Full Local Content Retention) が ADR-0005 を Superseded し、本文がローカル DB に保持されるようになったことで前提が変わり、本案を **採用** に転換する (2026-05-30、§4 改訂を参照)。
+
+採用根拠:
+
+- 秘書エージェント (Phase 10) の返信下書き / 本文検索ユースケースでは summary 経由 embedding では recall が不十分 (細部・固有名詞・依頼の機微が summary で抜け落ちる)。本文から embed することで semantic recall の精度が上がり、SQLite FTS5 (Sub-issue B2) の全文検索と組み合わせた hybrid search が成立する。
+- 「保管は summary のみ」は ADR-0020 で見直され、本文も `sources.body` に保管する。embed 元 text と保管 text は同じ `body` 列 (NULL の場合 `summary`) で fallback 統一する。
+- Embedding payload に「実本文」が混入することによる context bloat 懸念は ADR-0020 §Consequences で別解 (recall で絞り込んで agent context に断片のみ流す) が用意済み。
+
+§4 の Negative / Trade-off:
+
+- Body 長文化で embedder の入力 token cap を超える entity が出る。Phase 10 step B2 では head-truncation で対応 (chunk 戦略は §Open Q #2 で Phase 11+)。
+- Body が provenance `untrusted` の場合、embedding が間接的に poisoning text を index 化する形になるが、recall hit を LLM context に流す段階で ADR-0015 §決定 (f) do-not-follow preamble + ADR-0020 §(e) provenance タグで防御する責務に分離する (ADR-0020 Negative 1 緩和層と同じ流儀)。
+
 ## 決定の確定 (Phase 4 後追い)
 
 Phase 4 sub-issue A-D (PR #63-#74) の実装で本 ADR の Open Questions 1-2 を以下のとおり確定した:
@@ -269,6 +292,8 @@ Phase 4 MVP の `recall(query, *, k, entity_types=None)` だけでは「rowid �
 - [Architecture 2.6 (Vector Layer)](../architecture.md)
 - [ADR-0001: Python Stack](0001-python-stack.md)
 - [ADR-0002: Event-Sourced Architecture](0002-event-sourced-architecture.md)
-- [ADR-0005: External Content Minimization](0005-external-content-minimization.md)
+- [ADR-0005: External Content Minimization](0005-external-content-minimization.md) — 当初版 §4 の embed 対象 (summary 限定) 根拠。Phase 10 で **Superseded by ADR-0020**、本 ADR の §4 / Alternative #8 も同時に改訂
 - [ADR-0007: Single Python Package, defer Monorepo](0007-single-python-package.md)
+- [ADR-0020: Full Local Content Retention](0020-full-local-content-retention.md) — Phase 10 改訂の根拠。`sources.body` を SSOT として保持することで本文ベース embedding が可能になる前提 (本 ADR §4 / Alternative #8)
+- [Phase 10 Plan §3 Sub-issue B / §4-B](../phase-10-plan.md)
 - 知識 MCP: `tools/sqlite-vec` (該当ナレッジ未収録、追加候補)

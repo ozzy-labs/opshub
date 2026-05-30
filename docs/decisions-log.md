@@ -55,8 +55,8 @@ Phase 9 (Local-filesystem-backed Connector Layer、epic #187) は 2026-05-23 に
 | Git-backed (markdown + commit を event 代わり) | SQLite append-only events | 構造化クエリに不向き、粒度制御困難 | ADR-0002 |
 | CQRS + 別 DB | 単一 SQLite | over-engineering | ADR-0002 |
 | `markdown 主体 + SQLite 索引` (初期検討) | Event Store + Projections + Workspace surface | より principled、Brief 採用 | ADR-0002, 0003 |
-| Full body をローカル保持 | 最小化 (ID / URL / summary / metadata) | 機密 / TOS / 容量 / agent context 効率 | ADR-0005 (Phase 10 で **撤回**、§16 参照) |
-| Encrypted local body 保持 | 最小化 | 機密性は担保できるが TOS / 容量問題は残る | ADR-0005 (Phase 10 で **撤回**、§16 / §17 参照) |
+| Full body をローカル保持 | 最小化 (ID / URL / summary / metadata) | 機密 / TOS / 容量 / agent context 効率 | ADR-0005 (Phase 10 で **撤回**、§16 / §18 参照) |
+| Encrypted local body 保持 | 最小化 | 機密性は担保できるが TOS / 容量問題は残る | ADR-0005 (Phase 10 で **撤回**、§16 / §17 / §18 参照) |
 
 ## 4. 言語 / スタック
 
@@ -207,3 +207,15 @@ Phase 9 (Local-filesystem-backed Connector Layer、epic #187) は 2026-05-23 に
 | OS / FS レベル暗号化に委ねる (FileVault / LUKS / dm-crypt) | opshub が DB 単位の SQLCipher 暗号化を提供、鍵は keyring | operator 環境依存で opshub が保証できない (WSL2 / 非暗号化外部ボリューム / 一時マウント)、「opshub が本文を保持するなら保存時暗号化を提供する」責任境界、DB 単位の鍵なら opshub が鍵ライフサイクルを制御でき粒度が適切 | ADR-0021 |
 | 暗号化なし + 機密本文を excludes で除外して運用回避 | excludes (取り込まない前段) と保存時暗号化 (取り込んだ本文の保護) を別レイヤーで両立 | excludes は取り込み前の防御で取り込んだ本文の保存時保護にならない、機密判定が完全でない以上保存時暗号化は別レイヤーとして必須、本文保持で default は `encryption = true` | ADR-0021 |
 | DB 暗号鍵を専用の鍵管理 (新規 secret store) で保管 | ADR-0014 の keyring 経路を再利用 (`db:encryption_key` + `OPSHUB_DB_ENCRYPTION_KEY` env override) | DB 鍵も SaaS token も同じ keyring 経路で operator のメンタルモデルを一元化、opshub が鍵をディスク平文に書かない原則を継承、新規 secret store は重複 | ADR-0021 |
+
+## 18. Body-based Embedding (ADR-0012 Phase 10 改訂)
+
+ADR-0012 (Embedding Strategy) §4 の「embed 対象」を Phase 10 (Sub-issue B、本文ベース横断検索) に合わせて改訂。当初版 (2026-05-17) は ADR-0005 (External Content Minimization) 整合で `sources.summary` を embed し full body は対象外と pin していたが、ADR-0020 (Full Local Content Retention) が ADR-0005 を Superseded して `sources.body` が SSOT として保持されるようになったため、embed 元を本文ベースに切替える。
+
+| 却下案 | 採用案 | 理由 | 参照 |
+|---|---|---|---|
+| ADR-0005 整合維持 (`sources.summary` のみ embed) | `COALESCE(sources.body, sources.summary)` を embed | Phase 10 の返信下書き / 本文検索ユースケースで summary embedding では recall が不十分 (細部・固有名詞・依頼の機微が summary で抜け落ちる)、ADR-0020 で本文がローカル保持される以上 embed 元を本文に揃えるのが整合、historical row (body=NULL) は自動的に summary フォールバックで backward-compat | ADR-0012 改訂版 §4、Alternative #8 |
+| 別 vector store (body 用 / summary 用) を並列運用 | 単一 vector store で `COALESCE` fallback | ADR-0012 §Alternative #4 (複数 vector store 並列) と同根の却下理由 (ADR-0002 単一 SQLite 原則 / backup / replay 対象増)、fallback chain で同じ index に同居させても entity ごとに最大 1 vector のため `(model_id, model_version)` UNIQUE 制約は壊れない | ADR-0012 改訂版 §4 |
+| Body 長文を chunk + max pool で複数 vector 化 | 単純 head-truncation (Phase 10 MVP)、chunk 戦略は Phase 11+ で再評価 | Phase 10 step B2 の MVP scope を絞るため head-truncation で先行、chunk + pool は Open Q #2 で briefing 長文化と合わせて Phase 11+ で評価 | ADR-0012 §Open Q #2、改訂版 §4 |
+| `provenance_trust=untrusted` 本文は embed 対象外 | 信頼度を問わず embed、agent context に流す段階で防御 | recall 性能と poisoning 防御を同じ層で混ぜると recall 取りこぼしが恒久化、ADR-0015 §決定 (f) do-not-follow preamble + ADR-0020 §(e) provenance タグで context 注入段階で防御層を分離するほうが責務として清潔 | ADR-0012 改訂版 §4、ADR-0020 §(e) |
+| Body 切替時に既存 vector を invalidate しない (model_id 一致で skip) | `embeddings rebuild --rebuild-body` 等の経路で強制 re-embed | `model_id` / `model_version` は同じでも embed 元 text が summary→body に変わると vector の意味が変わる、operator が明示的に rebuild する経路を `embeddings rebuild` に乗せて backend 切替経路と同じ運用に統一 | ADR-0012 改訂版 §4、Phase 10 plan §3-B |
