@@ -128,20 +128,24 @@ from opshub.domain.events import (
     LinkCreated,
     LinkDeleted,
     ProposalApplied,
+    ProposalGenerated,
     ProposalRequested,
+    ReplyDraftCandidatePayload,
     SourceReferenced,
 )
 
 __all__ = ["LINK_TYPES_MVP", "LinksProjector", "links_table"]
 
 
-# ADR-0017 §決定 (b): the 5 ``link_type`` values populated by automatic
-# extraction in Phase 8 B2. Manual link CRUD via ``LinkCreated`` /
-# ``LinkDeleted`` (Phase 8 B1 / D1) may pass arbitrary strings — the
-# CLI warns when the value falls outside this enum but the projector
-# writes the row through without further validation. Captured here as
-# a ``frozenset`` so consumers (CLI warning helper / future graph
-# rendering) can membership-test without recomputing the literal set.
+# ADR-0017 §決定 (b): the 7 ``link_type`` values populated by automatic
+# extraction (5 from Phase 8 B2, 2 added in Phase 10 step E2 for
+# reply-draft provenance — ADR-0017 §決定 (b) Phase 10 改訂). Manual
+# link CRUD via ``LinkCreated`` / ``LinkDeleted`` (Phase 8 B1 / D1)
+# may pass arbitrary strings — the CLI warns when the value falls
+# outside this enum but the projector writes the row through without
+# further validation. Captured here as a ``frozenset`` so consumers
+# (CLI warning helper / future graph rendering) can membership-test
+# without recomputing the literal set.
 LINK_TYPES_MVP: frozenset[str] = frozenset(
     {
         "applied_to",
@@ -149,6 +153,9 @@ LINK_TYPES_MVP: frozenset[str] = frozenset(
         "generated_from_briefing",
         "references",
         "manual",
+        # Phase 10 step E2 (ADR-0017 §決定 (b) Phase 10 改訂):
+        "reply_draft_replies_to",
+        "referenced_in_reply_draft",
     }
 )
 
@@ -349,6 +356,53 @@ class LinksProjector:
             # replay. Either way, raising would defeat the idempotent-
             # rebuild contract.
             conn.execute(delete(links_table).where(links_table.c.id == event.aggregate_id))
+            return
+
+        if isinstance(event, ProposalGenerated):
+            # Phase 10 step E2 (ADR-0017 §決定 (b) Phase 10 改訂):
+            # reply-draft provenance. Two link types derive from a
+            # single ProposalGenerated event when reply_draft
+            # candidates are present:
+            #
+            # * ``reply_draft_replies_to`` — one link per reply_draft
+            #   candidate, from proposal:<id> → source:<reply_to_source_id>.
+            #   The candidate payload carries the source reference;
+            #   the projector iterates the discriminated union and
+            #   emits exactly one row per reply_draft candidate.
+            # * ``referenced_in_reply_draft`` — one link per
+            #   ``context_source_refs`` entry, from proposal:<id> →
+            #   <entity_type>:<entity_id>. Mirrors the Phase 5
+            #   ``referenced_in_briefing`` extraction pattern.
+            #
+            # task / decision-only proposals carry empty
+            # ``context_source_refs`` and no reply_draft candidates,
+            # so the dispatch is a no-op for the Phase 6 MVP shape.
+            # Pure derived state (ADR-0017 §決定 (c)): no new event
+            # is emitted; rebuild from the event log reproduces the
+            # rows byte-identically thanks to the natural-key UPSERT.
+            for candidate in event.candidates:
+                if isinstance(candidate, ReplyDraftCandidatePayload):
+                    _upsert_link(
+                        conn,
+                        from_entity_type="proposal",
+                        from_entity_id=event.aggregate_id,
+                        to_entity_type="source",
+                        to_entity_id=candidate.reply_to_source_id,
+                        link_type="reply_draft_replies_to",
+                        created_at=event.recorded_at,
+                        source_event_id=event.event_id,
+                    )
+            for entity_type, entity_id in event.context_source_refs:
+                _upsert_link(
+                    conn,
+                    from_entity_type="proposal",
+                    from_entity_id=event.aggregate_id,
+                    to_entity_type=entity_type,
+                    to_entity_id=entity_id,
+                    link_type="referenced_in_reply_draft",
+                    created_at=event.recorded_at,
+                    source_event_id=event.event_id,
+                )
             return
 
         # Unrelated event family — the rebuild driver fans every event

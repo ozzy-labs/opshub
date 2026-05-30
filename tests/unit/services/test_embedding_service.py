@@ -219,10 +219,7 @@ class _RecordingVectorStore:
         self.deleted_targets.append((entity_type, entity_id))
         with self._engine.begin() as conn:
             result = conn.execute(
-                text(
-                    "DELETE FROM embeddings "
-                    "WHERE entity_type = :et AND entity_id = :eid"
-                ),
+                text("DELETE FROM embeddings WHERE entity_type = :et AND entity_id = :eid"),
                 {"et": entity_type, "eid": entity_id},
             )
             return int(result.rowcount or 0)
