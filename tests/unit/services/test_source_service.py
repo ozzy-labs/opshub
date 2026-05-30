@@ -539,3 +539,72 @@ def test_cursor_get_returns_none_then_value_after_started(
 
     service.cursor_set("github", value="next-cursor", sync_started=False)
     assert service.cursor_get("github") == "next-cursor"
+
+
+# ---- Phase 10 (ADR-0020): body + provenance ------------------------------
+
+
+def test_observe_defaults_body_and_provenance_to_none() -> None:
+    """Callers that omit body / provenance produce ``None`` (backward-compat)."""
+    store = InMemoryEventStore()
+    service = _make_service(store=store)
+
+    source_event, _ = service.observe(
+        connector_name="github",
+        external_id="owner/repo#42",
+        source_type="issue",
+        title="legacy connector",
+    )
+
+    assert source_event.body is None
+    assert source_event.provenance_origin is None
+    assert source_event.provenance_trust is None
+
+
+def test_observe_threads_body_and_provenance_through() -> None:
+    """``observe(..., body=, provenance_*=)`` lands verbatim on the event (ADR-0020 §(e))."""
+    store = InMemoryEventStore()
+    service = _make_service(store=store)
+
+    source_event, _ = service.observe(
+        connector_name="slack",
+        external_id="C1:1.0",
+        source_type="slack_message",
+        title="alice in #general",
+        summary="preview",
+        body="the full retained message text",
+        provenance_origin="external",
+        provenance_trust="untrusted",
+    )
+
+    assert source_event.body == "the full retained message text"
+    assert source_event.provenance_origin == "external"
+    assert source_event.provenance_trust == "untrusted"
+
+
+def test_observe_does_not_put_token_in_body_store() -> None:
+    """Credentials must never reach the body store (DoD / ADR-0020 §(d)).
+
+    The connectors pass only fetched content into ``body``; tokens live
+    in the keyring (ADR-0014) and never flow through ``observe``. This
+    test pins that the ``SourceObserved`` event carries no token-shaped
+    field — there is simply no parameter on ``observe`` that could carry
+    a secret, so a future refactor that tried to stash one would fail
+    type-check / this assertion.
+    """
+    store = InMemoryEventStore()
+    service = _make_service(store=store)
+
+    token = "xoxb-SECRET-TOKEN-DO-NOT-STORE"
+    source_event, inbox_event = service.observe(
+        connector_name="slack",
+        external_id="C1:1.0",
+        source_type="slack_message",
+        title="alice in #general",
+        body="a normal message body with no secrets",
+        provenance_origin="external",
+        provenance_trust="untrusted",
+    )
+
+    serialised = source_event.model_dump_json() + inbox_event.model_dump_json()
+    assert token not in serialised

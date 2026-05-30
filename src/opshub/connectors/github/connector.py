@@ -84,6 +84,20 @@ class GitHubConnector:
                 f"GitHub connector requires {_REPO_ENV_VAR}=owner/repo "
                 f"in the environment (got {repo!r})"
             )
+        # Phase 10 (ADR-0020 §(b)): shared ingest excludes. When the
+        # configured ``owner/repo`` is in the ``repos`` selector, the
+        # connector observes nothing (no-op sync, prior cursor kept).
+        # ``load_excludes()`` resolves the file path via
+        # ``default_config_dir()`` directly — avoids threading a
+        # potentially-mocked ``OpsHubSettings`` (see slack connector).
+        from opshub.core.excludes import load_excludes
+
+        if load_excludes().excludes_repo(repo):
+            context.logger.warning(
+                "github connector: repo %s is excluded by excludes.yaml; skipping sync",
+                repo,
+            )
+            return SyncResult(observed_count=0, new_cursor=context.cursor_value)
         token = get_github_token()
         since = _parse_cursor(context.cursor_value)
 
@@ -116,6 +130,14 @@ class GitHubConnector:
             title=item.title,
             url=item.url,
             summary=item.summary,
+            # Phase 10 (ADR-0020): retain the full body and tag it as
+            # external + untrusted so downstream agent / LLM context
+            # treats it as reference material, never instructions
+            # (content poisoning / indirect prompt injection mitigation,
+            # ADR-0020 §(e)).
+            body=item.body,
+            provenance_origin="external",
+            provenance_trust="untrusted",
         )
 
 

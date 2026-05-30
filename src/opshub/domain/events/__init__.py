@@ -70,7 +70,12 @@ from opshub.domain.events.proposal import (
     ProposalRequested,
     TaskCandidatePayload,
 )
-from opshub.domain.events.source import SourceObserved, SourceReferenced
+from opshub.domain.events.source import (
+    ProvenanceOrigin,
+    ProvenanceTrust,
+    SourceObserved,
+    SourceReferenced,
+)
 from opshub.domain.events.task import (
     TaskActivated,
     TaskCompleted,
@@ -238,6 +243,8 @@ __all__ = [
     "ProposalGenerated",
     "ProposalRejected",
     "ProposalRequested",
+    "ProvenanceOrigin",
+    "ProvenanceTrust",
     "SourceObserved",
     "SourceReferenced",
     "TaskActivated",

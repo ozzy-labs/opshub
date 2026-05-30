@@ -73,9 +73,17 @@ def build_engine() -> Engine:
     """Construct the OpsHub SQLAlchemy ``Engine`` for CLI subcommands."""
     from opshub.core.config import OpsHubSettings
     from opshub.db import create_engine_for_sqlite
+    from opshub.db.engine import resolve_encryption_key
 
     settings = OpsHubSettings()
-    engine = create_engine_for_sqlite(settings.storage.db_path)
+    # Phase 10 (ADR-0021): when ``[storage] encryption`` is enabled the
+    # key is resolved (keyring / env override) and threaded into the
+    # SQLCipher-backed engine. Disabled → ``None`` → plain sqlite3.
+    encryption_key = resolve_encryption_key(settings)
+    engine = create_engine_for_sqlite(
+        settings.storage.db_path,
+        encryption_key=encryption_key,
+    )
     _require_initialised(engine)
     return engine
 

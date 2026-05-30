@@ -152,6 +152,11 @@ class BoxDriveConnector:
                 url=event.url,
                 summary=event.summary,
                 fingerprint=event.fingerprint,
+                # Phase 10 (ADR-0020): thread the provenance tags the
+                # mapper stamped on (body stays ``None`` — no file read).
+                body=event.body,
+                provenance_origin=event.provenance_origin,
+                provenance_trust=event.provenance_trust,
             )
             observed_count += 1
 
@@ -191,10 +196,17 @@ class BoxDriveConnector:
         # Lazy imports keep the cold-start budget tight.
         from opshub.connectors.box_drive.scanner import BoxDriveScanner
         from opshub.core.config import OpsHubSettings
+        from opshub.core.excludes import load_excludes
         from opshub.core.platform import box_drive_default_root_path
 
         settings = OpsHubSettings()
         cfg = settings.connectors.box_drive
+        # Phase 10 (ADR-0020 §(b)): the shared ``excludes.yaml`` ``paths``
+        # selector augments the connector's inline ``exclude_globs`` so an
+        # operator can migrate inline globs to the shared file at their
+        # own pace. Both lists feed the scanner's path matcher.
+        shared_paths = list(load_excludes(config_dir=settings.config_dir).paths)
+        exclude_globs = list(cfg.exclude_globs) + shared_paths
         root_path: Path | None = cfg.root_path
         if root_path is None:
             root_path = box_drive_default_root_path()
@@ -216,7 +228,7 @@ class BoxDriveConnector:
         # mentions ``docs/box-drive-setup.md``.
         return BoxDriveScanner(
             root_path=root_path,
-            exclude_globs=list(cfg.exclude_globs),
+            exclude_globs=exclude_globs,
             max_depth=cfg.max_depth,
             follow_symlinks=cfg.follow_symlinks,
             max_files=cfg.max_files,

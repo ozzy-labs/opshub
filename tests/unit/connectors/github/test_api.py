@@ -409,6 +409,7 @@ def test_github_item_is_frozen_and_minimal() -> None:
         "title",
         "url",
         "summary",
+        "body",
         "updated_at",
     }
 

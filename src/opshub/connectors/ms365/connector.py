@@ -268,6 +268,11 @@ class MS365Connector:
                     title=event.title,
                     url=event.url,
                     summary=event.summary,
+                    # Phase 10 (ADR-0020): thread the retained body +
+                    # provenance the mapper stamped onto the event.
+                    body=event.body,
+                    provenance_origin=event.provenance_origin,
+                    provenance_trust=event.provenance_trust,
                 )
                 new_cursor = advanced_cursor
                 observed += 1

@@ -110,6 +110,9 @@ def test_map_message_basic_shape() -> None:
         "title": "alice in #general",
         "summary": "Hello",
         "url": "https://acme.slack.com/archives/C123/p1700000000000100",
+        "body": "Hello",
+        "provenance_origin": "external",
+        "provenance_trust": "untrusted",
     }
 
 
@@ -290,3 +293,22 @@ def test_truncate_uses_unicode_ellipsis_not_three_dots() -> None:
     result = _truncate(text, 5)
     assert result == "aaaa…"
     assert "..." not in result
+
+
+# ---------------------------------------------------------------------- Phase 10 body
+
+
+def test_map_message_retains_body_and_tags_provenance() -> None:
+    """ADR-0020: the full message text is retained + tagged external/untrusted."""
+    kwargs = map_message(_raw_message(text="please review the design doc when free"))
+    assert kwargs["body"] == "please review the design doc when free"
+    assert kwargs["provenance_origin"] == "external"
+    assert kwargs["provenance_trust"] == "untrusted"
+    # The summary preview still rides alongside the full body.
+    assert kwargs["summary"] == "please review the design doc when free"
+
+
+def test_map_message_empty_text_body_is_none() -> None:
+    """An empty message text normalises ``body`` to ``None`` (NULL in the projection)."""
+    kwargs = map_message(_raw_message(text=""))
+    assert kwargs["body"] is None

@@ -95,6 +95,8 @@ from opshub.domain.events import (
     ConnectorSyncFailed,
     ConnectorSyncStarted,
     ItemEnqueued,
+    ProvenanceOrigin,
+    ProvenanceTrust,
     SourceObserved,
 )
 from opshub.projections.connector_cursors import connector_cursors_table
@@ -179,6 +181,9 @@ class SourceService:
         url: str | None = None,
         summary: str | None = None,
         fingerprint: str | None = None,
+        body: str | None = None,
+        provenance_origin: ProvenanceOrigin | None = None,
+        provenance_trust: ProvenanceTrust | None = None,
     ) -> tuple[SourceObserved, ItemEnqueued]:
         """Record a fresh observation of an external item.
 
@@ -207,6 +212,22 @@ class SourceService:
         ("new optional fields may be added without bumping
         ``schema_version``").
 
+        ``body`` / ``provenance_origin`` / ``provenance_trust`` (Phase
+        10 step A2, ADR-0020 Full Local Content Retention) carry the
+        full retained content of the observed item and its provenance
+        tags. ``provenance_origin`` distinguishes ``"external"``
+        (connector-fetched SaaS / FS content) from ``"internal"``
+        (operator-authored / opshub-generated); ``provenance_trust``
+        records whether the body may be trusted (``"trusted"``) or must
+        be treated as reference-only by an agent / LLM
+        (``"untrusted"``). External connector bodies pass ``origin=
+        "external"`` + ``trust="untrusted"`` so content poisoning /
+        indirect prompt injection is mitigated downstream (ADR-0020 §(e)
+        + ADR-0015 §決定 (f)). All three default to ``None`` and
+        round-trip as ``NULL`` for connectors / items with no body
+        (the ``box_drive`` FS scan, historic Phase 3-9 events) —
+        backward-compat per ADR-0002 §4 / ADR-0020 §(d).
+
         Returns the ``(source_event, inbox_event)`` tuple so callers
         can render both ULIDs without re-querying the store.
         """
@@ -220,6 +241,9 @@ class SourceService:
             url=url,
             summary=summary,
             fingerprint=fingerprint,
+            body=body,
+            provenance_origin=provenance_origin,
+            provenance_trust=provenance_trust,
         )
         # The inbox event borrows ``SourceService``'s configured actor.
         # In production the wiring helper passes the same actor to both

@@ -423,3 +423,102 @@ def test_reset_clears_every_row(engine: Engine) -> None:
     with engine.connect() as conn:
         remaining = conn.execute(select(sources_table)).all()
     assert remaining == []
+
+
+# ---- Phase 10 (ADR-0020): body + provenance ------------------------------
+
+
+def test_source_observed_persists_body_and_provenance(engine: Engine) -> None:
+    """``body`` + provenance tags round-trip onto the row (ADR-0020 §(e))."""
+    projection = SourcesProjection()
+    occurred = datetime(2026, 5, 30, 9, 0, 0, tzinfo=UTC)
+    event = SourceObserved(
+        aggregate_id=new_ulid(),
+        occurred_at=occurred,
+        recorded_at=occurred,
+        actor="test",
+        connector_name="github",
+        external_id="owner/repo#7",
+        source_type="issue",
+        title="retained",
+        summary="preview",
+        body="the full untruncated issue body that ADR-0020 now retains",
+        provenance_origin="external",
+        provenance_trust="untrusted",
+    )
+
+    with engine.begin() as conn:
+        projection.apply(conn, event)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(sources_table)).mappings().one()
+    assert row["body"] == "the full untruncated issue body that ADR-0020 now retains"
+    assert row["provenance_origin"] == "external"
+    assert row["provenance_trust"] == "untrusted"
+
+
+def test_source_observed_body_defaults_to_null(engine: Engine) -> None:
+    """A connector that omits ``body`` lands ``NULL`` (backward-compat, ADR-0020 §(d))."""
+    projection = SourcesProjection()
+    occurred = datetime(2026, 5, 30, 9, 0, 0, tzinfo=UTC)
+    event = SourceObserved(
+        aggregate_id=new_ulid(),
+        occurred_at=occurred,
+        recorded_at=occurred,
+        actor="test",
+        connector_name="box_drive",
+        external_id="projects/spec.md",
+        source_type="box_drive_file",
+        title="projects/spec.md",
+    )
+
+    with engine.begin() as conn:
+        projection.apply(conn, event)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(sources_table)).mappings().one()
+    assert row["body"] is None
+    assert row["provenance_origin"] is None
+    assert row["provenance_trust"] is None
+
+
+def test_reobservation_refreshes_body_and_provenance(engine: Engine) -> None:
+    """Re-observing an edited item updates ``body`` while keeping the first ``id``."""
+    projection = SourcesProjection()
+    t0 = datetime(2026, 5, 30, 9, 0, 0, tzinfo=UTC)
+    first_id = new_ulid()
+    first = SourceObserved(
+        aggregate_id=first_id,
+        occurred_at=t0,
+        recorded_at=t0,
+        actor="test",
+        connector_name="slack",
+        external_id="C1:1700000000.0001",
+        source_type="slack_message",
+        title="alice in #general",
+        body="original message text",
+        provenance_origin="external",
+        provenance_trust="untrusted",
+    )
+    second = SourceObserved(
+        aggregate_id=new_ulid(),
+        occurred_at=t0 + timedelta(minutes=5),
+        recorded_at=t0 + timedelta(minutes=5),
+        actor="test",
+        connector_name="slack",
+        external_id="C1:1700000000.0001",
+        source_type="slack_message",
+        title="alice in #general",
+        body="edited message text",
+        provenance_origin="external",
+        provenance_trust="untrusted",
+    )
+
+    with engine.begin() as conn:
+        projection.apply(conn, first)
+        projection.apply(conn, second)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(sources_table)).mappings().one()
+    assert row["id"] == first_id  # first-observation id preserved
+    assert row["body"] == "edited message text"  # body refreshed on re-observe

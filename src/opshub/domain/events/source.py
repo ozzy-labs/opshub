@@ -30,6 +30,26 @@ from pydantic import Field
 
 from opshub.domain.events.base import DomainEvent
 
+ProvenanceOrigin = Literal["external", "internal"]
+"""Where an observed item's body came from (ADR-0020 §(e)).
+
+``"external"`` — fetched from a third-party SaaS / local FS scan by a
+connector. The body is **not** under operator control and may contain
+adversarial content (content poisoning / indirect prompt injection).
+
+``"internal"`` — produced inside opshub (operator-authored workspace
+ingest, opshub-generated text). Trusted by default.
+"""
+
+ProvenanceTrust = Literal["trusted", "untrusted"]
+"""Trust level applied to an observed item's body (ADR-0020 §(e)).
+
+``"untrusted"`` content MUST be surfaced to an agent / LLM context as
+reference material, never as instructions (ADR-0015 §決定 (f)
+do-not-follow preamble). ``"trusted"`` content is operator-authored or
+opshub-generated.
+"""
+
 
 class SourceObserved(DomainEvent):
     """A connector observed an external item.
@@ -88,6 +108,30 @@ class SourceObserved(DomainEvent):
     Phase 3 / Phase 7 stream pick up the default ``None`` and a
     ``projections rebuild`` reproduces the ``NULL`` write through the
     projector — no data migration is required.
+
+    ``body`` / ``provenance_origin`` / ``provenance_trust`` (Phase 10 step A2, ADR-0020)
+    ------------------------------------------------------------------------------------
+    ADR-0020 (Full Local Content Retention) supersedes ADR-0005
+    (External Content Minimization): connectors now retain the full
+    body of an observed item rather than only a ≤200-char summary.
+    ``body`` carries that full text (``None`` for connectors / items
+    with no body, e.g. the ``box_drive`` FS scan which is forbidden
+    from reading file contents — ADR-0019 §不変条件 (b)).
+
+    ``provenance_origin`` (``"external"`` / ``"internal"``) and
+    ``provenance_trust`` (``"trusted"`` / ``"untrusted"``) tag where the
+    body came from and how far it can be trusted (ADR-0020 §(e)). They
+    are the core mitigation for the content-poisoning / indirect
+    prompt-injection attack surface that retaining external bodies
+    introduces: an agent / LLM consuming an ``external`` + ``untrusted``
+    body must treat it as reference material, never instructions
+    (combined with ADR-0015 §決定 (f) do-not-follow preamble).
+
+    All three are backward-compatible optional field additions
+    (ADR-0002 §4), so ``schema_version`` stays at ``1``. Historic
+    Phase 3-9 events deserialise with ``body = provenance_* = None``
+    and the projector writes them as ``NULL`` — existing source rows
+    behave exactly as before (ADR-0020 §(d) backward-compat).
     """
 
     event_type: Literal["source.observed"] = "source.observed"  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -99,6 +143,9 @@ class SourceObserved(DomainEvent):
     url: str | None = None
     summary: str | None = Field(default=None, max_length=200)
     fingerprint: str | None = None
+    body: str | None = None
+    provenance_origin: ProvenanceOrigin | None = None
+    provenance_trust: ProvenanceTrust | None = None
 
 
 class SourceReferenced(DomainEvent):

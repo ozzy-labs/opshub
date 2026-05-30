@@ -137,6 +137,14 @@ def map_message(raw: RawSlackMessage) -> dict[str, Any]:
         "title": f"{raw.user_display_name} in #{raw.channel_name}",
         "summary": _truncate(raw.text, SUMMARY_MAX_CHARS),
         "url": raw.permalink,
+        # Phase 10 (ADR-0020): retain the full message text and tag it
+        # external + untrusted. ``summary`` stays the ≤200-char preview;
+        # ``body`` carries the verbatim message for body-based search
+        # (Sub-issue B). Empty text → ``None`` so the projection stores
+        # NULL rather than "".
+        "body": raw.text or None,
+        "provenance_origin": "external",
+        "provenance_trust": "untrusted",
     }
 
 

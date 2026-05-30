@@ -195,3 +195,16 @@ def test_map_scanned_file_forwards_fingerprint(tmp_path: Path) -> None:
     observed = map_scanned_file(scanned, root_path=tmp_path)
 
     assert observed.fingerprint == "99:12345"
+
+
+def test_map_scanned_file_body_none_provenance_tagged() -> None:
+    """ADR-0020: box_drive never reads file bodies, so ``body`` is ``None``.
+
+    The observation is still external in origin, so the provenance tags
+    are stamped (external / untrusted) for downstream consistency with
+    the SaaS connectors.
+    """
+    event = map_scanned_file(_scanned(), root_path=Path("/mnt/b"))
+    assert event.body is None
+    assert event.provenance_origin == "external"
+    assert event.provenance_trust == "untrusted"

@@ -70,10 +70,24 @@ class StorageSettings(BaseModel):
     ``OPSHUB_DATA_DIR`` does *not* automatically relocate these — the section
     overrides are independent on purpose (ADR-0012 keeps storage separate from
     the XDG data dir so external mounts / encrypted volumes can be plugged in).
+
+    ``encryption`` (Phase 10, ADR-0021) toggles whole-DB SQLCipher
+    AES-256 encryption at rest. When ``True``, the engine factory opens
+    the DB through the SQLCipher driver and applies ``PRAGMA key`` from
+    the keyring-managed key (:mod:`opshub.core.encryption`); the
+    ``encryption`` extras (``sqlcipher3-binary``) must be installed.
+
+    The default is ``False`` so a fresh ``uv tool install`` / CI / test
+    run works without the native SQLCipher binary. ADR-0021 §(b) calls
+    for ``True`` once external bodies are retained (ADR-0020); operators
+    enabling Full Local Content Retention flip this and run
+    ``opshub init`` (or set ``OPSHUB_DB_ENCRYPTION_KEY``) so the key is
+    provisioned before the DB is written.
     """
 
     db_path: Path = Field(default_factory=_default_db_path)
     cache_dir: Path = Field(default_factory=_default_cache_dir)
+    encryption: bool = False
 
 
 class WorkspaceSettings(BaseModel):

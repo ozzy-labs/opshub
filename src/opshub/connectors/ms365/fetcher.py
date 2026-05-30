@@ -110,11 +110,12 @@ _PAGE_SIZE = 50
 #: ``connector_cursors`` projection (Phase 7.x will add a CLI flag).
 _EPOCH_ISO = "1970-01-01T00:00:00Z"
 
-#: Outlook ``$select`` projection. Pinning the field list keeps payload
-#: size small (ADR-0005 External Content Min) and stable — adding a
-#: field to the mapper later requires touching this list, which makes
-#: any expansion visible in code review.
-_OUTLOOK_SELECT = "id,subject,bodyPreview,sender,receivedDateTime,webLink"
+#: Outlook ``$select`` projection. Phase 10 (ADR-0020 Full Local Content
+#: Retention) adds ``body`` so the mapper can retain the full message
+#: body (``body.content``) alongside the ≤200-char ``bodyPreview``-derived
+#: summary. Pinning the field list keeps the projection stable — any
+#: future expansion stays visible in code review.
+_OUTLOOK_SELECT = "id,subject,body,bodyPreview,sender,receivedDateTime,webLink"
 
 
 @dataclass(frozen=True, slots=True)

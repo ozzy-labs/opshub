@@ -138,6 +138,7 @@ class GitHubItem:
     url: str
     summary: str | None
     updated_at: datetime
+    body: str | None = None
 
 
 def list_issues_since(
@@ -315,6 +316,10 @@ def _normalise_issue(repo: str, item: dict[str, Any]) -> GitHubItem:
         url=item["html_url"],
         summary=_first_line(item.get("body")),
         updated_at=_parse_iso_utc(item["updated_at"]),
+        # Phase 10 (ADR-0020): retain the full issue body. The summary
+        # above stays the ≤200-char preview; ``body`` carries the
+        # untruncated markdown for body-based search (Sub-issue B).
+        body=_body_text(item.get("body")),
     )
 
 
@@ -326,6 +331,8 @@ def _normalise_pull(repo: str, item: dict[str, Any], *, updated_at: datetime) ->
         url=item["html_url"],
         summary=_first_line(item.get("body")),
         updated_at=updated_at,
+        # Phase 10 (ADR-0020): retain the full PR description body.
+        body=_body_text(item.get("body")),
     )
 
 
@@ -349,6 +356,19 @@ def _normalise_notification(item: dict[str, Any]) -> GitHubItem:
         summary=_truncate_optional(raw_summary, SUMMARY_MAX_CHARS),
         updated_at=_parse_iso_utc(item["updated_at"]),
     )
+
+
+def _body_text(text: str | None) -> str | None:
+    """Return the full body text (Phase 10, ADR-0020), or ``None`` if empty.
+
+    Unlike :func:`_first_line` this performs **no** truncation — ADR-0020
+    Full Local Content Retention keeps the whole body. An empty / missing
+    body normalises to ``None`` so the projection stores ``NULL`` rather
+    than an empty string, keeping "has a body" queries unambiguous.
+    """
+    if not text or not text.strip():
+        return None
+    return text
 
 
 def _first_line(text: str | None) -> str | None:
