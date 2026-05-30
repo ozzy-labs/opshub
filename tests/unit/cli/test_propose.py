@@ -62,17 +62,22 @@ class _StubProposalService:
         self,
         *,
         proposal: Proposal | None = None,
+        reply_draft_proposal: Proposal | None = None,
         generate_raises: Exception | None = None,
+        reply_draft_raises: Exception | None = None,
         apply_result: tuple[str, str] = ("task", "01J6APPLIED0000000000000000"),
         apply_raises: Exception | None = None,
         reject_raises: Exception | None = None,
     ) -> None:
         self._proposal = proposal
+        self._reply_draft_proposal = reply_draft_proposal
         self._generate_raises = generate_raises
+        self._reply_draft_raises = reply_draft_raises
         self._apply_result = apply_result
         self._apply_raises = apply_raises
         self._reject_raises = reject_raises
         self.generate_calls: list[dict[str, object]] = []
+        self.generate_reply_draft_calls: list[dict[str, object]] = []
         self.apply_calls: list[tuple[str, int]] = []
         self.reject_calls: list[dict[str, object]] = []
 
@@ -99,6 +104,38 @@ class _StubProposalService:
         if self._generate_raises is not None:
             raise self._generate_raises
         assert self._proposal is not None, "stub configured without proposal or exception"
+        return self._proposal
+
+    def generate_reply_draft(
+        self,
+        reply_to_source_id: str,
+        *,
+        max_candidates: int = 3,
+        max_tokens: int = 2000,
+        expand_graph: bool = False,
+    ) -> Proposal:
+        """Stub the Phase 10 reply-draft service path.
+
+        Records the forwarded args so the ``--reply-to`` CLI tests can
+        assert routing happens at exactly the right boundary (no topic
+        / from_briefing passed through, only the reply-draft-shaped
+        kwargs the service expects).
+        """
+        self.generate_reply_draft_calls.append(
+            {
+                "reply_to_source_id": reply_to_source_id,
+                "max_candidates": max_candidates,
+                "max_tokens": max_tokens,
+                "expand_graph": expand_graph,
+            }
+        )
+        if self._reply_draft_raises is not None:
+            raise self._reply_draft_raises
+        if self._reply_draft_proposal is not None:
+            return self._reply_draft_proposal
+        assert self._proposal is not None, (
+            "stub configured without proposal / reply_draft_proposal or exception"
+        )
         return self._proposal
 
     def apply(self, proposal_id: str, candidate_index: int) -> tuple[str, str]:
@@ -780,3 +817,155 @@ def test_opshub_settings_has_no_auto_apply_field() -> None:
         "ADR-0016 §決定 (c) forbids auto-apply — re-evaluation requires "
         "a new ADR that supersedes 0016."
     )
+
+
+# ---- generate --reply-to (Phase 10 step E2, ADR-0016 §決定 (i)) -----------
+
+
+_REPLY_TO_SRC_ID = "01J6SRC0000000000000000001"
+
+
+def test_generate_reply_to_routes_to_generate_reply_draft(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--reply-to <id>`` dispatches to ``ProposalService.generate_reply_draft``.
+
+    Pins the CLI's reply-draft mode switch (Phase 10 step E2): when
+    ``--reply-to`` is supplied the CLI must route to the dedicated
+    service method, not to the generic :meth:`ProposalService.generate`
+    that would mis-interpret the topic argument.
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_LLM_BACKEND", "anthropic")
+    stub = _StubProposalService(reply_draft_proposal=_make_proposal())
+    _install_stub_service(monkeypatch, stub)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["propose", "generate", "topic ignored", "--reply-to", _REPLY_TO_SRC_ID],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert stub.generate_calls == []
+    assert len(stub.generate_reply_draft_calls) == 1
+    call = stub.generate_reply_draft_calls[0]
+    assert call["reply_to_source_id"] == _REPLY_TO_SRC_ID
+
+
+def test_generate_reply_to_ignores_topic_and_from_briefing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """In reply-draft mode the ``topic`` argument and ``--from-briefing`` are dropped.
+
+    The CLI declares ``topic`` as a required positional but documents
+    that it is ignored when ``--reply-to`` is supplied (Phase 10 step
+    E2). ``--from-briefing`` is similarly inert — reply-draft has its
+    own context loading (Sub-issue E2 style-example recall +
+    ``--expand-graph``).
+
+    Pin: the stub's ``generate_reply_draft`` signature has no
+    ``topic`` / ``from_briefing_id`` parameter, so the CLI must NOT
+    forward either, and ``stub.generate_calls`` must remain empty
+    (else the CLI dual-routed).
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_LLM_BACKEND", "anthropic")
+    stub = _StubProposalService(reply_draft_proposal=_make_proposal())
+    _install_stub_service(monkeypatch, stub)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "propose",
+            "generate",
+            "topic ignored when reply-to is set",
+            "--reply-to",
+            _REPLY_TO_SRC_ID,
+            "--from-briefing",
+            "01HF000000000000000000BRIE",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    # ``generate`` (the topic-based path) was NOT called — even though
+    # ``topic`` and ``--from-briefing`` were both supplied.
+    assert stub.generate_calls == []
+    assert len(stub.generate_reply_draft_calls) == 1
+    call = stub.generate_reply_draft_calls[0]
+    assert call["reply_to_source_id"] == _REPLY_TO_SRC_ID
+    # No leakage of topic / from_briefing into the reply-draft kwargs:
+    # the recorded keys are exactly the four reply-draft inputs.
+    assert set(call.keys()) == {
+        "reply_to_source_id",
+        "max_candidates",
+        "max_tokens",
+        "expand_graph",
+    }
+
+
+def test_generate_reply_to_with_expand_graph_forwards_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--reply-to <id> --expand-graph`` forwards ``expand_graph=True``.
+
+    Pins the Phase 8 graph-expansion contract (ADR-0017) over the
+    Phase 10 reply-draft path: the same ``--expand-graph`` flag
+    triggers 1-hop neighbour materialisation regardless of whether the
+    proposal is topic-driven or reply-draft-driven.
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_LLM_BACKEND", "anthropic")
+    stub = _StubProposalService(reply_draft_proposal=_make_proposal())
+    _install_stub_service(monkeypatch, stub)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "propose",
+            "generate",
+            "ignored",
+            "--reply-to",
+            _REPLY_TO_SRC_ID,
+            "--expand-graph",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert len(stub.generate_reply_draft_calls) == 1
+    call = stub.generate_reply_draft_calls[0]
+    assert call["expand_graph"] is True
+
+
+def test_generate_reply_to_propagates_max_candidates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--max-candidates`` and ``--max-tokens`` propagate in reply-draft mode."""
+    _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_LLM_BACKEND", "anthropic")
+    stub = _StubProposalService(reply_draft_proposal=_make_proposal())
+    _install_stub_service(monkeypatch, stub)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "propose",
+            "generate",
+            "ignored",
+            "--reply-to",
+            _REPLY_TO_SRC_ID,
+            "--max-candidates",
+            "2",
+            "--max-tokens",
+            "1200",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert len(stub.generate_reply_draft_calls) == 1
+    call = stub.generate_reply_draft_calls[0]
+    assert call["max_candidates"] == 2
+    assert call["max_tokens"] == 1200

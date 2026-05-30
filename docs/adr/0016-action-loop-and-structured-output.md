@@ -259,16 +259,16 @@ class ReplyDraftCandidatePayload(BaseModel):
 ```python
 # src/opshub/services/proposals/service.py の ProposalCandidatesSchema を拡張 (Phase 10 step E2)
 class ProposalCandidatesSchema(BaseModel):
-    schema_version: Literal["v2"] = "v2"  # v1: 旧フィールドのみ / v2: triage を含む
-    triage: Literal["respond", "notify", "ignore"] | None = None
     candidates: list[Candidate] = Field(default_factory=lambda: [], max_length=20)
+    triage: Literal["respond", "notify", "ignore"] | None = None
 ```
 
 要点:
 
+- **parent schema は `schema_version` を持たない**: schema versioning (§決定 (f)) は **per-candidate** で行う (`TaskCandidatePayload.schema_version = "v1"` / `DecisionCandidatePayload.schema_version = "v1"` / `ReplyDraftCandidatePayload.schema_version = "v2"`)。parent (`ProposalCandidatesSchema`) は candidate の discriminated union を運ぶ container にすぎず、parent 自体に独立した version は必要ない。Phase 6 v1 callers と Phase 10 callers は同じ parent shape を受け取り、union discriminator (`kind` + 各 candidate の `schema_version`) で「どの version の candidate が混ざっているか」を判定する
 - **3 値の意味**: `respond` = LLM が「返信下書きを 1 件以上提案する」と判断 (reply_draft candidate を `candidates` に含めるべきだった) / `notify` = 返信不要だが operator に存在を知らせるべき (inbox_item 系の triage に近いが、Phase 10 では durable な inbox_item を auto 生成しない) / `ignore` = ノイズ (人間 operator が後で見直し)
 - **`triage` field は LLM の自己申告メタデータで、durable state を変更しない**: 旧 ADR-0016 §決定 (c) HITL 必須は変更しない。`triage = "respond"` を返したから自動で reply_draft を apply するわけではなく、`opshub propose apply <id> <idx>` で operator が明示承認するまで durable state には何も書かれない。`triage` は CLI / MCP / Skill 側で「優先表示する candidate 群」を絞るためのヒントとして使われる
-- **`Optional` (default `None`)**: v1 schema との後方互換のため。LLM が triage を返さなかった場合は `None` で保存され、Phase 6 と同じ挙動 (= triage filter 不能、全 candidate 表示) になる
+- **`Optional` (default `None`)**: Phase 6 callers との後方互換のため。LLM が triage を返さなかった場合は `None` で保存され、Phase 6 と同じ挙動 (= triage filter 不能、全 candidate 表示) になる
 - **auto-apply 禁止の継続**: `triage = "ignore"` を見て candidate を自動破棄する経路、`triage = "respond"` で自動送信する経路はいずれも実装しない。§決定 (c) HITL 必須宣言を継承
 
 ### (k) 文体は静的プロンプトでなく recall した「自分が author の過去送信 event」を `<style_example>` 注入

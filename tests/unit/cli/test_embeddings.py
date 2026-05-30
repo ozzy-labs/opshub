@@ -340,6 +340,67 @@ def test_embeddings_rebuild_with_purge_drops_existing_rows_then_re_embeds(
         engine.dispose()
 
 
+def test_embeddings_rebuild_purge_with_source_entity_type_filter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--purge -t source`` purges only source embeddings and re-embeds them.
+
+    Phase 10 step B2 (ADR-0012 改訂版 §4): the most common operator
+    path after the body-based embedding rollout is "purge + rebuild
+    only the source family" because tasks / decisions / inbox_items
+    were not affected by the input shape change. The CLI must support
+    the ``-t source`` short form on ``--entity-type``, scope the purge
+    to ``source`` rows, and surface the purge count + per-entity
+    rebuild outcome on stdout.
+    """
+    db_path = _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_EMBEDDING__BACKEND", "local")
+    _install_stub_embedder(monkeypatch, _StubEmbedder())
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0, init_result.stdout
+
+    engine = _open_db(db_path)
+    try:
+        # Seed one task (untouched by the source-scoped purge) and one
+        # source (the purge / re-embed target).
+        _seed_task(engine, title="task stays embedded")
+        _seed_source(engine, summary="source to re-embed", external_id="ext-source-1")
+    finally:
+        engine.dispose()
+
+    # First rebuild lands two embeddings (one task, one source).
+    initial = runner.invoke(app, ["embeddings", "rebuild"])
+    assert initial.exit_code == 0, initial.stdout
+
+    engine = _open_db(db_path)
+    try:
+        assert _embeddings_row_count(engine) == 2
+    finally:
+        engine.dispose()
+
+    # Purge + rebuild scoped to ``source`` via the ``-t`` short form.
+    result = runner.invoke(app, ["embeddings", "rebuild", "--purge", "-t", "source"])
+    assert result.exit_code == 0, result.stdout
+    assert "purged 1 existing embedding(s)" in result.stdout
+    assert "embedded 1" in result.stdout
+
+    engine = _open_db(db_path)
+    try:
+        # The metadata table holds two rows: the task survived the
+        # source-scoped purge and the freshly re-embedded source.
+        assert _embeddings_row_count(engine) == 2
+        with engine.connect() as conn:
+            entity_types = {
+                str(row[0])
+                for row in conn.execute(text("SELECT entity_type FROM embeddings")).all()
+            }
+        assert entity_types == {"task", "source"}
+    finally:
+        engine.dispose()
+
+
 def test_embeddings_rebuild_with_limit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """``--limit 2`` caps the number of rows embedded across entity types."""
     db_path = _isolate_env(monkeypatch, tmp_path)

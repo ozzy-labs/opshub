@@ -550,6 +550,70 @@ def test_proposal_generated_candidates_roundtrip_via_json() -> None:
     assert isinstance(restored.candidates[1], DecisionCandidatePayload)
 
 
+def test_candidate_discriminator_round_trips_mixed_v1_and_v2_union() -> None:
+    """ADR-0016 §決定 (f): v1 + v2 candidates coexist in one union list.
+
+    Reader branches on ``(kind, schema_version)`` per §決定 (f). A
+    mixed list with v1 ``task`` + v1 ``decision`` + v2 ``reply_draft``
+    must serialise through ``model_dump(mode="json")`` and re-validate
+    back to the **typed** discriminated-union members — no field is
+    lost across the JSON round-trip, and the discriminator dispatch
+    selects the correct payload subclass for each entry.
+
+    Pins the Phase 10 cross-version reader contract: Phase 6 v1
+    candidates are NOT rewritten when v2 ``reply_draft`` is added, so a
+    single ``ProposalGenerated.candidates`` list can hold both
+    versions side-by-side (event log immutability, ADR-0002).
+    """
+    src_id = new_ulid()
+    proposal_id = _agg()
+    event = ProposalGenerated(
+        aggregate_id=proposal_id,
+        actor="service:proposal",
+        topic="mixed union round-trip",
+        scope="all",
+        candidates=[
+            TaskCandidatePayload(title="v1 task"),
+            DecisionCandidatePayload(text="v1 decision"),
+            ReplyDraftCandidatePayload(
+                reply_to_source_id=src_id,
+                reply_to_source_type="slack_message",
+                body="v2 reply draft",
+            ),
+        ],
+        model_id="m",
+        model_version="v",
+        tokens_in=10,
+        tokens_out=20,
+    )
+
+    dumped = event.model_dump(mode="json")
+    # Sanity-check the wire shape carries kind + schema_version per
+    # candidate so the reader can branch unambiguously.
+    assert dumped["candidates"][0]["kind"] == "task"
+    assert dumped["candidates"][0]["schema_version"] == "v1"
+    assert dumped["candidates"][1]["kind"] == "decision"
+    assert dumped["candidates"][1]["schema_version"] == "v1"
+    assert dumped["candidates"][2]["kind"] == "reply_draft"
+    assert dumped["candidates"][2]["schema_version"] == "v2"
+
+    restored = ProposalGenerated.model_validate(dumped)
+    assert restored == event
+    assert isinstance(restored.candidates[0], TaskCandidatePayload)
+    assert isinstance(restored.candidates[1], DecisionCandidatePayload)
+    assert isinstance(restored.candidates[2], ReplyDraftCandidatePayload)
+    assert restored.candidates[2].body == "v2 reply draft"
+    assert restored.candidates[2].reply_to_source_id == src_id
+
+    # Also pin the ``Candidate`` TypeAdapter (the shared discriminator
+    # dispatcher used by ``ProposalCandidatesSchema`` and other
+    # readers) round-trips each element individually.
+    for original, payload in zip(event.candidates, dumped["candidates"], strict=True):
+        round_tripped = _CandidateAdapter.validate_python(payload)
+        assert round_tripped == original
+        assert type(round_tripped) is type(original)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
