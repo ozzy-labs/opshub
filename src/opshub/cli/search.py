@@ -65,7 +65,10 @@ def search_command(
         None,
         "--connector",
         "-c",
-        help=("Restrict to hits from one connector (github / slack / ms365 / box / box_drive)."),
+        help=(
+            "Restrict to hits from one connector "
+            "(github / slack / ms365 / box / box_drive / onedrive_drive / teams)."
+        ),
     ),
     raw_query: bool = typer.Option(
         False,

@@ -358,6 +358,59 @@ class BoxDriveConnectorSettings(BaseModel):
     content_extraction: bool = False
 
 
+class OneDriveDriveConnectorSettings(BaseModel):
+    """OneDrive (local-filesystem-backed) connector configuration (Phase 11 F4-b, ADR-0019 §(j)).
+
+    The ``onedrive_drive`` connector mirrors :class:`BoxDriveConnectorSettings`
+    structurally: it reads a local OneDrive desktop sync folder on the
+    host filesystem rather than the Microsoft Graph API. Phase 11 F4-b
+    (ADR-0019 §(j) パターン汎化) factors the local-FS contract out of
+    the box_drive precedent so onedrive_drive — and any future
+    ``local_drive`` family connector — share the same shape:
+    ``stat()``-only scan by default, opt-in
+    :func:`opshub.core.document_extract.extract_document` hook for
+    Office bodies, identical structural safety caps.
+
+    ``enabled = False`` is the default (matches every other connector
+    and ADR-0019 §決定 (a)) so a fresh ``uv tool install`` never tries
+    to walk an arbitrary directory on first run.
+
+    ``root_path`` is the absolute path to the OneDrive sync folder. A
+    ``None`` value (the default) delegates to
+    :func:`opshub.core.platform.onedrive_drive_default_root_path` so
+    WSL2 hosts pick up ``/mnt/onedrive`` and macOS hosts pick up
+    ``~/OneDrive``. Linux native hosts have no default — the connector
+    raises :class:`ConfigError` with a pointer to
+    ``docs/onedrive-drive-setup.md`` at first sync.
+
+    Structural safety caps mirror :class:`BoxDriveConnectorSettings`
+    one-for-one so operators can move between the two without
+    re-learning knobs:
+
+    * ``max_depth = 16`` / ``max_files = 100_000`` — same blow-up
+      guards.
+    * ``follow_symlinks = False`` — OneDrive does not synthesise
+      symlinks of its own, so any link under the root is
+      operator-introduced and likely escapes the workspace.
+    * ``exclude_globs = []`` — fnmatch / gitignore-style patterns the
+      scanner skips.
+    * ``content_extraction = False`` — ADR-0019 §(b') opt-in. When
+      ``true``, ``.docx`` / ``.xlsx`` / ``.pptx`` (and legacy
+      ``.doc`` / ``.xls`` / ``.ppt``) are routed through
+      :func:`opshub.core.document_extract.extract_document`; everything
+      else stays on the stat-only path. Default-off path keeps the
+      no-``open()`` invariant intact bit-for-bit.
+    """
+
+    enabled: bool = False
+    root_path: Path | None = None
+    max_depth: int = 16
+    max_files: int = 100_000
+    follow_symlinks: bool = False
+    exclude_globs: list[str] = Field(default_factory=list)
+    content_extraction: bool = False
+
+
 class TeamsConnectorSettings(BaseModel):
     """Microsoft Teams connector configuration (Phase 11 F5).
 
@@ -402,7 +455,11 @@ class ConnectorSettings(BaseModel):
     of ``client_id`` / OAuth metadata) differs from the four
     pre-existing connectors by design. Phase 11 F5 adds
     :class:`TeamsConnectorSettings` for the Microsoft Teams chat
-    connector (Graph delta query + User Token principal).
+    connector (Graph delta query + User Token principal). Phase 11
+    F4-b (ADR-0019 §(j)) adds :class:`OneDriveDriveConnectorSettings`
+    for the OneDrive local-FS connector — the second entry in the
+    ``local_drive`` family, structurally identical to
+    :class:`BoxDriveConnectorSettings`.
 
     The section is intentionally separate from :class:`LLMSettings` /
     :class:`EmbeddingSettings` so per-connector overrides like
@@ -416,6 +473,9 @@ class ConnectorSettings(BaseModel):
     ms365: MS365ConnectorSettings = Field(default_factory=MS365ConnectorSettings)
     box: BoxConnectorSettings = Field(default_factory=BoxConnectorSettings)
     box_drive: BoxDriveConnectorSettings = Field(default_factory=BoxDriveConnectorSettings)
+    onedrive_drive: OneDriveDriveConnectorSettings = Field(
+        default_factory=OneDriveDriveConnectorSettings
+    )
     teams: TeamsConnectorSettings = Field(default_factory=TeamsConnectorSettings)
 
 

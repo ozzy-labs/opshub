@@ -59,7 +59,7 @@ import os
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from opshub.core.errors import ConfigError
 from opshub.core.logging import get_logger
@@ -180,7 +180,31 @@ class BoxDriveScanner:
       runtime issue).
     * Anything else (per-file ``OSError``, permission errors mid-walk)
       → logged warning, scan continues.
+
+    Subclass hooks (Phase 11 F4-b, ADR-0019 §(j) 汎化)
+    --------------------------------------------------
+
+    The ``onedrive_drive`` connector reuses this walk logic verbatim
+    (ADR-0019 §(j) shared contract). The three class-level constants
+    below are the only seams a sibling connector overrides:
+
+    * :attr:`_log_prefix` — namespace for structured-log keys
+      (``"box_drive.scan_*"`` here, ``"onedrive_drive.scan_*"`` in the
+      subclass). Lets ``opshub query`` filter logs by source.
+    * :attr:`_client_name` — human-readable client name embedded in
+      :class:`ConfigError` messages (``"Box Drive"`` here,
+      ``"OneDrive"`` in the subclass).
+    * :attr:`_setup_doc` — relative path to the setup doc the error
+      message points at (``"docs/box-drive-setup.md"`` here,
+      ``"docs/onedrive-drive-setup.md"`` in the subclass).
     """
+
+    #: Structured-log key prefix. Override in subclasses (ADR-0019 §(j)).
+    _log_prefix: ClassVar[str] = "box_drive"
+    #: Human-readable client name embedded in :class:`ConfigError` messages.
+    _client_name: ClassVar[str] = "Box Drive"
+    #: Setup doc the error message points operators at.
+    _setup_doc: ClassVar[str] = "docs/box-drive-setup.md"
 
     def __init__(
         self,
@@ -237,11 +261,11 @@ class BoxDriveScanner:
         """
         if not root_path.exists():
             raise ConfigError(
-                f"Box Drive root_path does not exist: {root_path}. "
-                "See docs/box-drive-setup.md for WSL2 / macOS setup."
+                f"{self._client_name} root_path does not exist: {root_path}. "
+                f"See {self._setup_doc} for WSL2 / macOS setup."
             )
         if not root_path.is_dir():
-            raise ConfigError(f"Box Drive root_path is not a directory: {root_path}")
+            raise ConfigError(f"{self._client_name} root_path is not a directory: {root_path}")
 
         self._root_path = root_path
         self._exclude_globs = list(exclude_globs) if exclude_globs else []
@@ -304,7 +328,7 @@ class BoxDriveScanner:
 
             if depth > self._max_depth:
                 _log.warning(
-                    "box_drive.scan_max_depth_reached",
+                    f"{self._log_prefix}.scan_max_depth_reached",
                     path=str(dir_path),
                     depth=depth,
                     max_depth=self._max_depth,
@@ -321,7 +345,7 @@ class BoxDriveScanner:
                     st = dir_path.stat()
                 except OSError as exc:
                     _log.warning(
-                        "box_drive.scan_dir_stat_failed",
+                        f"{self._log_prefix}.scan_dir_stat_failed",
                         path=str(dir_path),
                         error=type(exc).__name__,
                     )
@@ -329,7 +353,7 @@ class BoxDriveScanner:
                 key = (st.st_dev, st.st_ino)
                 if key in visited:
                     _log.warning(
-                        "box_drive.scan_symlink_loop_break",
+                        f"{self._log_prefix}.scan_symlink_loop_break",
                         path=str(dir_path),
                     )
                     continue
@@ -343,21 +367,21 @@ class BoxDriveScanner:
                 entries = list(os.scandir(dir_path))
             except PermissionError as exc:
                 _log.warning(
-                    "box_drive.scan_permission_denied",
+                    f"{self._log_prefix}.scan_permission_denied",
                     path=str(dir_path),
                     error=type(exc).__name__,
                 )
                 continue
             except FileNotFoundError as exc:
                 _log.warning(
-                    "box_drive.scan_dir_missing",
+                    f"{self._log_prefix}.scan_dir_missing",
                     path=str(dir_path),
                     error=type(exc).__name__,
                 )
                 continue
             except OSError as exc:
                 _log.warning(
-                    "box_drive.scan_dir_error",
+                    f"{self._log_prefix}.scan_dir_error",
                     path=str(dir_path),
                     error=type(exc).__name__,
                 )
@@ -386,7 +410,7 @@ class BoxDriveScanner:
                     is_dir = entry.is_dir(follow_symlinks=self._follow_symlinks)
                 except OSError as exc:
                     _log.warning(
-                        "box_drive.scan_entry_stat_failed",
+                        f"{self._log_prefix}.scan_entry_stat_failed",
                         path=entry.path,
                         error=type(exc).__name__,
                     )
@@ -400,7 +424,7 @@ class BoxDriveScanner:
                     is_file = entry.is_file(follow_symlinks=self._follow_symlinks)
                 except OSError as exc:
                     _log.warning(
-                        "box_drive.scan_entry_stat_failed",
+                        f"{self._log_prefix}.scan_entry_stat_failed",
                         path=entry.path,
                         error=type(exc).__name__,
                     )
@@ -419,7 +443,7 @@ class BoxDriveScanner:
                     stat_result = entry.stat(follow_symlinks=self._follow_symlinks)
                 except OSError as exc:
                     _log.warning(
-                        "box_drive.scan_entry_stat_failed",
+                        f"{self._log_prefix}.scan_entry_stat_failed",
                         path=entry.path,
                         error=type(exc).__name__,
                     )
@@ -439,7 +463,7 @@ class BoxDriveScanner:
                 yielded += 1
                 if yielded > self._max_files:
                     _log.warning(
-                        "box_drive.scan_max_files_reached",
+                        f"{self._log_prefix}.scan_max_files_reached",
                         max_files=self._max_files,
                         root_path=str(self._root_path),
                     )

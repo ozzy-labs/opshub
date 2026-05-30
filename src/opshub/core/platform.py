@@ -123,3 +123,49 @@ def box_drive_default_root_path(platform: Platform | None = None) -> Path | None
     if platform == "macos":
         return Path.home() / "Box"
     return None
+
+
+def onedrive_drive_default_root_path(platform: Platform | None = None) -> Path | None:
+    r"""Return the platform-default OneDrive root path, or ``None``.
+
+    Defaults follow ADR-0019 §(j-2) Phase 11 改訂 (the same pattern
+    helper :func:`box_drive_default_root_path` already uses, factored
+    into a sibling so the two connectors share the platform-detect
+    machinery but not a shared default that would surprise operators
+    with one mounted client but not the other):
+
+    * ``"wsl2"`` → ``Path("/mnt/onedrive")`` — assumes the operator
+      has set up a Windows-side mount of the OneDrive folder (e.g.
+      ``mklink /D`` from a known path to the OneDrive sync root, then
+      mapped through ``mountvol`` / WSL2 mount config). The
+      Windows-side setup is *not* automated by opshub; the connector
+      surfaces a ``ConfigError`` with a pointer to
+      ``docs/onedrive-drive-setup.md`` when the path is missing.
+    * ``"macos"`` → ``Path.home() / "OneDrive"`` — OneDrive's default
+      install location on macOS as documented by Microsoft.
+    * ``"linux"`` / ``"unsupported"`` → ``None`` — Microsoft provides
+      no OneDrive Linux client (the unofficial ``rclone`` mounts are
+      out of scope for the default path detection). Callers turn
+      ``None`` into a ``ConfigError`` with a pointer to
+      ``docs/onedrive-drive-setup.md``.
+
+    Parameters
+    ----------
+    platform:
+        Optional override for the detected platform. ``None`` (default)
+        calls :func:`detect_platform` once. Tests pass an explicit value
+        to pin behaviour without monkeypatching ``sys.platform``.
+
+    Returns
+    -------
+    Path | None
+        Default OneDrive root path, or ``None`` if no default exists
+        for the platform.
+    """
+    if platform is None:
+        platform = detect_platform()
+    if platform == "wsl2":
+        return Path("/mnt/onedrive")
+    if platform == "macos":
+        return Path.home() / "OneDrive"
+    return None

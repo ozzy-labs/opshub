@@ -158,6 +158,15 @@ def connector_sync(name: str) -> None:
         pass
 
     try:
+        import opshub.connectors.onedrive_drive  # pyright: ignore[reportUnusedImport]
+    except ImportError:
+        # OneDrive Drive connector mirrors box_drive structurally
+        # (Phase 11 F4-b, ADR-0019 §(j) — pure stdlib ``os.scandir``).
+        # Defensive guard for symmetry with the other connector
+        # imports above.
+        pass
+
+    try:
         import opshub.connectors.teams  # noqa: F401  # pyright: ignore[reportUnusedImport]
     except ImportError:
         # Teams connector module imports cleanly without the extras
@@ -314,6 +323,25 @@ def auth_set(
         )
         raise typer.Exit(code=2)
 
+    if name == "connector:onedrive_drive":
+        # Phase 11 F4-b (ADR-0019 §(j)) ``onedrive_drive`` connector
+        # mirrors the box_drive auth surface: there is none. The
+        # connector reads a local OneDrive sync folder, configured via
+        # ``[connectors.onedrive_drive] root_path`` in ``opshub.toml``
+        # (or the platform default: WSL2=/mnt/onedrive,
+        # macOS=~/OneDrive). Fail-fast with the same shape of error so
+        # the two local-FS connectors stay consistent in the operator's
+        # mental model.
+        typer.echo(
+            "onedrive_drive connector does not use OAuth or paste-code auth. "
+            "Configure root_path in opshub.toml under "
+            "[connectors.onedrive_drive] (or rely on the platform "
+            "default: WSL2=/mnt/onedrive, macOS=~/OneDrive). "
+            "See docs/adr/0019-local-filesystem-backed-connector.md for details.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
     if name == "github":
         from opshub.connectors.github.auth import GITHUB_PAT_SECRET_KEY
 
@@ -384,7 +412,7 @@ def auth_set(
             "github, connector:slack (or legacy slack), embedder:openai, "
             "embedder:voyage, llm:anthropic, llm:openai, connector:ms365, "
             "connector:box, connector:teams "
-            "(connector:box_drive uses opshub.toml, not auth set)",
+            "(connector:box_drive / connector:onedrive_drive use opshub.toml, not auth set)",
             err=True,
         )
         raise typer.Exit(code=2)

@@ -22,6 +22,7 @@ import pytest
 from opshub.core.platform import (
     box_drive_default_root_path,
     detect_platform,
+    onedrive_drive_default_root_path,
 )
 
 # ---------------------------------------------------------------------------
@@ -225,3 +226,78 @@ def test_default_root_path_calls_detect_platform_when_arg_omitted(
     monkeypatch.setattr(Path, "home", classmethod(_fake_home))
 
     assert box_drive_default_root_path() == fake_home / "Box"
+
+
+# ---------------------------------------------------------------------------
+# onedrive_drive_default_root_path() — Phase 11 F4-b (ADR-0019 §(j-2))
+# ---------------------------------------------------------------------------
+
+
+def test_onedrive_default_root_path_wsl2_is_mnt_onedrive() -> None:
+    """WSL2 default is ``/mnt/onedrive`` (operator pre-mounts the OneDrive sync root)."""
+    assert onedrive_drive_default_root_path("wsl2") == Path("/mnt/onedrive")
+
+
+def test_onedrive_default_root_path_macos_expands_to_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """macOS default expands ``~`` to ``~/OneDrive``.
+
+    Monkeypatching ``Path.home`` keeps the assertion independent of
+    the test runner's ``$HOME`` value (mirrors the box_drive test).
+    """
+    fake_home = Path("/Users/test-operator")
+
+    def _fake_home(cls: type[Path]) -> Path:
+        return fake_home
+
+    monkeypatch.setattr(Path, "home", classmethod(_fake_home))
+
+    assert onedrive_drive_default_root_path("macos") == fake_home / "OneDrive"
+
+
+def test_onedrive_default_root_path_linux_is_none() -> None:
+    """Linux native → ``None`` (Microsoft provides no OneDrive Linux client)."""
+    assert onedrive_drive_default_root_path("linux") is None
+
+
+def test_onedrive_default_root_path_unsupported_is_none() -> None:
+    """Unsupported platforms return ``None`` rather than raising.
+
+    The caller (the F4-b ``OneDriveDriveConnector``) turns ``None``
+    into a :class:`ConfigError` with operator-actionable text;
+    raising here would force every caller to re-catch the same
+    error.
+    """
+    assert onedrive_drive_default_root_path("unsupported") is None
+
+
+def test_onedrive_default_root_path_calls_detect_platform_when_arg_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Calling without an explicit platform delegates to ``detect_platform()``."""
+
+    def _fake_detect() -> str:
+        return "macos"
+
+    monkeypatch.setattr("opshub.core.platform.detect_platform", _fake_detect)
+    fake_home = Path("/Users/test-operator")
+
+    def _fake_home(cls: type[Path]) -> Path:
+        return fake_home
+
+    monkeypatch.setattr(Path, "home", classmethod(_fake_home))
+
+    assert onedrive_drive_default_root_path() == fake_home / "OneDrive"
+
+
+def test_onedrive_default_root_path_does_not_collide_with_box_drive() -> None:
+    """The two local-FS connectors yield distinct platform defaults.
+
+    Pinning the non-collision protects against a future refactor that
+    accidentally folds the two helpers into a single shared function
+    returning ``/mnt/b`` for both — which would silently break
+    operators running both connectors side-by-side.
+    """
+    assert box_drive_default_root_path("wsl2") != onedrive_drive_default_root_path("wsl2")
+    assert box_drive_default_root_path("macos") != onedrive_drive_default_root_path("macos")
