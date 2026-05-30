@@ -64,6 +64,23 @@ class SourceObserved(DomainEvent):
     than ``Literal`` so each connector can extend the vocabulary without
     a schema bump.
 
+    Known discriminators as of Phase 11:
+
+    * Phase 3 GitHub: ``"issue"`` / ``"pull_request"`` / ``"notification"``
+    * Phase 7 Slack: ``"slack_message"``
+    * Phase 7 MS365: ``"ms365_calendar"`` / ``"ms365_onedrive"`` /
+      ``"ms365_outlook"``
+    * Phase 7 Box: ``"box_event"``
+    * Phase 9 box_drive: ``"box_drive_file"``
+    * Phase 11 Teams (F5, ADR-0010 §改訂 (a)): ``"teams_message"``
+    * Phase 11 Office (F2, ADR-0025 §決定 (d)):
+      ``"word_document"`` / ``"excel_spreadsheet"`` /
+      ``"powerpoint_slide_deck"`` — produced by F4 mappers when they
+      route through :mod:`opshub.core.document_extract`. The
+      authoritative extension → discriminator table lives at
+      :data:`opshub.core.document_extract.SOURCE_TYPE_BY_EXTENSION`
+      so mappers MUST import it rather than re-deriving the string.
+
     ``title`` is the human-readable label. ``url`` and ``summary`` are
     optional, both bounded; ``summary`` is intentionally short — full
     bodies belong outside OpsHub (ADR-0005).

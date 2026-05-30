@@ -92,7 +92,17 @@ jobs:
         # fallback paths against a mocked transport. Every Graph call
         # is patched at ``httpx.Client`` / ``httpx.MockTransport``
         # boundary so no real Microsoft endpoint is reached in CI.
-        run: uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra connectors-ms365 --extra connectors-box --extra connectors-teams --extra mcp --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
+        #
+        # ``office`` is included so Phase 11 F2 unit tests
+        # (``tests/unit/core/test_document_extract.py``) can
+        # ``importorskip`` ``markitdown`` and exercise the Word / Excel /
+        # PowerPoint extraction paths against real fixture files. The
+        # cold-start guard (``tests/integration/test_cold_start.py``)
+        # still asserts ``markitdown`` is never imported on the
+        # ``opshub --help`` path because :func:`extract_document` uses a
+        # deferred ``import markitdown`` inside the function body
+        # (ADR-0025 §決定 (a) + §軽減策 #1).
+        run: uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra connectors-ms365 --extra connectors-box --extra connectors-teams --extra office --extra mcp --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
 
       - name: Ruff (lint)
         run: uv run ruff check
