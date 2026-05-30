@@ -79,7 +79,8 @@ def _patch_httpx_client(
 
     def _recorded(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return handler(request)
+        response: httpx.Response = handler(request)
+        return response
 
     def _factory(*args: Any, **client_kwargs: Any) -> httpx.Client:
         client_kwargs.pop("transport", None)
