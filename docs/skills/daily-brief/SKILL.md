@@ -34,7 +34,7 @@ input:
 ```text
 tool: task.list
 input:
-  status: "active"   # 当日に絞らず、未完了の全体感を見せる
+  state: "active"   # 当日に絞らず、未完了の全体感を見せる
   limit: 30
 ```
 
@@ -45,7 +45,7 @@ input:
 ```text
 tool: inbox.list
 input:
-  status: "pending"
+  state: "pending"
   limit: 20
 ```
 
@@ -56,11 +56,10 @@ triage 前 (`pending`) の inbox item を拾う。ADR-0010 で「connector が�
 ```text
 tool: decision.list
 input:
-  since: "P1D"   # 直近 1 日
   limit: 10
 ```
 
-当日の意思決定 / コミットメントを確認。再質問されたときの根拠として使う。
+当日の意思決定 / コミットメントを確認。再質問されたときの根拠として使う。`decision.list` は時間範囲フィルタを取らない (`limit` のみ受け付ける、`src/opshub/mcp/_registry.py` の Phase 10 schema) ため、当日に絞り込みたい場合はホスト側で戻り値 `decisions[i].recorded_at` を見て post-filter する。
 
 ## 出力フォーマット (ホスト側)
 

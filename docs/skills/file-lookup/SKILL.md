@@ -38,10 +38,12 @@ input:
 |---|---|
 | Box にあるあの〜 | `box_event` / `box_drive_file` |
 | Slack の〜 | `slack_message` |
-| GitHub の〜 | `github_issue` / `github_pull_request` |
+| GitHub の〜 | `issue` / `pull_request` / `notification` |
 | Outlook / メール | `ms365_outlook` |
 | カレンダー予定 | `ms365_calendar` |
 | OneDrive のファイル | `ms365_onedrive` |
+
+source_type 値は connector 実装の SSOT (`src/opshub/connectors/<name>/{api,mapper}.py` の `source_type=...` リテラル) に対応する。GitHub connector は `github_` prefix を持たず素の `issue` / `pull_request` / `notification` を発行する点に注意 (Phase 10 監査で SKILL.md ↔ 実装間の drift として固定済)。
 
 ### Step 3 (任意): 詳細を recall.search で展開
 

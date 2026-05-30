@@ -33,21 +33,23 @@ input:
 
 ### Step 2: 過去の同コンポーネントの decision を確認
 
+`decision.list` は MCP schema 上 `limit` のみを受け付ける (`src/opshub/mcp/_registry.py` の Phase 10 surface)。component / module path で絞り込みたい場合は `recall.search` を component 名で発火し、戻り値 `hits[]` を `entity_type == "decision"` で post-filter する経路を取る:
+
 ```text
-tool: decision.list
+tool: recall.search
 input:
-  related_to: "<component or module path>"
-  limit: 10
+  query: "<component or module path>"
+  limit: 30
 ```
 
-`decision.list` の `related_to` パラメータが未対応な場合はホスト側で `recall.search` 結果から decision のみフィルタする (Phase 10 Sub C の現実装に合わせる)。
+ホスト側で `hits[]` から `entity_type` が `decision` のものだけを抽出し、上位 10 件程度を「過去の同コンポーネントの意思決定」として表示する。本文ベース embedding (Sub-issue B、ADR-0012 改訂) により module path や component 名が decision 本文に含まれていれば hit する。
 
 ### Step 3 (任意): 同コンポーネントの open task を確認
 
 ```text
 tool: task.list
 input:
-  status: "active"
+  state: "active"
   limit: 50
 ```
 
