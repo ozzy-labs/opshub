@@ -57,10 +57,10 @@ from __future__ import annotations
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
-from sqlalchemy import Table, select
+from sqlalchemy import Table, select, text
 
 from opshub.core.errors import ConfigError, OpsHubError
 from opshub.core.ids import new_ulid
@@ -74,6 +74,7 @@ from opshub.domain.events.proposal import (
     ProposalGenerated,
     ProposalRejected,
     ProposalRequested,
+    ReplyDraftCandidatePayload,
     TaskCandidatePayload,
 )
 from opshub.llm.client import LLMMessage
@@ -84,6 +85,12 @@ from opshub.projections.proposals import proposals_table
 from opshub.projections.sources import sources_table
 from opshub.projections.tasks import tasks_table
 from opshub.services.proposals.prompts import SYSTEM_PROMPT, render_user_prompt
+from opshub.services.proposals.reply_draft_prompts import (
+    REPLY_DRAFT_SYSTEM_PROMPT,
+    ReplyToSource,
+    StyleExample,
+    render_reply_draft_user_prompt,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Generator
@@ -178,6 +185,15 @@ class ProposalCandidatesSchema(BaseModel):
     (Anthropic ``tool_use`` / OpenAI-compatible ``tools=``) and
     constructs an instance from the tool-call arguments before
     returning a :class:`~opshub.llm.client.StructuredResponse`.
+
+    Phase 10 step E2 (ADR-0016 §決定 (j)): the ``triage`` field
+    surfaces the LLM's three-way classification (``respond`` /
+    ``notify`` / ``ignore``) as a structured hint. Auto-apply is
+    **not** triggered by any triage value (§決定 (c) HITL contract
+    remains: durable state only flips via operator-driven
+    ``opshub propose apply``). ``triage=None`` keeps the schema
+    backward-compatible with Phase 6 callers that have no triage
+    awareness.
     """
 
     # ``default_factory=lambda: []`` (rather than ``default_factory=list``)
@@ -185,6 +201,7 @@ class ProposalCandidatesSchema(BaseModel):
     # ``list`` standalone narrows to ``list[Unknown]`` which trips the
     # ``reportUnknownVariableType`` strict check.
     candidates: list[Candidate] = Field(default_factory=lambda: [], max_length=20)
+    triage: Literal["respond", "notify", "ignore"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +226,25 @@ class Proposal:
     tokens_in: int
     tokens_out: int
     generated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplyToSourceRow:
+    """Compact view of the ``sources`` row a reply-draft targets.
+
+    Phase 10 step E2 helper kept module-private (single underscore
+    name) because reply-draft generation is the only caller. Mirrors
+    the columns :func:`render_reply_draft_user_prompt` needs from the
+    Phase 3 sources projection plus the Phase 10 Sub-issue A body
+    column (ADR-0020 §決定 (a)).
+    """
+
+    id: str
+    source_type: str
+    connector_name: str
+    title: str
+    body: str | None
+    summary: str | None
 
 
 class ProposalService:
@@ -510,6 +546,183 @@ class ProposalService:
             tokens_out=response.tokens_out,
         )
 
+    # ------------------------------------------------------------------ generate_reply_draft
+
+    def generate_reply_draft(
+        self,
+        reply_to_source_id: str,
+        *,
+        max_candidates: int = 3,
+        max_tokens: int = 2000,
+        max_style_examples: int = 3,
+        expand_graph: bool = False,
+    ) -> Proposal:
+        """Generate reply-draft candidates for an observed source.
+
+        Phase 10 step E2 (ADR-0016 §決定 (i)+(j)+(k)). Mirrors
+        :meth:`generate` but switches the prompt to the reply-draft
+        template (``reply_draft_prompts``) and the candidate scope to
+        ``ReplyDraftCandidatePayload``. The lifecycle events
+        (:class:`ProposalRequested` / :class:`ProposalGenerated` /
+        :class:`ProposalFailed`) and the apply / reject contract are
+        reused unchanged — reply_draft is an additional ``kind`` in
+        the same proposal aggregate (ADR-0016 §決定 (e) Phase 10).
+
+        External write-back is **not** triggered (ADR-0010 §禁止事項
+        7 Phase 10 改訂): the draft body is durably saved on
+        ``proposals.candidates[i].body`` and the operator manually
+        copies it to the upstream SaaS. The HITL boundary (ADR-0016
+        §決定 (c)) holds: apply only flips the candidate state,
+        without sending anything.
+
+        Parameters
+        ----------
+        reply_to_source_id:
+            ULID of the ``sources`` projection row the reply targets.
+            Apply-time validation rejects drafts whose source row
+            disappeared between generation and apply.
+        max_candidates:
+            Cap on the number of reply_draft candidates the LLM may
+            return. Default 3 — reply-draft generation typically wants
+            fewer / higher-quality variants than task / decision
+            generation.
+        max_tokens:
+            LLM response token cap. Same semantics as :meth:`generate`
+            (ADR-0015 §決定 (h) — caller responsibility for cost).
+        max_style_examples:
+            Upper bound on the number of past operator-authored
+            sources surfaced as ``<style_example>`` blocks in the
+            prompt. The recall query filters by source body (FTS5)
+            and provenance origin ``"internal"`` (Sub-issue A added
+            the provenance tags; see ADR-0020 §(e)). Operators who
+            have not yet ingested any internal-origin sources see an
+            empty style block and the model falls back to the
+            system-prompt-level role description.
+        expand_graph:
+            When ``True``, the service walks the knowledge graph
+            1-hop from ``reply_to_source_id`` via
+            :meth:`LinkService.related` and injects the neighbours as
+            ``<context_source>`` blocks (ADR-0017 §決定 (f)). The
+            ``referenced_in_reply_draft`` links are auto-extracted by
+            :class:`~opshub.projections.links.LinksProjector` from
+            the resulting ``ProposalGenerated.context_source_refs``.
+
+        Returns
+        -------
+        Proposal
+            The generated proposal record (reply_draft candidates +
+            cost trace).
+
+        Raises
+        ------
+        OpsHubError
+            When the source row is missing (``reply_to_source_id``
+            does not exist in the ``sources`` projection).
+        ConfigError
+            When ``expand_graph=True`` but no LinkService was wired
+            (mirrors :meth:`generate`).
+        """
+        if expand_graph and self._link_service is None:
+            raise ConfigError(
+                "expand_graph=True requires LinkService; check"
+                " opshub.cli._wiring.build_proposal_service composition"
+            )
+
+        reply_to_row = self._load_reply_to_source(reply_to_source_id)
+        if reply_to_row is None:
+            raise OpsHubError(f"source {reply_to_source_id} not found; cannot draft a reply")
+
+        # The proposal's ``topic`` doubles as the recall query for
+        # style examples (we want past replies whose body matches the
+        # current source's body / title). Truncate to the Pydantic
+        # ``topic`` field cap so the event records cleanly; the recall
+        # query itself can run over the full untruncated string.
+        topic_full = f"reply to {reply_to_row.source_type}: {reply_to_row.title}"
+        topic = topic_full[:500]
+
+        proposal_id = new_ulid()
+        self._record_requested(
+            proposal_id=proposal_id,
+            topic=topic,
+            scope=f"reply_draft:{reply_to_source_id}",
+            briefing_id=None,
+        )
+
+        style_examples = self._collect_style_examples(
+            reply_to_row=reply_to_row,
+            max_examples=max_style_examples,
+        )
+
+        context_source_refs: list[tuple[str, str]] = []
+        context_sources: list[tuple[str, str, str]] = []
+        if expand_graph:
+            assert self._link_service is not None  # narrowed above
+            context_source_refs, context_sources = self._collect_reply_draft_context(
+                reply_to_source_id=reply_to_source_id,
+            )
+
+        user_prompt = render_reply_draft_user_prompt(
+            reply_to=ReplyToSource(
+                source_id=reply_to_row.id,
+                source_type=reply_to_row.source_type,
+                title=reply_to_row.title,
+                body=reply_to_row.body or reply_to_row.summary or "",
+            ),
+            style_examples=style_examples,
+            context_sources=context_sources,
+            max_candidates=max_candidates,
+        )
+        messages = [
+            LLMMessage(role="system", content=REPLY_DRAFT_SYSTEM_PROMPT),
+            LLMMessage(role="user", content=user_prompt),
+        ]
+
+        try:
+            response = self._llm_client.complete_structured(
+                messages,
+                schema=ProposalCandidatesSchema,
+                max_tokens=max_tokens,
+            )
+        except Exception as exc:
+            self._record_failed(
+                proposal_id=proposal_id,
+                topic=topic,
+                scope=f"reply_draft:{reply_to_source_id}",
+                model_id=self._llm_client.model_id,
+                error_message=str(exc),
+            )
+            raise
+
+        parsed = response.parsed
+        assert isinstance(parsed, ProposalCandidatesSchema), (
+            "LLMClient.complete_structured must return the requested schema"
+        )
+        candidates = list(parsed.candidates)
+
+        if not candidates:
+            empty_msg = "LLM returned zero candidates"
+            self._record_failed(
+                proposal_id=proposal_id,
+                topic=topic,
+                scope=f"reply_draft:{reply_to_source_id}",
+                model_id=response.model_id,
+                error_message=empty_msg,
+            )
+            raise OpsHubError(empty_msg)
+
+        return self._record_generated(
+            proposal_id=proposal_id,
+            topic=topic,
+            scope=f"reply_draft:{reply_to_source_id}",
+            briefing_id=None,
+            candidates=candidates,
+            model_id=response.model_id,
+            model_version=response.model_version,
+            tokens_in=response.tokens_in,
+            tokens_out=response.tokens_out,
+            context_source_refs=context_source_refs,
+        )
+
     # ------------------------------------------------------------------ apply / reject
 
     def apply(self, proposal_id: str, candidate_index: int) -> tuple[str, str]:
@@ -564,21 +777,45 @@ class ProposalService:
             )
             applied_entity_type = "task"
             applied_entity_id = created.aggregate_id
-        else:
-            # Exhaustive over the Phase 6 MVP discriminated union
-            # (``TaskCandidatePayload | DecisionCandidatePayload``).
-            # Phase 6.x expansion (``inbox_item`` / ``source``) MUST add
-            # a new branch here and update the
-            # :data:`~opshub.domain.events.proposal.Candidate` alias —
-            # mypy / pyright will catch the missed branch via the
-            # discriminated-union exhaustiveness check.
-            assert isinstance(candidate, DecisionCandidatePayload)
+        elif isinstance(candidate, DecisionCandidatePayload):
             created_decision = self._decision_service.record_decision(
                 text=candidate.text,
                 context=candidate.context,
             )
             applied_entity_type = "decision"
             applied_entity_id = created_decision.aggregate_id
+        else:
+            # Phase 10 step E2 (ADR-0016 §決定 (i)): reply_draft apply
+            # path. **No external write-back** (ADR-0010 §禁止事項 7
+            # Phase 10 改訂): no SaaS send / post / comment is
+            # triggered. The draft body lives durably on
+            # ``proposals.candidates[i].body`` (already in the
+            # projection from ProposalGenerated). Apply only flips the
+            # state to ``applied`` and records the lifecycle event so
+            # the audit trail mirrors task / decision candidates.
+            #
+            # ``applied_entity_id`` is a fresh ULID minted here so the
+            # ``ProposalApplied`` event's natural key
+            # ``(aggregate_id, applied_entity_id)`` remains addressable
+            # — the operator can ``grep`` the audit log by either the
+            # proposal id or the reply-draft id. The ULID is opaque to
+            # any external system (there is no SaaS row to map it to
+            # because write-back is forbidden by ADR-0010 §禁止事項 7
+            # Phase 10 改訂) and the link projection emits
+            # ``reply_draft_replies_to`` from ``proposal:<id>`` to
+            # ``source:<reply_to_source_id>`` directly off
+            # ``ProposalGenerated.candidates`` (ADR-0017 §決定 (b)
+            # Phase 10 改訂), so the apply-time id is not needed for
+            # graph traversal.
+            #
+            # Exhaustive over the Phase 10 union
+            # (``TaskCandidatePayload | DecisionCandidatePayload |
+            # ReplyDraftCandidatePayload``). pyright / mypy enforce
+            # exhaustiveness via the discriminated-union narrowing —
+            # a future Candidate variant must add a new branch here.
+            assert isinstance(candidate, ReplyDraftCandidatePayload)
+            applied_entity_type = "reply_draft"
+            applied_entity_id = new_ulid()
 
         # Separate UoW: the TaskCreated / DecisionRecorded event is
         # already committed by the entity service; the ProposalApplied
@@ -725,6 +962,176 @@ class ProposalService:
                     seen.add(other)
                     source_payload.append((other[0], other[1], text))
 
+    def _load_reply_to_source(self, source_id: str) -> _ReplyToSourceRow | None:
+        """Read the ``sources`` row the reply targets.
+
+        Returns a typed dataclass capturing the columns the reply-
+        draft prompt needs: ``id`` / ``source_type`` / ``title`` /
+        ``body`` (Phase 10 step A2 ADR-0020) / ``summary`` (Phase 3
+        fallback for rows that have no full body). Missing row →
+        ``None`` so :meth:`generate_reply_draft` can raise a clear
+        ``OpsHubError`` rather than rendering an empty
+        ``<reply_to_source>`` block.
+        """
+        with self._engine.connect() as conn:
+            row = conn.execute(
+                select(
+                    sources_table.c.id,
+                    sources_table.c.source_type,
+                    sources_table.c.connector_name,
+                    sources_table.c.title,
+                    sources_table.c.body,
+                    sources_table.c.summary,
+                ).where(sources_table.c.id == source_id)
+            ).first()
+        if row is None:
+            return None
+        return _ReplyToSourceRow(
+            id=str(row[0]),
+            source_type=str(row[1]),
+            connector_name=str(row[2]),
+            title=str(row[3]),
+            body=(None if row[4] is None else str(row[4])),
+            summary=(None if row[5] is None else str(row[5])),
+        )
+
+    def _collect_style_examples(
+        self,
+        *,
+        reply_to_row: _ReplyToSourceRow,
+        max_examples: int,
+    ) -> list[StyleExample]:
+        """Surface past operator-authored sources as ``<style_example>`` blocks.
+
+        Phase 10 Sub-issue E (ADR-0016 §決定 (k)) wants the LLM's tone
+        shaped by the operator's *own* past replies, not by a baked-in
+        system prompt. The recall query filters by:
+
+        * ``provenance_origin == "internal"`` — Sub-issue A's
+          provenance tag (ADR-0020 §(e)) marks operator-authored
+          workspace ingest and opshub-generated text. We treat
+          internal as a coarse proxy for ``author = self`` until the
+          Phase 11+ ``actor``-on-sources work refines it (Open Q
+          #6 in phase-10-plan).
+        * ``source_type`` match on the reply target — same channel
+          shape (Slack to Slack, Outlook to Outlook).
+
+        FTS5 ranking by ``reply_to.body`` keeps the picks topically
+        adjacent so the model sees prior replies on similar threads
+        before being asked to draft this one. Hits with empty bodies
+        are dropped. The list is truncated to ``max_examples`` and is
+        always ordered by FTS bm25 (most relevant first).
+
+        Empty list when no internal-origin sources exist; the prompt
+        renderer then omits the ``<style_example>`` blocks entirely
+        and the LLM falls back to the thin system role description
+        (the "Inbox Zero failure mode avoidance" trade-off from
+        ADR-0016 §決定 (k)).
+        """
+        query_text = reply_to_row.body or reply_to_row.summary or reply_to_row.title
+        if not query_text.strip():
+            return []
+
+        # The FTS5 MATCH expression uses sqlite phrase-quote syntax so
+        # operator-controlled content cannot escalate to FTS5 boolean
+        # operators. Mirrors :meth:`SearchService._phrase_quote`.
+        escaped = query_text.strip().replace('"', '""')
+        match_expr = f'"{escaped}"'
+
+        sql = text(
+            "SELECT sources.id AS id, "
+            "       sources.source_type AS source_type, "
+            "       sources.body AS body, "
+            "       sources.summary AS summary "
+            "  FROM sources_fts "
+            "  JOIN sources ON sources.rowid = sources_fts.rowid "
+            " WHERE sources_fts MATCH :q "
+            "   AND sources.provenance_origin = 'internal' "
+            "   AND sources.source_type = :source_type "
+            " ORDER BY -bm25(sources_fts) DESC "
+            " LIMIT :limit"
+        )
+
+        examples: list[StyleExample] = []
+        with self._engine.connect() as conn:
+            try:
+                rows = conn.execute(
+                    sql.bindparams(
+                        q=match_expr,
+                        source_type=reply_to_row.source_type,
+                        limit=max_examples,
+                    )
+                ).all()
+            except Exception:
+                # FTS5 not provisioned (e.g. cold migration state) or
+                # malformed MATCH → degrade gracefully to no style
+                # examples rather than failing the whole reply-draft
+                # generation. The operator can still get a draft;
+                # they just lose the tone-matching benefit.
+                return []
+        for row in rows:
+            text_value = row.body or row.summary
+            if not text_value or not str(text_value).strip():
+                continue
+            examples.append(
+                StyleExample(
+                    source_id=str(row.id),
+                    source_type=str(row.source_type),
+                    body=str(text_value),
+                )
+            )
+        return examples
+
+    def _collect_reply_draft_context(
+        self,
+        *,
+        reply_to_source_id: str,
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str, str]]]:
+        """Walk the knowledge graph 1-hop from the reply target.
+
+        ADR-0017 §決定 (f) ``--expand-graph`` semantics reused for
+        reply-draft generation. Returns two parallel lists:
+
+        * ``context_source_refs`` — ``(entity_type, entity_id)``
+          tuples for :class:`ProposalGenerated.context_source_refs`
+          so the :class:`LinksProjector` can materialise
+          ``referenced_in_reply_draft`` rows (ADR-0017 §決定 (b)
+          Phase 10 改訂).
+        * ``context_sources`` — ``(entity_type, entity_id, text)``
+          tuples ready to splat into the prompt renderer.
+
+        Empty lists when the source has no graph neighbours.
+        """
+        assert self._link_service is not None
+        neighbours = self._link_service.related(
+            "source",
+            reply_to_source_id,
+            direction="both",
+            link_types=_GRAPH_EXPAND_LINK_TYPES,
+            limit=_GRAPH_EXPAND_PER_HIT_LIMIT,
+        )
+        refs: list[tuple[str, str]] = []
+        sources: list[tuple[str, str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        with self._engine.connect() as conn:
+            for link in neighbours:
+                if (link.from_entity_type, link.from_entity_id) == (
+                    "source",
+                    reply_to_source_id,
+                ):
+                    other = (link.to_entity_type, link.to_entity_id)
+                else:
+                    other = (link.from_entity_type, link.from_entity_id)
+                if other in seen:
+                    continue
+                body_text = _load_entity_text(conn, other[0], other[1])
+                if body_text is None:
+                    continue
+                seen.add(other)
+                refs.append(other)
+                sources.append((other[0], other[1], body_text))
+        return refs, sources
+
     def _load_briefing_markdown(self, briefing_id: str) -> str | None:
         """Read the ``briefings`` projection row by ULID.
 
@@ -836,6 +1243,7 @@ class ProposalService:
         model_version: str,
         tokens_in: int,
         tokens_out: int,
+        context_source_refs: list[tuple[str, str]] | None = None,
     ) -> Proposal:
         """Append :class:`ProposalGenerated` + project + return :class:`Proposal`.
 
@@ -843,6 +1251,15 @@ class ProposalService:
         failure rolls back the event row — the read model and the
         event log can never disagree (matches the Phase 5 briefing
         atomicity contract).
+
+        ``context_source_refs`` is the Phase 10 step E2 field carrying
+        ``--expand-graph`` neighbours injected as ``<context_source>``
+        blocks during reply_draft generation (ADR-0017 §決定 (b) Phase
+        10 改訂). Default ``None`` keeps the Phase 6 generate path
+        byte-identical: the event payload's default-empty list is what
+        ProposalGenerated already records when no graph expansion was
+        used, so the same projection / link extraction applies
+        backward-compatibly to existing events.
         """
         timestamp = now_utc()
         event = ProposalGenerated(
@@ -855,6 +1272,7 @@ class ProposalService:
             model_version=model_version,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            context_source_refs=context_source_refs if context_source_refs is not None else [],
             occurred_at=timestamp,
             recorded_at=timestamp,
         )

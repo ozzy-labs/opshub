@@ -67,6 +67,7 @@ __all__ = [
     "ProposalGenerated",
     "ProposalRejected",
     "ProposalRequested",
+    "ReplyDraftCandidatePayload",
     "TaskCandidatePayload",
 ]
 
@@ -110,16 +111,70 @@ class DecisionCandidatePayload(BaseModel):
     context: str | None = Field(default=None, max_length=2000)
 
 
+class ReplyDraftCandidatePayload(BaseModel):
+    """Reply-draft candidate payload (Phase 10 Sub-issue E, ADR-0016 §決定 (i)).
+
+    Encodes a single LLM-generated reply draft for an observed source
+    (Slack message / Outlook email / GitHub comment / etc). The
+    ``reply_to_source_id`` / ``reply_to_source_type`` pair grounds the
+    draft to a concrete row in the ``sources`` projection — apply-time
+    validation rejects drafts whose source no longer exists.
+
+    External write-back is **out of scope** (ADR-0010 §禁止事項 7
+    Phase 10 改訂): applying a reply_draft candidate flips the
+    candidate's projection state from ``pending`` to ``applied`` and
+    durably saves the draft body, but never sends or posts anything to
+    the upstream SaaS. The operator manually copies the draft into the
+    target channel; the HITL boundary (ADR-0016 §決定 (c)) is the
+    structural guarantee.
+
+    Schema versioning
+    -----------------
+    ``schema_version="v2"`` pins this payload to the Phase 10 extension
+    of the proposal Candidate union (ADR-0016 §決定 (f) — Phase 6 v1
+    candidates are not rewritten; readers branch on the version literal
+    when projecting / applying). Future field additions bump to
+    ``"v3"`` and the union becomes ``Literal["v2", "v3"]`` without
+    touching past events.
+
+    Field bounds
+    ------------
+    * ``reply_to_source_id`` — ULID of the source row (26 chars).
+    * ``reply_to_source_type`` — the source's ``source_type``
+      discriminator (``slack_message`` / ``ms365_outlook`` / etc.).
+      Free-form ≤50 chars so connector vocabulary additions do not
+      need a schema bump.
+    * ``body`` — the draft reply text. ``max_length=8000`` sized for
+      typical Slack / email reply length plus a defensive cap so a
+      runaway LLM cannot stuff 100k chars into a single candidate.
+    * ``subject`` — optional subject line (Outlook style); ``None`` for
+      threads that do not carry a separate subject (Slack DM, GitHub
+      comment).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["reply_draft"] = "reply_draft"
+    schema_version: Literal["v2"] = "v2"
+    reply_to_source_id: str = Field(min_length=26, max_length=26)
+    reply_to_source_type: str = Field(min_length=1, max_length=50)
+    body: str = Field(min_length=1, max_length=8000)
+    subject: str | None = Field(default=None, max_length=500)
+
+
 Candidate = Annotated[
-    TaskCandidatePayload | DecisionCandidatePayload,
+    TaskCandidatePayload | DecisionCandidatePayload | ReplyDraftCandidatePayload,
     Field(discriminator="kind"),
 ]
 """Discriminated union of candidate payloads, dispatched on ``kind``.
 
-Phase 6 MVP supports ``"task"`` and ``"decision"`` only. Phase 6.x can
-extend the union to ``inbox_item`` / ``"source"`` per ADR-0016 §決定
-(e); existing v1 candidates are *not* migrated (§決定 (f)) — readers
-branch on ``schema_version`` to handle both versions inline.
+Phase 6 MVP supported ``"task"`` and ``"decision"`` only. Phase 10
+Sub-issue E (ADR-0016 §決定 (i)) adds ``"reply_draft"`` for LLM-
+generated reply candidates. ``inbox_item`` / ``"source"`` remain
+Phase 6.x deferrals per ADR-0016 §決定 (e). Existing v1 candidates are
+*not* migrated when the union expands (ADR-0016 §決定 (f)) — readers
+branch on ``schema_version`` to handle ``v1`` (task / decision) and
+``v2`` (reply_draft) inline.
 """
 
 
@@ -177,6 +232,16 @@ class ProposalGenerated(DomainEvent):
     model_version: str = Field(min_length=1, max_length=100)
     tokens_in: int = Field(ge=0)
     tokens_out: int = Field(ge=0)
+    # Phase 10 step E2 (ADR-0017 §決定 (b) Phase 10 改訂):
+    # ``--expand-graph`` neighbours injected as ``<context_source>``
+    # blocks during reply_draft generation. The LinksProjector
+    # materialises one ``referenced_in_reply_draft`` link per entry
+    # so a later ``opshub graph trace <proposal-id>`` can recover
+    # the context entities the reply draft was grounded in.
+    # Default-empty so Phase 6 (task / decision) generations and
+    # historic events carry no derived link — backward compatible
+    # field addition per ADR-0002 §4 (schema_version stays at 1).
+    context_source_refs: list[tuple[str, str]] = Field(default_factory=lambda: [])
 
 
 class ProposalApplied(DomainEvent):
@@ -197,7 +262,7 @@ class ProposalApplied(DomainEvent):
     event_type: Literal["proposal.applied"] = "proposal.applied"  # pyright: ignore[reportIncompatibleVariableOverride]
     schema_version: int = 1
     candidate_index: int = Field(ge=0)
-    applied_entity_type: Literal["task", "decision"]
+    applied_entity_type: Literal["task", "decision", "reply_draft"]
     applied_entity_id: str = Field(min_length=26, max_length=26)  # ULID
     applied_by: str = Field(min_length=1, max_length=200)
 

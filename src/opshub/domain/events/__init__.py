@@ -68,6 +68,7 @@ from opshub.domain.events.proposal import (
     ProposalGenerated,
     ProposalRejected,
     ProposalRequested,
+    ReplyDraftCandidatePayload,
     TaskCandidatePayload,
 )
 from opshub.domain.events.source import (
@@ -245,6 +246,7 @@ __all__ = [
     "ProposalRequested",
     "ProvenanceOrigin",
     "ProvenanceTrust",
+    "ReplyDraftCandidatePayload",
     "SourceObserved",
     "SourceReferenced",
     "TaskActivated",

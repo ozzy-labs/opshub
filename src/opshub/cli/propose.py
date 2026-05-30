@@ -72,7 +72,12 @@ propose_app = typer.Typer(
 def propose_generate(
     topic: Annotated[
         str,
-        typer.Argument(help="The topic to propose next-actions for (free-form text)."),
+        typer.Argument(
+            help=(
+                "The topic to propose next-actions for (free-form text). "
+                "Ignored when --reply-to is supplied (Phase 10 reply-draft mode)."
+            ),
+        ),
     ],
     scope: Annotated[
         str,
@@ -86,6 +91,19 @@ def propose_generate(
         typer.Option(
             "--from-briefing",
             help="ULID of a briefing whose markdown seeds the LLM prompt as extra context.",
+        ),
+    ] = None,
+    reply_to: Annotated[
+        str | None,
+        typer.Option(
+            "--reply-to",
+            help=(
+                "ULID of a source to draft a reply for (Phase 10 Sub-issue E, "
+                "ADR-0016 §決定 (i)). Switches to reply-draft mode: the LLM "
+                "produces ReplyDraftCandidatePayload candidates grounded in the "
+                "named source. Apply records the draft locally; no external "
+                "send is performed (ADR-0010 §禁止事項 7 Phase 10 改訂)."
+            ),
         ),
     ] = None,
     max_candidates: Annotated[
@@ -117,7 +135,9 @@ def propose_generate(
                 "Expand context via the knowledge graph: each recall hit's "
                 "1-hop neighbours (referenced_in_briefing / references / "
                 "applied_to links) are appended as additional sources "
-                "(Phase 8, ADR-0017)."
+                "(Phase 8, ADR-0017). In reply-draft mode the 1-hop walk "
+                "starts from --reply-to and emits referenced_in_reply_draft "
+                "links (Phase 10 step E2)."
             ),
         ),
     ] = False,
@@ -162,14 +182,27 @@ def propose_generate(
 
     service = build_proposal_service(actor="cli:proposals_generate")
     try:
-        proposal = service.generate(
-            topic,
-            scope=scope,
-            from_briefing_id=from_briefing,
-            max_candidates=max_candidates,
-            max_tokens=max_tokens,
-            expand_graph=expand_graph,
-        )
+        if reply_to is not None:
+            # Phase 10 step E2: reply-draft mode. The `topic` argument
+            # is ignored — the service derives the recall query from
+            # the source row's title / body. ``from_briefing`` is
+            # also ignored (reply-draft has its own context loading
+            # via --expand-graph + style-example recall).
+            proposal = service.generate_reply_draft(
+                reply_to,
+                max_candidates=max_candidates,
+                max_tokens=max_tokens,
+                expand_graph=expand_graph,
+            )
+        else:
+            proposal = service.generate(
+                topic,
+                scope=scope,
+                from_briefing_id=from_briefing,
+                max_candidates=max_candidates,
+                max_tokens=max_tokens,
+                expand_graph=expand_graph,
+            )
     except ConfigError as exc:
         # Defensive: env-var override bypassed the pre-check above.
         typer.echo(f"Error: {exc}", err=True)

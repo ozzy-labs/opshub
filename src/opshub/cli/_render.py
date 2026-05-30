@@ -467,6 +467,20 @@ def render_proposal_md(proposal: Proposal) -> str:
             if context is not None and str(context).strip():
                 truncated_context = truncate(str(context), _CANDIDATE_BODY_TRUNCATE)
                 lines.append(f"    context: {truncated_context}")
+        elif kind == "reply_draft":
+            # Phase 10 step E2 (ADR-0016 §決定 (i)). Surfaces the
+            # reply target plus the draft body so an operator can copy
+            # the draft into the upstream SaaS by hand (no external
+            # write-back — ADR-0010 §禁止事項 7 Phase 10 改訂).
+            reply_to_source_id = getattr(candidate, "reply_to_source_id", "")
+            reply_to_source_type = getattr(candidate, "reply_to_source_type", "")
+            subject = getattr(candidate, "subject", None)
+            body = getattr(candidate, "body", "")
+            lines.append(f"[{index}] reply_draft → {reply_to_source_type}:{reply_to_source_id}")
+            if subject is not None and str(subject).strip():
+                lines.append(f"    subject: {subject}")
+            truncated_body = truncate(str(body), _CANDIDATE_BODY_TRUNCATE)
+            lines.append(f"    body: {truncated_body}")
         else:
             # Phase 6.x candidate kinds (e.g. inbox_item / source) land
             # here; the renderer falls back to a JSON dump of the

@@ -45,6 +45,7 @@ from opshub.domain.events import (
     ProposalGenerated,
     ProposalRejected,
     ProposalRequested,
+    ReplyDraftCandidatePayload,
     SourceObserved,
     TaskCandidatePayload,
     TaskCreated,
@@ -175,6 +176,119 @@ def test_candidate_discriminator_rejects_unknown_kind() -> None:
         _CandidateAdapter.validate_python({"kind": "source", "title": "x"})
 
 
+# ---- ReplyDraftCandidatePayload (Phase 10 step E2, ADR-0016 §決定 (i)) ----
+
+
+_REPLY_SRC_ID = new_ulid()
+
+
+def test_reply_draft_candidate_minimal_fields() -> None:
+    payload = ReplyDraftCandidatePayload(
+        reply_to_source_id=_REPLY_SRC_ID,
+        reply_to_source_type="slack_message",
+        body="OK, I'll take a look.",
+    )
+    assert payload.kind == "reply_draft"
+    assert payload.schema_version == "v2"
+    assert payload.reply_to_source_id == _REPLY_SRC_ID
+    assert payload.reply_to_source_type == "slack_message"
+    assert payload.body == "OK, I'll take a look."
+    assert payload.subject is None
+
+
+def test_reply_draft_candidate_with_subject() -> None:
+    payload = ReplyDraftCandidatePayload(
+        reply_to_source_id=_REPLY_SRC_ID,
+        reply_to_source_type="ms365_outlook",
+        body="Hi Alice, thanks for the follow-up.",
+        subject="Re: Q3 planning",
+    )
+    assert payload.subject == "Re: Q3 planning"
+
+
+def test_reply_draft_candidate_is_frozen() -> None:
+    payload = ReplyDraftCandidatePayload(
+        reply_to_source_id=_REPLY_SRC_ID,
+        reply_to_source_type="slack_message",
+        body="OK",
+    )
+    with pytest.raises(PydanticValidationError):
+        payload.body = "modified"
+
+
+def test_reply_draft_candidate_forbids_extra_fields() -> None:
+    with pytest.raises(PydanticValidationError):
+        ReplyDraftCandidatePayload.model_validate(
+            {
+                "kind": "reply_draft",
+                "reply_to_source_id": _REPLY_SRC_ID,
+                "reply_to_source_type": "slack_message",
+                "body": "OK",
+                "unexpected": "boom",
+            }
+        )
+
+
+def test_reply_draft_candidate_rejects_schema_v1() -> None:
+    """ADR-0016 §決定 (i): reply_draft is pinned at v2.
+
+    Phase 6 v1 candidates (task / decision) are NOT migrated; the
+    reader branches on schema_version per §決定 (f). A reply_draft
+    payload tagged as v1 must fail validation so a future schema bump
+    is detectable in CI.
+    """
+    with pytest.raises(PydanticValidationError):
+        ReplyDraftCandidatePayload.model_validate(
+            {
+                "kind": "reply_draft",
+                "schema_version": "v1",
+                "reply_to_source_id": _REPLY_SRC_ID,
+                "reply_to_source_type": "slack_message",
+                "body": "OK",
+            }
+        )
+
+
+def test_reply_draft_candidate_rejects_short_source_id() -> None:
+    """ULID is exactly 26 chars; shorter values must fail."""
+    with pytest.raises(PydanticValidationError):
+        ReplyDraftCandidatePayload(
+            reply_to_source_id="01J",  # too short
+            reply_to_source_type="slack_message",
+            body="OK",
+        )
+
+
+def test_reply_draft_candidate_rejects_empty_body() -> None:
+    with pytest.raises(PydanticValidationError):
+        ReplyDraftCandidatePayload(
+            reply_to_source_id=_REPLY_SRC_ID,
+            reply_to_source_type="slack_message",
+            body="",
+        )
+
+
+def test_reply_draft_candidate_rejects_oversized_body() -> None:
+    with pytest.raises(PydanticValidationError):
+        ReplyDraftCandidatePayload(
+            reply_to_source_id=_REPLY_SRC_ID,
+            reply_to_source_type="slack_message",
+            body="x" * 8001,  # 1 over cap
+        )
+
+
+def test_candidate_discriminator_dispatches_to_reply_draft_payload() -> None:
+    payload = _CandidateAdapter.validate_python(
+        {
+            "kind": "reply_draft",
+            "reply_to_source_id": _REPLY_SRC_ID,
+            "reply_to_source_type": "slack_message",
+            "body": "OK",
+        }
+    )
+    assert isinstance(payload, ReplyDraftCandidatePayload)
+
+
 # ---- ProposalRequested -----------------------------------------------------
 
 
@@ -265,7 +379,7 @@ def _decision_cand(text: str = "go") -> DecisionCandidatePayload:
 
 def test_proposal_generated_minimal_fields() -> None:
     proposal_id = _agg()
-    candidates: list[TaskCandidatePayload | DecisionCandidatePayload] = [
+    candidates: list[Candidate] = [
         _task_cand("ship"),
         _decision_cand("go"),
     ]
@@ -305,9 +419,7 @@ def test_proposal_generated_rejects_empty_candidates() -> None:
 
 def test_proposal_generated_rejects_too_many_candidates() -> None:
     proposal_id = _agg()
-    candidates: list[TaskCandidatePayload | DecisionCandidatePayload] = [
-        _task_cand(f"t{i}") for i in range(21)
-    ]
+    candidates: list[Candidate] = [_task_cand(f"t{i}") for i in range(21)]
     with pytest.raises(PydanticValidationError):
         ProposalGenerated(
             aggregate_id=proposal_id,
@@ -325,9 +437,7 @@ def test_proposal_generated_rejects_too_many_candidates() -> None:
 def test_proposal_generated_accepts_max_candidates() -> None:
     """20 candidates is the inclusive upper bound."""
     proposal_id = _agg()
-    candidates: list[TaskCandidatePayload | DecisionCandidatePayload] = [
-        _task_cand(f"t{i}") for i in range(20)
-    ]
+    candidates: list[Candidate] = [_task_cand(f"t{i}") for i in range(20)]
     event = ProposalGenerated(
         aggregate_id=proposal_id,
         actor="service:proposal",
@@ -340,6 +450,49 @@ def test_proposal_generated_accepts_max_candidates() -> None:
         tokens_out=0,
     )
     assert len(event.candidates) == 20
+
+
+def test_proposal_generated_defaults_context_source_refs_to_empty() -> None:
+    """Phase 10 step E2: ``context_source_refs`` is optional and defaults empty.
+
+    Backward compatibility per ADR-0002 §4 — historic Phase 6 events
+    must deserialise unchanged. The field default is an empty list so
+    ``LinksProjector.apply`` finds nothing to derive when consuming a
+    Phase 6 ``ProposalGenerated`` event.
+    """
+    proposal_id = _agg()
+    event = ProposalGenerated(
+        aggregate_id=proposal_id,
+        actor="service:proposal",
+        topic="t",
+        scope="all",
+        candidates=[_task_cand()],
+        model_id="m",
+        model_version="v",
+        tokens_in=0,
+        tokens_out=0,
+    )
+    assert event.context_source_refs == []
+
+
+def test_proposal_generated_accepts_context_source_refs() -> None:
+    """Phase 10 step E2 (ADR-0017 §決定 (b) Phase 10 改訂)."""
+    proposal_id = _agg()
+    ref_a = ("source", _agg())
+    ref_b = ("task", _agg())
+    event = ProposalGenerated(
+        aggregate_id=proposal_id,
+        actor="service:proposal",
+        topic="t",
+        scope="all",
+        candidates=[_task_cand()],
+        model_id="m",
+        model_version="v",
+        tokens_in=0,
+        tokens_out=0,
+        context_source_refs=[ref_a, ref_b],
+    )
+    assert event.context_source_refs == [ref_a, ref_b]
 
 
 def test_proposal_generated_rejects_negative_tokens() -> None:
@@ -479,7 +632,7 @@ def test_proposal_applied_rejects_negative_index() -> None:
 
 
 def test_proposal_applied_rejects_unknown_entity_type() -> None:
-    """ADR-0016 §決定 (e) restricts to ``"task"`` / ``"decision"``."""
+    """ADR-0016 §決定 (e) restricts to ``"task"`` / ``"decision"`` / ``"reply_draft"``."""
     proposal_id = _agg()
     with pytest.raises(PydanticValidationError):
         ProposalApplied.model_validate(
@@ -492,6 +645,22 @@ def test_proposal_applied_rejects_unknown_entity_type() -> None:
                 "applied_by": "cli:propose",
             }
         )
+
+
+def test_proposal_applied_accepts_reply_draft_type() -> None:
+    """Phase 10 step E2 (ADR-0016 §決定 (i)) widens the applied entity type union."""
+    proposal_id = _agg()
+    entity_id = _agg()
+    event = ProposalApplied(
+        aggregate_id=proposal_id,
+        actor="cli:propose",
+        candidate_index=2,
+        applied_entity_type="reply_draft",
+        applied_entity_id=entity_id,
+        applied_by="cli:propose",
+    )
+    assert event.applied_entity_type == "reply_draft"
+    assert event.applied_entity_id == entity_id
 
 
 @pytest.mark.parametrize(

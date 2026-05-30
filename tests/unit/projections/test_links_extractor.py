@@ -42,11 +42,14 @@ from opshub.domain.events import (
     LinkCreated,
     LinkDeleted,
     ProposalApplied,
+    ProposalGenerated,
     ProposalRequested,
+    ReplyDraftCandidatePayload,
     SourceReferenced,
     TaskCreated,
 )
-from opshub.projections.links import LinksProjector, links_table
+from opshub.domain.events.proposal import TaskCandidatePayload
+from opshub.projections.links import LINK_TYPES_MVP, LinksProjector, links_table
 
 
 @pytest.fixture
@@ -642,6 +645,171 @@ def test_auto_extracted_link_id_is_deterministic(engine: Engine) -> None:
 
 
 # ---- Unrelated event family ----------------------------------------------
+
+
+# ---- Phase 10 reply-draft link types (ADR-0017 §決定 (b) Phase 10 改訂) ---
+
+
+def test_link_types_mvp_includes_reply_draft_link_types() -> None:
+    """The Phase 10 enum widening must surface in the public set."""
+    assert "reply_draft_replies_to" in LINK_TYPES_MVP
+    assert "referenced_in_reply_draft" in LINK_TYPES_MVP
+
+
+def test_proposal_generated_with_reply_draft_creates_reply_draft_replies_to(
+    engine: Engine,
+) -> None:
+    """ADR-0017 §決定 (b) Phase 10 改訂: reply_draft candidate → link to source."""
+    projector = LinksProjector()
+    occurred = datetime(2026, 5, 30, 9, 0, 0, tzinfo=UTC)
+    proposal_id = new_ulid()
+    src_id = new_ulid()
+    event = ProposalGenerated(
+        aggregate_id=proposal_id,
+        occurred_at=occurred,
+        recorded_at=occurred,
+        actor="test",
+        topic="reply-draft test",
+        scope=f"reply_draft:{src_id}",
+        candidates=[
+            ReplyDraftCandidatePayload(
+                reply_to_source_id=src_id,
+                reply_to_source_type="slack_message",
+                body="OK",
+            )
+        ],
+        model_id="stub",
+        model_version="v1",
+        tokens_in=0,
+        tokens_out=0,
+    )
+
+    with engine.begin() as conn:
+        projector.apply(conn, event)
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(links_table)).all()
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.from_entity_type == "proposal"
+    assert row.from_entity_id == proposal_id
+    assert row.to_entity_type == "source"
+    assert row.to_entity_id == src_id
+    assert row.link_type == "reply_draft_replies_to"
+
+
+def test_proposal_generated_with_context_source_refs_creates_referenced_in_reply_draft(
+    engine: Engine,
+) -> None:
+    """ADR-0017 §決定 (b) Phase 10 改訂: context_source_refs → links."""
+    projector = LinksProjector()
+    occurred = datetime(2026, 5, 30, 9, 0, 0, tzinfo=UTC)
+    proposal_id = new_ulid()
+    src_id = new_ulid()
+    task_id = new_ulid()
+    decision_id = new_ulid()
+    event = ProposalGenerated(
+        aggregate_id=proposal_id,
+        occurred_at=occurred,
+        recorded_at=occurred,
+        actor="test",
+        topic="reply-draft with context",
+        scope=f"reply_draft:{src_id}",
+        candidates=[
+            ReplyDraftCandidatePayload(
+                reply_to_source_id=src_id,
+                reply_to_source_type="slack_message",
+                body="OK",
+            )
+        ],
+        model_id="stub",
+        model_version="v1",
+        tokens_in=0,
+        tokens_out=0,
+        context_source_refs=[("task", task_id), ("decision", decision_id)],
+    )
+
+    with engine.begin() as conn:
+        projector.apply(conn, event)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            select(links_table).where(links_table.c.link_type == "referenced_in_reply_draft")
+        ).all()
+
+    assert len(rows) == 2
+    to_pairs = sorted((row.to_entity_type, row.to_entity_id) for row in rows)
+    assert to_pairs == sorted([("task", task_id), ("decision", decision_id)])
+
+
+def test_proposal_generated_without_reply_draft_emits_no_reply_draft_links(
+    engine: Engine,
+) -> None:
+    """task/decision-only ProposalGenerated must not emit reply_draft links."""
+    projector = LinksProjector()
+    occurred = datetime(2026, 5, 30, 9, 0, 0, tzinfo=UTC)
+    proposal_id = new_ulid()
+    event = ProposalGenerated(
+        aggregate_id=proposal_id,
+        occurred_at=occurred,
+        recorded_at=occurred,
+        actor="test",
+        topic="task only",
+        scope="all",
+        candidates=[TaskCandidatePayload(title="ship it")],
+        model_id="stub",
+        model_version="v1",
+        tokens_in=0,
+        tokens_out=0,
+    )
+
+    with engine.begin() as conn:
+        projector.apply(conn, event)
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(links_table)).all()
+    assert rows == []
+
+
+def test_proposal_generated_rebuild_idempotent(engine: Engine) -> None:
+    """Replaying ProposalGenerated emits byte-identical link rows."""
+    projector = LinksProjector()
+    occurred = datetime(2026, 5, 30, 9, 0, 0, tzinfo=UTC)
+    proposal_id = new_ulid()
+    src_id = new_ulid()
+    event = ProposalGenerated(
+        aggregate_id=proposal_id,
+        occurred_at=occurred,
+        recorded_at=occurred,
+        actor="test",
+        topic="x",
+        scope=f"reply_draft:{src_id}",
+        candidates=[
+            ReplyDraftCandidatePayload(
+                reply_to_source_id=src_id,
+                reply_to_source_type="slack_message",
+                body="OK",
+            )
+        ],
+        model_id="stub",
+        model_version="v1",
+        tokens_in=0,
+        tokens_out=0,
+    )
+
+    with engine.begin() as conn:
+        projector.apply(conn, event)
+    with engine.connect() as conn:
+        first = conn.execute(select(links_table.c.id, links_table.c.link_type)).all()
+
+    with engine.begin() as conn:
+        projector.reset(conn)
+        projector.apply(conn, event)
+    with engine.connect() as conn:
+        second = conn.execute(select(links_table.c.id, links_table.c.link_type)).all()
+
+    assert first == second
 
 
 def test_apply_unrelated_event_is_noop(engine: Engine) -> None:

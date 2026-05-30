@@ -55,7 +55,9 @@ from opshub.domain.events import (
     TaskCreated,
 )
 from opshub.domain.events.proposal import (
+    Candidate,
     DecisionCandidatePayload,
+    ReplyDraftCandidatePayload,
     TaskCandidatePayload,
 )
 from opshub.llm.client import LLMMessage, LLMResponse, StructuredResponse
@@ -142,7 +144,7 @@ class _StubLLMClient:
     def __init__(
         self,
         *,
-        parsed_candidates: list[TaskCandidatePayload | DecisionCandidatePayload] | None = None,
+        parsed_candidates: list[Candidate] | None = None,
         model_id: str = "stub-llm",
         model_version: str = "v1",
         tokens_in: int = 100,
@@ -152,7 +154,7 @@ class _StubLLMClient:
         # ``parsed_candidates is None`` (not falsy) so callers can
         # explicitly pass an empty list for the "LLM returned zero
         # candidates" failure-path test.
-        self._parsed_candidates: list[TaskCandidatePayload | DecisionCandidatePayload]
+        self._parsed_candidates: list[Candidate]
         if parsed_candidates is None:
             self._parsed_candidates = [TaskCandidatePayload(title="default candidate")]
         else:
@@ -1117,3 +1119,305 @@ def test_generate_with_expand_graph_true_without_link_service_raises_config_erro
 
     requested = _events_of_type(migrated_engine, "proposal.requested")
     assert requested == []
+
+
+# ---- reply_draft (Phase 10 step E2, ADR-0016 §決定 (i)+(j)+(k)) -----------
+
+
+def _seed_source(
+    engine: Engine,
+    *,
+    source_id: str | None = None,
+    source_type: str = "slack_message",
+    connector_name: str = "slack",
+    title: str = "Test source",
+    body: str = "Hello, can you take a look?",
+    summary: str | None = None,
+    provenance_origin: str | None = "external",
+) -> str:
+    """Insert one ``sources`` row + matching ``sources_fts`` document."""
+    from opshub.core.ids import new_ulid
+    from opshub.core.time import now_utc
+    from opshub.projections.sources import sources_table
+
+    src_id = source_id if source_id is not None else new_ulid()
+    now = now_utc()
+    with engine.begin() as conn:
+        conn.execute(
+            insert(sources_table).values(
+                id=src_id,
+                connector_name=connector_name,
+                external_id=f"{connector_name}:{src_id}",
+                source_type=source_type,
+                title=title,
+                url=None,
+                summary=summary,
+                observed_at=now,
+                updated_at=now,
+                fingerprint=None,
+                body=body,
+                provenance_origin=provenance_origin,
+                provenance_trust="trusted" if provenance_origin == "internal" else "untrusted",
+            )
+        )
+    return src_id
+
+
+def test_generate_reply_draft_emits_requested_and_generated_on_success(
+    migrated_engine: Engine,
+) -> None:
+    """Reply-draft happy path: ProposalRequested + ProposalGenerated land.
+
+    The reply-draft mode does not exercise RecallService (style examples
+    are loaded via FTS5 directly from the source projection), so the
+    stub recall returns nothing.
+    """
+    src_id = _seed_source(migrated_engine, source_type="slack_message")
+    recall = _StubRecallService([])
+    llm = _StubLLMClient(
+        parsed_candidates=[
+            ReplyDraftCandidatePayload(
+                reply_to_source_id=src_id,
+                reply_to_source_type="slack_message",
+                body="Sure, let me check.",
+            )
+        ]
+    )
+    service = _make_service(migrated_engine, recall_service=recall, llm_client=llm)
+
+    proposal = service.generate_reply_draft(src_id)
+
+    assert len(proposal.candidates) == 1
+    candidate = proposal.candidates[0]
+    assert isinstance(candidate, ReplyDraftCandidatePayload)
+    assert candidate.reply_to_source_id == src_id
+
+    requested = _events_of_type(migrated_engine, "proposal.requested")
+    generated = _events_of_type(migrated_engine, "proposal.generated")
+    assert len(requested) == 1
+    assert len(generated) == 1
+
+
+def test_generate_reply_draft_raises_when_source_missing(
+    migrated_engine: Engine,
+) -> None:
+    """Missing source row → :class:`OpsHubError` with a friendly message."""
+    from opshub.core.ids import new_ulid
+
+    recall = _StubRecallService([])
+    llm = _StubLLMClient()
+    service = _make_service(migrated_engine, recall_service=recall, llm_client=llm)
+
+    unknown = new_ulid()
+    with pytest.raises(OpsHubError, match="not found"):
+        service.generate_reply_draft(unknown)
+
+
+def test_generate_reply_draft_with_expand_graph_without_link_service_raises(
+    migrated_engine: Engine,
+) -> None:
+    """``expand_graph=True`` + missing LinkService → :class:`ConfigError`."""
+    recall = _StubRecallService([])
+    llm = _StubLLMClient()
+    service = _make_service(migrated_engine, recall_service=recall, llm_client=llm)
+
+    src_id = _seed_source(migrated_engine)
+    with pytest.raises(ConfigError, match="expand_graph"):
+        service.generate_reply_draft(src_id, expand_graph=True)
+
+
+def test_generate_reply_draft_uses_reply_draft_system_prompt(
+    migrated_engine: Engine,
+) -> None:
+    """The reply-draft mode swaps the system prompt to the dedicated template."""
+    from opshub.services.proposals.reply_draft_prompts import REPLY_DRAFT_SYSTEM_PROMPT
+
+    src_id = _seed_source(migrated_engine)
+    recall = _StubRecallService([])
+    llm = _StubLLMClient(
+        parsed_candidates=[
+            ReplyDraftCandidatePayload(
+                reply_to_source_id=src_id,
+                reply_to_source_type="slack_message",
+                body="OK",
+            )
+        ]
+    )
+    service = _make_service(migrated_engine, recall_service=recall, llm_client=llm)
+
+    service.generate_reply_draft(src_id)
+    messages, _, _ = llm.structured_calls[0]
+    assert messages[0].role == "system"
+    assert messages[0].content == REPLY_DRAFT_SYSTEM_PROMPT
+
+
+def test_generate_reply_draft_user_prompt_contains_reply_to_block(
+    migrated_engine: Engine,
+) -> None:
+    """The user prompt wraps the source body in a ``<reply_to_source>`` block."""
+    src_id = _seed_source(
+        migrated_engine,
+        source_type="slack_message",
+        body="Please review the design doc.",
+        title="DM from Alice",
+    )
+    recall = _StubRecallService([])
+    llm = _StubLLMClient(
+        parsed_candidates=[
+            ReplyDraftCandidatePayload(
+                reply_to_source_id=src_id,
+                reply_to_source_type="slack_message",
+                body="OK, on it.",
+            )
+        ]
+    )
+    service = _make_service(migrated_engine, recall_service=recall, llm_client=llm)
+
+    service.generate_reply_draft(src_id)
+    messages, _, _ = llm.structured_calls[0]
+    user_content = messages[1].content
+    assert f'<reply_to_source id="{src_id}" type="slack_message"' in user_content
+    assert "Please review the design doc." in user_content
+
+
+def test_apply_reply_draft_records_event_without_creating_entity(
+    migrated_engine: Engine,
+) -> None:
+    """Reply-draft apply lands ProposalApplied but does NOT call TaskService."""
+    src_id = _seed_source(migrated_engine)
+    recall = _StubRecallService([])
+    llm = _StubLLMClient(
+        parsed_candidates=[
+            ReplyDraftCandidatePayload(
+                reply_to_source_id=src_id,
+                reply_to_source_type="slack_message",
+                body="Sure, on it.",
+            )
+        ]
+    )
+
+    # Sentinel TaskService/DecisionService that raise if invoked. The
+    # reply_draft apply path must NOT touch entity services (no task
+    # / decision row is materialised when the candidate is a draft).
+    class _ExplodingTaskService:
+        def create_task(self, *args: object, **kwargs: object) -> object:
+            raise AssertionError("TaskService.create_task must not run for reply_draft apply")
+
+    class _ExplodingDecisionService:
+        def record_decision(self, *args: object, **kwargs: object) -> object:
+            raise AssertionError(
+                "DecisionService.record_decision must not run for reply_draft apply"
+            )
+
+    service = _make_service(
+        migrated_engine,
+        recall_service=recall,
+        llm_client=llm,
+        task_service=_ExplodingTaskService(),  # type: ignore[arg-type]
+        decision_service=_ExplodingDecisionService(),  # type: ignore[arg-type]
+    )
+    proposal = service.generate_reply_draft(src_id)
+    entity_type, entity_id = service.apply(proposal.proposal_id, 0)
+
+    assert entity_type == "reply_draft"
+    assert len(entity_id) == 26  # fresh ULID
+
+    applied = _events_of_type(migrated_engine, "proposal.applied")
+    assert len(applied) == 1
+    event = applied[0]
+    assert isinstance(event, ProposalApplied)
+    assert event.applied_entity_type == "reply_draft"
+    assert event.applied_entity_id == entity_id
+
+
+def test_apply_reply_draft_does_not_send_external_request(
+    migrated_engine: Engine,
+) -> None:
+    """**HITL boundary test pin** (ADR-0010 §禁止事項 7 Phase 10 改訂).
+
+    Confirms ``ProposalService.apply`` does not import or invoke any
+    network primitives (``httpx`` / ``urllib`` / SaaS SDK ``post`` /
+    ``send`` methods) while applying a reply_draft candidate. The
+    contract is enforced structurally — no connector module ships a
+    write method (see :mod:`tests.unit.connectors.test_no_writeback`)
+    — and this test pins the runtime path: apply runs without any
+    network round-trip.
+    """
+    import socket
+    import sys
+    from unittest.mock import patch
+
+    src_id = _seed_source(migrated_engine)
+    recall = _StubRecallService([])
+    llm = _StubLLMClient(
+        parsed_candidates=[
+            ReplyDraftCandidatePayload(
+                reply_to_source_id=src_id,
+                reply_to_source_type="slack_message",
+                body="OK",
+            )
+        ]
+    )
+    service = _make_service(migrated_engine, recall_service=recall, llm_client=llm)
+    proposal = service.generate_reply_draft(src_id)
+
+    # Forbid ``socket.socket()`` entirely while apply runs. Any
+    # SaaS-bound HTTP would resolve a hostname and open a socket, so
+    # ``socket.socket`` is the chokepoint. ``stub_socket`` raises if
+    # apply tries to construct one — confirming the apply path stays
+    # entirely local. ``sys`` is referenced so the import survives
+    # autoformat passes that strip unused imports.
+    _ = sys
+
+    def _stub_socket(*args: object, **kwargs: object) -> object:
+        raise AssertionError("reply_draft apply must not open a socket — write-back is forbidden")
+
+    with patch.object(socket, "socket", new=_stub_socket):
+        service.apply(proposal.proposal_id, 0)
+
+
+def test_generate_reply_draft_with_expand_graph_writes_context_source_refs(
+    migrated_engine: Engine,
+) -> None:
+    """``expand_graph=True`` materialises graph neighbours into the event."""
+    src_id = _seed_source(migrated_engine, title="DM source")
+    # Seed a task that the source links to so the graph walk surfaces it.
+    task_id = _seed_task(migrated_engine, title="related task")
+    recall = _StubRecallService([])
+    llm = _StubLLMClient(
+        parsed_candidates=[
+            ReplyDraftCandidatePayload(
+                reply_to_source_id=src_id,
+                reply_to_source_type="slack_message",
+                body="OK",
+            )
+        ]
+    )
+    link_stub = _StubLinkService(
+        returns={
+            ("source", src_id): [
+                _make_link(
+                    link_id="01J6EXP00000000000000050",
+                    from_entity_type="source",
+                    from_entity_id=src_id,
+                    to_entity_type="task",
+                    to_entity_id=task_id,
+                    link_type="references",
+                ),
+            ],
+        }
+    )
+    service = _make_service(
+        migrated_engine,
+        recall_service=recall,
+        llm_client=llm,
+        link_service=link_stub,  # type: ignore[arg-type]
+    )
+
+    service.generate_reply_draft(src_id, expand_graph=True)
+
+    generated = _events_of_type(migrated_engine, "proposal.generated")
+    assert len(generated) == 1
+    event = generated[0]
+    assert isinstance(event, ProposalGenerated)
+    assert event.context_source_refs == [("task", task_id)]
