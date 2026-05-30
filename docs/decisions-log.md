@@ -267,3 +267,47 @@ Phase 10 Sub-issue D (秘書 Agent Skills) で、ADR-0004 (Agent Runtime Boundar
 | 形C: opshub 独自の軽量 agent runtime を実装 | 形A | scope creep (prompt 管理 / tool registry / retry / streaming / cancellation / concurrent run 管理が必要)、operational memory 責務と乖離、MCP が標準クライアント機構として収束済みで形A が最小コスト |
 | Agent Skills を opshub 本体に `share/skills/` 等で同梱し `opshub skills install` で配布 | `ozzy-labs/skills` preset 配布、opshub 本体は仕様 / catalog / scan ロジックのみ保持 | skill lifecycle と ①コア lifecycle が乖離、ozzy-labs エコシステムの skill 配布機構 (handbook ADR-0016) と二重化、複数ホスト間の skill 同期コスト、opshub install image 肥大化で M6 cold-start guard に影響 |
 | skill security scan を `ozzy-labs/skills` 側 CI にのみ実装 | opshub 本体側にも scan ロジック (`tools/skill_scan.py`) を実装し本リポ内 skill 仕様にも適用テスト | 仕様変更時の skill 構造変更を本リポでも検出可能にする、二段検査で悪意ある skill が外部ホスト `.claude/skills/` に到達する経路を抑制、scan ロジック自体を opshub 本体に置くことで `ozzy-labs/skills` 側の CI 設定変更 (別 PR) を待たずに本リポでの spec 起点の検査を開始できる |
+
+## 21. Office Document Content Extraction (ADR-0025)
+
+Phase 11 Sub-issue F1 (2026-05-31) で Word `.docx` / Excel `.xlsx` / PowerPoint `.pptx` の本文を OpsHub Source として取り込むための抽出層を ADR-0025 で新規 pin した。`[office]` extras に閉じた markitdown 1 本経路 + 50 MB ファイル上限 + 500K chars 抽出後上限 + 抽出失敗 fail-safe (`body=None` + warning log) + 形式別 source_type 3 種 (`word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`) + Excel cells 上限 (10K/シート + 50K/workbook) + PowerPoint 本文 + speaker notes 両方含む (画像 OCR は Phase 12+ defer) を契約として確定。ADR-0019 §不変条件 (b) `open()` ban との緊張は ADR-0019 §決定 (b') opt-in 例外節 (`[connectors.<name>] content_extraction = true` 時に限り `core/document_extract.extract(path)` 経路のみ open 許可) で解消。実装は Phase 11 Sub-issue F2 (#235) で `src/opshub/core/document_extract.py` を新設予定。
+
+| 却下案 | 採用案 | 理由 | 参照 |
+|---|---|---|---|
+| `python-docx` + `openpyxl` + `python-pptx` を自前連結 | markitdown 1 本 | API 表面が形式ごとに肥大化、出力形式が ライブラリごとに異なり markdown 化変換層を自前実装、Microsoft 公式の markitdown が同等カバレッジを 1 API で提供 | ADR-0025 §決定 (a)、Alternatives #1 |
+| `unstructured.io` 経由で多形式抽出 | markitdown 1 本 | 依存が重い (`nltk` / `pillow` / `pdfplumber` で 100MB 超)、内部 OCR 依存で ADR-0001 配布制約抵触、出力が `Element` リストで markdown 化に追加工程要 | ADR-0025 §決定 (a)、Alternatives #2 |
+| 形式横断 1 タイプ (`office_document`) で source_type 統一 | 形式別 3 種 (`word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`) | 「Excel だけ recall」「PPT に絞った検索」等の operator UX 確保、agent skill 設計余地 (meeting-prep が PPT 優先 weight 等)、source_type 自由文字列のため 3 種追加コストはほぼゼロ | ADR-0025 §決定 (d)、Alternatives #3 |
+| 抽出失敗時に SourceObserved を発行しない (fail-fast skip) | warning log + `body=None` で SourceObserved 発行継続 | metadata は valid 情報で抽出失敗で全捨ては過剰、後追い再試行の起点喪失、inbox から抽出失敗を operator が見えなくなる | ADR-0025 §決定 (c)、Alternatives #4 |
+| 抽出キャッシュ table を Phase 11 MVP に含める | キャッシュなし (Phase 11.x 候補) | MVP scope 肥大化 (新 projection + migration + projector + test fixture)、Phase 11 MVP の主目的は経路確立で rebuild 性能は secondary、稀イベントとして許容可能 | ADR-0025 §決定 (i)、Alternatives #5 |
+| ファイルサイズ上限 100 MB / 抽出後テキスト 1M chars に緩和 | 50 MB / 500K chars | 1 source が context window の 1/4 超で recall 全体が破綻、embedding cost 膨張、operator override で例外対応するほうが安全 default + 自由 escape hatch | ADR-0025 §決定 (b)、Alternatives #6 |
+
+## 22. ADR-0019 改訂 (Phase 11 — content_extraction opt-in 例外節 + onedrive_drive 汎化)
+
+Phase 11 Sub-issue F1 (2026-05-31) で ADR-0019 (Local-FS-backed Connector) を改訂し、Phase 9 で box_drive 専用に pin した §不変条件 (b) `open()` ban に **`content_extraction = true` opt-in の例外節** を §決定 (b') として追加した上で、Phase 11 Sub-issue F4-b (#237) の onedrive_drive 新設に向けた §パターン汎化節 (§決定 (j)) を追加。要点:
+
+- **§決定 (b') opt-in 例外節**: `[connectors.<name>] content_extraction = false` (default) では §不変条件 (b) は完全維持、scanner は `stat()` のみで `open()` 一切禁止 (Phase 9 と挙動不変)。`content_extraction = true` の明示設定下でのみ、`core/document_extract.extract(path)` 経路 (= markitdown、ADR-0025 §決定 (a)) **のみ** open 許可。diff path (fingerprint 計算) は不変条件保持 (stat() 完結)、CldAPI / FSE hydration 抑制ガイドラインは「個別 file への単発 open」に限定する形で継続
+- **§決定 (j) パターン汎化節**: Phase 11 F4-b で onedrive_drive を 2 vendor 目として追加するにあたり、box_drive / onedrive_drive 両方で成立する共通契約 (auth = OS-level / metadata = stat() / identity = rel_path / diff = fingerprint / 削除追跡なし / excludes = inline / operator precondition 外部化 / scan-only) を表で明文化。vendor x platform マトリクスとして `root_path` platform default 表に WSL2 `/mnt/onedrive` / macOS `~/OneDrive` を追記。`content_extraction` フックは両 connector に共通露出し、source_type は connector 名で分岐せず ADR-0025 §決定 (d) の 3 種を共通使用。共通基底 (`local_drive/base.py`) 抽出は XP rule of three の 3 vendor 目段階 (Phase 11.x+) まで持ち越し
+
+| 却下案 | 採用案 | 理由 |
+|---|---|---|
+| Phase 11 で `open()` ban を全面解除 | opt-in (`content_extraction = true`) の例外節として境界を絞る | Phase 9 で防いでいた network egress / cache 肥大化 / OS notification 暴発を最小化、Phase 9 operator は default false で無影響、scan walk の高速性 (stat() 完結) を維持、test invariant を「open は extractor 経由のみ」に進化させ構造的 guard を継承 |
+| onedrive_drive を独立 ADR (ADR-0027 等) として起票 | ADR-0019 §パターン汎化節 (§決定 (j)) として吸収 | box_drive と onedrive_drive は 9 決定全て共有 (vendor 固有点は `root_path` platform default のみ)、独立 ADR は概念的二重化、Phase 11 plan §1 OQ3 で「ADR-0019 改訂で吸収」確定済 |
+| Phase 11 で `connectors/local_drive/base.py` 共通基底を抽出 | コード共通基底抽出は Phase 11.x+ で 3 vendor 目と同時に再評価 | XP rule of three の 2 vendor 目で抽象化すると 3 vendor 目の quirks (Dropbox smart sync / Google Drive 分岐 root / iCloud Documents-only) で抽象が破壊的に変わるリスク、Phase 11 plan §3 F4-b 「box_drive を踏襲」と整合、設計レベルの汎化 (本節) は今やる / コード共通基底は後回しの分割で premature abstraction を回避 |
+| `content_extraction` を connector 名で source_type 分岐 (`box_drive_office_doc` 等) | source_type は connector 名で分岐せず ADR-0025 §決定 (d) の 3 種を共通使用 | `/mnt/b/specs/api.docx` と `/mnt/onedrive/specs/api.docx` を同 source_type で扱うほうが Phase 4 recall / Phase 8 link traversal の query 表面が単純、`connector_name` + `rel_path` prefix で十分区別可能 |
+
+## 23. ADR-0010 改訂 (Phase 11 — Teams + 本文抽出契約 + delta-link + User Token principal)
+
+Phase 11 Sub-issue F1 (2026-05-31) で ADR-0010 (Connector Contract) を改訂し、Phase 10 改訂 (write-back ban、§禁止事項 7) を **保持したまま** 以下 4 点を加算追加。
+
+- **改訂 (a) Teams 新コネクタ追加**: Phase 11 F5 (#238) の `connectors/teams/` connector を本 ADR の Connector Protocol + 責務 1-6 + 禁止事項 1-7 の契約対象に追加。Slack ADR-0018 / 既存 ms365 connector パターンに揃え、`source_type="teams_message"` で `sources` projection に persist
+- **改訂 (b) 本文抽出契約**: local-FS-backed connector (box_drive / onedrive_drive) が Office 文書 (`.docx` / `.xlsx` / `.pptx`) の本文を取り込む経路を「連続 stat → 抽出 (`core/document_extract.extract`) → SourceObserved with body」として明示化。markitdown 1 本経路を ADR-0025 §決定 (a) で固定、connector が直接 `python-docx` / `openpyxl` / `python-pptx` を import / 呼び出すことは禁止。size / text / cells 上限と source_type 3 種は ADR-0025 で pin (connector ごとに独自上限を上書きしない)。text-only 本文取り込み (Slack / Outlook / Teams chat) は markitdown 経由を要さず mapper が直接 SourceObserved.body に載せる
+- **改訂 (c) delta-link cursor + 失効時 full-pass fallback 義務**: Microsoft Graph delta query を cursor として使う connector (Phase 7 ms365 outlook / onedrive + Phase 11 teams) に、TTL 失効時 (`410 Gone` / `invalidatedDeltaToken`) の **自動 fallback** を義務化。WARNING log → 直近 N 日 (`fallback_window_days`、default 30、`opshub.toml` 上書き可) full-pass → 新 delta link 取得 → 次回 sync 差分 mode 復帰。fallback 自体失敗時は `ConnectorSyncFailed` (本 ADR §責務 4 整合)。Phase 7 既存 connector への適用は forward-compat (cursor 値は opaque string、TTL 失効検知時に fallback 起動、breaking change なし)
+- **改訂 (d) Teams User Token principal**: Phase 11 F5 Teams connector の認証 principal を **User Token** に確定 (Slack ADR-0018 と同パターン)。Azure Portal App Registration で `Chat.Read` / `ChannelMessage.Read.All` 等 delegated permissions を operator が consent、MSAL device code / interactive flow で取得、ADR-0014 keyring 経路に `connector:teams:access_token` + `connector:teams:refresh_token` で保管、env override は `OPSHUB_CONNECTOR_TEAMS_TOKEN`。Bot Token (Application permissions) は alternative として `docs/teams-setup.md` に記載するが default は User Token
+
+| 却下案 | 採用案 | 理由 |
+|---|---|---|
+| Teams を独立 ADR (ADR-0026 等) として起票 | ADR-0010 §Phase 11 改訂 (a) として吸収 | Phase 11 plan §1 OQ4 で「ADR-0010 改訂で吸収」確定済、Connector Protocol + 責務 1-6 + 禁止事項 1-7 を Teams にも適用する確認のみで独立 ADR は概念的二重化 |
+| Teams Bot Token (Application permissions) を default principal | User Token (delegated permissions) を default、Bot Token は alternative | ADR-0018 Slack User Token と同根拠 (operator 1 名スケール、書き戻し非対応との整合、own context 自然表現)、企業 IT policy で User Token consent が阻まれる場合の退路として Bot Token を docs 記載 |
+| connector が `python-docx` / `openpyxl` / `python-pptx` を直接 import / 呼び出し可能 | `core/document_extract.py` 1 module に markitdown 経路を集中化、connector からの直接呼び出しは禁止 | 3 ライブラリ分の error handling / size 上限 / fail-safe を connector 個別に実装すると Phase 11 改訂 (b) の契約 (size 上限 / fail-safe / source_type) が connector ごとに drift、`core/document_extract.py` 集中化で 1 経路に強制 |
+| Graph delta-link 失効時に `ConnectorSyncFailed` で fail-fast (fallback なし) | 自動 fallback で直近 N 日 full-pass + 新 delta link 取得 | fail-fast だと operator が手動再実行するまで Teams chat の取り込みが完全停止、long-tail TTL 失効が標準運用に組み込まれており fail-fast は運用継続性を破壊、重複は SourceObserved の dedup で吸収可能で fallback の副作用は限定的 |
+| `fallback_window_days` を hard-coded (固定 30 日) | `opshub.toml` operator override 可、default 30 日 | 1 年以上 outage 後の re-onboarding 等で `fallback_window_days = 365` 一時設定が必要、運用調整 escape hatch を残しつつ default は安全側 |

@@ -1,7 +1,7 @@
 # 0010. Connector Contract
 
-- Status: Accepted (revised 2026-05-30 for Phase 10 Sub-issue E)
-- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外)
+- Status: Accepted (revised 2026-05-31 for Phase 11 Sub-issue F1)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外); 2026-05-31 (Phase 11 改訂: Teams 追加 + 本文抽出契約 + delta-link cursor + User Token principal)
 - Deciders: ozzy
 
 ## Context
@@ -160,11 +160,103 @@ Phase 3-9 の connector はすべて **fetch (差分取り込み) only** で実�
 
 これらすべてが揃った場合のみ。flag 1 つで緩める / 個別 connector が独自に実装する経路は許可しない (Phase 6 ADR-0016 §決定 (c) の auto-apply 禁止と同じ強度の宣言)。
 
+## Phase 11 改訂 (Sub-issue F1、2026-05-31)
+
+Phase 11 (epic #233) で Teams 新コネクタ + Word/Excel/PowerPoint 文書抽出 + Outlook 本文 deep retention を導入するにあたり、本 ADR を改訂し以下 4 点を追加する (Phase 10 改訂節 §禁止事項 7 は **保持**、本節は **加算改訂**)。
+
+### Phase 11 改訂 (a) — Teams 新コネクタを契約対象に追加
+
+Phase 11 Sub-issue F5 (#238) で **`connectors/teams/` connector** を新設し、本 ADR の `Connector` Protocol + 責務 1-6 + 禁止事項 1-7 をそのまま適用する。Microsoft Graph delta query 経由で chat messages を fetch し、`source_type="teams_message"` で `sources` projection に persist する。
+
+- **Protocol signature 変更なし** — Phase 3 で確定し Phase 7 (Slack / MS365 / Box) + Phase 9 (box_drive) + Phase 11 (teams / onedrive_drive) で適合済の Connector Protocol を再利用
+- **本 ADR の禁止事項 1-7 すべて適用** — Task / Decision / Link 直接生成禁止 / projection 直接更新禁止 / Application Service 経由必須 / vendor 固有 event 名禁止 / write-back ban (§禁止事項 7) を Teams にも継承
+- **Slack ADR-0018 / 既存 ms365 connector パターンに揃える** — auth principal (Phase 11 改訂 (d) を参照) / fetcher / mapper / connector 4 module 構成
+
+### Phase 11 改訂 (b) — 本文抽出契約: 連続 stat → 抽出 → SourceObserved with body
+
+Phase 11 Sub-issue F4 (#237、box_drive / onedrive_drive) で local-FS-backed connector が Office 文書 (`.docx` / `.xlsx` / `.pptx`) の本文を取り込むにあたり、本 ADR §責務 1-2 (external API fetch + source normalization) と §責務 6 (body の minimization) を Office 文書経路に **延伸** する形で本文抽出契約を pin する。
+
+本文抽出契約の流れ:
+
+```text
+external metadata fetch (FS scan: os.scandir → entry.stat())
+  → diff detection (fingerprint = f"{size}:{mtime_ns}" との比較、ADR-0019 §決定 (d))
+  → 拡張子マッチ + content_extraction = true の場合のみ
+    → 抽出 (core/document_extract.extract(path) 経由、markitdown 単独経路、ADR-0025 §決定 (a))
+    → fail-safe (例外時は body=None、ADR-0025 §決定 (c))
+  → SourceObserved with (body + provenance_origin + provenance_trust) を Application Service 経由で append
+```
+
+抽出層の不変条件:
+
+1. **抽出経路は ADR-0025 §決定 (a) の markitdown 1 本** — connector が直接 `python-docx` / `openpyxl` / `python-pptx` を import / 呼び出すことを禁止 (`core/document_extract.py` 1 module に集中化)
+2. **size 上限 / text 上限 / cells 上限は ADR-0025 §決定 (b)(e) で pin** — connector ごとに独自上限を上書きしない (`opshub.toml` operator override は許容)
+3. **抽出失敗は fail-safe で SourceObserved 発行継続** — ADR-0025 §決定 (c) の `body=None` + warning log + summary 注記契約を全 local-FS connector で共通
+4. **source_type は ADR-0025 §決定 (d) の 3 種** — connector 名で source_type を分岐しない (box_drive と onedrive_drive のどちらも `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` を共通使用)
+5. **ADR-0019 §決定 (b') opt-in 例外節と整合** — `content_extraction = true` の opt-in 設定下でのみ抽出経路が起動、default false で従来挙動 (本文なし) を維持
+
+text-only 本文取り込み (Slack / Outlook / Teams chat) は markitdown 経由を **要さない**。これらは vendor SDK / Graph API から得た plain text / HTML を mapper が直接 `SourceObserved.body` に載せる経路で、`core/document_extract.py` は介在しない。本契約 §(b) は **バイナリ文書 (`.docx` / `.xlsx` / `.pptx`) からの本文抽出にのみ** 適用される。
+
+### Phase 11 改訂 (c) — delta-link cursor + 失効時 full-pass fallback 義務
+
+Phase 11 Sub-issue F5 (#238) Teams connector + 既存 Outlook / OneDrive (Phase 7 ms365 connector) で Microsoft Graph delta query を cursor として使う connector に、**delta-link cursor + 失効時 full-pass fallback** を契約として明示する。
+
+delta-link cursor の運用:
+
+1. **正常時** — `/me/chats/getAllMessages?$deltatoken=<token>` 等の Graph delta query で差分のみ取得、`@odata.deltaLink` を `connector_cursors.cursor` に opaque string で永続化
+2. **TTL 失効時** — Graph API が `410 Gone` / `invalidatedDeltaToken` 系エラーを返した場合、**自動 fallback**:
+   1. `WARNING` log: `event="connector.delta_link.expired"`, `connector=<name>`, `since=<original_delta_link>` (delta link 本体は token を含み得るため sanitised)
+   2. **full-pass** モードで直近 N 日 (`fallback_window_days`、default `30`、`opshub.toml` 上書き可) を fetch、各 message を SourceObserved として append (重複は SourceObserved の dedup key で吸収、append-only の自然な挙動)
+   3. fallback 完了時に **新しい delta link を取得** し `connector_cursors.cursor` を更新 (次回 sync から差分 mode に復帰)
+3. **fallback 自体が失敗** — Graph API への接続失敗 / 認証エラー / 全件取得中の throttling 等で fallback も完遂しない場合、`ConnectorSyncFailed` event を append して fail-fast (本 ADR §責務 4 と整合)
+
+`fallback_window_days` の設定例:
+
+```toml
+[connectors.teams]
+fallback_window_days = 30  # default 30; 0 = disable fallback (非推奨)
+```
+
+採用理由:
+
+- **Graph delta query の TTL 失効を構造的に吸収** — Microsoft Graph の delta link は documented TTL (公式は 30 日前後だが実値は変動) を持ち、long-tail で失効する。失効を手当てしないと operator が sync を再起動するまで「Teams chat が取り込まれない」状態が継続する
+- **fallback で抜けを最小化** — 直近 N 日 full-pass で「失効中に発生したメッセージ」を最大限拾い直す
+- **重複は append-only で吸収** — SourceObserved の dedup は projection 側で `external_id` (vendor message id) によって行われるため、fallback で同 message が再 append されても projection 側で 1 row に収束する (本 ADR §責務 4 と整合)
+- **fallback_window_days 上書きで運用調整** — 1 年以上の長期 outage 後の re-onboarding 等で `fallback_window_days = 365` 等の一時設定が可能
+
+本契約 §(c) は Graph delta query を持つ全 connector (Phase 7 ms365 outlook / onedrive / Phase 11 teams) に適用される。Phase 7 既存 connector への適用は Phase 11 で **forward-compat** に追加 (既存 cursor 値は opaque string として扱われ、TTL 失効を検知した時点で fallback が起動する、breaking change なし)。
+
+### Phase 11 改訂 (d) — Teams User Token principal (ADR-0014 keyring 経由、Bot Token は alternative)
+
+Phase 11 Sub-issue F5 (#238) Teams connector の認証 principal を **User Token** に確定する。Slack ADR-0018 (`xoxp-` user token を採用、bot token は却下) と同パターン。
+
+Teams User Token の運用:
+
+1. **取得経路** — Azure Portal で App Registration を作成し `Chat.Read` / `ChannelMessage.Read.All` 等の delegated permissions を operator が consent → MSAL device code flow / interactive flow で User Token を取得
+2. **保管経路** — ADR-0014 (SaaS Token Storage) の keyring 経路を再利用、key 規約 `connector:teams:access_token` + `connector:teams:refresh_token`。env override は `OPSHUB_CONNECTOR_TEAMS_TOKEN` (CI / 緊急用)
+3. **scope** — minimum-required scope を `docs/teams-setup.md` (F6 で新設) に列挙、operator が consent screen で広 scope を許諾しないよう案内
+4. **refresh** — MSAL の refresh token + acquire_token_silent で透過的に refresh、refresh 失敗時は `ConnectorSyncFailed` event + setup docs を指す actionable error
+5. **Bot Token は alternative** — 一部企業環境で User Token consent が拒否される / app registration が許可されない場合、Bot Token (Application permissions) で代替する経路を `docs/teams-setup.md` に記載。ただし default は User Token
+
+採用理由 (Slack ADR-0018 と同根拠):
+
+- **operator 1 名スケールが OpsHub の前提** — Bot は team-level identity で「個人秘書」境界に合わない、User Token なら operator の own context (自身が参加している channels のみ) を自然に表現
+- **書き戻し非対応 (Phase 10 改訂 §禁止事項 7) との整合** — User Token は read scope のみ要求すれば足り、write scope を持たないことで「経路の不在」を keyring 設定段階から強制可能
+- **Slack / Outlook / OneDrive と principal パターンが揃う** — Phase 7-11 で全 SaaS connector が User Token principal に揃い、operator のメンタルモデルが 1 つ (consent → keyring 保管 → refresh)
+- **app registration ハードルが高い環境への退路** — Bot Token alternative を docs に明記することで、企業 IT policy で User Token consent が阻まれる operator にも経路を残す (Phase 11 では Bot Token 経路の test pin は不要、code path を Optional に予約)
+
+採用理由が成立する根拠は ADR-0018 §Decision と全く同じため詳細は ADR-0018 を参照。本 ADR §Phase 11 改訂 (d) は ADR-0018 の Slack User Token 確定を **Teams にも適用する確認** にとどまる。
+
 ## 関連
 
 - [Principles 7 (Connector Contract)](../principles.md)
 - [Architecture 2.1 (Connector Layer)](../architecture.md)
 - [ADR-0002: Event-Sourced Architecture](0002-event-sourced-architecture.md)
 - [ADR-0004: Agent Runtime Boundary](0004-agent-runtime-boundary.md)
-- [ADR-0005: External Content Minimization](0005-external-content-minimization.md)
-- [ADR-0014: SaaS Token Storage](0014-saas-token-storage.md)
+- [ADR-0005: External Content Minimization](0005-external-content-minimization.md) — Phase 10 で ADR-0020 が supersede 済、本文取り込み経路は ADR-0020 / ADR-0025 を参照
+- [ADR-0014: SaaS Token Storage](0014-saas-token-storage.md) — Teams User Token も同経路で keyring 保管 (Phase 11 改訂 (d))
+- [ADR-0018: Slack Connector Token Principal](0018-slack-token-principal.md) — Teams User Token principal は本 ADR と同根拠 (Phase 11 改訂 (d))
+- [ADR-0019: Local-FS-backed Connector](0019-local-filesystem-backed-connector.md) — Phase 11 Sub-issue F1 で `content_extraction` opt-in 例外節 + onedrive_drive 汎化を同時改訂
+- [ADR-0020: Full Local Content Retention](0020-full-local-content-retention.md) — 本文取り込みの根拠 (Phase 11 改訂 (b) で Office 文書経路に延伸)
+- [ADR-0025: Office Document Content Extraction](0025-office-document-content-extraction.md) — Phase 11 Sub-issue F1 で新規起票、本 ADR §Phase 11 改訂 (b) 本文抽出契約の実装層を pin
+- [Phase 11 Plan §2 ADR 構成 + §3 Sub-issue F](../phase-11-plan.md)
