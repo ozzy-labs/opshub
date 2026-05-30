@@ -142,7 +142,7 @@ def _connector_with_events(
             yield from events
 
     fetcher = _StubFetcher()
-    return BoxConnector(fetcher_factory=lambda: fetcher)  # type: ignore[arg-type]
+    return BoxConnector(fetcher_factory=lambda: fetcher)  # type: ignore[arg-type,return-value]
 
 
 # ---------------------------------------------------------------------- name
