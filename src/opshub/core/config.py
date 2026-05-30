@@ -338,6 +338,37 @@ class BoxDriveConnectorSettings(BaseModel):
     exclude_globs: list[str] = Field(default_factory=list)
 
 
+class TeamsConnectorSettings(BaseModel):
+    """Microsoft Teams connector configuration (Phase 11 F5).
+
+    The Teams connector reads Microsoft Graph
+    ``/me/chats/getAllMessages`` with delta-token pagination and a
+    full-pass fallback when Graph invalidates the stored delta link
+    (ADR-0010 §改訂 (c)).
+
+    ``enabled = False`` is the default per the Phase 7 plan §1 #2
+    convention — every SaaS connector is opt-in so a fresh
+    ``uv tool install`` never tries to reach an external API.
+
+    ``fallback_window_days`` controls how far back the connector scans
+    when Graph rejects the stored delta link. Defaults to ``30`` per
+    ADR-0010 §改訂 (c) — long enough to cover a typical vacation /
+    outage window without slurping years of history. Operators with
+    longer outages set this higher (a temporary ``365`` for
+    re-onboarding is the documented pattern). A value of ``0``
+    disables the fallback path entirely — the connector then surfaces
+    the underlying :class:`ConnectorFailedError` instead of recovering
+    (discouraged but allowed).
+
+    The Microsoft Graph User Token lives in the OS keyring under
+    ``connector:teams:token`` per ADR-0014 / ADR-0010 §改訂 (d) — it
+    never appears in ``opshub.toml`` or this settings model.
+    """
+
+    enabled: bool = False
+    fallback_window_days: int = 30
+
+
 class ConnectorSettings(BaseModel):
     """External SaaS / local-FS connector configuration root.
 
@@ -349,7 +380,9 @@ class ConnectorSettings(BaseModel):
     Box Drive connector — the first non-SaaS connector in opshub, so
     its shape (``root_path`` / ``max_depth`` / ``max_files`` instead
     of ``client_id`` / OAuth metadata) differs from the four
-    pre-existing connectors by design.
+    pre-existing connectors by design. Phase 11 F5 adds
+    :class:`TeamsConnectorSettings` for the Microsoft Teams chat
+    connector (Graph delta query + User Token principal).
 
     The section is intentionally separate from :class:`LLMSettings` /
     :class:`EmbeddingSettings` so per-connector overrides like
@@ -363,6 +396,7 @@ class ConnectorSettings(BaseModel):
     ms365: MS365ConnectorSettings = Field(default_factory=MS365ConnectorSettings)
     box: BoxConnectorSettings = Field(default_factory=BoxConnectorSettings)
     box_drive: BoxDriveConnectorSettings = Field(default_factory=BoxDriveConnectorSettings)
+    teams: TeamsConnectorSettings = Field(default_factory=TeamsConnectorSettings)
 
 
 class LLMSettings(BaseModel):

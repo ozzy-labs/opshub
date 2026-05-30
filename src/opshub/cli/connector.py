@@ -149,12 +149,21 @@ def connector_sync(name: str) -> None:
         pass
 
     try:
-        import opshub.connectors.box_drive  # noqa: F401  # pyright: ignore[reportUnusedImport]
+        import opshub.connectors.box_drive  # pyright: ignore[reportUnusedImport]
     except ImportError:
         # Box Drive connector module imports cleanly with no third-party
         # extras (Phase 9, ADR-0019 — the scanner is pure stdlib
         # ``os.scandir``). This guard is defensive and would only fire
         # if a future refactor adds a heavy top-level dependency.
+        pass
+
+    try:
+        import opshub.connectors.teams  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    except ImportError:
+        # Teams connector module imports cleanly without the extras
+        # (the heavy ``httpx`` imports stay inside the fetcher
+        # constructor); this branch is defensive and would only
+        # trigger if a future refactor adds a top-level SDK import.
         pass
     from opshub.connectors import discover_connectors
     from opshub.connectors.context import ConnectorContext
@@ -309,6 +318,18 @@ def auth_set(
         from opshub.connectors.github.auth import GITHUB_PAT_SECRET_KEY
 
         key = GITHUB_PAT_SECRET_KEY
+    elif name == "connector:teams":
+        # Phase 11 F5 (ADR-0010 §改訂 (d)): the Teams Microsoft Graph
+        # User Token is stored under ``connector:teams:token`` so the
+        # CLI writer + TeamsAuth reader cannot drift (mirrors the
+        # Slack / MS365 / Box precedent). Unlike MS365 / Box this
+        # connector accepts a pre-resolved token directly rather than
+        # running an in-process OAuth dance — operators acquire the
+        # token via Azure Portal / MSAL device code flow and paste
+        # the result into ``--token`` (or stdin).
+        from opshub.connectors.teams.auth import TEAMS_TOKEN_SECRET_KEY
+
+        key = TEAMS_TOKEN_SECRET_KEY
     elif name in ("slack", "connector:slack"):
         # Phase 7 step A1 (principal updated in Phase 7.x per ADR-0018):
         # the Slack OAuth access token is stored under
@@ -362,7 +383,8 @@ def auth_set(
             f"unknown auth target {name!r}; currently supported: "
             "github, connector:slack (or legacy slack), embedder:openai, "
             "embedder:voyage, llm:anthropic, llm:openai, connector:ms365, "
-            "connector:box (connector:box_drive uses opshub.toml, not auth set)",
+            "connector:box, connector:teams "
+            "(connector:box_drive uses opshub.toml, not auth set)",
             err=True,
         )
         raise typer.Exit(code=2)

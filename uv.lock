@@ -1710,6 +1710,10 @@ connectors-ms365 = [
 connectors-slack = [
     { name = "slack-sdk" },
 ]
+connectors-teams = [
+    { name = "httpx" },
+    { name = "msal" },
+]
 dev = [
     { name = "mypy" },
     { name = "pyright" },
@@ -1754,12 +1758,14 @@ requires-dist = [
     { name = "boxsdk", marker = "extra == 'connectors-box'", specifier = ">=3.10,<4" },
     { name = "httpx", marker = "extra == 'connectors-github'", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'connectors-ms365'", specifier = ">=0.27" },
+    { name = "httpx", marker = "extra == 'connectors-teams'", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'llm-ollama'", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "keyring", marker = "extra == 'encryption'", specifier = ">=24" },
     { name = "keyring", marker = "extra == 'secrets'", specifier = ">=24" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.0" },
     { name = "msal", marker = "extra == 'connectors-ms365'", specifier = ">=1.30" },
+    { name = "msal", marker = "extra == 'connectors-teams'", specifier = ">=1.30" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "numpy", marker = "extra == 'vector'", specifier = ">=2.0" },
     { name = "openai", marker = "extra == 'api-embedding-openai'", specifier = ">=1.40" },
@@ -1785,7 +1791,7 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "voyageai", marker = "extra == 'api-embedding-voyage'", specifier = ">=0.2" },
 ]
-provides-extras = ["vector", "local-embedding", "api-embedding-openai", "api-embedding-voyage", "llm-anthropic", "llm-openai", "llm-ollama", "connectors-github", "connectors-slack", "connectors-ms365", "connectors-box", "secrets", "encryption", "mcp", "dev"]
+provides-extras = ["vector", "local-embedding", "api-embedding-openai", "api-embedding-voyage", "llm-anthropic", "llm-openai", "llm-ollama", "connectors-github", "connectors-slack", "connectors-ms365", "connectors-box", "connectors-teams", "secrets", "encryption", "mcp", "dev"]
 
 [[package]]
 name = "packaging"

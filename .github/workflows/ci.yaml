@@ -85,7 +85,14 @@ jobs:
         # request leaves CI (Phase 7 plan §1 #6). The cold-start guard
         # still asserts ``boxsdk`` never leaks onto the ``opshub --help``
         # path.
-        run: uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra connectors-ms365 --extra connectors-box --extra mcp --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
+        #
+        # ``connectors-teams`` is included so Phase 11 F5 unit tests
+        # (``tests/unit/connectors/teams/test_fetcher.py``) can
+        # ``importorskip`` ``httpx`` and exercise the Graph delta + 410
+        # fallback paths against a mocked transport. Every Graph call
+        # is patched at ``httpx.Client`` / ``httpx.MockTransport``
+        # boundary so no real Microsoft endpoint is reached in CI.
+        run: uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra connectors-ms365 --extra connectors-box --extra connectors-teams --extra mcp --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
 
       - name: Ruff (lint)
         run: uv run ruff check
