@@ -364,14 +364,15 @@ class TeamsFetcher:
             "$filter": f"lastModifiedDateTime ge {since}",
             "$top": str(_PAGE_SIZE),
         }
-        url: str | None = f"{GRAPH_BASE}/me/chats/getAllMessages?{urlencode(params)}"
+        initial_url: str = f"{GRAPH_BASE}/me/chats/getAllMessages?{urlencode(params)}"
+        url: str | None = initial_url
 
         # We do not yet have a fresh delta link, so the cursor we yield
         # *during* the fallback walk replays the same ``$filter`` URL.
         # That keeps a mid-fallback crash idempotent: the next sync
         # repeats the filter (the projection dedups), and only when the
         # walk completes do we swap in the freshly-acquired delta link.
-        cursor_in_flight: str = url
+        cursor_in_flight: str = initial_url
         while url is not None:
             body = self._request("GET", url)
             value_obj = body.get("value")

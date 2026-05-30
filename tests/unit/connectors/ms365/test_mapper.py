@@ -288,9 +288,7 @@ def test_map_outlook_message_truncates_large_body() -> None:
     # Marker carries kept + original counts so operators can detect
     # partial bodies deterministically (matches the F2 ``core/text_limits``
     # shape Phase 11 plan §3 F3 anticipates).
-    expected_suffix = (
-        f"\n\n[outlook body truncated: {MAX_OUTLOOK_BODY_CHARS} / {over} chars]"
-    )
+    expected_suffix = f"\n\n[outlook body truncated: {MAX_OUTLOOK_BODY_CHARS} / {over} chars]"
     assert event.body.endswith(expected_suffix)
     # The retained body is exactly ``MAX_OUTLOOK_BODY_CHARS`` of head +
     # the suffix — no characters from the tail leak in.
