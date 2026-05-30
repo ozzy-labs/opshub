@@ -1,7 +1,7 @@
-# 0019. Local-filesystem-backed Connector (box_drive)
+# 0019. Local-filesystem-backed Connector (box_drive / onedrive_drive)
 
-- Status: Accepted
-- Date: 2026-05-23
+- Status: Accepted (revised 2026-05-31 for Phase 11 Sub-issue F1)
+- Date: 2026-05-23 (initial, box_drive only); 2026-05-31 (Phase 11 改訂: `content_extraction` opt-in 例外節 + onedrive_drive 汎化、ADR-0025 同時起票)
 - Deciders: ozzy
 
 ## Context
@@ -67,6 +67,25 @@ OpsHub に **Local-filesystem-backed Connector pattern** を追加し、第一�
 - IT policy / network egress / Box Drive cache 肥大化 / OS notification 発火 / ADR-0005 違反 のいずれも構造的に発生不能になる
 - 本文 read を「やってはいけない」regex review に頼るのではなく、test で `open()` 呼び出しを fail させる構造 invariant にする方が長期的に robust
 - SHA-256 等の内容 hash は本文 read を要するため本不変条件違反、選ばない (代替は §決定 (d) fingerprint で解決)
+
+#### (b') Phase 11 改訂 — `content_extraction = true` opt-in 例外節
+
+Phase 11 (ADR-0025 Office Document Content Extraction) で Word / Excel / PowerPoint 文書の本文取り込みを導入するにあたり、§決定 (b) `open()` ban に **opt-in の例外節** を追加する。要点:
+
+1. **既定挙動は不変** — `[connectors.<name>] content_extraction` は **default `false`**。設定省略 / false の状態では §決定 (b) は **完全に維持** され、scanner は `stat()` のみで `open()` / `read_bytes()` / `read_text()` / magic bytes / shebang / 全 file content hash を一切実行しない。Phase 9 box_drive 運用と挙動 1 byte たりとも変わらない
+2. **opt-in で例外** — operator が `opshub.toml` で `[connectors.box_drive] content_extraction = true` (または同等の onedrive_drive 設定) を明示設定した場合に限り、**`core/document_extract.extract(path)` 経路のみ** open を許可する。経路は ADR-0025 §決定 (a) で markitdown 経由に固定され、`core/document_extract.py` 以外の `open()` / `read_*` は引き続き禁止
+3. **diff path は完全に不変** — fingerprint 計算 (`f"{size}:{mtime_ns}"`、§決定 (d)) は `entry.stat()` のみで成立する経路を維持する。`open()` 許可は **extraction stage のみ**で、scan walk + fingerprint 比較 stage には例外が及ばない。これにより 100k files の scan 全体が `stat()` で完結する性質を維持
+4. **CldAPI / FSE hydration 抑制ガイドラインの継続** — `content_extraction = true` の場合でも、open 許可は「拡張子マッチ (`.docx` / `.xlsx` / `.pptx`) + fingerprint 変化あり + size 上限内 (ADR-0025 §決定 (b))」を満たす **個別 file への単発 open** に限られる。scan walk 中の magic bytes 検査 / shebang 検査 / SHA-256 全 file hash 等の **全 file 走査型 open は引き続き禁止**。これにより CldAPI placeholder / FSE placeholder の hydration を「実際に抽出する file」だけに最小化する設計を保つ
+5. **新 test invariant** — `content_extraction = true` 経路の保護として、Phase 11 F2/F4 で `tests/unit/connectors/<name>/test_scanner.py::test_scanner_opens_only_via_extractor` を追加。`unittest.mock.patch("builtins.open", ...)` で scan 全体を観察し、open が `core.document_extract.extract` 呼び出しに起因する場合のみ allow、それ以外を fail させる。`content_extraction = false` 経路の `test_scanner_never_opens_files` は従来どおり継続
+
+採用理由:
+
+- **本 ADR の意義 (CldAPI hydration / IT policy 順守) と ADR-0025 の意義 (Office 本文取り込み) の両立** — 「open ban を全面解除する」ではなく「`core/document_extract.extract(path)` 経路に限定して例外」と境界を絞ることで、ADR-0019 §(b) が防いでいた network egress / cache 肥大化 / OS notification 暴発 を最小限の犠牲に抑えながら本文抽出を導入できる
+- **default false で Phase 9 operator は無影響** — `opshub.toml` に `content_extraction = true` を明示書き加えるまで挙動が変わらず、Phase 9 → Phase 11 アップグレード時の breaking change 経路を作らない
+- **scan walk の高速性維持** — diff 判定 stage は `stat()` のみで完結し、100k files の scan が依然 fingerprint mismatch 数の file だけ extract する形で済む (全 file extract ではない)
+- **test invariant の進化** — 「open は extractor 経由のみ」という強制条件を CI に常駐させることで、誤って magic bytes 検査 / hash 計算 / 全 file content hash を scanner に追加した瞬間 test が落ちる構造的 guard を維持
+
+§決定 (b') の opt-in 例外は ADR-0025 §決定 (g) と相互参照する。本 ADR と ADR-0025 は同時起票 (Phase 11 Sub-issue F1) で 1 PR で Accepted されるため、両者を切り離して読まないこと。
 
 ### (c) Identity = `rel_path` (path-as-id、grep 可能形式、rename = 旧停止+新発火 制限)
 
@@ -224,6 +243,74 @@ Phase 9.x で **filewatch backend abstraction** として別 PR / 別 ADR で扱
 
 scan mode の trigger は operator manual + cron 経由を想定 (`crontab -e` で `0 */6 * * * opshub connector sync box_drive` 等)。常駐 daemon の OS-level 自動起動 (systemd / launchd) は opshub 範囲外。
 
+### (j) Phase 11 改訂 — パターン汎化 (`local_drive` family) と onedrive_drive 追加
+
+Phase 11 (Sub-issue F4-b、#237 / ADR-0025 同時起票) で **OneDrive Desktop** を 2 つ目の local-FS-backed connector として追加する。Phase 9 では box_drive 専用の MVP として本 ADR を起票したが、Phase 11 で 2 vendor 目を実装するにあたり「Phase 9 の決定 (a)-(i) が box_drive 固有か / Local-FS-backed connector pattern 一般に成立するか」を再評価し、**全 9 決定が pattern 一般に成立する** ことを確認した上で、本節を **§パターン汎化節** として追加する。XP rule of three (1 vendor で実装 → 2 vendor で抽象化を判断 → 3 vendor で確定) の 2 vendor 目に相当する段階で、**設計レベルでの汎化 (本節)** は実施するが、**コード共通基底 (`connectors/local_drive/base.py` 抽出)** は Phase 11 では実施せず Phase 11.x で 3 vendor 目 (Dropbox / Google Drive for desktop / iCloud Drive 等) を実装する際に再評価する。
+
+#### (j-1) 共通契約 (両 connector で成立する pattern)
+
+box_drive (Phase 9) と onedrive_drive (Phase 11 F4-b) は以下の契約を共有する:
+
+| 論点 | 共通契約 | 参照 |
+|---|---|---|
+| auth | OS-level 同期クライアント (Box Drive / OneDrive) が稼働、operator が事前 OS ログイン済 | §(a) |
+| metadata access | `os.stat()` のみ、`open()` 禁止 (Phase 11 で `content_extraction = true` opt-in 例外あり) | §(b) + §(b') |
+| identity | `rel_path` (root_path 相対パス、grep 可能、rename = 旧停止+新発火 MVP 制限) | §(c) |
+| diff detection | `sources.fingerprint = f"{size}:{mtime_ns}"` + in-memory dict 比較 | §(d) |
+| 削除追跡 | なし (Phase 11.x で `--stale` flag 候補) | §(e) |
+| excludes | `opshub.toml` inline (`[connectors.<name>] exclude_globs`) | §(g) |
+| operator precondition | OS setup (mount / install) は opshub 範囲外、setup docs に外出し | §(h) |
+| watch mode | Phase 9 / 11 MVP では scan-only、filewatch backend は Phase 11.x+ 候補 | §(i) |
+
+#### (j-2) vendor 固有点の表 (`root_path` platform default)
+
+§決定 (f) の `root_path` platform-aware default 表を **vendor x platform マトリクス** に汎化する:
+
+| Vendor | Platform | 判定方法 | default `root_path` | 備考 |
+|---|---|---|---|---|
+| box_drive | WSL2 | `/proc/sys/kernel/osrelease` に `microsoft` 文字列 + `sys.platform == "linux"` | `Path("/mnt/b")` | operator が事前 `mountvol B:` + `wsl --shutdown` 設定済の前提 |
+| box_drive | macOS | `sys.platform == "darwin"` | `Path.home() / "Box"` | Box Drive デフォルトインストール先 |
+| box_drive | Linux native | `sys.platform == "linux"` かつ WSL2 判定 false | `None` (= `ConfigError`) | Box Drive Linux client は存在しない |
+| **onedrive_drive** | **WSL2** | 同上 | `Path("/mnt/onedrive")` | operator が事前 `mountvol` 相当の手順を `docs/onedrive-drive-setup.md` で設定済の前提 |
+| **onedrive_drive** | **macOS** | 同上 | `Path.home() / "OneDrive"` | OneDrive macOS client デフォルトインストール先 |
+| **onedrive_drive** | **Linux native** | 同上 | `None` (= `ConfigError`) | OneDrive Linux client は提供されていない (Microsoft 公式) |
+| 両 connector | Windows native | (該当しない) | (該当しない) | opshub 全体が POSIX-only、`pyproject.toml` classifier `Operating System :: POSIX` |
+
+`opshub.toml` で operator が `[connectors.onedrive_drive] root_path = "<custom>"` を明示指定した場合は platform default を無視する escape hatch は box_drive と同じ。custom path 不存在は `ConfigError` で fail-fast。
+
+#### (j-3) `content_extraction` フックの両 connector への露出
+
+Phase 11 F4 で **box_drive と onedrive_drive の両方** が ADR-0025 §決定 (a)(g) の content extraction hook を持つ。設定例:
+
+```toml
+[connectors.box_drive]
+enabled = true
+root_path = "/mnt/b"
+content_extraction = true       # Phase 11 で追加、default false
+
+[connectors.onedrive_drive]
+enabled = true
+root_path = "/mnt/onedrive"
+content_extraction = true       # 同上
+```
+
+`content_extraction = true` の場合、scanner は `.docx` / `.xlsx` / `.pptx` 拡張子 file について `core/document_extract.extract(path)` を呼び、`SourceObserved.body` に markitdown 抽出結果を載せる。default false で従来挙動 (本文なし、path-based summary のみ)。
+
+source_type は ADR-0025 §決定 (d) の 3 種 (`word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`) を box_drive / onedrive_drive 共通で使用する。**connector 名で source_type を分岐しない**。例: `/mnt/b/specs/api.docx` と `/mnt/onedrive/specs/api.docx` はどちらも `source_type="word_document"` で取り込まれ、`external_id` の prefix (rel_path) と `connector_name` で区別される。
+
+#### (j-4) Phase 11 で共通基底 (`local_drive/base.py`) を抽出しない理由
+
+- **rule of three の中間段** — 2 vendor 目で共通基底を抽出すると、3 vendor 目の quirks (Dropbox の smart sync placeholder semantics / Google Drive の My Drive vs Shared Drives 分岐 root / iCloud Drive の Documents-only visibility) で抽象が破壊的に変わるリスクが高い
+- **Phase 11 scope を絞る** — Sub-issue F4-b で onedrive_drive を box_drive と並列の `connectors/onedrive_drive/` package として実装し、共通基底抽出は Phase 11.x または Phase 12+ で 3 vendor 目と同時に実施する
+- **コード重複は許容** — 2 vendor の scanner / mapper / settings が rel_path 識別 / fingerprint 計算 / exclude_globs / `content_extraction` フックを各々持つことは MVP 段階で許容する (本節 §(j-1) の共通契約が pattern として明文化されている以上、重複は構造的破綻ではない)
+- **Phase 11 plan §3 F4 で確認済** — Phase 11 plan §3-F4-b 「box_drive を踏襲」記述と整合
+
+採用理由:
+
+- **設計レベルの汎化 (本節) は今やる、コード共通基底は後回し** という分割で premature abstraction を避けつつ、operator / agent が「box_drive と onedrive_drive は同じ family の別 vendor」と認識できる documentation 基盤を Phase 11 で確立
+- **§(j-2) マトリクス** は Phase 11.x+ で 3 vendor 目 (Dropbox / Google Drive for desktop / iCloud Drive) を追加する際の拡張点を明示化
+- **§(j-3) `content_extraction` の両 connector 露出** が ADR-0025 §決定 (g) と整合し、Office 文書抽出経路が box_drive / onedrive_drive のどちらでも同じ挙動になることを保証
+
 ## Consequences
 
 ### Positive
@@ -336,6 +423,8 @@ scan 開始時の `sources` projection 全 row と walk 結果を symmetric diff
 - [ADR-0010: Connector Contract](0010-connector-contract.md) — `Connector` Protocol を変えずに auth layer を OS 依存に置換する根拠、責務 (fetch + normalize + event 化) と禁止事項 (Task / Decision / Link 直接生成しない、projection 直接更新しない) を本 ADR でも全継承
 - [ADR-0014: SaaS Token Storage](0014-saas-token-storage.md) — box_drive は token を持たない (OS-level Box Drive 認証に依存) ため `core/secrets` / keyring 経路は使わない (Phase 7 4 connector との差分)
 - [ADR-0018: Slack Connector Token Principal](0018-slack-token-principal.md) — 直前 ADR、本 ADR の番号採番 (0019) の根拠
+- [ADR-0025: Office Document Content Extraction](0025-office-document-content-extraction.md) — 本 ADR と Phase 11 Sub-issue F1 で同時起票・改訂。§決定 (b') opt-in 例外節は ADR-0025 §決定 (g) と相互参照
 - Phase 7 `box` connector — Web API 経路 (`source_type="box_event"`)、本 ADR の box_drive (`source_type="box_drive_file"`) と二重取り込み許容 (operator が独立に enable / disable 可能)
 - [Phase 9 Plan §1 確定済み事項 + §2.1 sub-issue A + §6 spike 不採用の根拠](../phase-9-plan.md)
+- [Phase 11 Plan §2 ADR 構成 + §3 Sub-issue F1 / F4-b](../phase-11-plan.md) — Phase 11 で onedrive_drive を追加し本 ADR §(j) パターン汎化節を導入
 - 参考記事 (WSL2 → Box Drive mountvol 手順): <https://qiita.com/himacreation/items/e375e010d670d756e754>
