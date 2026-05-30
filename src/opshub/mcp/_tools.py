@@ -239,14 +239,18 @@ def build_decision_list_handler(engine: Engine) -> ToolHandler:
 
         limit: int = int(arguments.get("limit", 20))
 
+        # ``decisions`` has no ``created_at`` column — the projection
+        # records ``recorded_at`` (see ADR-0002 immutability + the
+        # ``decisions_table`` definition). Use that column so the
+        # handler does not raise ``AttributeError`` at first call.
         stmt = (
             select(
                 decisions_table.c.id,
                 decisions_table.c.text,
-                decisions_table.c.created_at,
+                decisions_table.c.recorded_at,
             )
             .order_by(
-                decisions_table.c.created_at.desc(),
+                decisions_table.c.recorded_at.desc(),
                 decisions_table.c.id.asc(),
             )
             .limit(limit)
@@ -261,7 +265,7 @@ def build_decision_list_handler(engine: Engine) -> ToolHandler:
                     {
                         "id": row.id,
                         "text": _truncate(row.text),
-                        "created_at": row.created_at.isoformat() if row.created_at else None,
+                        "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
                     }
                     for row in rows
                 ],
