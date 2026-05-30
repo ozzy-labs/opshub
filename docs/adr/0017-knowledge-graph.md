@@ -1,7 +1,7 @@
 # 0017. Knowledge Graph
 
-- Status: Accepted
-- Date: 2026-05-17
+- Status: Accepted (revised 2026-05-30 for Phase 10 Sub-issue E)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §決定 (b) revision: `reply_draft_replies_to` / `referenced_in_reply_draft` link_type 追加)
 - Deciders: ozzy
 
 ## Context
@@ -53,7 +53,7 @@ CREATE INDEX links_to_idx ON links (to_entity_type, to_entity_id);
 
 per-link_type 別 table 案は **§Alternatives Considered 1** で却下している (schema bloat / 重複 index / UNION query 複雑化)。
 
-### (b) `link_type` 初期 enum (Phase 8 MVP = 5 種類)
+### (b) `link_type` 初期 enum (Phase 8 MVP = 5 種類、Phase 10 で 7 種類に拡張)
 
 Phase 8 MVP では以下の 5 種類の `link_type` を pin する。自動抽出 path はこの enum に限定し、enum 外の link_type は **manual path でのみ** warning 付きで許容する (operator が任意の関係を表現できる余地は残しつつ、auto-extracted link と区別可能にするため)。
 
@@ -66,6 +66,20 @@ Phase 8 MVP では以下の 5 種類の `link_type` を pin する。自動抽�
 | `manual` | `LinkCreated` (`opshub link add`) | operator が明示的に張った link (任意の entity 間) |
 
 manual path の `link_type` は free-form 文字列 (`--type` の値は自由) を許容するが、上記 5 種類以外を使うと CLI が `warning: link_type "<value>" is not in the recommended enum; auto-extracted links use [applied_to, referenced_in_briefing, generated_from_briefing, references, manual]` を出す。これは operator が任意の link semantics を導入できる余地を残しつつ、auto-extracted link と区別可能にする目的。
+
+> **Phase 10 改訂 (2026-05-30、Sub-issue E)**: ADR-0016 改訂 (§決定 (i)) で追加される `reply_draft` candidate kind の provenance を表現するため、以下の **2 link_type** を enum に昇格する。これにより auto-extracted enum は 7 種類になる。新 event は派生せず、§決定 (c) の **pure derived state projector パターン**を踏襲する (`ProposalApplied` 経路と同様、既存 event payload から派生)。
+
+| link_type (Phase 10 追加) | 発行経路 | 意味 |
+|---|---|---|
+| `reply_draft_replies_to` | `ProposalApplied` 自動抽出 (`applied_entity_type = "reply_draft"` の場合) + Phase 10 reply_draft candidate の `reply_to_source_id` を `metadata` 経由で源として確定 | `proposal:<id>` → `source:<reply_to_source_id>` (返信下書きが返信先 source を参照) |
+| `referenced_in_reply_draft` | `BriefingGenerated.source_refs` 拡張パターンと同じく、reply_draft の生成プロンプトで `<context_source>` (ADR-0017 §決定 (f) `--expand-graph` 経由) として注入された entity 群を materialise | `proposal:<id>` → `<referenced_entity_type>:<referenced_entity_id>` (reply_draft 生成 context として参照した entity) |
+
+要点:
+
+- **新 event 非発行**: 上記 2 link_type は **`ProposalApplied` (reply_draft 候補が apply された場合) や `ProposalGenerated` (reply_draft 候補が生成された時点で proposal payload に reply_to_source_id が含まれる)** から派生する純粋な derived state で、新 event family を導入しない。ADR-0017 §決定 (c) と完全に同じパターン (§Phase 8 b/c で確立した pattern を踏襲)
+- **`LinksProjector` の dispatch 表に 2 path 追加**: `ProposalApplied` 経路で `applied_entity_type == "reply_draft"` の場合 (ADR-0016 §決定 (i) の `reply_to_source_id` を candidate payload から復元) と `ProposalGenerated` 経路で reply_draft candidate が含まれる場合 (`<context_source>` 由来の link)。両 path は §決定 (a) の natural-key UPSERT で `projections rebuild` 冪等
+- **既存 5 link_type の semantics は不変**: `applied_to` は task / decision / reply_draft の 3 entity 種に拡張されるが、link_type 文字列としては従来通り (新 entity 種類が増えるだけ)
+- **manual path での自由度**: ADR-0017 §決定 (b) で manual link が free-form 文字列を許容する原則は不変。`reply_draft_replies_to` / `referenced_in_reply_draft` を manual で打つと auto-extracted と同じ enum 内なので warning は出ない (operator が `opshub link add` で意図的に reply_draft の provenance を手書きするのは想定される運用)
 
 ### (c) 自動抽出 projector は新 event を発行しない (pure derived state)
 
