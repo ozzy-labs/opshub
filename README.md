@@ -7,12 +7,15 @@
 
 English | [日本語](README.ja.md)
 
-**Local-first operational memory + execution hub for humans and AI agents.**
+**Local-first secretary agent platform — auditable operational memory for humans and AI agents.**
 
-OpsHub stores work state — tasks, decisions, briefings, embeddings, links — in
-a single SQLite event log under your home directory. AI agents read and write
-the same surface via a CLI, so context is preserved across sessions without
-shipping state to a cloud service.
+OpsHub is the local-first **secretary agent platform**: an auditable, event-sourced operational memory that an AI agent host (Claude Code / Codex CLI / Gemini CLI / GitHub Copilot CLI) can drive on your behalf. Ask your agent "what should I do next?" or "draft a reply to that Slack thread" and it talks to OpsHub over MCP to recall, summarise, and propose — never sending your state to a cloud service.
+
+Three layers ([ADR-0004](docs/adr/0004-agent-runtime-boundary.md)):
+
+1. **You (human)** — ask in natural language.
+2. **Secretary agent** — runs in your editor / terminal (Claude Code etc.). OpsHub ships **MCP server (`opshub mcp serve`) + Agent Skills (SKILL.md)** but no LLM runtime; the agent host owns the brain.
+3. **OpsHub core (CLI)** — append-only event log + projections + body store + connectors. Same surface, whether you call it from the agent or from the CLI directly.
 
 ## Install
 
@@ -62,6 +65,40 @@ opshub propose apply <proposal-id> 0                  # operator-approved entity
 All state lives under XDG directories; override via `OPSHUB_*` env vars
 (e.g. `OPSHUB_STORAGE__DB_PATH=/custom/path.sqlite`).
 
+## Ask your secretary
+
+Once you wire OpsHub into an agent host over MCP (see [Connect an agent host](#connect-an-agent-host-mcp) below), you can talk to your secretary in plain language. The agent calls the right OpsHub commands behind the scenes.
+
+| You ask | Skill that fires | What it does |
+|---|---|---|
+| "What should I do next?" / "今日のまとめ" | `daily-brief` / `next-actions` | Top signals from the last 24h + active tasks + untriaged inbox |
+| "Draft a reply to that Slack thread" / "返信案考えて" | `reply-draft` | LLM-generated draft grounded in your past sending style (you copy-paste — OpsHub never sends) |
+| "Review PR #123" | `pr-review` | Pulls related decisions / tasks / past discussion so the agent can review with context |
+| "Find that Box file about X" / "Box にあったあの資料" | `file-lookup` | Full-text + semantic search across Slack / Box / GitHub / MS365 / Box Drive |
+
+The five secretary skills ship through [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) via the `@ozzylabs/skills` Renovate preset (handbook ADR-0016). See [`docs/secretary-agent.md`](docs/secretary-agent.md) for the full catalog and what OpsHub deliberately does not do (no write-back to SaaS, no always-on runtime, no auto-apply).
+
+## Connect an agent host (MCP)
+
+```bash
+uv tool install "ozzylabs-opshub[mcp]"
+opshub init
+opshub db migrate
+opshub mcp tools           # inspect read / write tool surface
+```
+
+Then point your agent host (Claude Code etc.) at `opshub mcp serve` as a stdio MCP server. Example for Claude Code (`~/.claude/mcp_servers.json`):
+
+```json
+{
+  "mcpServers": {
+    "opshub": { "command": "opshub", "args": ["mcp", "serve"] }
+  }
+}
+```
+
+Full setup (other hosts, encryption, troubleshooting): [`docs/mcp-setup.md`](docs/mcp-setup.md).
+
 ## Configure an LLM backend (optional)
 
 OpsHub is functional without any LLM — `task` / `decision` / `inbox` /
@@ -81,7 +118,7 @@ rationale.
 
 ## What's in OpsHub today
 
-Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23:
+Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23. Phase 10 shipped 2026-05-31:
 
 | Phase | Layer | Highlights |
 |---|---|---|
@@ -94,9 +131,9 @@ Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23:
 | 7 | Connectors wave 2 | Slack + Microsoft 365 + Box |
 | 8 | Knowledge graph | `links` projection + auto-extraction + `graph` + `--expand-graph` |
 | 9 | Local-FS connectors | `box_drive` (Box Drive desktop client → local FS scan, ADR-0019) |
+| 10 | Secretary agent platform | Full local body retention (ADR-0020) + encryption at rest (ADR-0021) + MCP server (ADR-0022) + `opshub search` (FTS5) + `opshub mcp serve` + secretary 5 Skills + reply-draft (ADR-0016 §決定 (i)) |
 
-Next: **Phase 10+ (Multi-machine sync)** — see [`docs/principles.md`](docs/principles.md)
-§Open Questions #5. Longer phase-by-phase narrative lives in
+Next: **Phase 11 (MS Office deep-dive — Teams + Outlook body + Word/Excel/PowerPoint extraction)** — see [`docs/phase-10-plan.md`](docs/phase-10-plan.md) §9. Phase 12+ candidates: multi-machine sync, proactive secretary (cron-delegated commands). Longer phase-by-phase narrative lives in
 [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery).
 
 ## Commands
@@ -142,11 +179,16 @@ opshub projections rebuild                            # rebuild projections from
 
 # Semantic recall (Phase 4, ADR-0012)
 opshub connector auth set embedder:openai             # store OpenAI API key in OS keychain
-opshub embeddings rebuild                             # bulk-embed task/decision/inbox/source summaries
+opshub embeddings rebuild                             # bulk-embed task/decision/inbox/source bodies (Phase 10: now body-based, ADR-0020)
 opshub embeddings status                              # show backend + per-entity-type embedded vs pending
 opshub embeddings drain                               # retry pending embeddings (auto-embed hook backup)
 opshub embeddings find-duplicates -t 0.92             # offline near-duplicate scan
 opshub recall "recent decisions about authentication" # semantic search across all entities
+
+# Full-text search across source bodies (Phase 10, ADR-0012 改訂 §4 + ADR-0020)
+opshub search "ticket-1234"                           # SQLite FTS5 across Slack / GitHub / Box / MS365 / Box Drive bodies
+opshub search "deploy AND failure" --raw              # opt into FTS5 boolean / phrase / prefix syntax
+opshub search "channel ID" --connector slack          # restrict to one connector
 
 # Briefing (Phase 5, ADR-0015)
 opshub connector auth set llm:anthropic               # store Anthropic API key in OS keychain
@@ -155,14 +197,15 @@ opshub brief "phase 5 progress" --save                # also persist under <work
 opshub brief "phase 5 progress" --format json         # JSON with briefing_id / model / tokens / source_refs
 opshub brief "phase 8 review" --expand-graph          # widen LLM context via 1-hop graph expansion
 
-# Action loop (Phase 6, ADR-0016)
+# Action loop (Phase 6, ADR-0016, Phase 10 reply-draft)
 opshub propose generate "next steps"                  # LLM proposes task/decision candidates
 opshub propose generate "next steps" --from-briefing <id>
 opshub propose generate "next steps" --format json
 opshub propose generate "next steps" --expand-graph   # 1-hop graph expansion for proposals
+opshub propose generate --reply-to <source-id>        # Phase 10: reply-draft mode (ADR-0016 §決定 (i))
 opshub propose list                                   # recent proposals (markdown table)
 opshub propose list --state pending --limit 10        # filter: pending / applied / rejected
-opshub propose apply <proposal-id> <candidate-index>  # operator approval → creates entities
+opshub propose apply <proposal-id> <candidate-index>  # operator approval → creates entities (reply-draft saves locally, never sends)
 opshub propose reject <proposal-id> <candidate-index> --reason "out of scope"
 
 # Knowledge graph (Phase 8, ADR-0017)
@@ -172,6 +215,11 @@ opshub link remove <link-id> --reason "wrong source"  # hard delete (emits LinkD
 opshub graph related task:<task-id> --direction both  # 1-hop neighbours (md / json / dot)
 opshub graph trace task:<task-id> --depth 3           # backward provenance walk (default 3, max 10)
 opshub graph expand task:<task-id> --depth 2 --format dot
+
+# MCP server surface (Phase 10, ADR-0022)
+opshub mcp tools                                       # inspect read / write tool surface (auditable policy-as-data)
+opshub mcp tools -f json                               # JSON for diff / scripting
+opshub mcp serve                                       # stdio MCP server — agent host spawns this as a subprocess
 ```
 
 ## Optional dependencies
@@ -183,14 +231,18 @@ opshub graph expand task:<task-id> --depth 2 --format dot
 | `api-embedding-openai` / `api-embedding-voyage` | API embedder backends | Small |
 | `llm-anthropic` / `llm-openai` | API LLM backends | Small |
 | `llm-ollama` | Ollama daemon client | Small |
-| `connectors-github` / `connectors-slack` / `connectors-msgraph` / `connectors-box` | SaaS connectors | Small |
+| `connectors-github` / `connectors-slack` / `connectors-ms365` / `connectors-box` | SaaS connectors | Small |
 | `secrets` | OS keyring backend | Small |
+| `encryption` | SQLCipher-backed at-rest encryption (Phase 10, ADR-0021) | Small |
+| `mcp` | MCP server SDK for `opshub mcp serve` (Phase 10, ADR-0022) | Small |
 | `dev` | Test + lint toolchain | Medium |
 
 ## Documentation
 
-- [`docs/principles.md`](docs/principles.md) — design principles (local-first, event-sourced, etc.)
+- [`docs/principles.md`](docs/principles.md) — design principles (local-first, event-sourced, full local content retention)
 - [`docs/architecture.md`](docs/architecture.md) — layered architecture overview
+- [`docs/secretary-agent.md`](docs/secretary-agent.md) — Phase 10 secretary agent platform usage (skills catalog, what it can / cannot do)
+- [`docs/mcp-setup.md`](docs/mcp-setup.md) — Phase 10 MCP setup for agent hosts (Claude Code etc.)
 - [`docs/adr/`](docs/adr/README.md) — Architecture Decision Records
 - [`docs/box-drive-setup.md`](docs/box-drive-setup.md) — Phase 9 `box_drive` connector setup (WSL2 / macOS)
 - [`docs/upgrading.md`](docs/upgrading.md) — version migration notes (when applicable)
@@ -198,7 +250,7 @@ opshub graph expand task:<task-id> --depth 2 --format dot
 - [`docs/RELEASE_RUNBOOK.md`](docs/RELEASE_RUNBOOK.md) — how to cut a release (maintainers)
 - [`CHANGELOG.md`](CHANGELOG.md) — release history
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution guidelines
-- [`SECURITY.md`](SECURITY.md) — vulnerability disclosure
+- [`SECURITY.md`](SECURITY.md) — vulnerability disclosure + Phase 10 body retention threat model
 
 ## License
 

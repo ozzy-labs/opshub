@@ -1,6 +1,6 @@
 # Repository and Package Structure
 
-> Status: Draft (in active design). Last reviewed: 2026-05-17.
+> Status: Draft (in active design). Last reviewed: 2026-05-31.
 
 OpsHub リポジトリのトップレベル構成と Python パッケージ (`src/opshub/`) の内部構造を記述する。実装着手時はこの構成から開始し、必要に応じて更新する。
 
@@ -45,7 +45,17 @@ opshub/
 │   │   ├── connectors.md
 │   │   └── workspace.md
 │   ├── adr/                        # Architecture Decision Records
+│   ├── secretary-agent.md          # Phase 10: 秘書エージェント層 (形A) の使い方
+│   ├── mcp-setup.md                # Phase 10: エージェント host から MCP 経由で叩く手順
+│   ├── skills/                     # Phase 10: 秘書 5 Skill の SSOT (daily-brief / next-actions / reply-draft / pr-review / file-lookup) [P10]
+│   │   ├── daily-brief/SKILL.md
+│   │   ├── next-actions/SKILL.md
+│   │   ├── reply-draft/SKILL.md
+│   │   ├── pr-review/SKILL.md
+│   │   └── file-lookup/SKILL.md
 │   └── runbook/                    # 未作成
+├── tools/                          # Phase 10: skill security scan (4 カテゴリ + frontmatter 隠しユニコード検出) [P10]
+│   └── skill_scan.py
 ├── src/
 │   └── opshub/                     # 項目 2 で詳細
 ├── tests/
@@ -79,7 +89,7 @@ opshub/
 
 ## 2. Python パッケージ構成 (src/opshub/)
 
-各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P5+8]` / `[P6]` / `[P6+8]` / `[P6.x]` / `[P7]` / `[P7.x]` / `[P8]` / `[P8.x]` / `[P9]` / `[P9.x]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで、`[P7]` は Phase 7 (Connectors Wave 2、Slack + Microsoft 365 + Box) で、`[P8]` は Phase 8 (Knowledge graph layer、ADR-0017 + `links` projection + 4 自動抽出 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration) で merge 済 (2026-05-17)、`[P9]` は Phase 9 (Local-filesystem-backed Connector Layer、ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector + `core/platform.py` + `opshub connector sync box_drive`) で merge 済 (2026-05-23)。複合 tag (例: `[P5+8]` / `[P6+8]` / `[P1+2+3+9]`) は当該 Phase で初出 + 後続 Phase で拡張が入った module を示す。`[P6.x]` は Phase 6 完了後の継続作業 (`llama.cpp` direct binding / proposal scoring 等)、`[P7.x]` は Phase 7 完了後の継続作業 (additional connectors / common OAuth helper refactor / connector observability 等)、`[P8.x]` は Phase 8 完了後の継続作業 (connector-side automatic `SourceReferenced` 発行 / graph visualisation web UI / soft-delete 検討 等)、`[P9.x]` は Phase 9 完了後の継続作業 (watch mode (filewatch backend) / 追加 FS connector / xattr identity / `opshub source list --stale` / 共通 `excludes.yaml` 機構 等)、`[future]` は Phase 10 (multi-machine sync 等) 以降。
+各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P5+8]` / `[P6]` / `[P6+8]` / `[P6.x]` / `[P7]` / `[P7.x]` / `[P8]` / `[P8.x]` / `[P9]` / `[P9.x]` / `[P10]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで、`[P7]` は Phase 7 (Connectors Wave 2、Slack + Microsoft 365 + Box) で、`[P8]` は Phase 8 (Knowledge graph layer、ADR-0017 + `links` projection + 4 自動抽出 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration) で merge 済 (2026-05-17)、`[P9]` は Phase 9 (Local-filesystem-backed Connector Layer、ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector + `core/platform.py` + `opshub connector sync box_drive`) で merge 済 (2026-05-23)、`[P10]` は Phase 10 (Secretary Agent Platform、ADR-0020 + ADR-0021 + ADR-0022 + ADR-0004/0016/0017/0010 改訂、本文ベース embedding + SQLite FTS5 + `opshub search` + `opshub mcp serve` + 秘書 5 Skills) で merge 済 (2026-05-31)。複合 tag (例: `[P5+8]` / `[P6+8]` / `[P1+2+3+9]` / `[P6+10]`) は当該 Phase で初出 + 後続 Phase で拡張が入った module を示す。`[P6.x]` は Phase 6 完了後の継続作業、`[P7.x]` は Phase 7 完了後、`[P8.x]` は Phase 8 完了後、`[P9.x]` は Phase 9 完了後、`[future]` は Phase 11 (MS Office 深掘り) / Phase 12 (multi-machine sync 等) 以降。
 
 ```text
 src/opshub/
@@ -114,9 +124,11 @@ src/opshub/
 │   ├── workspace.py                # generate / ingest [P1+2+3]
 │   ├── event.py                    # event append / list [future]
 │   ├── source.py                   # source add / list [future]
-│   └── connector.py                # list / sync / auth set (Phase 5 で `llm:<name>` 名前空間にも対応) [P1+2+3+5]
+│   ├── connector.py                # list / sync / auth set (Phase 5 で `llm:<name>` 名前空間にも対応) [P1+2+3+5]
+│   ├── search.py                   # `opshub search` — FTS5 horizontal full-text search (Phase 10 step B2、ADR-0012 改訂 §4) [P10]
+│   └── mcp.py                      # `opshub mcp serve` / `opshub mcp tools` (Phase 10 sub C、ADR-0022) [P10]
 ├── core/                           # 共通ユーティリティ [P1]
-│   ├── config.py                   # Pydantic Settings (Phase 5 で LLMSettings 追加、Phase 6 で OllamaLLMSettings + `ollama` backend literal 追加、Phase 7 で ConnectorSettings + per-connector settings 追加、Phase 9 で BoxDriveConnectorSettings 追加) [P1+2+3+4+5+6+7+9]
+│   ├── config.py                   # Pydantic Settings (Phase 5 で LLMSettings 追加、Phase 6 で OllamaLLMSettings + `ollama` backend literal 追加、Phase 7 で ConnectorSettings + per-connector settings 追加、Phase 9 で BoxDriveConnectorSettings 追加、Phase 10 で StorageSettings.encryption 追加) [P1+2+3+4+5+6+7+9+10]
 │   ├── ids.py                      # ULID / UUID [P1]
 │   ├── time.py                     # tz-aware datetime helpers [P1]
 │   ├── platform.py                 # WSL2 / macOS / Linux 判定 helper (ADR-0019 §決定 (f)、`detect_platform()` / `box_drive_default_root_path()`) [P9]
@@ -124,6 +136,8 @@ src/opshub/
 │   ├── secrets.py                  # keyring-backed token storage (ADR-0014) [P1+2+3]
 │   ├── sanitise.py                 # API key / Bearer token 除去 (Phase 5 で extract) [P5]
 │   ├── slug.py                     # filename-safe slug for briefings/--save [P5]
+│   ├── encryption.py               # SQLCipher key resolver (ADR-0021、`require_db_key()` / `OPSHUB_DB_ENCRYPTION_KEY` env override + keyring) [P10]
+│   ├── excludes.py                 # 取り込み除外設定パーサ (ADR-0020 §(b)、`~/.config/opshub/excludes.yaml` を channel / sender / repo / path で評価) [P10]
 │   └── errors.py                   # [P1]
 ├── db/                             # 永続化レイヤ [P1]
 │   ├── engine.py                   # SQLAlchemy Engine / Session [P1]
@@ -163,15 +177,17 @@ src/opshub/
 │   ├── file_ingest_service.py      # workspace/inbox/*.md → event + ingested_files [P1+2+3]
 │   ├── embedding_service.py        # CLI-driven embed pending entities + `embed_one_if_pending` (P5 で sanitise extract + auto-embed hook 用 single-row API 追加) [P1+2+3+4+5]
 │   ├── recall_service.py           # vector + SQL filter hybrid search [P1+2+3+4]
+│   ├── search_service.py           # SQLite FTS5 横断本文検索 (Phase 10 sub B、`sources_fts` 仮想テーブル経由) [P10]
 │   ├── duplicate_service.py        # offline near-duplicate scan [P1+2+3+4]
 │   ├── briefings/                  # BriefingService + prompts (ADR-0015、Phase 8 で `--expand-graph` 拡張) [P5+8]
 │   │   ├── __init__.py             # [P5]
 │   │   ├── prompts.py              # SYSTEM_PROMPT / USER_PROMPT_TEMPLATE / render_user_prompt [P5]
 │   │   └── service.py              # BriefingService.generate(topic, ...) (Phase 8 で `expand_graph: bool = False` parameter 追加) [P5+8]
-│   ├── proposals/                  # ProposalService + prompts (ADR-0016、Phase 8 で `--expand-graph` 拡張) [P6+8]
+│   ├── proposals/                  # ProposalService + prompts (ADR-0016、Phase 8 で `--expand-graph` 拡張、Phase 10 で reply_draft 拡張) [P6+8+10]
 │   │   ├── __init__.py             # [P6]
 │   │   ├── prompts.py              # SYSTEM_PROMPT / render_user_prompt (briefing-seed + delimiter wrap) [P6]
-│   │   └── service.py              # ProposalService.generate / apply / reject (Phase 8 で `expand_graph: bool = False` parameter 追加) [P6+8]
+│   │   ├── reply_draft_prompts.py  # 返信下書き専用 prompt (do-not-follow preamble + style_example + context_source) (ADR-0016 §決定 (i)+(k)) [P10]
+│   │   └── service.py              # ProposalService.generate / apply / reject (Phase 8 で `expand_graph` parameter 追加、Phase 10 で `generate_reply_draft()` 追加) [P6+8+10]
 │   ├── links/                      # LinkService + traversal (related / trace / expand) + writer (create / delete) (ADR-0017) [P8]
 │   │   ├── __init__.py             # [P8]
 │   │   └── service.py              # LinkService: read-only traversal + manual link CRUD writer methods [P8]
@@ -254,6 +270,14 @@ src/opshub/
 │   ├── openai_client.py            # OpenAILLMClient (gpt-4o-mini default、Phase 6 で tools= structured output 拡張) [P5+6]
 │   ├── ollama_client.py            # OllamaLLMClient (local daemon、OpenAI 互換 endpoint、ADR-0016 §決定 (h)) [P6]
 │   └── factory.py                  # build_llm_client + NoOpLLMClient (Phase 6 で `ollama` branch + NoOp.complete_structured 追加) [P5+6]
+├── mcp/                            # MCP server surface (Phase 10 sub C、ADR-0022) — stdio one transport [P10]
+│   ├── __init__.py                 # [P10]
+│   ├── server.py                   # serve_stdio() + dispatch_tool_call() + build_tool_specs_for_engine() [P10]
+│   ├── _registry.py                # policy-as-data registry (ToolSpec / ToolPolicy / ReadCategory / WriteCategory、ADR-0022 §(c)) [P10]
+│   ├── _tools.py                   # read tool handlers (recall.search / task.list / inbox.list / decision.list) [P10]
+│   ├── _writes.py                  # write tool handlers (task.create / inbox.add / connector.sync、HITL) [P10]
+│   ├── _redact.py                  # redact_secrets() (ADR-0022 §(b) — sk-... / ghp_... / Bearer ... をマスク) [P10]
+│   └── _logging.py                 # OTel GenAI semconv (execute_tool / tool.name / tool.call.id) for structlog (ADR-0022 §(e)) [P10]
 # graph/ サブパッケージは新設せず、Phase 8 では `projections/links.py` + `services/links/`
 # + `cli/link.py` + `cli/graph.py` の組み合わせで Knowledge graph layer を提供する。
 # ADR-0017 §決定 (a) の単一 `links` table + LinkService traversal で完結。

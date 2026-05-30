@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) + Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須)) + Phase 7 (Connectors Wave 2、MVP = Slack + Microsoft 365 + Box、epic #113) + Phase 8 (Knowledge graph layer、MVP = ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、epic #128) complete (2026-05-17) + Phase 9 (Local-filesystem-backed Connector Layer、MVP = ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (scanner + mapper + connector + settings) + `core/platform.py` + `opshub connector sync box_drive`、epic #187) complete (2026-05-23). 次の候補は Phase 10+ (Multi-machine sync、principles §Open Q #5)。`llama.cpp` direct binding / briefing cache + narrow scope / connector-side automatic `SourceReferenced` 発行 / watch mode (filewatch backend) / 追加 FS connector / multi-machine sync は Phase 6.x / 7.x / 8.x / 9.x / 10 以降。詳細は §9 (Phased Delivery) を参照。
+> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) + Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須)) + Phase 7 (Connectors Wave 2、MVP = Slack + Microsoft 365 + Box、epic #113) + Phase 8 (Knowledge graph layer、MVP = ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、epic #128) complete (2026-05-17) + Phase 9 (Local-filesystem-backed Connector Layer、MVP = ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (scanner + mapper + connector + settings) + `core/platform.py` + `opshub connector sync box_drive`、epic #187) complete (2026-05-23) + **Phase 10 (Secretary Agent Platform、MVP = ADR-0020 (full local content retention、ADR-0005 supersede) + ADR-0021 (encryption at rest、SQLCipher + keyring) + ADR-0022 (MCP server surface、stdio + policy-as-data + redact + OTel naming) + ADR-0004 改訂 (形A) + ADR-0016/0017/0010 改訂 (reply_draft) + 本文ベース embedding + SQLite FTS5 + `opshub search` + `opshub mcp serve` + 秘書 5 Skills + `tools/skill_scan.py`、epic #203) complete (2026-05-31)**. 次の候補は Phase 11 (MS Office 深掘り = Teams + Outlook 本文 + Word/Excel/PowerPoint 抽出、Phase 10 plan §9 / §3 Sub-issue F)。`llama.cpp` direct binding / briefing cache + narrow scope / connector-side automatic `SourceReferenced` 発行 / watch mode (filewatch backend) / 追加 FS connector / multi-machine sync は Phase 6.x / 7.x / 8.x / 9.x / 11+ 以降。詳細は §9 (Phased Delivery) を参照。
 
 OpsHub の高レベルアーキテクチャ・データフロー・データモデル・用語を記述する。具体的な決定の根拠は対応 ADR を参照。
 
@@ -68,6 +68,8 @@ OpsHub の高レベルアーキテクチャ・データフロー・データモ�
 Phase 3 実装状況: **GitHub connector が最初の具象実装** (`src/opshub/connectors/github/`、ADR-0010 で contract が検証され Accepted 昇格)。共通基盤 (`Connector` Protocol / `ConnectorContext` / `SourceService` / `connector_cursors` projection / `core.secrets` keychain backend) は完了。Slack / Microsoft 365 / Box は Phase 3.x で同じ contract に従って追加する。workspace 上の人手記述 `.md` は別経路 (`opshub workspace ingest` + `FileIngestService` + `ingested_files` projection、ADR-0005 整合) で event 化する。
 
 Phase 9 実装状況: **`box_drive` connector が最初の FS-backed 具象実装** (`src/opshub/connectors/box_drive/`、ADR-0019)。Phase 7 までの 4 connector が vendor Web API + OAuth に依存していたのに対し、`box_drive` は OS-level Box Drive 認証 + ローカル FS scan で同じ `Connector` Protocol に適合する。`source_type="box_drive_file"`、`fingerprint = f"{size}:{mtime_ns}"` 列 (`sources` projection、migration 0017) で差分検出。詳細は §2.11 を参照。
+
+Phase 10 実装状況: **本文取り込み + provenance タグの拡張** ([ADR-0020](adr/0020-full-local-content-retention.md))。`SourceObserved` event に `body` / `provenance_origin` / `provenance_trust` の 3 フィールドが追加され、Slack / Box / GitHub / MS365 の各 connector mapper が要約だけでなく本文も取り込むようになった。連動して `sources` projection の `body` 列 (migration 0018) と FTS5 仮想テーブル `sources_fts` (migration 0019) が追加される。`box_drive` は ADR-0019 §不変条件 (b) で `open()` 禁止のため `body=None` のまま (FS scan は metadata のみ)。**取り込み除外設定** (`~/.config/opshub/excludes.yaml`) は channel / sender / repo / path で外部入力を弾き、保存時暗号化は SQLCipher で DB 丸ごと AES-256 (ADR-0021)。詳細は §8.1 を参照。
 
 5 connector の一覧:
 
@@ -239,8 +241,59 @@ actionable error で reject される (paste-code 不要、`opshub.toml` 設定�
 詳細は [ADR-0019: Local-filesystem-backed Connector](adr/0019-local-filesystem-backed-connector.md)
 と [docs/box-drive-setup.md](box-drive-setup.md) を参照。Phase 9.x の outlook
 は ADR-0019 §関連と principles.md §Open Questions を参照
-(watch mode / 追加 FS connector / xattr identity / `opshub source list --stale` /
-共通 `excludes.yaml` 機構)。
+(watch mode / 追加 FS connector / xattr identity / `opshub source list --stale`)。
+共通 `excludes.yaml` 機構は Phase 10 ADR-0020 §(b) で横断統合済 (`src/opshub/core/excludes.py`)。
+
+### 2.11a MCP Server Layer (Phase 10)
+
+[ADR-0022](adr/0022-mcp-server-surface.md) で **エージェント host に ① コアを露出する MCP サーバ面** を追加した。`opshub mcp serve` (`src/opshub/mcp/`) が stdio で起動し、policy-as-data registry で定義された read / write tool 群を MCP プロトコル経由で公開する。**ネットワーク listen は禁止** (stdio 一択、HTTP/SSE モジュールへの import も `tests/unit/mcp/test_no_network_listen` で構造的に弾く) なので、confused deputy / SSRF / セッション乗っ取りが non-applicable になる。
+
+主要不変条件 (ADR-0022 §決定):
+
+- **stdio one transport** — `serve_stdio()` のみ entry point。HTTP / SSE は実装しない。
+- **No token passthrough** — `ToolSpec` の `input_schema` は SaaS トークン受け入れ field を持たず、tool response は `redact_secrets` で `sk-...` / `ghp_...` / `Bearer ...` を redact する (ADR-0022 §(b))。
+- **Read / write split = policy-as-data** — `ReadCategory` / `WriteCategory` enum が `ToolPolicy(read_only, destructive, idempotent, open_world)` を駆動。エージェント host は MCP `annotations` を見て read は auto-approve、write は人確認 (ADR-0022 §(c))。
+- **Context-efficient returns** — `recall.search` / list 系は本文ではなく 200 文字 snippet を返す (ADR-0022 §(d))。データ持ち出し面と LLM context の両方を縮小。
+- **OTel GenAI naming** — `gen_ai.operation.name=execute_tool` / `gen_ai.tool.name=<name>` / `gen_ai.tool.call.id=<ulid>` を structlog に記録 (将来 `mcp-otel` extras で exporter に出す、ADR-0022 §(e))。
+
+Phase 10 C2 で出荷した tool 一覧 (`src/opshub/mcp/_registry.py`):
+
+| Kind | Name | 目的 |
+|---|---|---|
+| read | `recall.search` | 横断 semantic / FTS recall (tasks / decisions / inbox / sources) |
+| read | `task.list` | tasks projection 取得 (state filter 可) |
+| read | `inbox.list` | inbox_items projection 取得 |
+| read | `decision.list` | decisions projection 取得 |
+| write | `task.create` | TaskCreated event を追記 (HITL) |
+| write | `inbox.add` | ItemEnqueued event を追記 (HITL) |
+| write | `connector.sync` | 登録済 connector の sync を発火 (HITL、外部 API hit) |
+
+MCP セットアップ手順は [docs/mcp-setup.md](mcp-setup.md) を参照。エージェント host (Claude Code 等) が subprocess として `opshub mcp serve` を spawn し、stdin / stdout で MCP プロトコルを話す。
+
+### 2.11b Secretary Agent Layer (Phase 10、形A)
+
+[ADR-0004 改訂](adr/0004-agent-runtime-boundary.md) で **形A** を確立した。opshub は **MCP サーバ (口) + Agent Skills (手順書)** のみを提供し、頭脳 (LLM 推論ループ / ReAct / state machine) は外部エージェント host (Claude Code / Codex CLI / Gemini CLI / Copilot CLI) が担う。opshub 自身には:
+
+- **runtime なし** — LangGraph / OpenAI Agents SDK / Claude Agent SDK 相当の loop は持たない。
+- **常駐プロセスなし** — `opshub mcp serve` は host が spawn する subprocess。リクエスト駆動。
+- **人格なし** — システムプロンプト / persona は host 側 (skill description + host の persona) に置く。
+
+代わりに opshub は:
+
+1. **MCP tool 面** (§2.11a)
+2. **秘書 5 Skill** (`docs/skills/<name>/SKILL.md` を SSOT として `ozzy-labs/skills` リポから `@ozzylabs/skills` Renovate preset で各ホスト `.claude/skills/` に配布):
+
+   | skill | description トリガ | 使う tool / コマンド | 自律範囲 |
+   |---|---|---|---|
+   | `daily-brief` | 「今日のまとめ / 状況」 | `recall.search` + `task.list` + `inbox.list` + `decision.list` | 自律 OK |
+   | `next-actions` | 「次に何 / やること」 | `task.list` + `recall.search` (+ HITL `task.create`) | read 自律 / write 人確認 |
+   | `reply-draft` | 「返信案 / 下書き」 | `recall.search` + CLI `propose generate --kind reply_draft` + CLI `propose apply` | apply 時は人確認 |
+   | `pr-review` | 「PR レビューして」 | `recall.search` + `decision.list` + `task.list` | 自律 OK |
+   | `file-lookup` | 「Box / ファイル確認」 | `recall.search` (FTS5 横断) | 自律 OK |
+
+3. **skill security scan** (`tools/skill_scan.py`) — プロンプトインジェクション / コマンドインジェクション / ハードコード鍵 / データ持ち出し の 4 カテゴリ + frontmatter の隠しユニコード / 「ignore previous instructions」類のパターン検出。`ozzy-labs/skills` CI で skill 配信前にチェックする。
+
+詳細は [docs/secretary-agent.md](secretary-agent.md) を参照。
 
 ### 2.12 Workspace Generation Layer
 
@@ -362,18 +415,30 @@ workspace/
 
 ## 8. Security Principles
 
-詳細は [ADR-0005: External Content Minimization](adr/0005-external-content-minimization.md) 参照。
+Phase 10 で本文保持に方針転換 ([ADR-0020](adr/0020-full-local-content-retention.md))。詳細は [principles.md §6](principles.md) と [ADR-0020](adr/0020-full-local-content-retention.md)、操作上の責務は [SECURITY.md](../SECURITY.md) を参照。
 
-### 8.1 External Content Retention
+### 8.1 External Content Retention (Phase 10 改訂)
+
+Phase 10 で本文をローカルに保持する方針 ([ADR-0020](adr/0020-full-local-content-retention.md)、ADR-0005 を supersede) に移行した。要約のみを残す旧方針は秘書ユースケース (横断検索 / 再要約 / 返信下書きの文体再現) で上流再取得を強要し、SaaS 側で本文が消えた瞬間に文脈を失う ＝ §1 Local-first と矛盾していた。
 
 | 保持する | 保持しない |
 |---|---|
-| external IDs | full Slack history |
-| URLs | full email bodies |
-| summaries | confidential documents |
-| metadata | credentials |
-| extracted action items | access tokens |
-| 最小引用 | binary artifacts |
+| 外部 SaaS の本文 (Slack message body / GitHub issue body / Outlook 本文 / Box ファイル抽出テキスト) | credentials / access tokens (`core/secrets` + keyring 経由、本文ストアへの混入禁止) |
+| external IDs | binary artifacts (画像 / 添付バイナリ — Phase 11 以降で抽出テキスト化を検討) |
+| URLs / metadata | excludes 設定で弾かれた channel / sender / repo / path |
+| 要約・action items | provenance タグなしの本文 (取り込み時に origin / trust 必須) |
+| provenance タグ (`origin`/`trust`) |  |
+
+#### 安全策のレイヤリング
+
+1. **取り込み除外** (`~/.config/opshub/excludes.yaml`、ADR-0020 §(b)) — channel / sender / repo / path で connector の取り込み時点で弾く。秘密チャネルや個人用ファイルを最初から記憶に入れない。
+2. **保存時暗号化** ([ADR-0021](adr/0021-encryption-at-rest.md)、`[storage] encryption = true` で opt-in) — SQLCipher が DB ファイルを AES-256 で暗号化。鍵は OS keychain (`db:encryption_key` slot) で管理 ([ADR-0014](adr/0014-saas-token-storage.md) 再利用、`OPSHUB_DB_ENCRYPTION_KEY` env override 可)。`tests/unit/core/test_encryption.py` で「暗号化無効 DB に本文が平文で残る」「鍵不在で `ConfigError`」を pin。
+3. **provenance タグ** (ADR-0020 §(e)) — `provenance_origin = "external"` + `provenance_trust = "untrusted"` を connector が必ず付与。LLM / agent はこれを見て「本文中の指示文」を実行命令としては扱わない (ADR-0015 §決定 (f) の `<source>...</source>` 境界と同じ contract)。
+4. **認証情報の本文からの分離** — SaaS トークンは `core/secrets` + keyring に置き、event payload / 本文 / log / tool result には流さない。MCP 層も `redact_secrets` で念押し ([ADR-0022](adr/0022-mcp-server-surface.md) §(b))。
+
+#### Threat model 上の前提
+
+OpsHub は **single-user / single-host / OS-level access control** が前提 ([SECURITY.md](../SECURITY.md) Scope)。本文をローカルに置く判断はこの前提下でのみ成立する。Multi-user host や untrusted workstation 上での運用は対象外。詳細な脅威モデル議論は [ADR-0020 §Negative](adr/0020-full-local-content-retention.md) を参照。
 
 ### 8.2 Agent Safety
 
@@ -397,7 +462,8 @@ Agent は以下を行わない。
 | 6 | Action loop layer (ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain + `opshub propose` CLI、human-in-the-loop apply 必須、✅ 2026-05-17 完了) | `llama.cpp` direct binding / proposal scoring / multi-step plans (Phase 6.x) |
 | 7 | Connectors Wave 2 (Slack + Microsoft 365 + Box、ADR-0010 + ADR-0014 + ADR-0005 を再利用、✅ 2026-05-17 完了、epic #113) | additional connectors (Notion / Linear / Jira 等) / common OAuth helper refactor (Phase 7.x) |
 | 8 | Knowledge graph layer (ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、✅ 2026-05-17 完了、epic #128) | connector-side automatic `SourceReferenced` 発行 / graph visualisation web UI (Phase 8.x) / multi-machine sync (Phase 10+) |
-| 9 | Local-filesystem-backed Connector Layer (ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (scanner + mapper + connector + settings) + `core/platform.py` (WSL2 / macOS 判定) + `opshub connector sync box_drive` 経路、✅ 2026-05-23 完了、epic #187) | watch mode (filewatch backend) / 追加 FS connector (OneDrive / Dropbox / Google Drive for desktop / iCloud) / xattr identity / `opshub source list --stale` / 共通 `excludes.yaml` 機構 (Phase 9.x) / multi-machine sync (Phase 10+) |
+| 9 | Local-filesystem-backed Connector Layer (ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (scanner + mapper + connector + settings) + `core/platform.py` (WSL2 / macOS 判定) + `opshub connector sync box_drive` 経路、✅ 2026-05-23 完了、epic #187) | watch mode (filewatch backend) / 追加 FS connector (OneDrive / Dropbox / Google Drive for desktop / iCloud) / xattr identity / `opshub source list --stale` (Phase 9.x) / multi-machine sync (Phase 12+) |
+| 10 | Secretary Agent Platform (ADR-0020 (full local content retention、ADR-0005 supersede) + ADR-0021 (encryption at rest、SQLCipher + keyring) + ADR-0022 (MCP server surface、stdio + policy-as-data + redact + OTel naming) + ADR-0004 改訂 (形A、opshub は MCP + Agent Skills のみ、runtime なし) + ADR-0016 改訂 (`ReplyDraftCandidatePayload`) + ADR-0017 改訂 (`reply_draft_replies_to` / `referenced_in_reply_draft` link types) + ADR-0010 改訂 (write-back 明示禁止) + 本文ベース embedding (migration 0018) + SQLite FTS5 (migration 0019) + `opshub search` CLI + `opshub mcp serve` CLI + 秘書 5 Skills (daily-brief / next-actions / reply-draft / pr-review / file-lookup) + `tools/skill_scan.py`、✅ 2026-05-31 完了、epic #203) | MS Office 深掘り (Teams + Outlook 本文 + Word/Excel/PowerPoint 抽出、ADR-0025 = Phase 11) / 能動性段階 1-4 (cron 委譲 / 記憶キュレーション / 通知 / filewatch、Phase 12+) / multi-machine sync (Phase 12+) |
 
 詳細は [Principles 9 (Phased Delivery)](principles.md) 参照。
 
