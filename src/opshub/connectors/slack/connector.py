@@ -132,11 +132,30 @@ class SlackConnector:
         auth = SlackAuth()
         fetcher = SlackFetcher(auth, channels=channels)
 
+        # Phase 10 (ADR-0020 §(b)): shared ingest excludes. Slack honours
+        # the ``channels`` and ``senders`` selectors — a message in an
+        # excluded channel, or from an excluded sender, is never observed
+        # (the cursor still advances so the connector does not re-scan it
+        # forever). ``load_excludes()`` resolves the file path via
+        # ``default_config_dir()`` directly so we avoid threading
+        # ``OpsHubSettings`` through this path — tests that patch
+        # ``OpsHubSettings`` at the class level would otherwise hand us
+        # a MagicMock whose ``config_dir`` attribute is itself a
+        # MagicMock that ``yaml.safe_load`` would iterate forever over.
+        from opshub.core.excludes import load_excludes
+
+        excludes = load_excludes()
+
         cursors = _load_cursors(context.cursor_value)
         observed_count = 0
         for channel_id, raw_message, new_cursor in fetcher.fetch_messages(
             cursor_per_channel=cursors,
         ):
+            cursors[channel_id] = new_cursor
+            if excludes.excludes_channel(raw_message.channel_id) or excludes.excludes_sender(
+                raw_message.user_id
+            ):
+                continue
             kwargs = map_message(raw_message)
             # ``source_service`` is typed as ``Any`` on
             # :class:`ConnectorContext` (the framework predates the
@@ -144,7 +163,6 @@ class SlackConnector:
             # ``observe`` signature catches argument drift at runtime
             # via TypeError.
             context.source_service.observe(**kwargs)
-            cursors[channel_id] = new_cursor
             observed_count += 1
 
         new_cursor_value = _dump_cursors(cursors) if cursors else context.cursor_value

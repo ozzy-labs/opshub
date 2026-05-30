@@ -170,6 +170,14 @@ def map_scanned_file(
         url=f"file://{abs_path}",
         summary=summary,
         fingerprint=scanned.fingerprint,
+        # Phase 10 (ADR-0020): box_drive is structurally forbidden from
+        # reading file bodies (ADR-0019 §不変条件 (b)), so ``body`` is
+        # always ``None``. The observation is external in origin and the
+        # synced SaaS content is untrusted, so it still carries the
+        # provenance tags for downstream consistency.
+        body=None,
+        provenance_origin="external",
+        provenance_trust="untrusted",
     )
 
 

@@ -40,8 +40,17 @@ _PLACEHOLDER_URL = "driver://user:pass@localhost/dbname"
 
 
 def _resolve_engine() -> Engine:
-    """Build the SQLAlchemy Engine used to apply migrations."""
+    """Build the SQLAlchemy Engine used to apply migrations.
+
+    Phase 10 (ADR-0021): when ``[storage] encryption`` is enabled the
+    CLI (:func:`opshub.cli.db.apply_migrations`) passes ``-x encryption=1``
+    so this resolver threads the keyring-managed key into the
+    SQLCipher-backed engine regardless of which URL branch is taken. A
+    run without that flag (the test suite's explicit ``sqlalchemy.url`` /
+    ``-x url=``) stays unencrypted.
+    """
     x_args = context.get_x_argument(as_dictionary=True)
+    encryption_key = _resolve_x_encryption_key(x_args)
     override_url = x_args.get("url")
     if override_url:
         # ``-x url=sqlite:///...`` — caller fully specifies the target.
@@ -51,17 +60,37 @@ def _resolve_engine() -> Engine:
         if not override_url.startswith("sqlite:///"):
             raise ValueError(f"Phase 1 only supports SQLite URLs; got {override_url!r}")
         db_path_str = override_url.removeprefix("sqlite:///")
-        return create_engine_for_sqlite(Path(db_path_str))
+        return create_engine_for_sqlite(Path(db_path_str), encryption_key=encryption_key)
 
     ini_url = config.get_main_option("sqlalchemy.url")
     if ini_url and ini_url != _PLACEHOLDER_URL:
         if not ini_url.startswith("sqlite:///"):
             raise ValueError(f"Phase 1 only supports SQLite URLs; got {ini_url!r}")
         db_path_str = ini_url.removeprefix("sqlite:///")
-        return create_engine_for_sqlite(Path(db_path_str))
+        return create_engine_for_sqlite(Path(db_path_str), encryption_key=encryption_key)
 
     # Default: XDG-based path, created on demand by the engine factory.
-    return create_engine_for_sqlite(default_db_path())
+    from opshub.db.engine import resolve_encryption_key
+
+    return create_engine_for_sqlite(
+        default_db_path(),
+        encryption_key=encryption_key if encryption_key is not None else resolve_encryption_key(),
+    )
+
+
+def _resolve_x_encryption_key(x_args: dict[str, str]) -> str | None:
+    """Return the DB key when the CLI passed ``-x encryption=1``, else ``None``.
+
+    ``opshub db migrate`` / ``opshub init`` set this flag whenever
+    ``[storage] encryption = true`` so an explicit ``sqlalchemy.url``
+    (which they must set for the wheel-resolved script location) still
+    runs through the SQLCipher driver.
+    """
+    if x_args.get("encryption") not in ("1", "true", "True"):
+        return None
+    from opshub.core.encryption import require_db_key
+
+    return require_db_key()
 
 
 def run_migrations_offline() -> None:

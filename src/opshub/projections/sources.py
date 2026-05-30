@@ -90,6 +90,15 @@ sources_table: Table = Table(
     # four Web-API-backed connectors. Mirrors migration
     # ``0017_add_fingerprint_to_sources``.
     Column("fingerprint", String, nullable=True),
+    # Phase 10 step A2 (ADR-0020 Full Local Content Retention): the
+    # full retained body plus provenance tags (origin / trust). All
+    # nullable so Phase 3-9 rows — and the ``box_drive`` connector,
+    # which never reads file bodies (ADR-0019 §不変条件 (b)) — keep
+    # landing with ``NULL``. Mirrors migration
+    # ``0018_add_body_provenance_to_sources``.
+    Column("body", Text(), nullable=True),
+    Column("provenance_origin", Text(), nullable=True),
+    Column("provenance_trust", Text(), nullable=True),
     UniqueConstraint(
         "connector_name",
         "external_id",
@@ -162,6 +171,15 @@ class SourcesProjection:
         field always pass ``None``, which round-trips as ``NULL`` —
         the column is nullable in migration ``0017`` precisely so the
         four pre-existing connectors stay byte-identical.
+
+        Phase 10 step A2 (ADR-0020): ``body`` / ``provenance_origin`` /
+        ``provenance_trust`` are likewise written through on both arms.
+        Re-observation refreshes them so an edited upstream item
+        updates the retained body and its trust tag. Connectors / items
+        with no body (Phase 3-9 historic events, the ``box_drive``
+        FS scan) pass ``None`` and round-trip as ``NULL`` — the columns
+        are nullable in migration ``0018`` for the same backward-compat
+        reason (ADR-0020 §(d)).
         """
         stmt = sqlite_insert(sources_table).values(
             id=event.aggregate_id,
@@ -174,6 +192,9 @@ class SourcesProjection:
             observed_at=event.occurred_at,
             updated_at=event.occurred_at,
             fingerprint=event.fingerprint,
+            body=event.body,
+            provenance_origin=event.provenance_origin,
+            provenance_trust=event.provenance_trust,
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=["connector_name", "external_id"],
@@ -183,6 +204,12 @@ class SourcesProjection:
                 "summary": stmt.excluded.summary,
                 "updated_at": stmt.excluded.updated_at,
                 "fingerprint": stmt.excluded.fingerprint,
+                # Phase 10 step A2 (ADR-0020): refresh body + provenance
+                # on re-observation so an edited upstream item updates
+                # the retained content and its trust tag.
+                "body": stmt.excluded.body,
+                "provenance_origin": stmt.excluded.provenance_origin,
+                "provenance_trust": stmt.excluded.provenance_trust,
             },
         )
         conn.execute(stmt)

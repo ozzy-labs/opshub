@@ -69,7 +69,7 @@ already wraps :class:`ConnectorFailedError` into a sanitised
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from opshub.core.errors import ConnectorFailedError
 from opshub.core.time import now_utc
@@ -156,6 +156,10 @@ def map_calendar_event(raw: RawCalendarEvent, *, actor: str = DEFAULT_ACTOR) -> 
         summary=summary,
         occurred_at=_parse_iso_utc(raw.last_modified_iso),
         actor=actor,
+        # Phase 10 (ADR-0020): retain the full event body (Graph
+        # ``body.content``). ``/me/calendar/events`` has no ``$select``
+        # so the body rides along in ``raw``.
+        body=_body_from_raw(raw.raw),
     )
 
 
@@ -208,10 +212,32 @@ def map_outlook_message(raw: RawOutlookMessage, *, actor: str = DEFAULT_ACTOR) -
         summary=_truncate(raw.body_preview),
         occurred_at=_parse_iso_utc(raw.received_iso),
         actor=actor,
+        # Phase 10 (ADR-0020): retain the full message body (Graph
+        # ``body.content``, fetched via the extended ``$select``). The
+        # ≤200-char summary still comes from ``bodyPreview``.
+        body=_body_from_raw(raw.raw),
     )
 
 
 # ----- helpers -------------------------------------------------------------
+
+
+def _body_from_raw(raw: dict[str, Any]) -> str | None:
+    """Lift the full body text from a Graph payload's ``body.content``.
+
+    Phase 10 (ADR-0020 Full Local Content Retention): Graph returns the
+    body as ``{"contentType": "html"|"text", "content": "..."}``. We
+    keep the raw content verbatim (HTML or text) — Sub-issue B / the
+    secretary skills decide on rendering. An empty / missing body
+    normalises to ``None`` so the projection stores ``NULL``.
+    """
+    body = raw.get("body")
+    if not isinstance(body, dict):
+        return None
+    content = cast("dict[str, Any]", body).get("content")
+    if not isinstance(content, str) or not content.strip():
+        return None
+    return content
 
 
 def _build_source_observed(
@@ -223,6 +249,7 @@ def _build_source_observed(
     summary: str,
     occurred_at: datetime,
     actor: str,
+    body: str | None = None,
 ) -> SourceObserved:
     """Assemble a :class:`SourceObserved`, normalising empty strings.
 
@@ -268,6 +295,12 @@ def _build_source_observed(
         # downstream projections / templates can branch cleanly.
         url=url if url else None,
         summary=summary if summary else None,
+        # Phase 10 (ADR-0020): full body + provenance. External SaaS
+        # content is tagged untrusted so downstream agent / LLM context
+        # treats it as reference material, never instructions.
+        body=body,
+        provenance_origin="external",
+        provenance_trust="untrusted",
     )
 
 

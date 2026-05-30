@@ -36,9 +36,30 @@ from opshub.core.config import OpsHubSettings
 from opshub.core.errors import ConfigError
 from opshub.core.logging import get_logger
 
-__all__ = ["create_engine_for_sqlite", "default_db_path"]
+__all__ = ["create_engine_for_sqlite", "default_db_path", "resolve_encryption_key"]
 
 _logger = get_logger(__name__)
+
+
+def resolve_encryption_key(settings: OpsHubSettings | None = None) -> str | None:
+    """Return the DB encryption key when ``[storage] encryption`` is enabled.
+
+    Returns ``None`` when encryption is disabled (the default) so the
+    engine factory keeps the plain stdlib ``sqlite3`` driver. When
+    enabled, resolves the key through :func:`opshub.core.encryption.require_db_key`
+    (env-var override → keyring) and fails fast with a
+    :class:`~opshub.core.errors.ConfigError` if no key is present
+    (ADR-0021 §(b): never open an existing encrypted DB with a freshly
+    minted wrong key).
+    """
+    s = settings if settings is not None else OpsHubSettings()
+    if not s.storage.encryption:
+        return None
+    # Lazy import keeps the cold-start path (ADR-0001) free of the
+    # secrets / keyring import unless encryption is actually enabled.
+    from opshub.core.encryption import require_db_key
+
+    return require_db_key()
 
 
 def default_db_path(settings: OpsHubSettings | None = None) -> Path:
@@ -52,7 +73,12 @@ def default_db_path(settings: OpsHubSettings | None = None) -> Path:
     return s.data_dir / "db" / "opshub.sqlite"
 
 
-def create_engine_for_sqlite(db_path: Path, *, echo: bool = False) -> Engine:
+def create_engine_for_sqlite(
+    db_path: Path,
+    *,
+    echo: bool = False,
+    encryption_key: str | None = None,
+) -> Engine:
     """Build a SQLAlchemy ``Engine`` bound to the given SQLite file.
 
     The parent directory is created on demand so callers don't need to run a
@@ -62,6 +88,15 @@ def create_engine_for_sqlite(db_path: Path, *, echo: bool = False) -> Engine:
     PRAGMAs are applied via a ``connect`` event listener on the *returned*
     engine so they reach every pooled connection — not just the first one
     SQLAlchemy opens.
+
+    ``encryption_key`` (Phase 10, ADR-0021) opts the engine into whole-DB
+    SQLCipher AES-256 encryption at rest. When supplied, the engine is
+    bound to the SQLCipher-backed DBAPI module (``sqlcipher3``, shipped
+    by the ``encryption`` extras) and a ``PRAGMA key`` is applied to
+    every pooled connection *before* any other statement so the cipher is
+    keyed before the page-1 header is read. ``None`` (the default) keeps
+    the plain stdlib ``sqlite3`` driver — backward-compatible with every
+    pre-Phase-10 caller and the unencrypted CI / test path.
     """
     # Defensive runtime check: callers from untyped layers (e.g. CLI parsing)
     # may pass a ``str``. We reject loudly rather than letting ``Path.parent``
@@ -71,23 +106,76 @@ def create_engine_for_sqlite(db_path: Path, *, echo: bool = False) -> Engine:
 
     url = _sqlite_url_for(db_path)
 
+    connect_args: dict[str, Any] = {
+        "check_same_thread": False,
+        "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+    }
     # ``future=True`` is the default on SQLAlchemy 2.x but we set it explicitly
     # for clarity. ``check_same_thread=False`` lets a connection be passed
     # across threads in tests; SQLAlchemy itself serialises access via the
     # pool, so this is safe.
-    engine = create_engine(
-        url,
-        echo=echo,
-        future=True,
-        connect_args={
-            "check_same_thread": False,
-            "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-        },
-    )
+    create_kwargs: dict[str, Any] = {
+        "echo": echo,
+        "future": True,
+        "connect_args": connect_args,
+    }
+    if encryption_key is not None:
+        # SQLCipher ships a drop-in ``sqlite3`` replacement module; we
+        # hand it to SQLAlchemy via ``module=`` rather than switching the
+        # URL dialect so the rest of the engine (URL parsing, pool,
+        # PRAGMA / extension listeners) is identical to the plain path.
+        create_kwargs["module"] = _import_sqlcipher_module()
 
+    engine = create_engine(url, **create_kwargs)
+
+    if encryption_key is not None:
+        _register_key_listener(engine, encryption_key)
     _register_pragma_listener(engine)
     _register_extension_loader(engine)
     return engine
+
+
+def _import_sqlcipher_module() -> Any:
+    """Return the ``sqlcipher3`` DBAPI module, with a clear error if absent.
+
+    The SQLCipher binding lives in the ``encryption`` extras (ADR-0021
+    §(d)); a default install does not carry it. We surface the missing
+    dependency as a :class:`ConfigError` pointing at the extras rather
+    than letting an ``ImportError`` bubble up untranslated.
+    """
+    try:
+        import sqlcipher3.dbapi2 as sqlcipher_dbapi2  # type: ignore[import-not-found,unused-ignore]
+    except ImportError as exc:
+        raise ConfigError(
+            "encryption at rest ([storage] encryption = true) requires the "
+            "'encryption' extras (SQLCipher): uv sync --extra encryption "
+            "(or uv tool install 'ozzylabs-opshub[encryption]'). See ADR-0021."
+        ) from exc
+    return sqlcipher_dbapi2
+
+
+def _register_key_listener(engine: Engine, encryption_key: str) -> None:
+    """Apply ``PRAGMA key`` to every connection before any other statement.
+
+    SQLCipher requires the key to be set immediately after opening the
+    database file and before any read, so this listener is registered
+    before the PRAGMA / extension listeners. The key value must be
+    inlined (``PRAGMA key`` rejects bound parameters); the key is
+    keyring-managed hex with no quotes, so escaping single quotes is a
+    defensive measure rather than a real injection vector.
+    """
+
+    @event.listens_for(engine, "connect")
+    def _apply_key(  # pyright: ignore[reportUnusedFunction]
+        dbapi_connection: Any,
+        _connection_record: ConnectionPoolEntry,
+    ) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            escaped = encryption_key.replace("'", "''")
+            cursor.execute(f"PRAGMA key = '{escaped}'")
+        finally:
+            cursor.close()
 
 
 def _sqlite_url_for(db_path: Path) -> str:

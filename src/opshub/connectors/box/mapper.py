@@ -138,6 +138,15 @@ def map_event(raw: RawBoxEvent, *, actor: str = "connector:box") -> SourceObserv
         title=title,
         url=raw.web_url,
         summary=summary,
+        # Phase 10 (ADR-0020): Box *events* describe file activity, not
+        # file content — there is no body to retain (mirrors box_drive,
+        # which is forbidden from reading file bodies, ADR-0019). The
+        # event is still external in origin, so it carries the external
+        # + untrusted provenance tags for consistency with the other
+        # SaaS connectors.
+        body=None,
+        provenance_origin="external",
+        provenance_trust="untrusted",
     )
 
 

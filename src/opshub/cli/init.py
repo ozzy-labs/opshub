@@ -70,5 +70,8 @@ def init_command(*, force: bool = False) -> int:
     if force or not config_path.exists():
         config_path.write_text(STARTER_CONFIG_TOML, encoding="utf-8")
 
-    apply_migrations(settings)
+    # ``provision_key=True``: when ``[storage] encryption`` is enabled,
+    # mint + store a fresh DB key for this brand-new database (ADR-0021
+    # §(b)). Safe here because ``init`` runs before the DB carries data.
+    apply_migrations(settings, provision_key=True)
     return 0

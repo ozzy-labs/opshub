@@ -63,6 +63,9 @@ class _RecordingSourceService:
         title: str,
         url: str | None = None,
         summary: str | None = None,
+        body: str | None = None,
+        provenance_origin: str | None = None,
+        provenance_trust: str | None = None,
     ) -> None:
         self.calls.append(
             {
@@ -72,6 +75,9 @@ class _RecordingSourceService:
                 "title": title,
                 "url": url,
                 "summary": summary,
+                "body": body,
+                "provenance_origin": provenance_origin,
+                "provenance_trust": provenance_trust,
             }
         )
 

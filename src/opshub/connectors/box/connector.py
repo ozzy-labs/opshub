@@ -180,4 +180,9 @@ class BoxConnector:
             title=projected.title,
             url=projected.url,
             summary=projected.summary,
+            # Phase 10 (ADR-0020): thread the provenance the mapper
+            # stamped onto the event (body is ``None`` for Box events).
+            body=projected.body,
+            provenance_origin=projected.provenance_origin,
+            provenance_trust=projected.provenance_trust,
         )

@@ -49,6 +49,11 @@ dependencies = [
   "jinja2>=3.1",
   "structlog>=24.1",
   "sqlite-vec>=0.1",
+  # Cross-connector ingest excludes (Phase 10, ADR-0020 §(b)) parse
+  # ``~/.config/opshub/excludes.yaml``. PyYAML is tiny (no native
+  # deps) and excludes is core to the Full Local Content Retention
+  # safety story, so it lives in base dependencies rather than extras.
+  "pyyaml>=6",
 ]
 
 [project.optional-dependencies]
@@ -99,6 +104,14 @@ connectors-box = ["boxsdk>=3.10,<4"]
 # Linux Secret Service / Windows Credential Locker). Connectors fetch their
 # PAT / OAuth tokens through ``opshub.core.secrets``.
 secrets = ["keyring>=24"]
+# Encryption at rest (Phase 10, ADR-0021). ``sqlcipher3-binary`` ships a
+# prebuilt SQLCipher-backed sqlite3 module (AES-256). Gated behind extras
+# (ADR-0021 §(d)) so the core install stays free of the native SQLCipher
+# binary — only operators who set ``[storage] encryption = true`` install
+# it via ``uv sync --extra encryption``. The DB key is managed through the
+# same keyring path as ``secrets`` (ADR-0014 reuse), so encryption pulls
+# ``keyring`` too.
+encryption = ["sqlcipher3-binary>=0.5", "keyring>=24"]
 # Development tools.
 dev = [
   "pytest>=8.2",
