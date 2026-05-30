@@ -112,6 +112,13 @@ secrets = ["keyring>=24"]
 # same keyring path as ``secrets`` (ADR-0014 reuse), so encryption pulls
 # ``keyring`` too.
 encryption = ["sqlcipher3-binary>=0.5", "keyring>=24"]
+# MCP server surface (Phase 10, ADR-0022). The Anthropic Python MCP SDK
+# powers ``opshub mcp serve`` — stdio one transport, no HTTP server is
+# implemented (ADR-0022 §(a)). Gated behind extras (ADR-0001
+# distribution constraint) so the core install stays SDK-free; operators
+# who connect an agent host install via ``uv sync --extra mcp``. See
+# ``docs/mcp-setup.md`` for the agent-host wiring instructions.
+mcp = ["mcp>=1.0"]
 # Development tools.
 dev = [
   "pytest>=8.2",

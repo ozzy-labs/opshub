@@ -32,6 +32,7 @@ from opshub.cli.handoff import handoff_app
 from opshub.cli.inbox import inbox_app
 from opshub.cli.link import link_app
 from opshub.cli.lock import lock_app
+from opshub.cli.mcp import mcp_app
 from opshub.cli.projections import projections_app
 from opshub.cli.propose import propose_app
 from opshub.cli.recall import register as register_recall
@@ -65,6 +66,7 @@ app.add_typer(connector_app)
 app.add_typer(propose_app)
 app.add_typer(link_app)
 app.add_typer(graph_app)
+app.add_typer(mcp_app)
 register_recall(app)
 register_brief(app)
 
