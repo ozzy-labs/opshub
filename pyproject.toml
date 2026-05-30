@@ -127,6 +127,8 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.11",
   "pyright>=1.1.380",
+  "types-PyYAML>=6.0",
+  "types-jsonschema>=4.21",
 ]
 [project.scripts]
 opshub = "opshub.cli.app:main"

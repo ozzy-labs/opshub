@@ -200,11 +200,11 @@ async def serve_stdio(*, server_name: str = "opshub", server_version: str = "0.0
 
     server: Server = Server(server_name)
 
-    @server.list_tools()
+    @server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
     async def _list_tools() -> list[Any]:  # pyright: ignore[reportUnusedFunction]
         return [_to_mcp_tool(spec) for spec in specs]
 
-    @server.call_tool()
+    @server.call_tool()  # type: ignore[untyped-decorator]
     async def _call_tool(  # pyright: ignore[reportUnusedFunction]
         name: str, arguments: dict[str, Any] | None
     ) -> list[Any]:
