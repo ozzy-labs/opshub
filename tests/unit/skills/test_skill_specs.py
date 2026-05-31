@@ -364,7 +364,222 @@ def test_reply_draft_uses_mcp_propose_generate_as_primary_path() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. Phase 12 H3 semantic pins (analysis skills)
+# 8. Phase 12 H5 — draft skills (handoff-draft + announcement-draft)
+# ---------------------------------------------------------------------------
+#
+# Phase 12 H5 (docs/phase-12-plan.md §3 H5) adds two text-only draft skills.
+# ADR-0016 §決定 (l)(a) pins the persist boundary by "返信元 source の有
+# 無": reply-draft persists via propose.generate + propose.apply, but
+# handoff-draft / announcement-draft return text only — no candidate
+# persist / apply path. The tests below pin (a) presence, (b) format /
+# scan / budget reuse via dedicated parametrize, (c) per-skill MCP
+# dispatch (handoff: task.list + decision.list + recall.search +
+# graph.related; announcement: recall.search + decision.list + brief),
+# and (d) text-only boundary: no propose.generate / propose.apply
+# references in body, no write tool references at all.
+#
+# We deliberately do not extend ``_REQUIRED_SKILLS`` here because the
+# Phase 12 plan §3 Wave 配置 calls out merge-conflict mitigation: each
+# Wave 2 sub-issue (H2/H3/H4/H5) edits this file in a dedicated section
+# so the existing 5-skill parametrize block stays as-is and the new
+# parametrize blocks land side by side.
+
+_PHASE_12_H5_TEXT_ONLY_DRAFT_SKILLS: tuple[str, ...] = (
+    "handoff-draft",
+    "announcement-draft",
+)
+
+# Per-skill required MCP tool surface (Phase 12 plan §3 H5).
+# - handoff-draft: task.list (state=in_progress) + decision.list +
+#   recall.search + graph.related
+# - announcement-draft: recall.search + decision.list (recorded_after=
+#   last_release) + brief (announcement tone)
+_PHASE_12_H5_REQUIRED_MCP_TOOLS: dict[str, tuple[str, ...]] = {
+    "handoff-draft": ("task.list", "decision.list", "recall.search", "graph.related"),
+    "announcement-draft": ("recall.search", "decision.list", "brief"),
+}
+
+# Tools that imply candidate persist / apply path (ADR-0016 §決定 (l)(a)
+# / (b)). handoff-draft / announcement-draft must NOT reference these —
+# their SKILL.md must explicitly stay on the read-only side.
+#
+# ``propose.generate`` covers the dispatch-key path (§決定 (l)(b)),
+# ``propose.apply`` covers the persist commit, and ``task.create`` /
+# ``inbox.add`` / ``connector.sync`` cover the other write tools the
+# scope-out section forbids in body text.
+_PHASE_12_H5_FORBIDDEN_WRITE_TOOLS: tuple[str, ...] = (
+    "propose.generate",
+    "propose.apply",
+    "task.create",
+    "inbox.add",
+    "connector.sync",
+)
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H5_TEXT_ONLY_DRAFT_SKILLS)
+def test_phase_12_h5_draft_skill_spec_exists(name: str) -> None:
+    """Phase 12 H5 SKILL.md files exist at the canonical path."""
+    path = _SKILLS_DIR / name / "SKILL.md"
+    assert path.is_file(), f"missing Phase 12 H5 draft skill spec: {path}"
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H5_TEXT_ONLY_DRAFT_SKILLS)
+def test_phase_12_h5_draft_skill_frontmatter(name: str) -> None:
+    """Phase 12 H5 SKILL.md frontmatter has matching ``name`` + non-empty ``description``."""
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    frontmatter, body = parse_frontmatter(text)
+    assert frontmatter.get("name") == name, (
+        f"{path} frontmatter ``name`` must equal directory name; got {frontmatter.get('name')!r}"
+    )
+    assert frontmatter.get("description"), (
+        f"{path} frontmatter must include a non-empty ``description``"
+    )
+    assert body.strip(), f"{path} must have a non-empty body"
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H5_TEXT_ONLY_DRAFT_SKILLS)
+def test_phase_12_h5_draft_skill_body_within_budget(name: str) -> None:
+    """Phase 12 H5 SKILL.md body stays inside the 5000-word ceiling."""
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    _, body = parse_frontmatter(text)
+    words = body.split()
+    assert len(words) <= _BODY_WORD_CEILING, (
+        f"{path} body has {len(words)} words; "
+        f"≤{_BODY_WORD_CEILING} expected (Phase 10 plan §3-D 5k tokens budget)"
+    )
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H5_TEXT_ONLY_DRAFT_SKILLS)
+def test_phase_12_h5_draft_skill_passes_security_scan(name: str) -> None:
+    """Phase 12 H5 SKILL.md is clean under ``tools.skill_scan``.
+
+    The Phase 12 H5 DoD lists ``skill_scan pass`` as a required gate.
+    This pin makes a future contributor unable to land a SKILL.md that
+    fails the security scan without also editing the scanner.
+    """
+    path = _SKILLS_DIR / name / "SKILL.md"
+    result = scan_skill_file(path)
+    assert result.ok, f"{path} failed security scan:\n" + "\n".join(
+        f"  {f.category.value} {f.rule_id} L{f.line_number}: {f.snippet}" for f in result.findings
+    )
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H5_TEXT_ONLY_DRAFT_SKILLS)
+def test_phase_12_h5_draft_skill_does_not_import_opshub_module(name: str) -> None:
+    """Phase 12 H5 SKILL.md must not contain direct ``import opshub`` lines.
+
+    Same ②→① boundary as the existing 5 skills: skills go through MCP
+    tools, never through Python module imports of ``opshub.*``.
+    """
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    for pattern in _FORBIDDEN_IMPORT_PATTERNS:
+        match = pattern.search(text)
+        assert match is None, (
+            f"{path} contains direct opshub import ({match.group(0)!r}); "
+            f"skills must go through MCP tools (ADR-0004 §(b))"
+        )
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H5_TEXT_ONLY_DRAFT_SKILLS)
+def test_phase_12_h5_draft_skill_dispatches_required_mcp_tools(name: str) -> None:
+    """Phase 12 H5 per-skill MCP dispatch pin.
+
+    The Phase 12 plan §3 H5 maps each draft skill to a specific MCP
+    tool set:
+
+    - ``handoff-draft``: ``task.list`` (state=in_progress) +
+      ``decision.list`` + ``recall.search`` + ``graph.related``
+    - ``announcement-draft``: ``recall.search`` + ``decision.list``
+      (recorded_after=last_release) + ``brief`` (announcement tone)
+
+    Every required tool name must appear verbatim in the SKILL.md body
+    so a host-side router can dispatch reliably.
+    """
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    for tool in _PHASE_12_H5_REQUIRED_MCP_TOOLS[name]:
+        assert tool in text, (
+            f"{path} must reference MCP tool {tool!r} verbatim "
+            f"(Phase 12 plan §3 H5 per-skill MCP dispatch pin)"
+        )
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H5_TEXT_ONLY_DRAFT_SKILLS)
+def test_phase_12_h5_draft_skill_is_text_only_no_persist_path(name: str) -> None:
+    """Phase 12 H5 text-only boundary pin (ADR-0016 §決定 (l)(a) / (b)).
+
+    handoff-draft / announcement-draft are text-only: they must NOT
+    reference any candidate persist / apply MCP tool in their body.
+    The forbidden set covers (a) ``propose.generate`` (dispatch-key
+    persist path frozen to 4 modes that excludes handoff / announcement
+    per ADR-0016 §決定 (l)(b)), (b) ``propose.apply`` (candidate commit),
+    and (c) ``task.create`` / ``inbox.add`` / ``connector.sync`` (other
+    write tools the scope-out section of each SKILL.md forbids).
+
+    ``reply-draft`` is the *only* draft skill that may reference these.
+
+    This pin makes the OQ2=B / ADR-0016 §決定 (l)(a) decision
+    machine-checked so a future contributor cannot silently re-add a
+    persist path by editing the SKILL.md body.
+    """
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+
+    # A SKILL.md is allowed to *name* the forbidden tools in a
+    # "できないこと / やらない" or "参考" block to explicitly call out
+    # that the persist path does NOT apply. To distinguish "uses the
+    # tool" from "documents the absence", we require the forbidden
+    # tool name to appear only inside the explicit scope-out section
+    # (the "できないこと / やらない" heading is the canonical marker)
+    # and not as an actionable ``tool: <name>`` MCP invocation block.
+    invocation_pattern = re.compile(
+        r"^\s*tool:\s*(?P<tool>[a-z_.]+)\s*$",
+        re.MULTILINE,
+    )
+    invoked_tools = {match.group("tool") for match in invocation_pattern.finditer(text)}
+
+    forbidden_invocations = invoked_tools.intersection(_PHASE_12_H5_FORBIDDEN_WRITE_TOOLS)
+    assert not forbidden_invocations, (
+        f"{path} contains MCP tool invocation block(s) for forbidden "
+        f"write tool(s) {sorted(forbidden_invocations)!r}; Phase 12 H5 "
+        f"draft skills are text-only (ADR-0016 §決定 (l)(a) / (b))"
+    )
+
+
+def test_phase_12_h5_handoff_draft_references_adr_0016_decision_l() -> None:
+    """``handoff-draft`` SKILL.md must cite ADR-0016 §決定 (l) (text-only rationale).
+
+    ADR-0016 §決定 (l) is the authoritative ruling that handoff-draft
+    is text-only. The SKILL.md must reference it so a reader can
+    trace the design decision without having to re-derive the persist
+    boundary from first principles.
+    """
+    path = _SKILLS_DIR / "handoff-draft" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert "ADR-0016" in text and "(l)" in text, (
+        f"{path} must reference ADR-0016 §決定 (l) (Draft 系統一方針 / text-only rationale)"
+    )
+
+
+def test_phase_12_h5_announcement_draft_references_adr_0016_decision_l() -> None:
+    """``announcement-draft`` SKILL.md must cite ADR-0016 §決定 (l) (text-only rationale).
+
+    Same rationale as ``handoff-draft``: ADR-0016 §決定 (l) is the
+    SSOT for the text-only persist boundary, the SKILL.md must
+    reference it explicitly.
+    """
+    path = _SKILLS_DIR / "announcement-draft" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert "ADR-0016" in text and "(l)" in text, (
+        f"{path} must reference ADR-0016 §決定 (l) (Draft 系統一方針 / text-only rationale)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. Phase 12 H3 semantic pins (analysis skills)
 # ---------------------------------------------------------------------------
 #
 # Phase 12 H3 (docs/phase-12-plan.md §3 H3) adds two analysis skills:
