@@ -32,7 +32,7 @@ opshub 本体が **持たない** もの:
 | 「次に何やる?」「やること教えて」「今週やること」「優先度高いのは?」 | [next-actions](skills/next-actions/SKILL.md) | 優先度順の next-actions リスト。新規 task 追加は人確認付き (`task.create` HITL) |
 | 「これに返信案考えて」「下書き作って」 | [reply-draft](skills/reply-draft/SKILL.md) | 返信下書き候補。送信は行わずユーザーが手で貼り付け (HITL apply、idempotent) |
 | 「PR #N レビューして」「この差分どう?」 | [pr-review](skills/pr-review/SKILL.md) | 関連 decision / task / 過去議論を引いてレビュー観点を提示 |
-| 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」「あの Google Doc」「Sheets の <X>」「Google Slides で説明したやつ」 | [find-document](skills/find-document/SKILL.md) | 本文ベース横断検索で Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Google Workspace (Docs / Slides / Sheets、Phase 13) / Office 文書 (Word / Excel / PowerPoint、Phase 11 ADR-0025) から該当 source を返す (Phase 12 H1 で `search` FTS5 MCP tool を直接呼ぶよう変更) |
+| 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」「あの Google Doc」「Sheets の <X>」「Google Slides で説明したやつ」「あの Gmail」「Gmail に来てた件」「Google Calendar の予定」 | [find-document](skills/find-document/SKILL.md) | 本文ベース横断検索で Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Google Workspace (Docs / Slides / Sheets、Phase 13) / Gmail (`gmail_message`、Phase 14) / Google Calendar (`google_calendar`、Phase 14) / Office 文書 (Word / Excel / PowerPoint、Phase 11 ADR-0025) から該当 source を返す (Phase 12 H1 で `search` FTS5 MCP tool を直接呼ぶよう変更) |
 | 「来週の会議準備」「明日のミーティング前確認」「<会議名> の準備して」「打ち合わせ前に状況教えて」 | [meeting-prep](skills/meeting-prep/SKILL.md) | 対象 calendar event の目的 / 過去関連やりとり / 関連 decisions / 参考 sources を会議前に集約 (Phase 12 H2、read-only、pair = meeting-followup) |
 | 「<X> について調べて」「<Y> の経緯」「<トピック> 網羅的に教えて」 | [research](skills/research/SKILL.md) | トピック横断調査 (semantic recall + FTS5 + graph 拡張 + LLM 統合要約) を実行し、sources 一覧 / 関連 entities / 経緯サマリを返す (Phase 12 H2) |
 | 「上司向け週次報告」「クライアント向け進捗まとめ」「外向きステータス」「マネージャーに送る report」 | [external-brief](skills/external-brief/SKILL.md) | 対象期間の完了 task + 確定 decision を外向き tone で集約 (Phase 12 H3、persist なし、pair = personal-brief) |
@@ -57,7 +57,7 @@ host LLM が auto-approve できる read 系。MCP annotation = `readOnlyHint=tr
 | [next-actions](skills/next-actions/SKILL.md) | stand-alone | 「次に何やる?」「やること教えて」「今週やること」「優先度高いのは?」 | `task.list` (`updated_after/before`) + `recall.search` (+ HITL `task.create`) | 優先度順リスト (state + due + 関連 source) |
 | [pr-review](skills/pr-review/SKILL.md) | stand-alone | 「PR #N レビューして」「この差分どう?」 | `recall.search` + `decision.list` (`recorded_after/before`) + `task.list` + `graph.related` / `graph.trace` | レビュー観点リスト (関連 decision + 過去 review + 関連 task) |
 | [find-document](skills/find-document/SKILL.md) | stand-alone | 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」「あの Google Doc」「Sheets の <X>」「Google Slides で説明したやつ」 | `search` (FTS5、Phase 12 H1) + 補助 `recall.search` / `source.list` (`observed_after/before`) / `source.get` | source 一覧 (source_type 別 / 新しい順、snippet 200 字) |
-| [meeting-prep](skills/meeting-prep/SKILL.md) | ↔ meeting-followup | 「来週の会議準備」「明日のミーティング前確認」「<会議名> の準備して」 | `source.list` (`source_type=ms365_calendar` + `observed_after/before`) + `recall.search` + `graph.related` | 会議ごとに「目的 / 過去関連やりとり / 関連 decisions / 参考 sources」 |
+| [meeting-prep](skills/meeting-prep/SKILL.md) | ↔ meeting-followup | 「来週の会議準備」「明日のミーティング前確認」「<会議名> の準備して」 | `source.list` (`source_type=ms365_calendar` または `google_calendar` + `observed_after/before`、Phase 14 で Google Calendar も対象) + `recall.search` + `graph.related` | 会議ごとに「目的 / 過去関連やりとり / 関連 decisions / 参考 sources」 |
 | [research](skills/research/SKILL.md) | stand-alone | 「<X> について調べて」「<Y> の経緯」「<トピック> 網羅的に教えて」 | `recall.search` (semantic) + `search` (FTS5) + `graph.related` / `graph.expand` + `brief` (+ `graph.trace` / `source.get` 任意) | sources 一覧 + 関連 entities + 経緯サマリ |
 | [external-brief](skills/external-brief/SKILL.md) | ↔ personal-brief | 「上司向け週次報告」「クライアント向け進捗まとめ」「外向きステータス」 | `task.list` (`state=completed` + `updated_after`) + `decision.list` (`recorded_after`) + `brief` (外向き tone) | 外向き report (要点先出し / 進捗 + 確定事項 / 主観抑制) |
 | [decision-rationale](skills/decision-rationale/SKILL.md) | stand-alone | 「あの決定はなぜ」「X を選んだ理由」「Y の決定経緯」 | `decision.list` (topic 絞り) + `graph.trace` + `recall.search` | 決定 + 直接の根拠 source + 先行 decision + 関連 context |
@@ -73,9 +73,9 @@ host LLM が user 確認必須 (`propose.generate` で候補生成 → user 確�
 | [reply-draft](skills/reply-draft/SKILL.md) | draft family | 「返信案考えて」「下書き作って」「これに返信したい」 | `recall.search` + `propose.generate` (`reply_to_source_id`) + `propose.apply` (HITL、idempotent) | 返信下書き候補 (persist = `ReplyDraftCandidatePayload`、`reply_to_source_id` が natural key、user が手で SaaS に貼り付け) |
 | [inbox-triage](skills/inbox-triage/SKILL.md) | ↔ source-extract | 「受信箱整理して」「inbox 仕分けて」「未処理アイテム捌いて」 | `inbox.list` (`state=open`) + `propose.generate` (`mode=inbox_triage`) + `propose.apply` (HITL) | 各 inbox item への action 候補 (task / decision)、user 個別承認分のみ保存 |
 | [source-extract](skills/source-extract/SKILL.md) | ↔ inbox-triage | 「この資料から task 抽出」「これに含まれる decisions 教えて」「<source_id> から候補を」 | `source.get` + `propose.generate` (`mode=source_extract`) + `propose.apply` (HITL) | 1 source から抽出された task / decision / reply_draft 候補、user 個別承認分のみ保存 |
-| [meeting-followup](skills/meeting-followup/SKILL.md) | ↔ meeting-prep | 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」 | `source.list` (`source_type=ms365_calendar` + `observed_after/before`) + `source.get` + `recall.search` + `propose.generate` (`mode=meeting_followup`) + `propose.apply` (HITL) | 会議からの task / decision 候補、user 個別承認分のみ保存 |
+| [meeting-followup](skills/meeting-followup/SKILL.md) | ↔ meeting-prep | 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」 | `source.list` (`source_type=ms365_calendar` または `google_calendar` + `observed_after/before`、Phase 14 で Google Calendar も対象) + `source.get` + `recall.search` + `propose.generate` (`mode=meeting_followup`) + `propose.apply` (HITL) | 会議からの task / decision 候補、user 個別承認分のみ保存 |
 
-skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。実際の配布は opshub からの **手動 install** ([§8 セットアップ](#8-セットアップ) 参照)。`@ozzylabs/skills` Renovate preset 経由の配布は Phase 14+ に defer (Phase 13 では Google Workspace コネクタを優先、ADR-0004 §決定 (c) backout)。
+skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。実際の配布は opshub からの **手動 install** ([§8 セットアップ](#8-セットアップ) 参照)。`@ozzylabs/skills` Renovate preset 経由の配布は Phase 15+ に defer (Phase 13 では Google Workspace コネクタを、Phase 14 では Gmail + Google Calendar コネクタを優先、ADR-0004 §決定 (c) backout)。
 
 ## 4. Pair structure
 
@@ -152,11 +152,30 @@ auto-apply 経路は構造的に存在しない (ADR-0016 §決定 (c))。`opshu
 
 `inbox.add` と `connector.sync` は 14 skills のいずれからも primary 経路として呼ばれない (host LLM の自律判断で呼ぶ余地は残す)。`embeddings.find_duplicates` も同様 (現状は CLI / operator が直接叩く用途)。
 
-### 6.3 Phase 11 / Phase 13 source_type 列挙
+### 6.3 Phase 11 / Phase 13 / Phase 14 source_type 列挙
 
-Phase 11 で追加された source_type (`teams_message` / `ms365_outlook` (body deep retention) / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`) と Phase 13 で追加された source_type (`google_doc` / `google_slides` / `google_sheets` / `google_workspace_file` catch-all) は、14 skills 全てから `recall.search` / `search` / `source.list` / `source.get` 経由で透過的に利用可能。mapper が `sources.body` に persist する限り skill 側に追加の変更は不要 (Phase 11 plan §7.3 step 1 / Phase 13 plan §7.3 step 4)。
+Phase 11 で追加された source_type (`teams_message` / `ms365_outlook` (body deep retention) / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`) と Phase 13 で追加された source_type (`google_doc` / `google_slides` / `google_sheets` / `google_workspace_file` catch-all) と Phase 14 で追加された source_type (`gmail_message` / `google_calendar`) は、14 skills 全てから `recall.search` / `search` / `source.list` / `source.get` 経由で透過的に利用可能。mapper が `sources.body` に persist する限り skill 側に追加の変更は不要 (Phase 11 plan §7.3 step 1 / Phase 13 plan §7.3 step 4 / Phase 14 plan §6 step 2)。
 
-find-document が利用できる本文系 source_type は計 6 種 (Phase 11 office 3 種 + Phase 13 Google Workspace native 3 種) + その他 metadata + body 各 connector で 1 つ MCP / 1 つ search だけで横断可能。`google_workspace_file` (catch-all、非 native = Drive にアップロードされた PDF / 画像 / フォルダ等) は metadata-only (`body=None`) で persist されるため、find-document の対象になるのは title / URL / observed_at のみ。
+find-document が利用できる本文系 source_type は計 9 種 (Phase 11 office 3 種 + Phase 13 Google Workspace native 3 種 + Phase 14 Gmail / Google Calendar / Outlook の 3 種だが Outlook は Phase 11) + その他 metadata + body 各 connector で 1 つ MCP / 1 つ search だけで横断可能。`google_workspace_file` (catch-all、非 native = Drive にアップロードされた PDF / 画像 / フォルダ等) は metadata-only (`body=None`) で persist されるため、find-document の対象になるのは title / URL / observed_at のみ。
+
+### 6.3.1 Phase 14 mapper symmetry 対照表
+
+Phase 14 では Gmail / Google Calendar を MS365 Outlook / Calendar と symmetric に実装することで、host LLM / skill 側に「Outlook と Gmail で挙動が違う」「MS365 Calendar と Google Calendar で挙動が違う」分岐ロジックを増やさず、mapper symmetry で recall を均一に扱えるようにした。Outlook / Gmail と ms365_calendar / google_calendar の field / summary / body フォーマット同形性は `tests/unit/connectors/test_mapper_symmetry.py` で機械検証 (Phase 14 G3 + G4 で 6 + 4 ケース)。
+
+| 軸 | MS365 (Phase 7+11) | Google (Phase 14) | 対称性のポイント |
+|---|---|---|---|
+| メール unit | `ms365_outlook` = 1 message | `gmail_message` = 1 message | thread 単位にしない (event store immutability 整合)、threadId は field 保持 |
+| メール body | text/plain 優先 → text/html 生保持 / markitdown なし / 添付 retain なし | text/plain 優先 → text/html 生保持 / markitdown なし / 添付 retain なし | 完全同一。markitdown 経路を通さない理由は text-only family のため (Phase 11 Office binary 経路とは別系統) |
+| メール label / category | `[Categories: ...]` prepend (Phase 11) | `[Labels: ...]` prepend (Phase 14) | summary / body 埋め込みのみ、構造化 field 追加なし |
+| メール truncation | `[outlook body truncated: N / M chars]` tag | `[gmail body truncated: N / M chars]` tag | tag 文字列形式同形 |
+| Calendar unit | `ms365_calendar` = master event only | `google_calendar` = master event only | recurring instance は展開せず master + RRULE field 保持 |
+| Calendar override | MS365 は単一 event として返るので追加処理なし | Google API は override を独立 event として返す → 別 SourceObserved emit + body に `Override of: <master_id> (originalStart: <iso>)` back-pointer | Google 側の API 仕様差を mapper layer で吸収、event store 上では両者とも `google_calendar` source_type の独立 record |
+| Calendar summary | `f"{start_iso} - {end_iso} ({attendees_count} attendees)"` | `f"{start_iso} - {end_iso} ({attendees_count} attendees)"` | regex 一致を pin test で検証 |
+| Calendar body | attendee email list / 議題 (description) / 会議室 (location) を追記 | attendee email list / 議題 (description) / 会議室 (location) を追記 | 同形 |
+| RRULE | field 保持、instance 展開なし | field 保持、instance 展開なし | Calendar instance 展開 projection は Phase 15+ で ms365 / google 両方同時に切る |
+| OAuth principal | MS365 = MSAL `acquire_token_by_refresh_token` + rotation 書き戻し (Phase 7) | Google = 同パターン (`connectors/google_auth/` shared、Phase 14 G2) | Teams pattern (verbatim user token) とは別系統。1 Google account = 1 principal で 3 connector (Drive + Gmail + Calendar) 共有 |
+
+Phase 15+ で symmetric に拡張する候補: Calendar instance 展開 projection (ms365 / google 同時) / Gmail thread aggregation projection (Outlook thread と同時) / 添付の markitdown 経路 (両者同時、ADR-0025 拡張) / label / attendee の構造化 SourceObserved field 化 (両者同時)。
 
 ### 6.4 Phase 12 H1 で追加された physical column ベース時間フィルタ
 
@@ -186,6 +205,10 @@ find-document が利用できる本文系 source_type は計 6 種 (Phase 11 off
   - **Google Slides 本文** (`google_slides`、Drive API export → pptx → markitdown)
   - **Google Sheets 本文** (`google_sheets`、Drive API export → xlsx → markitdown)
   - **Google Workspace metadata only** (`google_workspace_file` catch-all = Workspace 非 native ファイル / フォルダ、metadata のみ persist。Phase 13 G3 default 挙動)
+- Phase 14 で追加された **Gmail / Google Calendar 由来の文脈**を秘書の素材として使う (14 skills 全てが `source.body` ベースで透過的に対応、Outlook / ms365_calendar と symmetric):
+  - **Gmail 本文** (`gmail_message`、Gmail API v1 `users.messages.get(format=full)` 経由、text/plain 優先 → text/html 生保持、markitdown なし、添付 retain なし、`[Labels: ...]` prepend、message 単位 = thread 単位ではなく threadId は field 保持。[Google Workspace setup](google-workspace-setup.md) §Gmail 節参照)
+  - **Google Calendar 本文** (`google_calendar`、Calendar API v3 `events.list(syncToken=...)` 経由、master event only + RRULE field 保持、override は別 record として emit + body に back-pointer、summary = `start_iso - end_iso (N attendees)`、attendee email list / 議題 / 会議室は body に追記。[Google Workspace setup](google-workspace-setup.md) §Calendar 節参照)
+  - Gmail 添付 / Calendar 添付の本文抽出は Phase 15+ で markitdown 経路追加 (ADR-0025 拡張)
 - Phase 12 で追加された **秘書らしいユースケース** に対応 (5 → 14 skills 拡張):
   - 「会議準備 / 会議後フォロー」(`meeting-prep` ↔ `meeting-followup`)
   - 「トピック横断調査」(`research`、recall + FTS5 + graph 拡張 + brief 統合)
