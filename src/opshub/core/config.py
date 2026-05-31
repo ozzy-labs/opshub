@@ -573,6 +573,67 @@ class GoogleWorkspaceConnectorSettings(BaseModel):
     fallback_window_days: int = 30
 
 
+class GoogleCalendarConnectorSettings(BaseModel):
+    """Google Calendar connector configuration (Phase 14 Sub-issue G4, ADR-0010 §Phase 14 改訂).
+
+    The Google Calendar connector reads Google Calendar API v3
+    ``events.list`` with a ``syncToken`` delta cursor and a 410 GONE
+    TTL-fallback path (Calendar invalidates sync tokens after a
+    vendor-defined window; the connector falls back to a
+    ``timeMin`` / ``timeMax`` window walk and persists the freshly
+    minted ``nextSyncToken`` as the new cursor). Phase 14 plan §1 OQ5
+    + ADR-0010 §Phase 14 改訂 (j) pin the contract.
+
+    ``enabled = False`` is the default per Phase 7 plan §1 #2
+    convention — every SaaS connector is opt-in so a fresh
+    ``uv tool install`` never tries to reach an external API.
+    Operators flip the flag after configuring the shared Google
+    OAuth principal under ``[connectors.google_workspace]``
+    (``client_id`` + ``client_secret``; Phase 14 G2 generalised the
+    OAuth helper so one principal covers Drive + Gmail + Calendar
+    per Phase 14 plan §1 OQ6).
+
+    ``calendar_id`` defaults to ``"primary"`` (the operator's primary
+    calendar). Phase 14 G4 MVP fetches only the primary calendar per
+    Phase 14 plan OQ13 — secondary calendar loop is a Phase 15+
+    extension. Operators on a multi-calendar workflow can override
+    this to a specific calendar id today but only one calendar can be
+    fetched per sync until the loop ships.
+
+    ``time_min_days`` controls the backward window edge for first-sync
+    bootstrap + TTL fallback. Defaults to ``90`` (Phase 14 plan OQ11)
+    — long enough to cover a typical seasonal cycle without slurping
+    years of history. ``time_max_days`` controls the forward edge,
+    defaulting to ``365`` so events the operator already accepted for
+    the next year appear in the recall projection from day one. Both
+    are inclusive day counts measured from "now"; the connector
+    expands them into RFC 3339 timestamps when it calls
+    ``events.list``.
+
+    Operators with longer outages bump ``time_min_days`` temporarily
+    (e.g. ``365`` for re-onboarding after a multi-month gap). Both
+    fields accept ``0`` (the window collapses to a single instant —
+    not useful in production but accepted so the connector does not
+    fail-fast on an obvious-misconfig boundary; Calendar would reject
+    the resulting call and the operator would see the error in the
+    sync log).
+
+    The Refresh Token lives in the OS keyring under
+    ``connector:google_workspace:refresh_token`` per ADR-0014 §Phase 7
+    Validation (one slot shared by Drive / Gmail / Calendar per Phase
+    14 plan OQ6) — it never appears in ``opshub.toml`` or this
+    settings model. There is intentionally no ``[connectors.google_calendar]
+    client_id`` field; the Calendar connector reads the principal from
+    ``[connectors.google_workspace]`` to make the "1 Google account =
+    1 principal" rule visible in the config shape.
+    """
+
+    enabled: bool = False
+    calendar_id: str = "primary"
+    time_min_days: int = 90
+    time_max_days: int = 365
+
+
 class TeamsConnectorSettings(BaseModel):
     """Microsoft Teams connector configuration (Phase 11 F5).
 
@@ -644,6 +705,9 @@ class ConnectorSettings(BaseModel):
     teams: TeamsConnectorSettings = Field(default_factory=TeamsConnectorSettings)
     google_workspace: GoogleWorkspaceConnectorSettings = Field(
         default_factory=GoogleWorkspaceConnectorSettings
+    )
+    google_calendar: GoogleCalendarConnectorSettings = Field(
+        default_factory=GoogleCalendarConnectorSettings
     )
 
 

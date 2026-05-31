@@ -1,0 +1,40 @@
+{
+  "kind": "calendar#events",
+  "etag": "\"p33gd2jhjbat\"",
+  "summary": "alice@example.com",
+  "updated": "2026-05-31T10:00:00.000Z",
+  "timeZone": "UTC",
+  "accessRole": "owner",
+  "nextSyncToken": "CPDh4P3clfgCEPDh4P3clfgCGAUg__________8B",
+  "items": [
+    {
+      "kind": "calendar#event",
+      "etag": "\"3501232401892000\"",
+      "id": "evt-single-001",
+      "status": "confirmed",
+      "htmlLink": "https://www.google.com/calendar/event?eid=ZXZ0LXNpbmdsZS0wMDE",
+      "created": "2026-05-20T09:00:00.000Z",
+      "updated": "2026-05-31T09:30:00.000Z",
+      "summary": "Coffee with Bob",
+      "description": "Catch up on Q3 planning over coffee.",
+      "location": "Cafe Bluebird, 123 Main St",
+      "organizer": {
+        "email": "alice@example.com",
+        "displayName": "Alice",
+        "self": true
+      },
+      "start": {
+        "dateTime": "2026-06-01T15:00:00+09:00",
+        "timeZone": "Asia/Tokyo"
+      },
+      "end": {
+        "dateTime": "2026-06-01T16:00:00+09:00",
+        "timeZone": "Asia/Tokyo"
+      },
+      "attendees": [
+        {"email": "alice@example.com", "responseStatus": "accepted"},
+        {"email": "bob@example.com", "responseStatus": "accepted"}
+      ]
+    }
+  ]
+}

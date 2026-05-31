@@ -176,7 +176,7 @@ def connector_sync(name: str) -> None:
         pass
 
     try:
-        import opshub.connectors.google_workspace  # noqa: F401  # pyright: ignore[reportUnusedImport]
+        import opshub.connectors.google_workspace  # pyright: ignore[reportUnusedImport]
     except ImportError:
         # Google Workspace connector module imports cleanly without
         # the extras (the heavy ``httpx`` imports stay inside the auth
@@ -184,6 +184,17 @@ def connector_sync(name: str) -> None:
         # only trigger if a future refactor adds a top-level SDK
         # import (Phase 13 G3 — ADR-0001 cold-start guard, ADR-0010
         # §Phase 13 改訂).
+        pass
+
+    try:
+        import opshub.connectors.google_calendar  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    except ImportError:
+        # Google Calendar connector module imports cleanly without the
+        # extras (the heavy ``httpx`` imports stay inside the auth /
+        # client constructors); this branch is defensive and would only
+        # trigger if a future refactor adds a top-level SDK import
+        # (Phase 14 G4 — ADR-0001 cold-start guard, ADR-0010
+        # §Phase 14 改訂 (j)).
         pass
     from opshub.connectors import discover_connectors
     from opshub.connectors.context import ConnectorContext
