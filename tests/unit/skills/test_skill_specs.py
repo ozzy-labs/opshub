@@ -584,12 +584,12 @@ def test_h4_propose_generate_schema_includes_mode_enum() -> None:
     generate_spec = next((s for s in specs if s.name == "propose.generate"), None)
     assert generate_spec is not None
     schema = dict(generate_spec.input_schema)
-    properties = dict(schema["properties"])  # type: ignore[index]
+    properties = dict(schema["properties"])
     assert "mode" in properties, (
         "propose.generate input schema must declare a ``mode`` property"
         " (Phase 12 H4, ADR-0016 §決定 (l)(b))"
     )
-    mode_schema = dict(properties["mode"])  # type: ignore[arg-type]
+    mode_schema = dict(properties["mode"])
     enum = tuple(mode_schema.get("enum", ()))
     assert set(enum) == {"inbox_triage", "source_extract", "meeting_followup"}, (
         f"propose.generate ``mode`` enum must equal the H4 dispatch triple;"
