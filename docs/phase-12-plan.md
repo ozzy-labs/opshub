@@ -24,14 +24,14 @@ Phase 11 で取り込んだ Teams / Outlook / Word / Excel / PowerPoint 由来�
 | OQ2 | HITL 境界・draft 系永続化 | **B**: reply-draft は既存通り `propose.generate` + `propose.apply`、handoff-draft / announcement-draft は **text-only**（persist しない）。新 candidate kind 追加なし、schema 拡張なし |
 | OQ3 | 既存 5 Skills MCP 整合化 | **A**: 全面 MCP 直接呼び化（CLI fallback 廃止）+ `search`(FTS5) MCP tool 追加 + personal-brief / next-actions の description 拡張で期間指定対応 |
 | OQ4 | MCP tool 追加範囲 | **A 包括的（4 項目）**：`search`(FTS5) + `propose.apply` + 既存 4 read tools に **physical column ベースの時間フィルタ** 追加（task.list=`updated_after/before` / inbox.list=`created_after/before` / decision.list=`recorded_after/before` / source.list=`observed_after/before`、ISO 8601 optional）。tool 別の独立命名は audit findings (2026-05-31) を反映、業務時刻と物理列の混線回避 |
-| OQ5 | ozzy-labs/skills 配布 | **C**: 配布せず、opshub `docs/skills/` を SSOT、host install は README 手動手順、配信機構（ozzy-labs/skills CI + Renovate preset）は Phase 13+ で別途検討 |
+| OQ5 | ozzy-labs/skills 配布 | **C**: 配布せず、opshub `docs/skills/` を SSOT、host install は README 手動手順、配信機構（ozzy-labs/skills CI + Renovate preset）は Phase 14+ で別途検討 (Phase 12 当時の plan では「Phase 13+」と書いていたが、Phase 13 は Google Workspace コネクタが優先され配信機構は touch されなかったため、Phase 13 audit 2026-05-31 で表記を Phase 14+ に統一) |
 | OQ6 | 新 Skills e2e 品質確認 | **A**: 統合 1 本（`test_phase12_secretary_lifecycle.py`）+ per-skill MCP dispatch pin（`tests/unit/skills/test_skill_specs.py` 拡張で skill 内 MCP tool 名・引数 schema を pin） |
 | OQ7 | ADR 構成 | **B**: 新規 ADR ゼロ、**改訂 3 本**（ADR-0004 / ADR-0022 / ADR-0016）。Skill catalog（14 skills 責務マップ）は ADR ではなく `docs/secretary-agent.md` を SSOT |
 
 ### Phase 10/11 から継承する不変方針
 
 1. **形A**: opshub は MCP server + Agent Skills のみ提供、頭脳（runtime）は外部ホスト。
-2. **能動性なし**: リクエスト駆動のみ。常駐・定期実行は Phase 13+。
+2. **能動性なし**: リクエスト駆動のみ。常駐・定期実行は Phase 14+ (Phase 13 完了済み、Google Workspace コネクタも能動性導入なしで完結)。
 3. **外部書き戻しなし**: 取り込み + ローカル context 生成のみ、書き戻しは ADR-0010 で明示禁止（緊張点③）。draft 系 skill は text 生成のみ、user が手動で SaaS に転記。
 4. **本文ローカル保持** + `provenance_origin="external"` / `provenance_trust="untrusted"` 付き（ADR-0020）。
 5. **SQLCipher 丸ごと暗号化 opt-in**（ADR-0021、keyring 経由）。
@@ -68,7 +68,7 @@ HITL write（propose.generate + apply・4 件）:
 
 | ADR | 種別 | タイトル | 主な改訂内容 |
 |---|---|---|---|
-| **ADR-0004** | 改訂 | Agent Runtime Boundary | §決定 (c) の「Agent Skills は `ozzy-labs/skills` preset 配布」を「**Skills は opshub `docs/skills/` を SSOT、配信機構（ozzy-labs/skills CI + Renovate preset）は Phase 13+ で別途検討**」に修正（OQ5=C 反映）。新規 §決定：Skill catalog は `docs/secretary-agent.md` を SSOT として 14 skills 責務マップ・HITL boundary・MCP tool 依存マップ・pair structure を維持。Phase 10 改訂時の前提（ozzy-labs/skills 配布完成）を意図的に backout する形で文書化 |
+| **ADR-0004** | 改訂 | Agent Runtime Boundary | §決定 (c) の「Agent Skills は `ozzy-labs/skills` preset 配布」を「**Skills は opshub `docs/skills/` を SSOT、配信機構（ozzy-labs/skills CI + Renovate preset）は Phase 14+ で別途検討**」に修正（OQ5=C 反映、Phase 12 当時の plan は「Phase 13+」と書いていたが、Phase 13 audit 2026-05-31 で表記を Phase 14+ に統一）。新規 §決定：Skill catalog は `docs/secretary-agent.md` を SSOT として 14 skills 責務マップ・HITL boundary・MCP tool 依存マップ・pair structure を維持。Phase 10 改訂時の前提（ozzy-labs/skills 配布完成）を意図的に backout する形で文書化 |
 | **ADR-0022** | 改訂 | MCP Server Surface | 既存 7（Phase 10 Sub C）+ Step 1 widening 8（PR #231）に **Phase 12 で 4 追加** を明記：(a) `search`(FTS5、`ReadCategory.SEARCH` 新設、phrase quote default、`raw_query` flag は CLI 専用で MCP schema からは除外) / (b) `propose.apply`(`WriteCategory.PROPOSE_APPLY`、`read_only=false, destructive=false, idempotent=true`、handler 層で `ProposalService.apply` の `OpsHubError("already applied/rejected")` を catch → `{ok:true, already_applied:true, applied_entity_id:...}` に正規化して idempotent semantics を成立させる) / (c)(d)(e)(f) 既存 4 read tools 入力 schema 拡張で **physical column ベースの時間フィルタ** 追加（task.list=`updated_after/before`、inbox.list=`created_after/before`、decision.list=`recorded_after/before`、source.list=`observed_after/before`、ISO 8601 optional）。annotation policy 維持（read 自律 / write 確認）。MCP 引数名 → 各 projection 物理列の写像表を ADR-0022 §決定 に追加 |
 | **ADR-0016** | 改訂 | Action Loop and Structured Output | §決定 (i)/(j)/(k) の reply_draft（Phase 10 改訂）に加え、**新規 §決定 (l) Draft 系統一方針** を独立条文として追記。要点：(a) **persist 境界は「返信元 source の有無」で切る**：reply-draft は `propose.generate` + `propose.apply` で persist (`reply_to_source_id` が natural key)、handoff-draft / announcement-draft は **text 返却のみ persist しない**（自発生成で natural key なし、OQ2=B 反映） / (b) **mode 引数の射程**：Phase 12 で導入される `propose.generate` の `mode` 引数（`inbox_triage` / `source_extract` / `meeting_followup`）は **persist 経路を持つ structured-output dispatch key** に限定。handoff/announcement は `propose.generate` を経由せず host LLM が `brief` / `recall.search` / `source.get` / `decision.list` の read tool を合成して text を組み立てる / (c) **triage は reply_draft 文脈のみ**：§決定 (j) の 3 値 triage は draft 系全体ではなく reply_draft 専用 signal、handoff/announcement は射程外 / (d) **Candidate discriminated union 凍結**：`task | decision | reply_draft` の 3 kind で凍結、新 candidate kind 追加なし / (e) 理由：使用頻度の現実主義 + schema 拡張コスト回避、将来 persist 需要顕在化時に §決定 (f) schema versioning パターンで `HandoffDraftCandidatePayload` を v3 として追加可能（in-place migration なし、新 ADR or 本 ADR 改訂で対応） |
 
@@ -84,7 +84,7 @@ ADR 改訂 3 本 + 既存 5 rename + MCP 整合化 + 4 新 MCP tools 露出 + sk
 
 **PR H1-a** `docs(adr): adr-0004 + 0022 + 0016 改訂 (phase 12)`
 
-- ADR-0004 改訂（Skills SSOT in opshub docs/skills/、配信機構 Phase 13+ defer + Skill catalog refers to docs/secretary-agent.md）
+- ADR-0004 改訂（Skills SSOT in opshub docs/skills/、配信機構 Phase 14+ defer + Skill catalog refers to docs/secretary-agent.md）
 - ADR-0022 改訂（4 新 MCP tools 契約化、annotation policy 維持）
 - ADR-0016 改訂（draft 系統一方針：reply persist / handoff,announcement text-only）
 - `docs/decisions-log.md` entries（3 件）
@@ -400,4 +400,4 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
 - Phase 12 epic #253、子 sub-issue #254-#259
 - Phase 1 #3 / Phase 2 #23 / Phase 3 #43 / Phase 4 #62 / Phase 5 #81 / Phase 6 #99 / Phase 7 #113 / Phase 8 #128 / Phase 9 #187 / Phase 10 #203 / Phase 11 #233
 - Step 1 MCP widening: PR #231（brief / graph.* / source.* / propose.generate / embeddings.find_duplicates）
-- handbook ADR-0016（skills repo 機構、Phase 13+ で配布完成予定）
+- handbook ADR-0016（skills repo 機構、Phase 14+ で配布完成予定）

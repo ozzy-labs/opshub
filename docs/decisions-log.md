@@ -403,6 +403,7 @@ Phase 13 Sub-issue G1 (2026-05-31) で ADR-0025 (Office Document Content Extract
 - **(d') 形式別 3 種を加算追加**: Drive API が返す Google mimeType (`application/vnd.google-apps.document` / `.presentation` / `.spreadsheet`) を connector mapper で `google_doc` / `google_slides` / `google_sheets` source_type に正規化。MS Office 系 3 種 (§決定 (d)) と分離することで operator が「Workspace 由来か Office 由来か」を query レベルで区別可能 (find-document 自然文 query との整合)
 - **(j) Workspace export 経路**: Drive API `files.export(fileId, mimeType=<Office mediatype>)` でバイナリ取得 → markitdown 経由抽出。**3 形式とも MS Office mediatype 経由で統一** (Docs だけ markdown 直接 export を採ると `core/document_extract.py` の経路が `google_doc` のみ別分岐になり API 表面整合性が崩れる)。`core/document_extract.extract` の API 表面を `path_or_bytes` 形式に拡張 (Phase 11 は path-only)、source_hint 引数を追加
 - **既存 §決定 (a)-(i) は保持**: markitdown 1 本経路 / 50MB + 500K chars cap / fail-safe / Excel cells 上限 / PPT notes / ADR-0019 §不変条件 (b) 共存 / provenance / 抽出キャッシュなし、すべて Phase 11 から無変更で継承
+- **OQ9 closeout (Phase 13 audit 2026-05-31 で確定)**: Phase 13 plan §8 OQ9 (ADR-0025 cap (50MB/500K chars) の Workspace export 適合性) は G2/G4 実測の結果 **closed**。代表 Sheets→xlsx / Docs→docx / Slides→pptx sample の export size 分布はすべて共通 cap 内に収まり、`[office.google_workspace] max_file_size_mb` separate override は **未導入**。`[office]` 単一 knob が Box Drive / OneDrive / Google Workspace の 3 経路を lockstep で governing する Phase 11 audit Cluster B two-key composition (§決定 (g)) を Workspace export 経路にもそのまま適用、操作面の単純さを優先。下表の 4 件目 (size cap 却下案) は当時の forecast snapshot として残置、本 closeout で OQ9 の決着を補足。
 
 | 却下案 | 採用案 | 理由 |
 |---|---|---|
