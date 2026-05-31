@@ -413,11 +413,19 @@ def _lookup_applied_entity(
 
     from opshub.db.schema import events_table
 
+    # Event log discriminator: the Pydantic event class
+    # :class:`opshub.domain.events.proposal.ProposalApplied` declares
+    # ``event_type: Literal["proposal.applied"]`` (dot-notation, ADR-0002
+    # event naming). Phase 12 H6 surfaced that an earlier draft of this
+    # lookup filtered on the CamelCase class name and silently missed
+    # every historical apply, causing the second ``propose.apply`` to
+    # re-raise instead of returning ``already_applied=true``. The string
+    # below MUST stay in sync with the event class literal.
     stmt = (
         select(events_table.c.payload)
         .where(
             events_table.c.aggregate_id == proposal_id,
-            events_table.c.event_type == "ProposalApplied",
+            events_table.c.event_type == "proposal.applied",
         )
         .order_by(events_table.c.recorded_at.asc(), events_table.c.id.asc())
     )

@@ -1,6 +1,6 @@
 # Architecture
 
-> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) + Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須)) + Phase 7 (Connectors Wave 2、MVP = Slack + Microsoft 365 + Box、epic #113) + Phase 8 (Knowledge graph layer、MVP = ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、epic #128) complete (2026-05-17) + Phase 9 (Local-filesystem-backed Connector Layer、MVP = ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (scanner + mapper + connector + settings) + `core/platform.py` + `opshub connector sync box_drive`、epic #187) complete (2026-05-23) + Phase 10 (Secretary Agent Platform、MVP = ADR-0020 (full local content retention、ADR-0005 supersede) + ADR-0021 (encryption at rest、SQLCipher + keyring) + ADR-0022 (MCP server surface、stdio + policy-as-data + redact + OTel naming) + ADR-0004 改訂 (形A) + ADR-0016/0017/0010 改訂 (reply_draft) + 本文ベース embedding + SQLite FTS5 + `opshub search` + `opshub mcp serve` + 秘書 5 Skills + `tools/skill_scan.py`、epic #203) complete (2026-05-31) + **Phase 11 (MS Office 深掘り、MVP = ADR-0025 (Office Document Content Extraction、markitdown 経路 + 50 MB / 500K chars cap + source_type 3 種) + ADR-0019 改訂 (`content_extraction = true` opt-in 例外節 + onedrive_drive パターン汎化) + ADR-0010 改訂 (Teams 追加 + 本文抽出契約 + delta-link cursor + 失効時 full-pass fallback + Teams User Token principal) + `core/document_extract.py` + `connectors/teams/` + `connectors/onedrive_drive/` + `connectors/box_drive` の Office 抽出 hook + `connectors/ms365/mapper` の outlook body deep retention、epic #233) complete (2026-05-31)**. 次の候補は Phase 12+ (multi-machine sync / 能動性段階 1-4 = cron 委譲 / 記憶キュレーション / 通知 / filewatch、画像 OCR、追加コネクタ Google Workspace / Notion / Jira)。`llama.cpp` direct binding / briefing cache + narrow scope / connector-side automatic `SourceReferenced` 発行 / watch mode (filewatch backend) / 追加 FS connector / multi-machine sync は Phase 6.x / 7.x / 8.x / 9.x / 11.x+ 以降。詳細は §9 (Phased Delivery) を参照。
+> Status: Phase 1 (foundation) + Phase 2 (coordination) + Phase 3 (connectors + workspace ingest、MVP scope = framework + GitHub) + Phase 4 (semantic recall layer、MVP scope = full Pluggable Embedder + recall + duplicate detection) + Phase 5 (briefing layer、MVP = ADR-0015 + Pluggable LLM (Anthropic + OpenAI) + `opshub brief` + event-driven auto-embed 補助) + Phase 6 (action loop layer、MVP = ADR-0016 + Pluggable LLM structured output (Anthropic + OpenAI + Ollama) + Proposal domain (events + projection + service + `opshub propose` CLI、human-in-the-loop apply 必須)) + Phase 7 (Connectors Wave 2、MVP = Slack + Microsoft 365 + Box、epic #113) + Phase 8 (Knowledge graph layer、MVP = ADR-0017 + `links` projection (migration 0016) + 4 自動抽出経路 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration、epic #128) complete (2026-05-17) + Phase 9 (Local-filesystem-backed Connector Layer、MVP = ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (scanner + mapper + connector + settings) + `core/platform.py` + `opshub connector sync box_drive`、epic #187) complete (2026-05-23) + Phase 10 (Secretary Agent Platform、MVP = ADR-0020 (full local content retention、ADR-0005 supersede) + ADR-0021 (encryption at rest、SQLCipher + keyring) + ADR-0022 (MCP server surface、stdio + policy-as-data + redact + OTel naming) + ADR-0004 改訂 (形A) + ADR-0016/0017/0010 改訂 (reply_draft) + 本文ベース embedding + SQLite FTS5 + `opshub search` + `opshub mcp serve` + 秘書 5 Skills + `tools/skill_scan.py`、epic #203) complete (2026-05-31) + Phase 11 (MS Office 深掘り、MVP = ADR-0025 (Office Document Content Extraction、markitdown 経路 + 50 MB / 500K chars cap + source_type 3 種) + ADR-0019 改訂 (`content_extraction = true` opt-in 例外節 + onedrive_drive パターン汎化) + ADR-0010 改訂 (Teams 追加 + 本文抽出契約 + delta-link cursor + 失効時 full-pass fallback + Teams User Token principal) + `core/document_extract.py` + `connectors/teams/` + `connectors/onedrive_drive/` + `connectors/box_drive` の Office 抽出 hook + `connectors/ms365/mapper` の outlook body deep retention、epic #233) complete (2026-05-31) + **Phase 12 (Secretary Skills 拡張、MVP = 14 skills 体制 (新規 9 = meeting-prep / research / inbox-triage / external-brief / decision-rationale / handoff-draft / announcement-draft / meeting-followup / source-extract + 既存 5 のうち rename 2 = daily-brief → personal-brief / file-lookup → find-document) + 4 新 MCP tools (`search` FTS5 + `propose.apply` HITL idempotent + 既存 4 read tools の physical column ベース時間フィルタ) + 既存 5 SKILL.md を MCP 直接呼びに統一 + ADR-0004 改訂 (Skills SSOT 移管 + Skill catalog SSOT 独立条文化) + ADR-0022 改訂 (4 新 MCP tools 契約化) + ADR-0016 改訂 (draft 系統一方針 §決定 (l)) + `docs/secretary-agent.md` を 14 skills 責務マップ SSOT に拡張、epic #253) complete (2026-05-31)**. 次の候補は Phase 13+ (multi-machine sync / 能動性段階 1-4 = cron 委譲 / 記憶キュレーション / 通知 / filewatch、画像 OCR、追加コネクタ Google Workspace / Notion / Jira、`ozzy-labs/skills` 配布完成)。`llama.cpp` direct binding / briefing cache + narrow scope / connector-side automatic `SourceReferenced` 発行 / watch mode (filewatch backend) / 追加 FS connector / multi-machine sync は Phase 6.x / 7.x / 8.x / 9.x / 11.x+ 以降。詳細は §9 (Phased Delivery) を参照。
 
 OpsHub の高レベルアーキテクチャ・データフロー・データモデル・用語を記述する。具体的な決定の根拠は対応 ADR を参照。
 
@@ -258,17 +258,27 @@ actionable error で reject される (paste-code 不要、`opshub.toml` 設定�
 - **Context-efficient returns** — `recall.search` / list 系は本文ではなく 200 文字 snippet を返す (ADR-0022 §(d))。データ持ち出し面と LLM context の両方を縮小。
 - **OTel GenAI naming** — `gen_ai.operation.name=execute_tool` / `gen_ai.tool.name=<name>` / `gen_ai.tool.call.id=<ulid>` を structlog に記録 (将来 `mcp-otel` extras で exporter に出す、ADR-0022 §(e))。
 
-Phase 10 C2 で出荷した tool 一覧 (`src/opshub/mcp/_registry.py`):
+Phase 10 C2 baseline + Step 1 widening (PR #231) + Phase 12 H1 (ADR-0022 改訂 §決定 (f)) で出荷した tool 一覧 (`src/opshub/mcp/_registry.py`、計 17 tools = read 12 + write 5):
 
 | Kind | Name | 目的 |
 |---|---|---|
-| read | `recall.search` | semantic recall (vector、tasks / decisions / inbox / sources)。FTS5 は `opshub search` CLI で提供、両者は補完関係 (principles §6.4) |
-| read | `task.list` | tasks projection 取得 (state filter 可) |
-| read | `inbox.list` | inbox_items projection 取得 |
-| read | `decision.list` | decisions projection 取得 |
+| read | `recall.search` | semantic recall (vector、tasks / decisions / inbox / sources)。FTS5 は `opshub search` CLI および `search` MCP tool で提供、両者は補完関係 (principles §6.4) |
+| read | `task.list` | tasks projection 取得 (state filter + Phase 12 H1 で `updated_after` / `updated_before` 物理列フィルタ追加、`tasks.updated_at` ベース、ISO 8601 半開区間) |
+| read | `inbox.list` | inbox_items projection 取得 (state filter + Phase 12 H1 で `created_after` / `created_before` 物理列フィルタ追加、`inbox_items.created_at` ベース) |
+| read | `decision.list` | decisions projection 取得 (Phase 12 H1 で `recorded_after` / `recorded_before` 物理列フィルタ追加、`decisions.recorded_at` ベース) |
+| read | `brief` | LLM 要約 briefing 生成 (Step 1 widening、PR #231) |
+| read | `graph.related` | 1-hop graph 隣接取得 (Step 1 widening) |
+| read | `graph.trace` | backward provenance walk (Step 1 widening) |
+| read | `graph.expand` | bidirectional N-hop subgraph (Step 1 widening) |
+| read | `source.list` | sources projection 取得 (connector / source_type filter + Phase 12 H1 で `observed_after` / `observed_before` 物理列フィルタ追加、`sources.observed_at` ベース) |
+| read | `source.get` | 1 source row 取得 by ULID (Step 1 widening) |
+| read | `embeddings.find_duplicates` | offline near-duplicate scan (Step 1 widening) |
+| read | `search` | **Phase 12 H1 新規** — body-level FTS5 横断検索 (`ReadCategory.SEARCH`、phrase-quoted default、`raw_query` flag は CLI 専用で MCP schema 除外。`SearchService.search` の MCP 露出) |
 | write | `task.create` | TaskCreated event を追記 (HITL) |
 | write | `inbox.add` | ItemEnqueued event を追記 (HITL) |
 | write | `connector.sync` | 登録済 connector の sync を発火 (HITL、外部 API hit) |
+| write | `propose.generate` | LLM proposal 生成 (HITL、Step 1 widening + Phase 12 H4 で `mode` 引数追加 = `inbox_triage` / `source_extract` / `meeting_followup`、persist 経路を持つ dispatch key に限定、ADR-0016 §決定 (l)(b)) |
+| write | `propose.apply` | **Phase 12 H1 新規** — proposal candidate を apply (HITL、`WriteCategory.PROPOSE_APPLY`、`destructive=false` + `idempotent=true`。handler 層で `OpsHubError("already applied")` catch → `{ok:true, already_applied:true, applied_entity_type, applied_entity_id}` に正規化して idempotent annotation を成立させる) |
 
 MCP セットアップ手順は [docs/mcp-setup.md](mcp-setup.md) を参照。エージェント host (Claude Code 等) が subprocess として `opshub mcp serve` を spawn し、stdin / stdout で MCP プロトコルを話す。
 
@@ -283,17 +293,75 @@ MCP セットアップ手順は [docs/mcp-setup.md](mcp-setup.md) を参照。�
 代わりに opshub は:
 
 1. **MCP tool 面** (§2.11a)
-2. **秘書 5 Skill** (`docs/skills/<name>/SKILL.md` を SSOT として `ozzy-labs/skills` リポから `@ozzylabs/skills` Renovate preset で各ホスト `.claude/skills/` に配布):
+2. **秘書 14 Skill** (Phase 12 で 5 → 14 拡張、`docs/skills/<name>/SKILL.md` を opshub SSOT として保持、配信機構 = `ozzy-labs/skills` CI + Renovate preset は Phase 13+ に defer、ADR-0004 §決定 (c) backout)。Skill catalog SSOT は [docs/secretary-agent.md](secretary-agent.md) (ADR-0004 §決定 (c-2))。
 
-   | skill | description トリガ | 使う tool / コマンド | 自律範囲 |
-   |---|---|---|---|
-   | `personal-brief` | 「今日 / 今週 / 今月 / 先週 / 先月 のまとめ」 | `brief` または `recall.search` + `task.list` (`updated_after/before`) + `inbox.list` (`created_after/before`) + `decision.list` (`recorded_after/before`) | 自律 OK |
-   | `next-actions` | 「次に何 / やること / 今週やること」 | `task.list` (`updated_after/before`) + `recall.search` (+ HITL `task.create`) | read 自律 / write 人確認 |
-   | `reply-draft` | 「返信案 / 下書き」 | `recall.search` + MCP `propose.generate` (reply_to_source_id) + MCP `propose.apply` (idempotent) | apply 時は人確認 |
-   | `pr-review` | 「PR レビューして」 | `recall.search` + `decision.list` (`recorded_after/before`) + `task.list` | 自律 OK |
-   | `find-document` | 「Box / ファイル確認」 | MCP `search` (FTS5) + 補助的に `recall.search` (semantic recall) | 自律 OK |
+   **read 自律 OK (10)**:
 
-3. **skill security scan** (`tools/skill_scan.py`) — プロンプトインジェクション / コマンドインジェクション / ハードコード鍵 / データ持ち出し の 4 カテゴリ + frontmatter の隠しユニコード / 「ignore previous instructions」類のパターン検出。`ozzy-labs/skills` CI で skill 配信前にチェックする。
+   | skill | pair | description トリガ | 使う MCP tool | 自律範囲 |
+   |---|---|---|---|---|
+   | `personal-brief` | ↔ external-brief | 「今日 / 今週 / 今月 / 先週 / 先月 のまとめ」「自分の状況」 | `brief` または `recall.search` + `task.list` (`updated_after/before`) + `inbox.list` (`created_after/before`) + `decision.list` (`recorded_after/before`) | 自律 OK |
+   | `next-actions` | (stand-alone) | 「次に何 / やること / 今週やること」「優先度高いのは?」 | `task.list` (`updated_after/before`) + `recall.search` (+ HITL `task.create`) | read 自律 / write 人確認 |
+   | `pr-review` | (stand-alone) | 「PR レビューして」「この差分どう?」 | `recall.search` + `decision.list` (`recorded_after/before`) + `task.list` + `graph.related` / `graph.trace` | 自律 OK |
+   | `find-document` | (stand-alone) | 「Box にあったあの資料」「<キーワード>含むファイル」 | `search` (FTS5、Phase 12 H1) + 補助的に `recall.search` / `source.list` (`observed_after/before`) / `source.get` | 自律 OK |
+   | `meeting-prep` | ↔ meeting-followup | 「来週の会議準備」「明日のミーティング前確認」 | `source.list` (`source_type=ms365_calendar` + `observed_after/before`) + `recall.search` + `graph.related` | 自律 OK |
+   | `research` | (stand-alone) | 「<X> について調べて」「<トピック> 網羅的に」 | `recall.search` (semantic) + `search` (FTS5) + `graph.related` / `graph.expand` + `brief` | 自律 OK |
+   | `external-brief` | ↔ personal-brief | 「上司向け週次報告」「クライアント向け進捗」 | `task.list` (`state=completed` + `updated_after`) + `decision.list` (`recorded_after`) + `brief` (外向き tone) | 自律 OK |
+   | `decision-rationale` | (stand-alone) | 「あの決定はなぜ」「X を選んだ理由」 | `decision.list` (topic 絞り) + `graph.trace` + `recall.search` | 自律 OK |
+   | `handoff-draft` | (draft family) | 「引き継ぎ書作って」「handoff 書く」 | `task.list` (`state=in_progress`) + `decision.list` + `recall.search` + `graph.related` (text-only、persist なし、ADR-0016 §決定 (l)(a)) | 自律 OK |
+   | `announcement-draft` | (draft family) | 「リリース告知文書いて」「announcement」 | `recall.search` + `decision.list` (`recorded_after=last_release`) + `brief` (announcement tone、text-only、persist なし) | 自律 OK |
+
+   **HITL write (4)**:
+
+   | skill | pair | description トリガ | 使う MCP tool | 自律範囲 |
+   |---|---|---|---|---|
+   | `reply-draft` | (draft family) | 「返信案 / 下書き」 | `recall.search` + `propose.generate` (`reply_to_source_id`) + `propose.apply` (HITL、idempotent) | generate / apply とも人確認 |
+   | `inbox-triage` | ↔ source-extract | 「受信箱整理」「inbox 仕分け」 | `inbox.list` (`state=open`) + `propose.generate` (`mode=inbox_triage`) + `propose.apply` (HITL) | generate / apply とも人確認 |
+   | `source-extract` | ↔ inbox-triage | 「この資料から task 抽出」「<source_id> から候補」 | `source.get` + `propose.generate` (`mode=source_extract`) + `propose.apply` (HITL) | generate / apply とも人確認 |
+   | `meeting-followup` | ↔ meeting-prep | 「会議後の action items」「議事録から task 抽出」 | `source.list` (`source_type=calendar_event` + `observed_after/before`) + `source.get` + `recall.search` + `propose.generate` (`mode=meeting_followup`) + `propose.apply` (HITL) | generate / apply とも人確認 |
+
+   **Pair structure** (4 pair、host LLM の routing 精度向上のための対称軸):
+
+   - `personal-brief` ↔ `external-brief`: 自分向け (粒度細かめ、進行中タスクも含む) ↔ 外向き (完了 + 確定 decision 中心、tone 制御)
+   - `meeting-prep` ↔ `meeting-followup`: 会議前 (read-only、preparation context) ↔ 会議後 (HITL write、action items 抽出)
+   - `inbox-triage` ↔ `source-extract`: 集合 (inbox 全体を一気に仕分け) ↔ 個別 (1 source から候補抽出)
+   - `reply-draft` / `handoff-draft` / `announcement-draft`: draft family (返信 / 引き継ぎ / 告知、persist 境界は ADR-0016 §決定 (l)(a) で「返信元 source の有無」で切る = reply-draft のみ persist、handoff/announcement は text-only)
+
+   **HITL boundary** (ADR-0022 §決定 (c) annotation policy):
+
+   - read tools 12 + read 自律 OK skill 10 → host LLM auto-approve
+   - write tools 5 (`task.create` / `inbox.add` / `connector.sync` / `propose.generate` / `propose.apply`) + HITL write skill 4 → host LLM が user 確認必須
+   - auto-apply 経路は構造的に存在しない (ADR-0016 §決定 (c))
+   - 外部 SaaS 書き戻し経路も構造的に存在しない (ADR-0010 §禁止事項 7)
+
+   **MCP tool 依存マップ** (skill × MCP tool マトリクス、`docs/secretary-agent.md` §MCP tool 依存マップ で詳細表を保持):
+
+   ```text
+   read tools (12):
+     recall.search       → personal-brief, next-actions, reply-draft, pr-review,
+                           find-document, meeting-prep, research, decision-rationale,
+                           handoff-draft, announcement-draft, meeting-followup
+     task.list           → personal-brief, next-actions, pr-review, external-brief, handoff-draft
+     inbox.list          → personal-brief, inbox-triage
+     decision.list       → personal-brief, pr-review, external-brief, decision-rationale,
+                           handoff-draft, announcement-draft
+     brief               → personal-brief, external-brief, research, announcement-draft
+     graph.related       → pr-review, meeting-prep, research, handoff-draft
+     graph.trace         → pr-review, decision-rationale
+     graph.expand        → research
+     source.list         → find-document, meeting-prep, meeting-followup
+     source.get          → find-document, source-extract, meeting-followup
+     embeddings.find_duplicates → (現状未利用、agent host の自律判断で活用可)
+     search (FTS5)       → find-document, research
+
+   write tools (5、HITL):
+     task.create         → next-actions
+     inbox.add           → (現状未利用、host LLM の自律判断で活用可)
+     connector.sync      → (現状未利用、operator が CLI から呼ぶことを推奨)
+     propose.generate    → reply-draft, inbox-triage, source-extract, meeting-followup
+     propose.apply       → reply-draft, inbox-triage, source-extract, meeting-followup
+   ```
+
+3. **skill security scan** (`tools/skill_scan.py`) — プロンプトインジェクション / コマンドインジェクション / ハードコード鍵 / データ持ち出し の 4 カテゴリ + frontmatter の隠しユニコード / 「ignore previous instructions」類のパターン検出。Phase 12 では 14 skills 全てに対して `tests/unit/skills/test_skill_specs.py` の per-skill MCP dispatch pin + skill security scan が走る。
 
 詳細は [docs/secretary-agent.md](secretary-agent.md) を参照。
 
@@ -498,6 +566,7 @@ Agent は以下を行わない。
 | 9 | Local-filesystem-backed Connector Layer (ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector (scanner + mapper + connector + settings) + `core/platform.py` (WSL2 / macOS 判定) + `opshub connector sync box_drive` 経路、✅ 2026-05-23 完了、epic #187) | watch mode (filewatch backend) / 追加 FS connector (OneDrive / Dropbox / Google Drive for desktop / iCloud) / xattr identity / `opshub source list --stale` (Phase 9.x) / multi-machine sync (Phase 12+) |
 | 10 | Secretary Agent Platform (ADR-0020 (full local content retention、ADR-0005 supersede) + ADR-0021 (encryption at rest、SQLCipher + keyring) + ADR-0022 (MCP server surface、stdio + policy-as-data + redact + OTel naming) + ADR-0004 改訂 (形A、opshub は MCP + Agent Skills のみ、runtime なし) + ADR-0016 改訂 (`ReplyDraftCandidatePayload`) + ADR-0017 改訂 (`reply_draft_replies_to` / `referenced_in_reply_draft` link types) + ADR-0010 改訂 (write-back 明示禁止) + 本文ベース embedding (migration 0018) + SQLite FTS5 (migration 0019) + `opshub search` CLI + `opshub mcp serve` CLI + 秘書 5 Skills (Phase 12 H1 で `personal-brief` / `next-actions` / `reply-draft` / `pr-review` / `find-document` に rename 済) + `tools/skill_scan.py`、✅ 2026-05-31 完了、epic #203) | MS Office 深掘り (Teams + Outlook 本文 + Word/Excel/PowerPoint 抽出、ADR-0025 = Phase 11) / 能動性段階 1-4 (cron 委譲 / 記憶キュレーション / 通知 / filewatch、Phase 12+) / multi-machine sync (Phase 12+) |
 | 11 | MS Office 深掘り (ADR-0025 (Office Document Content Extraction、markitdown 経路 + 50 MB / 500K chars cap + source_type 3 種 `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` + fail-safe) + ADR-0019 改訂 (`content_extraction = true` opt-in 例外節 + onedrive_drive パターン汎化、§決定 (b') + (j)) + ADR-0010 改訂 (Teams connector + 本文抽出契約 + delta-link cursor + 失効時 full-pass fallback + Teams User Token principal) + `src/opshub/core/document_extract.py` + `connectors/teams/` (Graph delta + User Token) + `connectors/onedrive_drive/` (WSL2 `/mnt/onedrive` / macOS `~/OneDrive` platform default) + `connectors/box_drive` Office hook + `connectors/ms365/mapper` outlook body deep retention、✅ 2026-05-31 完了、epic #233) | 画像 OCR (PPT 内画像 / Office 図表、tesseract / pytesseract 経路、Phase 12+ defer) / 外部書き戻し (返信送信 = Teams 候補、新 ADR 要、Phase 12+) / 追加コネクタ (Google Workspace = markitdown 経路再利用 / Notion / Jira、Phase 12+) / multi-machine sync (Phase 12+) / 能動性段階 1-4 (Phase 12+) |
+| 12 | Secretary Skills 拡張 (秘書 Skill レパートリーを 5 → 14 に拡張: 新規 9 = meeting-prep / research / inbox-triage / external-brief / decision-rationale / handoff-draft / announcement-draft / meeting-followup / source-extract + 既存 5 のうち rename 2 = daily-brief → personal-brief / file-lookup → find-document、区分: read 自律 OK 10 + HITL write 4 + pair structure 4 = personal-brief ↔ external-brief / meeting-prep ↔ meeting-followup / inbox-triage ↔ source-extract / draft family) + 4 新 MCP tools (`search` (FTS5、phrase-quoted default、`raw_query` flag は CLI 専用で MCP schema 除外、`ReadCategory.SEARCH`) + `propose.apply` (HITL、idempotent 正規化、`WriteCategory.PROPOSE_APPLY`、`destructive=false` + `idempotent=true`) + 既存 4 read tools の physical column ベース時間フィルタ = `task.list.updated_after/before` (`tasks.updated_at`) / `inbox.list.created_after/before` (`inbox_items.created_at`) / `decision.list.recorded_after/before` (`decisions.recorded_at`) / `source.list.observed_after/before` (`sources.observed_at`)、ISO 8601 半開区間) + 既存 5 SKILL.md を MCP 直接呼びに統一 (CLI fallback 廃止) + `propose.generate` の `mode` 引数追加 (`inbox_triage` / `source_extract` / `meeting_followup`、persist 経路を持つ 4 mode のみ) + ADR 改訂 3本 (ADR-0004 改訂 (Skills SSOT を opshub `docs/skills/` に移管 + §決定 (c-2) Skill catalog SSOT = `docs/secretary-agent.md` 独立条文化) + ADR-0022 改訂 (§決定 (f) 4 新 MCP tools 契約化) + ADR-0016 改訂 (§決定 (l) draft 系統一方針: persist 境界 = 返信元 source の有無 / `mode` 引数射程 / triage = reply_draft 専用 / Candidate union freeze)) + `docs/secretary-agent.md` を 14 skills 責務マップ SSOT に拡張 (§形A 責務分担 / §秘書への依頼例 / §Skill catalog (read 10 / HITL write 4) / §Pair structure / §HITL boundary / §MCP tool 依存マップ / §できること・できないこと / §セットアップ / §skill security / §関連)、✅ 2026-05-31 完了、epic #253) | `ozzy-labs/skills` 配布完成 (Phase 13+ defer、ADR-0004 §決定 (c) backout) / 削除候補 skills (agenda-builder / retrospective / weekly-plan / options-compare / risk-assessment、需要顕在化時に個別追加) / draft 系 persist 需要 (handoff-draft / announcement-draft が persist 要求時に ADR-0016 §決定 (f) versioning パターンで対応) / Phase 14+ = 統合・検索融合レイヤ / 能動性 / 外部書き戻し / Codex / Gemini / Copilot Skills 横展開 |
 
 詳細は [Principles 9 (Phased Delivery)](principles.md) 参照。
 

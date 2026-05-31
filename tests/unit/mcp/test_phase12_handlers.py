@@ -246,14 +246,18 @@ class _StubProposalService:
         self._applied[key] = result
         # Mimic SqlAlchemyEventStore.append by inserting a row into
         # ``events_table`` with the same shape ``_lookup_applied_entity``
-        # expects (``event_type=ProposalApplied`` + payload with the
-        # ``applied_entity_*`` fields).
+        # expects. The discriminator must match the Pydantic event
+        # class :class:`opshub.domain.events.proposal.ProposalApplied`
+        # which declares ``event_type: Literal["proposal.applied"]``
+        # (dot-notation, ADR-0002 event naming). A Phase 12 H6 e2e
+        # test surfaced an earlier mismatch where this stub used
+        # ``"ProposalApplied"`` and silently masked the lookup bug.
         with self._engine.begin() as conn:
             conn.execute(
                 insert(events_table).values(
                     id="01HEVTAPPLIED0000000000000",
                     aggregate_id=proposal_id,
-                    event_type="ProposalApplied",
+                    event_type="proposal.applied",
                     schema_version=1,
                     occurred_at=_BASE,
                     recorded_at=_BASE,
@@ -341,6 +345,46 @@ async def test_propose_apply_propagates_already_rejected(
     handler = build_propose_apply_handler(engine)
     with pytest.raises(OpsHubError, match="already rejected"):
         await handler({"proposal_id": "01HPROP3", "candidate_index": 0})
+
+
+def test_lookup_applied_entity_event_type_matches_pydantic_literal() -> None:
+    """Pin the ``event_type`` discriminator string used by ``_lookup_applied_entity``
+    against the Pydantic event class literal.
+
+    Phase 12 H6 surfaced an earlier mismatch where the lookup filtered
+    on ``"ProposalApplied"`` while the
+    :class:`opshub.domain.events.proposal.ProposalApplied` class
+    declares ``event_type: Literal["proposal.applied"]`` (dot-notation,
+    ADR-0002 event naming). The mismatch silently masked every
+    historical apply lookup, causing the second ``propose.apply`` call
+    to raise ``OpsHubError("already applied")`` instead of returning
+    ``already_applied=true``. A symbolic source-grep guards the drift
+    so a future rename of the Pydantic literal is caught immediately.
+    """
+    import re
+    from pathlib import Path
+
+    from opshub.domain.events.proposal import ProposalApplied
+
+    # Default value of the Literal[...] field
+    pydantic_literal = ProposalApplied.model_fields["event_type"].default
+    assert pydantic_literal == "proposal.applied"
+
+    writes_src = (
+        Path(__file__).resolve().parents[3] / "src" / "opshub" / "mcp" / "_writes.py"
+    ).read_text(encoding="utf-8")
+    # Capture the event_type literal threaded into the lookup query.
+    match = re.search(
+        r'events_table\.c\.event_type\s*==\s*"([^"]+)"',
+        writes_src,
+    )
+    assert match is not None, (
+        'could not find `events_table.c.event_type == "..."` in mcp/_writes.py'
+    )
+    assert match.group(1) == pydantic_literal, (
+        "mcp/_writes.py event_type filter must match the Pydantic"
+        f" literal {pydantic_literal!r}; got {match.group(1)!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

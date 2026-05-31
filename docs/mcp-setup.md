@@ -64,7 +64,52 @@ Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1):
 | write | `propose.generate`            | Generate next-action / reply-draft candidates (HITL apply)        |
 | write | `propose.apply`               | Apply a proposal candidate (HITL, idempotent, Phase 12 H1)        |
 
-Step 1 widening (post Phase 10) added the 7 new read tools and the HITL write `propose.generate`. Phase 12 H1 (ADR-0022 改訂) added `search` (FTS5, phrase-quoted by default — the CLI `--raw-query` flag is intentionally not exposed at the MCP boundary), `propose.apply` (HITL, idempotent — second call for the same `(proposal_id, candidate_index)` returns `{ok: true, already_applied: true, ...}` instead of raising), and physical-column time filters (`updated_after/before` on `task.list`, `created_after/before` on `inbox.list`, `recorded_after/before` on `decision.list`, `observed_after/before` on `source.list`). The Tier 1 skill set (`personal-brief`, `next-actions`, `pr-review`, `find-document`) calls MCP directly instead of falling back to the CLI shell.
+Step 1 widening (post Phase 10) added the 7 new read tools and the HITL write `propose.generate`. Phase 12 H1 (ADR-0022 改訂 §決定 (f)) added 4 new MCP tools / arguments:
+
+* **`search` (read, Phase 12 H1)** — body-level FTS5 search across `sources.body` (and the FTS5 `sources_fts` virtual table populated by migration 0019). Phrase-quoted by default; the CLI `--raw-query` flag is intentionally **not** exposed at the MCP boundary so host LLMs' free-form token streams stay safe from FTS5 syntax escapes. `ReadCategory.SEARCH` annotation = `readOnlyHint=true, destructiveHint=false`.
+* **`propose.apply` (HITL write, Phase 12 H1)** — apply a previously-generated proposal candidate. **Idempotent**: the second call for the same `(proposal_id, candidate_index)` returns `{ok: true, already_applied: true, applied_entity_type: ..., applied_entity_id: ...}` instead of raising, by catching `OpsHubError("already applied")` and walking the event log to recover the historical entity tuple. `WriteCategory.PROPOSE_APPLY` annotation = `readOnlyHint=false, destructiveHint=false, idempotentHint=true` (the first MCP write tool to advertise `destructive=false`, the others remain `destructive=true`).
+* **Physical-column time filters (Phase 12 H1)** — `task.list` accepts `updated_after` / `updated_before` (filters `tasks.updated_at`); `inbox.list` accepts `created_after` / `created_before` (`inbox_items.created_at`); `decision.list` accepts `recorded_after` / `recorded_before` (`decisions.recorded_at`); `source.list` accepts `observed_after` / `observed_before` (`sources.observed_at`). All ISO 8601, optional, `>= after` / `< before` half-open intervals. Physical-column naming (rather than business concepts like `completed_after`) keeps the projection schema and the MCP argument names aligned.
+* **`propose.generate` `mode` argument (Phase 12 H4)** — accepts `inbox_triage` / `source_extract` / `meeting_followup` (the persist-bearing dispatch keys, ADR-0016 §決定 (l)(b)). `mode` is mutually exclusive with `reply_to_source_id`; the implicit `reply_draft` mode is signalled by `reply_to_source_id` alone. `handoff_draft` / `announcement_draft` skills do **not** route through `propose.generate` because they are text-only (no persist boundary, ADR-0016 §決定 (l)(a)).
+
+Phase 12 H1 also unified the original 5 skills (`personal-brief`, `next-actions`, `reply-draft`, `pr-review`, `find-document`) on the MCP surface — they call MCP tools directly instead of falling back to the CLI shell. Phase 12 H2-H5 added 9 new skills on top (see `docs/secretary-agent.md` for the 14-skill catalog).
+
+## 3a. Install the 14 secretary skills on the agent host (Phase 12)
+
+Phase 12 ships **14 secretary skills** as opshub-resident SKILL.md files under `docs/skills/<name>/SKILL.md` (SSOT, ADR-0004 §決定 (c)). The `@ozzylabs/skills` Renovate preset distribution is deferred to Phase 13+; in Phase 12, copy them into each host's skill loader manually:
+
+```sh
+# Claude Code (user-level)
+cp -r path/to/opshub/docs/skills/* ~/.claude/skills/
+
+# Codex CLI / GitHub Copilot CLI (user-level)
+cp -r path/to/opshub/docs/skills/* ~/.agents/skills/
+
+# Project-local install (any host)
+cp -r path/to/opshub/docs/skills/* ./.claude/skills/   # or ./.agents/skills/
+```
+
+The 14 skills are:
+
+| Tier | Skill | Trigger phrase examples |
+| --- | --- | --- |
+| read | `personal-brief` | "今日のまとめ" / "今週どうなってる" / "最近どうなってる" |
+| read | `next-actions` | "次に何やる?" / "やること教えて" / "優先度高いのは?" |
+| read | `pr-review` | "PR #N レビューして" / "この差分どう?" |
+| read | `find-document` | "Box にあったあの資料" / "<キーワード>含むファイル" |
+| read | `meeting-prep` (Phase 12 H2) | "来週の会議準備" / "明日のミーティング前確認" |
+| read | `research` (Phase 12 H2) | "<X> について調べて" / "<トピック> 網羅的に教えて" |
+| read | `external-brief` (Phase 12 H3) | "上司向け週次報告" / "クライアント向け進捗まとめ" |
+| read | `decision-rationale` (Phase 12 H3) | "あの決定はなぜ" / "X を選んだ理由" |
+| read | `handoff-draft` (Phase 12 H5) | "引き継ぎ書作って" / "handoff 書く" |
+| read | `announcement-draft` (Phase 12 H5) | "リリース告知文書いて" / "announcement 作って" |
+| HITL write | `reply-draft` | "返信案考えて" / "下書き作って" |
+| HITL write | `inbox-triage` (Phase 12 H4) | "受信箱整理して" / "inbox 仕分けて" |
+| HITL write | `source-extract` (Phase 12 H4) | "この資料から task 抽出" / "<source_id> から候補を" |
+| HITL write | `meeting-followup` (Phase 12 H4) | "会議後の action items" / "議事録から task 抽出" |
+
+The full responsibility map (pair structure / MCP tool dependency matrix / HITL boundary / can-do/can't-do) lives in [docs/secretary-agent.md](secretary-agent.md). Skill descriptions include Japanese trigger phrases, so asking the agent host in natural language routes to the right skill automatically.
+
+After copying, restart the agent host (or its skill loader if it supports hot reload) so the new skills become visible.
 
 ## 4. Wire the agent host
 
@@ -107,8 +152,8 @@ If you store new connector tokens, use `opshub connector auth set <name>` — th
 
 The annotations on every tool reflect a policy-as-data registry. A compliant host will:
 
-* auto-approve `recall.search`, `task.list`, `inbox.list`, `decision.list`, `brief`, `graph.related`, `graph.trace`, `graph.expand`, `source.list`, `source.get`, `embeddings.find_duplicates` — they are read-only against the local DB (or, for `brief`, observation-only via the LLM provider);
-* require operator confirmation for `task.create`, `inbox.add`, `connector.sync`, `propose.generate` — they mutate the durable log (`propose.generate` writes a `ProposalGenerated` event even though apply is still HITL-only) or call an external SaaS.
+* auto-approve `recall.search`, `task.list`, `inbox.list`, `decision.list`, `brief`, `graph.related`, `graph.trace`, `graph.expand`, `source.list`, `source.get`, `embeddings.find_duplicates`, `search` (Phase 12 H1, FTS5) — they are read-only against the local DB (or, for `brief`, observation-only via the LLM provider);
+* require operator confirmation for `task.create`, `inbox.add`, `connector.sync`, `propose.generate`, `propose.apply` (Phase 12 H1) — they mutate the durable log (`propose.generate` writes a `ProposalGenerated` event even though apply is still HITL-only; `propose.apply` writes `TaskCreated` / `DecisionRecorded` / `ReplyDraftSaved`, idempotent on the second call) or call an external SaaS.
 
 The 84% vs <5% asymmetry between auto-approve and human-in-the-loop tool-poisoning success rates (cited in ADR-0022 §(c)) is the primary reason the write surface is intentionally narrow and explicitly flagged.
 
@@ -198,7 +243,46 @@ These illustrate the new surface in JSON form. Inputs match `inputSchema`; outpu
  "hitl_apply_required": true}
 ```
 
-`hitl_apply_required` is always `true` — apply (task / decision creation) still requires `opshub propose apply <proposal-id> <candidate-index>` from the operator.
+`hitl_apply_required` is always `true` — apply (task / decision creation) still requires either `opshub propose apply <proposal-id> <candidate-index>` from the operator, or a confirmed `propose.apply` MCP call from the agent host.
+
+### `propose.apply` (Phase 12 H1 HITL write, idempotent)
+
+```json
+// first call
+{"proposal_id": "01HPROP…", "candidate_index": 0}
+
+// first-call output
+{"ok": true, "already_applied": false,
+ "applied_entity_type": "task", "applied_entity_id": "01HTASK…",
+ "proposal_id": "01HPROP…", "candidate_index": 0}
+
+// second call with the same arguments
+// → {"ok": true, "already_applied": true,
+//    "applied_entity_type": "task", "applied_entity_id": "01HTASK…",
+//    "proposal_id": "01HPROP…", "candidate_index": 0}
+// (handler catches OpsHubError("already applied") and recovers
+//  the historical entity tuple via _lookup_applied_entity)
+//
+// "already rejected" propagates as MCP isError, as do unknown proposals
+// and out-of-range candidate indices.
+```
+
+### `search` (Phase 12 H1 read, FTS5 phrase-quoted)
+
+```json
+// input — raw_query flag is intentionally absent from the MCP schema;
+// the body is phrase-quoted server-side so free-form host tokens stay safe.
+{"query": "Q3 architecture review", "limit": 20}
+
+// output
+{"query": "Q3 architecture review", "hits": [
+   {"entity_type": "source", "entity_id": "01HSRC…",
+    "title": "q3-review-notes.docx", "snippet": "…", "rank": 0.0123},
+   …],
+ "truncated_snippets": true}
+```
+
+For the CLI `--raw-query` power-user path, use `opshub search "..." --raw` instead — that flag stays available at the CLI boundary but is intentionally not mirrored to the MCP surface.
 
 ## 7. Logging
 

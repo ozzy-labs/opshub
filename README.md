@@ -69,15 +69,26 @@ All state lives under XDG directories; override via `OPSHUB_*` env vars
 
 Once you wire OpsHub into an agent host over MCP (see [Connect an agent host](#connect-an-agent-host-mcp) below), you can talk to your secretary in plain language. The agent calls the right OpsHub commands behind the scenes.
 
+Phase 12 (2026-05-31) widened the secretary skill repertoire from 5 to **14** (10 read / 4 HITL write). The catalog below shows the most common triggers; the full responsibility map lives in [`docs/secretary-agent.md`](docs/secretary-agent.md).
+
 | You ask | Skill that fires | What it does |
 |---|---|---|
 | "What should I do next?" / "今日のまとめ" / "今週どうなってる" | `personal-brief` / `next-actions` | Signals over the requested window (今日 / 今週 / 今月 / 先週 / 先月) + active tasks + untriaged inbox |
-| "Draft a reply to that Slack thread" / "返信案考えて" | `reply-draft` | LLM-generated draft grounded in your past sending style (you copy-paste — OpsHub never sends) |
+| "Draft a reply to that Slack thread" / "返信案考えて" | `reply-draft` | LLM-generated draft grounded in your past sending style (HITL apply, idempotent — OpsHub never sends) |
 | "Review PR #123" | `pr-review` | Pulls related decisions / tasks / past discussion so the agent can review with context |
-| "Find that Box file about X" / "Word/Excel/PPT 探して" | `find-document` | Full-text + semantic search across Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive (incl. Office body extraction, Phase 11) |
+| "Find that Box file about X" / "Word/Excel/PPT 探して" | `find-document` | Full-text + semantic search across Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive (incl. Office body extraction, Phase 11; FTS5 over MCP since Phase 12 H1) |
 | "Summarise that Teams thread" / "Teams スレッド要約して" | `personal-brief` / `find-document` | Body-based recall over Teams chat history (Phase 11) |
+| "Prep me for tomorrow's meeting" / "明日の会議準備" | `meeting-prep` (Phase 12) | Purpose + prior discussion + related decisions / sources for the upcoming calendar event |
+| "Research X end-to-end" / "<X> について調べて" | `research` (Phase 12) | Cross-cutting topical research (semantic recall + FTS5 + graph expand + briefing) |
+| "Weekly status for my manager" / "上司向け週次報告" | `external-brief` (Phase 12) | Outward-facing report (completed tasks + confirmed decisions, restrained tone) — pair of personal-brief |
+| "Why did we choose X?" / "あの決定はなぜ" | `decision-rationale` (Phase 12) | Decision + source + prior decisions traced via `graph.trace` |
+| "Triage my inbox" / "受信箱整理して" | `inbox-triage` (Phase 12, HITL) | Generate per-item action candidates over open inbox items, you approve each one |
+| "Extract tasks from this doc" / "この資料から task 抽出" | `source-extract` (Phase 12, HITL) | Pull task / decision candidates from one source body |
+| "Action items from yesterday's meeting" / "会議後のフォロー" | `meeting-followup` (Phase 12, HITL) | Action items extracted from recent calendar events — pair of meeting-prep |
+| "Write the handoff doc" / "引き継ぎ書作って" | `handoff-draft` (Phase 12) | Markdown handoff text built from in-progress tasks + decisions + recall (text-only, no persist) |
+| "Draft the release announcement" / "リリース告知文書いて" | `announcement-draft` (Phase 12) | Markdown announcement built from `recall.search` + recent decisions + briefing (text-only) |
 
-The five secretary skills ship through [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) via the `@ozzylabs/skills` Renovate preset (handbook ADR-0016). See [`docs/secretary-agent.md`](docs/secretary-agent.md) for the full catalog and what OpsHub deliberately does not do (no write-back to SaaS, no always-on runtime, no auto-apply).
+The 14 secretary skills live under [`docs/skills/<name>/SKILL.md`](docs/skills/) (Phase 12 H1 made opshub the SSOT). The original 5 skills were renamed (`daily-brief` → `personal-brief`, `file-lookup` → `find-document`); the other 9 are new in Phase 12 H2-H5. The `@ozzylabs/skills` Renovate preset distribution (handbook ADR-0016) is deferred to Phase 13+; in Phase 12 you copy them into the host loader manually (see [Install the secretary skills](#install-the-secretary-skills) below). See [`docs/secretary-agent.md`](docs/secretary-agent.md) for the responsibility map, MCP tool dependency matrix, pair structure, HITL boundary, and what OpsHub deliberately does not do (no write-back to SaaS, no always-on runtime, no auto-apply).
 
 ## Connect an agent host (MCP)
 
@@ -100,6 +111,23 @@ Then point your agent host (Claude Code etc.) at `opshub mcp serve` as a stdio M
 
 Full setup (other hosts, encryption, troubleshooting): [`docs/mcp-setup.md`](docs/mcp-setup.md).
 
+## Install the secretary skills
+
+Phase 12 ships **14 secretary skills** under [`docs/skills/<name>/SKILL.md`](docs/skills/) (opshub is the SSOT, [ADR-0004 §決定 (c)](docs/adr/0004-agent-runtime-boundary.md)). The `@ozzylabs/skills` Renovate preset distribution is deferred to Phase 13+; in Phase 12 copy the skills into the host loader manually:
+
+```bash
+# Claude Code (user-level)
+cp -r path/to/opshub/docs/skills/* ~/.claude/skills/
+
+# Codex CLI / GitHub Copilot CLI (user-level)
+cp -r path/to/opshub/docs/skills/* ~/.agents/skills/
+
+# Project-local install (any host)
+cp -r path/to/opshub/docs/skills/* ./.claude/skills/   # or ./.agents/skills/
+```
+
+Skill descriptions include Japanese trigger phrases, so asking your agent "今日のまとめ" / "What should I do next?" routes to the right skill automatically. See [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 (セットアップ) for the up-to-date install steps and Phase 13+ distribution outlook.
+
 ## Configure an LLM backend (optional)
 
 OpsHub is functional without any LLM — `task` / `decision` / `inbox` /
@@ -119,7 +147,7 @@ rationale.
 
 ## What's in OpsHub today
 
-Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23. Phase 10 + Phase 11 shipped 2026-05-31:
+Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23. Phase 10 + Phase 11 + Phase 12 shipped 2026-05-31:
 
 | Phase | Layer | Highlights |
 |---|---|---|
@@ -134,8 +162,9 @@ Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23. Phase 10 
 | 9 | Local-FS connectors | `box_drive` (Box Drive desktop client → local FS scan, ADR-0019) |
 | 10 | Secretary agent platform | Full local body retention (ADR-0020) + encryption at rest (ADR-0021) + MCP server (ADR-0022) + `opshub search` (FTS5) + `opshub mcp serve` + secretary 5 Skills + reply-draft (ADR-0016 §決定 (i)) + ADR-0004 revision (form-A: no agent runtime in core) + ADR-0010 revision (write-back ban) + ADR-0017 revision (reply_draft link types) |
 | 11 | MS Office deep-dive | Office content extraction (ADR-0025, markitdown for `.docx`/`.xlsx`/`.pptx`, 50 MB / 500K chars cap, fail-safe) + ADR-0019 revision (`content_extraction` opt-in exception + `onedrive_drive` pattern generalisation) + ADR-0010 revision (Teams connector + body-extraction contract + delta-link cursor + invalidated-token fallback + Teams User Token principal) + new `teams` connector (Microsoft Graph chat delta + `Chat.Read`) + new `onedrive_drive` connector (FS scan, WSL2 `/mnt/onedrive` / macOS `~/OneDrive`) + `box_drive` Office extraction hook + Outlook body deep retention |
+| 12 | Secretary Skills expansion | Secretary skill repertoire grows from 5 to **14** (10 read / 4 HITL write) — `meeting-prep` / `research` / `inbox-triage` / `external-brief` / `decision-rationale` / `handoff-draft` / `announcement-draft` / `meeting-followup` / `source-extract` are new; `daily-brief` / `file-lookup` renamed to `personal-brief` / `find-document`. 4 new MCP tools (`search` FTS5 + `propose.apply` HITL idempotent + physical-column time filters on `task.list` / `inbox.list` / `decision.list` / `source.list`). The original 5 skills now call MCP directly (CLI fallback dropped). ADR-0004 revision (Skills SSOT moves into opshub `docs/skills/`, distribution deferred to Phase 13+) + ADR-0022 revision (4 new MCP tools contract) + ADR-0016 revision (draft-family unified policy: persist boundary by reply-source presence, `mode` arg scope, triage scope, Candidate union freeze). `docs/secretary-agent.md` becomes the 14-skill catalog SSOT (responsibility map + HITL boundary + MCP tool dependency matrix + pair structure) |
 
-Next: **Phase 12+ candidates** — multi-machine sync, proactive secretary (cron-delegated commands), image OCR (PPT figures / slide images), additional connectors (Google Workspace via markitdown reuse / Notion / Jira), external write-back (Teams reply send with HITL). Longer phase-by-phase narrative lives in
+Next: **Phase 13+ candidates** — multi-machine sync, proactive secretary (cron-delegated commands), image OCR (PPT figures / slide images), additional connectors (Google Workspace via markitdown reuse / Notion / Jira), external write-back (Teams reply send with HITL), `ozzy-labs/skills` distribution completion. Longer phase-by-phase narrative lives in
 [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery).
 
 ## Commands
