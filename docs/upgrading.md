@@ -267,7 +267,7 @@ Two existing skills were renamed (`daily-brief` → `personal-brief`, `file-look
 
 ### Skill install on the host
 
-The `ozzy-labs/skills` distribution channel ([ADR-0004](adr/0004-agent-runtime-boundary.md) §決定 (c) backout) is deferred to Phase 14+ (Phase 13 shipped Google Workspace, not the skills distribution channel); the **opshub repo (`docs/skills/<name>/SKILL.md`) is the SSOT** and the host installs them manually:
+The `ozzy-labs/skills` distribution channel ([ADR-0004](adr/0004-agent-runtime-boundary.md) §決定 (c) backout) is deferred to Phase 15+ (Phase 13 shipped Google Workspace, Phase 14 shipped Gmail + Google Calendar, not the skills distribution channel); the **opshub repo (`docs/skills/<name>/SKILL.md`) is the SSOT** and the host installs them manually:
 
 ```bash
 # Claude Code (project-level)
@@ -370,6 +370,90 @@ The first three discriminators flow through the same `find-document` / `search` 
 - **New optional extras**: `connectors-google-workspace` (httpx). Pair with `[office]` extras when enabling `content_extraction = true`.
 - **No CLI breaking changes**. `opshub connector auth set google_workspace` (positional form, not `connector:google_workspace`) and `opshub connector sync google_workspace` are the new sync targets — both are additive.
 - **External write-back is still forbidden** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7). Drive write APIs (`files.update` / `files.create` / `files.copy` / `comments.create` / `permissions.*`) are deliberately not implemented in the connector. Drive push notifications (`files.watch`) are also forbidden — the connector polls via `changes.list` only to preserve form-A (no opshub-internal runtime).
+
+## Phase 14: Gmail + Google Calendar connectors
+
+Phase 14 ([ADR-0010](adr/0010-connector-contract.md) revision §Phase 14 (i)-(m) + [ADR-0014](adr/0014-saas-token-storage.md) revision (scope expansion for `connector:google_workspace:refresh_token` slot + shared auth foundation extraction)) adds two new connectors — `google_mail` (Gmail) and `google_calendar` (Google Calendar) — that **share the existing Google OAuth principal** from Phase 13. **No DB schema changes** (the existing `sources.body` column + FTS5 index from Phase 10 carry the new bodies), **no breaking CLI changes**, **no new extras** (`connectors-google-workspace` is reused for httpx), and the external write-back ban remains in force.
+
+### Re-consent required (existing operators)
+
+If you already configured the `google_workspace` connector in Phase 13, **your existing refresh token covers only `drive.readonly`** and will not work for the new Gmail / Calendar APIs. Phase 14 expands the shared OAuth principal to the 3-scope fixed list `drive.readonly + gmail.readonly + calendar.readonly` (1 Google account = 1 principal shared across Drive + Gmail + Calendar, [Phase 14 plan §1 OQ6](phase-14-plan.md#1-decisions-snapshot)). To upgrade:
+
+1. **Re-register scopes in the Google Cloud Console.** Open your existing OAuth client → OAuth consent screen → **Add or Remove Scopes** → add `gmail.readonly` and `calendar.readonly` (`drive.readonly` is already there from Phase 13). Submit for verification if your project is in production mode. Full walkthrough: [`docs/google-workspace-setup.md`](google-workspace-setup.md) §Scopes.
+2. **Re-run the paste-code flow once.** A single re-consent applies to all three connectors:
+   ```bash
+   opshub connector auth set google_workspace
+   # browser opens with the new 3-scope consent screen; paste the code back
+   ```
+   The keyring slot stays the same (`connector:google_workspace:refresh_token`), so existing env override `OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN` continues to work — just refresh its value once.
+3. **Existing `google_workspace` sync continues to work** unchanged after re-consent. The Drive endpoint still uses `drive.readonly`; the extra scopes are unused there.
+
+If you skip re-consent, `opshub connector sync google_mail` and `opshub connector sync google_calendar` will fail with a 401 `Request had insufficient authentication scopes` error and exit cleanly without writing any events.
+
+### Opt-in: enable the `google_mail` connector
+
+```bash
+# 1. extras はすでに Phase 13 で install 済み (connectors-google-workspace は httpx 共通)。
+#    新 extras なし — Phase 14 Gmail は httpx を流用。
+
+# 2. Configure in opshub.toml.
+# In ~/.config/opshub/config.toml:
+#   [connectors.google_mail]
+#   enabled = true
+#   fallback_window_days = 30              # users.history.list 7-day TTL invalidation fallback window
+#   # body 上限 / poll 設定は default で運用、override 必要時のみ:
+#   # max_body_chars = 500000              # Outlook と揃える default
+#   # max_messages_per_pass = 500          # full-pass の上限
+
+# 3. Sync (re-consent 済み前提、Phase 13 google_workspace と同 principal).
+opshub connector sync google_mail
+```
+
+The connector reads Gmail API v1 `users.messages.list` for the initial sync and `users.history.list` for delta. When Google invalidates the `startHistoryId` (HTTP 404 after the 7-day TTL elapses) the connector logs a warning (`connector.history_list.expired`) and falls back to a one-time `users.messages.list` full pass over the last `fallback_window_days` (default 30) before resuming differential mode. Same shape as the Phase 11 Teams / Phase 13 Drive fallback ([ADR-0010](adr/0010-connector-contract.md) §Phase 14 改訂 (j) generalises the pattern to all delta-cursor connectors).
+
+Bodies are extracted **symmetrically with the Phase 11 Outlook mapper**: `text/plain` preferred → `text/html` raw kept; no markitdown; no attachment retention. Labels prepend as `[Labels: INBOX, ImportantWork]`; truncation appends `[gmail body truncated: N / M chars]`. `threadId` is kept as a field; thread aggregation projection is a Phase 15+ candidate.
+
+### Opt-in: enable the `google_calendar` connector
+
+```bash
+# 1. extras はすでに Phase 13 で install 済み。
+
+# 2. Configure in opshub.toml.
+# In ~/.config/opshub/config.toml:
+#   [connectors.google_calendar]
+#   enabled = true
+#   fallback_window_days = 30              # syncToken 410 GONE fallback window
+#   # window default は MVP では「過去 90 日 + 未来 365 日」、override 可能:
+#   # time_min_days = 90                   # 過去 N 日
+#   # time_max_days = 365                  # 未来 N 日
+
+# 3. Sync.
+opshub connector sync google_calendar
+```
+
+The connector reads Calendar API v3 `events.list(syncToken=...)` for delta. When Google returns 410 GONE (`SyncTokenExpiredError`), the connector logs `connector.events_list.expired` and falls back to a `events.list(timeMin, timeMax)` window walk (`singleEvents=false` + `showDeleted=true` pinned) before resuming sync-token mode. Override events (`recurringEventId` + `originalStartTime` set) are emitted as **separate `SourceObserved` records sharing `source_type="google_calendar"`** with a body back-pointer `Override of: <master_id> (originalStart: <iso>)` — symmetric in spirit with how the MS365 calendar mapper handles master events ([Phase 14 plan §G4 / OQ3](phase-14-plan.md#1-decisions-snapshot)).
+
+Summaries follow `f"{start_iso} - {end_iso} ({attendees_count} attendees)"`; attendee email list / description / location are appended to the body; RRULE is kept as a field. Instance expansion (master + RRULE → individual instances) is a Phase 15+ projection-layer candidate (ms365 + google simultaneously).
+
+### Phase 14 specifics
+
+- **DB head unchanged** = `0019_create_sources_fts` (Phase 10). Phase 14 ships **no migrations**.
+- **No new extras** — both connectors reuse `connectors-google-workspace` (httpx).
+- **No CLI breaking changes**. `opshub connector sync google_mail` and `opshub connector sync google_calendar` are additive. The auth CLI is unchanged: `opshub connector auth set google_workspace` now provisions the refresh token for all three connectors at once.
+- **Mapper symmetry is mechanically verified** by `tests/unit/connectors/test_mapper_symmetry.py` (6 cases for Gmail ↔ Outlook + 4 cases for google_calendar ↔ ms365_calendar). If you fork the mapper for vendor-specific tweaks, run this pin test to confirm the divergence is intentional.
+- **External write-back is still forbidden** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7). Gmail `send` API and Calendar `events.insert` / `events.patch` / `events.delete` are deliberately not implemented. Push notifications (`users.watch` for Gmail / Calendar `events.watch`) are also forbidden — both connectors poll only ([ADR-0010](adr/0010-connector-contract.md) §Phase 14 改訂 (i)).
+- **No new ADRs** — Phase 14 continues the single-revision trajectory (Phase 11 = 1 new + 2 revisions → Phase 12 = 0 new + 3 revisions → Phase 13 = 0 new + 3 revisions → **Phase 14 = 0 new + 2 revisions**).
+
+### New source_types
+
+Two new `source_type` discriminators land in `sources` ([ADR-0010](adr/0010-connector-contract.md) §Phase 14 改訂 (l)):
+
+| Source | `source_type` | Body extraction |
+|---|---|---|
+| Gmail message | `gmail_message` | text/plain preferred → text/html raw kept; no markitdown; no attachment retention; `[Labels: ...]` prepend; `[gmail body truncated]` tag; threadId field |
+| Google Calendar event (master or override) | `google_calendar` | summary = `start_iso - end_iso (N attendees)`; attendee email list / description / location in body; RRULE field; override emitted as separate record with `Override of: <master_id>` back-pointer in body |
+
+Both flow through the existing `find-document` / `search` / `recall.search` / `meeting-prep` / `meeting-followup` / `personal-brief` / `next-actions` paths — no skill-side changes required.
 - Full setup (GCP project, OAuth consent screen, scopes, troubleshooting): [`docs/google-workspace-setup.md`](google-workspace-setup.md).
 
 ## Phase 14: Gmail + Google Calendar (G2 — shared Google OAuth foundation, scope expansion)

@@ -75,7 +75,7 @@ Phase 12 H1 also unified the original 5 skills (`personal-brief`, `next-actions`
 
 ## 3a. Install the 14 secretary skills on the agent host (Phase 12)
 
-Phase 12 ships **14 secretary skills** as opshub-resident SKILL.md files under `docs/skills/<name>/SKILL.md` (SSOT, ADR-0004 §決定 (c)). The `@ozzylabs/skills` Renovate preset distribution is deferred to Phase 14+ (Phase 13 shipped Google Workspace, not the skills distribution channel); copy them into each host's skill loader manually:
+Phase 12 ships **14 secretary skills** as opshub-resident SKILL.md files under `docs/skills/<name>/SKILL.md` (SSOT, ADR-0004 §決定 (c)). The `@ozzylabs/skills` Renovate preset distribution is deferred to Phase 15+ (Phase 13 shipped Google Workspace, Phase 14 shipped Gmail + Google Calendar, not the skills distribution channel); copy them into each host's skill loader manually:
 
 ```sh
 # Claude Code (user-level)
@@ -200,11 +200,11 @@ These illustrate the new surface in JSON form. Inputs match `inputSchema`; outpu
 ### `source.list` / `source.get`
 
 ```json
-// source.list — Phase 13 widens the connector_name vocabulary to
+// source.list — Phase 14 widens the connector_name vocabulary to
 // {github, slack, ms365, box, box_drive, onedrive_drive, teams,
-//  google_workspace} and the source_type vocabulary to include
-// google_doc / google_slides / google_sheets / google_workspace_file
-// alongside the Phase 11 office source_types.
+//  google_workspace, google_mail, google_calendar} and the source_type
+// vocabulary to include gmail_message / google_calendar alongside the
+// Phase 13 google_* source_types and Phase 11 office source_types.
 {"connector_name": "github", "source_type": "pull_request", "limit": 50}
 
 // source.get

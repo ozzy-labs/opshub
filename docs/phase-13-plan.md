@@ -295,18 +295,23 @@ drive 例: `/drive --merge #275 -> #276,#277 -> #278 -> #279`（Wave 2 で G2/G3
 
 ## 9. Phase 14+ outlook
 
-**Phase 14 候補**:
+> **Phase 14 再評価メモ (2026-05-31)**: 本節は Phase 13 完了時点の forecast。Phase 14 着手時 (2026-05-31、epic #292) に **「Phase 14 = Gmail + Google Calendar コネクタ」** に再評価し、Phase 13 plan §9 で Phase 14 候補としていた「画像 OCR」「Drive Comments / Suggestions 取り込み」は **Phase 15+ へ移送** した。理由 = (a) opshub の秘書 use case で MS365 (Outlook + Calendar) 対称性の最大欠落が Gmail + Calendar 未対応であり、operator が Google 派なら秘書として体感価値が最大、(b) Phase 13 で Google OAuth refresh token rotation + paste-code flow + httpx 経路が確立しているため auth.py は scope 拡張のみで再利用可能 (1 回 re-consent)、(c) Outlook の mapper / cursor / source_type が前例として存在し symmetric に実装することで mapper / skill 側 logic を分岐させずに済む、(d) 画像 OCR は ADR-0025 拡張 + tesseract システム依存が必要で性質が異なる、Drive Comments も別データモデルで分割が綺麗、(e) Phase 13 / Phase 11 流の単一カテゴリ集中パターンに揃う。Phase 14 完了時点 (2026-05-31、PR #298 / #300 / #301 / #303 / G5 closeout PR) で本節を書き戻し済 — Phase 13 audit R2-CROSS-06 (forecast 取り残し) 同型ミス防止のため、再評価時の docs 書き戻しを規律化した。
 
-- 画像 OCR (PPT 内画像 + Office 図表、tesseract / pytesseract、Phase 11 OQ7 / Phase 12 §9 defer 分の正規実装)
-- **Drive Comments / Suggestions 取り込み** (本文取り込みの自然延長、Google Workspace の議論履歴 = 決定経緯の context source、能動性ではなく次回 sync 時に diff として取り込む)
+**Phase 14 (完了、2026-05-31)**: Gmail + Google Calendar コネクタ (epic #292、上記再評価で確定)。新規 `connectors/google_mail/` + `connectors/google_calendar/` + shared `connectors/google_auth/` foundation。OAuth scope を `drive.readonly` から `drive.readonly + gmail.readonly + calendar.readonly` の 3-scope 固定 list に拡張、1 Google account = 1 principal を Drive + Gmail + Calendar の 3 connector で共有 (1 回 re-consent)。Gmail = message 単位 (Outlook と symmetric)、Calendar = master event only + override 別 record (MS365 Calendar と symmetric)、本文抽出は Outlook 流継承 (text/plain 優先 → text/html 生保持、markitdown なし、添付 retain なし)。ADR 改訂 2 本 (ADR-0010 §Phase 14 改訂 (i)-(m) + ADR-0014)、新規 ADR ゼロ。詳細は [`docs/phase-14-plan.md`](phase-14-plan.md)。
 
-**Phase 15+ 候補**:
+**Phase 15+ 候補** (Phase 13 → 14 から繰り越し分を含む):
 
+- **画像 OCR** (PPT 内画像 + Office 図表、tesseract / pytesseract、Phase 11 OQ7 / Phase 12 §9 / **Phase 13 → 14 から再 defer** 分の正規実装)
+- **Drive Comments / Suggestions 取り込み** (Google Workspace の議論履歴 = 決定経緯の context source、能動性ではなく次回 sync 時に diff として取り込む、**Phase 13 → 14 から再 defer**)
+- **Gmail / Calendar 添付の本文抽出** (Gmail attachments.get + Calendar 添付 → markitdown、ADR-0025 拡張、Phase 14 から新規 defer)
+- **Calendar instance 展開 projection** (master event + RRULE → instance dynamic 展開、ms365_calendar / google_calendar 両 connector 同時に projection 層として切る、Phase 14 から新規 defer)
+- **Gmail thread aggregation projection** (message 単位 source を thread でまとめて recall に提示、graph layer の `replied_to` link 経由、Phase 14 から新規 defer)
+- **メール・カレンダー meta 構造化** (label / attendee / response_status を SourceObserved field 化、ms365 / google 両 connector 同時に、Phase 14 から新規 defer)
 - Notion コネクタ (OAuth principal + page hierarchy)
 - Jira / Linear コネクタ (issue + comments)
 - Confluence コネクタ (page + version)
-- 能動性段階 1-4 (緊張点②、cron 委譲 / 記憶キュレーション / 通知 / filewatch / **Drive `files.watch` push notification 再評価**)
-- 外部書き戻し (緊張点③、Drive write / Reply send、明示承認必須)
+- 能動性段階 1-4 (緊張点②、cron 委譲 / 記憶キュレーション / 通知 / filewatch / **Drive `files.watch` + Gmail `users.watch` + Calendar `events.watch` push notification 再評価**)
+- 外部書き戻し (緊張点③、Drive write / Reply send / **Gmail send / Calendar event create**、明示承認必須)
 - 統合・検索融合レイヤ (RRF + dreaming + bi-temporal links)
 - ozzy-labs/skills 配布完成 (ADR-0004 §決定 (c) 復権 + Renovate preset 整備)
 - Google Workspace multi-account 対応 (OQ11、operator が個人 GCP + 業務 Workspace 併用するケース)

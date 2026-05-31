@@ -75,7 +75,7 @@ Phase 12（2026-05-31）で秘書 Skill レパートリーを 5 → **14** に�
 | 「今日のまとめ」「次に何やる?」「今週どうなってる」 | `personal-brief` / `next-actions` | 指定期間（今日 / 今週 / 今月 / 先週 / 先月）の主要シグナル + active task + 未処理 inbox |
 | 「あの Slack スレッドに返信案考えて」 | `reply-draft` | LLM が過去の自分の送信文体を踏まえて下書きを生成（HITL apply、idempotent、OpsHub は外送信しない） |
 | 「PR #123 をレビューして」 | `pr-review` | 関連 decision / task / 過去議論を引いてレビュー観点を提示 |
-| 「Box にあった X の資料」「Word / Excel / PPT 探して」「あの Google Doc」「Sheets 探して」 | `find-document` | Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive / Google Workspace を本文ベースで横断検索（Phase 11 で Office 文書本文も対象、Phase 12 H1 で `search` FTS5 を MCP 経由で直接利用、Phase 13 で Google Docs / Slides / Sheets を Drive API export + markitdown 経由で取り込み） |
+| 「Box にあった X の資料」「Word / Excel / PPT 探して」「あの Google Doc」「Sheets 探して」「あの Gmail」「Gmail に来てた件」「Google Calendar の予定」 | `find-document` | Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive / Google Workspace / Gmail / Google Calendar を本文ベースで横断検索（Phase 11 で Office 文書本文も対象、Phase 12 H1 で `search` FTS5 を MCP 経由で直接利用、Phase 13 で Google Docs / Slides / Sheets を Drive API export + markitdown 経由で取り込み、Phase 14 で Gmail (`gmail_message`) と Google Calendar (`google_calendar`) を Gmail API + Calendar API 経由で取り込み、Outlook / ms365_calendar と symmetric） |
 | 「Teams スレッド要約して」 | `personal-brief` / `find-document` | Phase 11 で取り込んだ Teams chat 本文に対する横断 recall |
 | 「明日の会議準備」「次のミーティング前に context」 | `meeting-prep` (Phase 12) | 対象 calendar event の目的 / 過去関連やりとり / 関連 decisions / 参考 sources を集約 |
 | 「<X> について調べて」「<トピック> 網羅的に」 | `research` (Phase 12) | トピック横断調査（semantic recall + FTS5 + graph 拡張 + LLM 統合要約） |
@@ -87,7 +87,7 @@ Phase 12（2026-05-31）で秘書 Skill レパートリーを 5 → **14** に�
 | 「引き継ぎ書作って」「handoff 書く」 | `handoff-draft` (Phase 12) | task.list (in_progress) + decision.list + recall + graph から引き継ぎ書 text を構成（persist なし、text-only） |
 | 「リリース告知文書いて」「announcement 作って」 | `announcement-draft` (Phase 12) | recall + decision + brief で告知文 text を構成（persist なし、text-only） |
 
-14 件の秘書 Skill は [`docs/skills/<name>/SKILL.md`](docs/skills/) を SSOT として保持しています（Phase 12 H1 で opshub を SSOT に確定、ADR-0004 §決定 (c)）。既存 5 件のうち 2 件を rename（`daily-brief` → `personal-brief` / `file-lookup` → `find-document`）し、新規 9 件を Phase 12 H2-H5 で追加しました。`@ozzylabs/skills` Renovate preset 経由の配布は Phase 14+ に defer（ADR-0004 §決定 (c) backout、Phase 13 完了時点でも依然 defer）。Phase 13 まではホスト側に手動 install します（[秘書 Skill を install する](#秘書-skill-を-install-する) 参照）。Skills カタログ（責務マップ / MCP tool 依存マップ / pair structure / HITL boundary）と「できること / できないこと」（外部書き戻し / 常駐 / auto-apply はしない）の詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。
+14 件の秘書 Skill は [`docs/skills/<name>/SKILL.md`](docs/skills/) を SSOT として保持しています（Phase 12 H1 で opshub を SSOT に確定、ADR-0004 §決定 (c)）。既存 5 件のうち 2 件を rename（`daily-brief` → `personal-brief` / `file-lookup` → `find-document`）し、新規 9 件を Phase 12 H2-H5 で追加しました。`@ozzylabs/skills` Renovate preset 経由の配布は Phase 15+ に defer（ADR-0004 §決定 (c) backout、Phase 14 完了時点でも依然 defer）。Phase 13 まではホスト側に手動 install します（[秘書 Skill を install する](#秘書-skill-を-install-する) 参照）。Skills カタログ（責務マップ / MCP tool 依存マップ / pair structure / HITL boundary）と「できること / できないこと」（外部書き戻し / 常駐 / auto-apply はしない）の詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。
 
 ## エージェント host を接続する (MCP)
 
@@ -112,7 +112,7 @@ opshub mcp tools           # read / write tool 一覧を確認 (policy-as-data �
 
 ## 秘書 Skill を install する
 
-Phase 12 で導入した 14 件の秘書 Skill は Phase 13 完了時点でも同じく [`docs/skills/<name>/SKILL.md`](docs/skills/) を opshub SSOT として保持しています（[ADR-0004 §決定 (c)](docs/adr/0004-agent-runtime-boundary.md)）。`@ozzylabs/skills` Renovate preset 経由の配布は引き続き Phase 14+ に defer されているため、当面はホスト側に手動 copy します:
+Phase 12 で導入した 14 件の秘書 Skill は Phase 14 完了時点でも同じく [`docs/skills/<name>/SKILL.md`](docs/skills/) を opshub SSOT として保持しています（[ADR-0004 §決定 (c)](docs/adr/0004-agent-runtime-boundary.md)）。`@ozzylabs/skills` Renovate preset 経由の配布は引き続き Phase 15+ に defer されているため、当面はホスト側に手動 copy します:
 
 ```bash
 # Claude Code（ユーザー単位）
@@ -125,7 +125,7 @@ cp -r path/to/opshub/docs/skills/* ~/.agents/skills/
 cp -r path/to/opshub/docs/skills/* ./.claude/skills/   # または ./.agents/skills/
 ```
 
-Skill description に日本語トリガが含まれるため、「今日のまとめ」「会議準備」のような自然文でホストが該当 Skill を発火します。最新の install 手順と Phase 14+ の配布完成計画は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 (セットアップ) を参照。
+Skill description に日本語トリガが含まれるため、「今日のまとめ」「会議準備」のような自然文でホストが該当 Skill を発火します。最新の install 手順と Phase 15+ の配布完成計画は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 (セットアップ) を参照。
 
 ## LLM backend の設定（任意）
 
@@ -146,7 +146,7 @@ ollama serve && ollama pull llama3.2:3b
 
 ## OpsHub に今あるもの
 
-Phase 1–8 を出荷済み（2026-05-17, v0.1.0）。Phase 9 出荷 2026-05-23。Phase 10・Phase 11・Phase 12・Phase 13 出荷 2026-05-31:
+Phase 1–8 を出荷済み（2026-05-17, v0.1.0）。Phase 9 出荷 2026-05-23。Phase 10・Phase 11・Phase 12・Phase 13・Phase 14 出荷 2026-05-31:
 
 | Phase | レイヤ | ハイライト |
 |---|---|---|
@@ -163,8 +163,9 @@ Phase 1–8 を出荷済み（2026-05-17, v0.1.0）。Phase 9 出荷 2026-05-23�
 | 11 | MS Office 深掘り | Office 文書本文抽出 (ADR-0025、markitdown 経路で `.docx`/`.xlsx`/`.pptx`、50 MB / 500K chars cap、fail-safe) + ADR-0019 改訂 (`content_extraction` opt-in 例外節 + `onedrive_drive` パターン汎化) + ADR-0010 改訂 (Teams connector + 本文抽出契約 + delta-link cursor + 失効時 full-pass fallback + Teams User Token principal) + 新 `teams` connector (Microsoft Graph chat delta + `Chat.Read`) + 新 `onedrive_drive` connector (FS scan、WSL2 `/mnt/onedrive` / macOS `~/OneDrive`) + `box_drive` の Office 抽出 hook + Outlook 本文 deep retention |
 | 12 | Secretary Skills 拡張 | 秘書 Skill レパートリーを 5 → **14** に拡張 (read 自律 OK 10 / HITL write 4)。新規 9 = `meeting-prep` / `research` / `inbox-triage` / `external-brief` / `decision-rationale` / `handoff-draft` / `announcement-draft` / `meeting-followup` / `source-extract`、rename 2 = `daily-brief` → `personal-brief` / `file-lookup` → `find-document`。4 新 MCP tools (`search` (FTS5) + `propose.apply` (HITL idempotent) + 既存 4 read tools の物理列ベース時間フィルタ = `task.list` / `inbox.list` / `decision.list` / `source.list`)。既存 5 SKILL.md を MCP 直接呼びに統一 (CLI fallback 廃止)。ADR-0004 改訂 (Skills SSOT を opshub `docs/skills/` に移管、配布は Phase 14+ defer) + ADR-0022 改訂 (4 新 MCP tools 契約化) + ADR-0016 改訂 (draft 系統一方針: persist 境界 = 返信元 source の有無 / `mode` 引数射程 / triage 射程 / Candidate union freeze)。`docs/secretary-agent.md` を 14 skills 責務マップ SSOT に拡張（責務マップ / HITL boundary / MCP tool 依存マップ / pair structure） |
 | 13 | Google Workspace コネクタ | 新規 `google_workspace` connector が Google Docs / Slides / Sheets を Drive API v3 (`changes.list` cursor + 失効時 full-pass fallback) + OAuth Refresh Token (offline access + 自前 refresh + rotation 書き戻し = MS365 / Box pattern、Teams pattern (verbatim user token) とは別系統である旨を ADR-0010 §Phase 13 改訂 (e)-(h) で明文化) で取り込み。Workspace native 本文 (`google_doc` / `google_slides` / `google_sheets`) は Drive API `files.export` で MS Office mediatype (`.docx` / `.pptx` / `.xlsx`) として取得し、Phase 11 で確立した markitdown 経路 (`core/document_extract.extract_workspace_export(bytes, source_type)`、ADR-0025 §決定 (d') + (j)) に流して本文抽出。ADR 改訂 3 本 (ADR-0010 + ADR-0014 + ADR-0025)、新 ADR ゼロ (Phase 11 → 12 → 13 で「1 新規 + 2 改訂 → 0 新規 + 3 改訂 → 0 新規 + 3 改訂」と縮退継続)。Drive `files.watch` push notification は禁止 (`changes.list` poll のみで形 A 整合 = 能動性なし)。新 extras `connectors-google-workspace` (httpx) + 新 setup doc `docs/google-workspace-setup.md` |
+| 14 | Gmail + Google Calendar コネクタ | 新規 `google_mail` connector が Gmail API v1 (`users.messages.list` 初回 + `users.history.list` delta + 7 日 TTL 失効時 full-pass fallback) で、新規 `google_calendar` connector が Calendar API v3 (`events.list(syncToken=...)` delta + `410 GONE` 失効時 full-pass + `timeMin`/`timeMax` window fallback) で取り込み。両者は Phase 13 の Google OAuth principal を新規 shared `connectors/google_auth/` foundation 経由で共有 — 1 Google account = 1 principal が `drive.readonly + gmail.readonly + calendar.readonly` の 3-scope 固定 list を Drive + Gmail + Calendar の 3 connector で共有（1 回の再 consent で 3 connector 全てに反映）。Mapper は MS365 Outlook / Calendar mapper (Phase 7 + Phase 11) と**意図的に symmetric**: Gmail = message 単位 `gmail_message`、text/plain 優先 → text/html 生保持 / markitdown なし / 添付 retain なし / `[Labels: ...]` prepend / `[gmail body truncated]` tag / threadId field。Calendar = master event only `google_calendar`、override は別 record として emit / summary = `start_iso - end_iso (N attendees)` / RRULE field / attendee list を body 埋め込み。Push notification (`watch` / `events.watch`) は禁止 — poll のみで形 A 整合。Symmetry は `tests/unit/connectors/test_mapper_symmetry.py` で機械検証。ADR 改訂 2 本 (ADR-0010 + ADR-0014)、新 ADR ゼロ（単一改訂路線を継続）。新 extras なし — Gmail / Calendar は `connectors-google-workspace` (httpx) を流用 |
 
-次は **Phase 14+ 候補** — multi-machine sync / 能動性段階 1-4 (cron 委譲 / 記憶キュレーション / 通知 / filewatch) / 画像 OCR (PPT 内画像 / Office 図表、Phase 13 から繰り越し) / 追加コネクタ (Notion / Jira / Linear / Confluence、Phase 13 から繰り越し) / Drive Comments / Suggestions 取り込み (Phase 13 follow-up) / 外部書き戻し (Teams / Drive 返信送信 + HITL、要 新 ADR) / `ozzy-labs/skills` 配布完成。phase ごとの詳細は [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery) に。
+次は **Phase 15+ 候補** — multi-machine sync / 能動性段階 1-4 (cron 委譲 / 記憶キュレーション / 通知 / filewatch / Gmail push / Calendar push 再評価) / 画像 OCR (PPT 内画像 / Office 図表、Phase 13 → 14 から繰り越し) / Drive Comments / Suggestions 取り込み (Phase 13 follow-up) / Gmail / Calendar 添付の本文抽出 (markitdown 経路、ADR-0025 拡張) / 追加コネクタ (Notion / Jira / Linear / Confluence、Phase 13 から繰り越し) / 外部書き戻し (Teams / Drive / Gmail 返信送信 + Calendar event create + HITL、要 新 ADR) / Calendar instance 展開 projection (ms365 / google 両方同時) / `ozzy-labs/skills` 配布完成。phase ごとの詳細は [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery) に。
 
 ## コマンド
 
@@ -202,8 +203,10 @@ opshub connector sync box_drive                       # Phase 9: ローカル Bo
 opshub connector sync onedrive_drive                  # Phase 11: ローカル OneDrive Desktop mount を scan (docs/onedrive-drive-setup.md)
 opshub connector auth set connector:teams             # Phase 11: Microsoft Graph User Token を OS keychain に保存 (Chat.Read、docs/teams-setup.md)
 opshub connector sync teams                           # Phase 11: Graph chat delta + 失効時 fallback
-opshub connector auth set google_workspace            # Phase 13: Google OAuth paste-code (drive.readonly、refresh token を OS keychain に保存、docs/google-workspace-setup.md)
+opshub connector auth set google_workspace            # Phase 14: Google OAuth paste-code、Drive + Gmail + Calendar の 3 connector で principal 共有 (drive.readonly + gmail.readonly + calendar.readonly、1 回の再 consent で 3 つ全て反映、docs/google-workspace-setup.md)
 opshub connector sync google_workspace                # Phase 13: Drive API v3 changes.list cursor + 失効時 fallback (content_extraction = true で Workspace export → markitdown 経路)
+opshub connector sync google_mail                     # Phase 14: Gmail API v1 users.history.list delta + 7 日 TTL fallback (message 単位、Outlook と symmetric な本文抽出)
+opshub connector sync google_calendar                 # Phase 14: Calendar API v3 events.list(syncToken=...) + 410 GONE fallback (master event only + override 別 record、MS365 Calendar と symmetric)
 opshub connector list                                 # 登録済 connector を表示
 
 # Workspace + projections
@@ -268,7 +271,7 @@ opshub mcp serve                                       # stdio MCP server — �
 | `llm-ollama` | Ollama daemon クライアント | 小 |
 | `connectors-github` / `connectors-slack` / `connectors-ms365` / `connectors-box` | SaaS connector | 小 |
 | `connectors-teams` | Microsoft Teams connector (Phase 11、msal + httpx) | 小 |
-| `connectors-google-workspace` | Google Workspace connector (Phase 13、httpx)。`[office]` extras と併用すると `content_extraction = true` を有効化でき、`google_doc` / `google_slides` / `google_sheets` を Workspace export → markitdown 経路で本文取り込み | 小 |
+| `connectors-google-workspace` | Google Workspace connector (Phase 13、httpx)。`[office]` extras と併用すると `content_extraction = true` を有効化でき、`google_doc` / `google_slides` / `google_sheets` を Workspace export → markitdown 経路で本文取り込み。Phase 14 で Gmail (`google_mail`) と Google Calendar (`google_calendar`) connector も同じ extras を流用 (httpx 共有、新 extras なし) | 小 |
 | `office` | Office 文書本文抽出 (Phase 11、ADR-0025)。`markitdown` を `[docx,xlsx,pptx]` sub-extras 付きで導入する (内訳は `mammoth` / `openpyxl` / `python-pptx`) ため、opshub が対応する 3 つの sub-format のみが取り込まれる | 小 |
 | `secrets` | OS keyring backend | 小 |
 | `encryption` | SQLCipher backed の保存時暗号化 (Phase 10、ADR-0021) | 小 |
