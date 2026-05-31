@@ -1,7 +1,7 @@
 # 0025. Office Document Content Extraction
 
-- Status: Accepted
-- Date: 2026-05-31
+- Status: Accepted (revised 2026-05-31 for Phase 13 Sub-issue G1: Google Workspace source_type 3 種 + Workspace export 経路追加)
+- Date: 2026-05-31 (initial、Phase 11 Sub-issue F1); 2026-05-31 (Phase 13 改訂: 新 source_type `google_doc` / `google_slides` / `google_sheets` 追加 + Workspace export → Office mediatype → markitdown 経路を §決定 (d') / §決定 (j) として追加)
 - Deciders: ozzy
 
 ## Context
@@ -173,6 +173,54 @@ Phase 11.x 候補:
 - キャッシュ層を MVP に含めると schema migration が増え、本 PR の scope (ADR のみ 1 PR) で吸収不能
 - rebuild は operator が明示的に走らせる稀イベントで、初期は 100k files で 数十分かかっても許容
 
+### (d') source_type 拡張 = Google Workspace 3 種 (`google_doc` / `google_slides` / `google_sheets`) — Phase 13 改訂
+
+Phase 13 Sub-issue G1 (2026-05-31) で §決定 (d) の source_type 3 種 (`word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`) に、Google Workspace 由来 3 種を **加算追加** する。本節は §決定 (d) に対する Phase 13 改訂で、§決定 (d) は **保持** (削除・変更しない)。
+
+| Google mimeType | 新 source_type | 想定用途例 | 抽出経路 (§決定 (j) 参照) |
+|---|---|---|---|
+| `application/vnd.google-apps.document` | `google_doc` | 仕様書 / 議事録 / 提案書 (Google Docs) | → `.docx` export → markitdown |
+| `application/vnd.google-apps.presentation` | `google_slides` | プレゼン資料 (Google Slides) | → `.pptx` export → markitdown |
+| `application/vnd.google-apps.spreadsheet` | `google_sheets` | 集計 / 一覧 / トラッキング表 (Google Sheets) | → `.xlsx` export → markitdown |
+
+採用理由:
+
+- **operator UX** — `opshub source list --type google_doc` で Google Docs だけ拾う、`opshub recall --type google_sheets` で Sheets に絞った semantic search 等、形式ごとの操作粒度が成立 (§決定 (d) と同根拠)
+- **find-document 自然文 query との整合** — 「Google Docs にあった仕様書」「あの Sheets」等の自然文を直接 source_type filter に落とし込める (Phase 12 find-document skill 拡張に直結)
+- **MS Office 系 3 種との分離** — `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` (§決定 (d)) と `google_doc` / `google_slides` / `google_sheets` (本節) を分離することで、operator は「Workspace 由来か Office 由来か」を query レベルで区別可能。両者を 1 タイプに統合する案は却下 (本 ADR §Alternatives #3 と同根拠)
+- **Phase 13 plan OQ3 確定** — `Final[Literal[...]]` で G2 (Sub-issue) が `domain/events/source.py` に公開し、G3 (Sub-issue) が import する分担パターン。Phase 11 §決定 (d) と同じ projection 表面拡張パターン
+
+### (j) Workspace export 経路 (Google Workspace 専用、Web API 経由のバイナリ export) — Phase 13 改訂
+
+Phase 13 Sub-issue G1 (2026-05-31) で `core/document_extract.py` の API 表面を **Workspace export 経路に延伸** する。本節は §決定 (a) 抽出ライブラリ = markitdown 1 本 を **保持** したまま、Google Workspace 専用の input 経路 (バイナリ export → markitdown) を追加する。
+
+抽出経路の流れ (Google Workspace、ADR-0010 §Phase 13 改訂 (f) と整合):
+
+```text
+Google mimeType (application/vnd.google-apps.*)
+  → Drive API files.export(fileId, mimeType=<Office mediatype>) でバイナリ取得
+    ├─ vnd.google-apps.document     → .docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+    ├─ vnd.google-apps.presentation → .pptx (application/vnd.openxmlformats-officedocument.presentationml.presentation)
+    └─ vnd.google-apps.spreadsheet  → .xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+  → markitdown(bytes_or_tempfile) (§決定 (a) 共通経路)
+  → ExtractResult (body + truncated + extraction_skipped + skip_reason)
+```
+
+不変条件:
+
+1. **markitdown 1 本経路を保持** — §決定 (a) と同じ markitdown 単独経路。Google Workspace 専用の docx / pptx / xlsx parser を `core/document_extract.py` に追加しない (Office 由来 3 種と同じ markitdown 関数を呼ぶ)
+2. **Google ネイティブ markdown export は使わない** — Docs は `text/markdown` 直接 export を持つが、Sheets / Slides は markdown 直接 export 非対応。3 形式とも MS Office mediatype 経由で統一することで `core/document_extract.py` の API 表面 1 経路を保つ (ADR-0010 §Phase 13 改訂 (f) §不変条件 2 と一致)
+3. **size 上限 / text 上限 / cells 上限は §決定 (b)(e) を継承** — Workspace export 由来文書も同じ cap に従う。ただし元 file size 概念が Google native fmt → export 後 size で異なるため、cap 適合性は Phase 13 plan OQ9 で実測後に必要なら `[office.google_workspace] max_file_size_mb` separate override 導入 (本 ADR では separate override の存在可能性のみ pin)
+4. **fail-safe は §決定 (c) を継承** — `files.export` 失敗 (Drive API throttling / file permission lost / 巨大 file の export timeout 等) は markitdown 例外と同じく `body=None` + warning log で SourceObserved 発行継続。Connector 側で Drive API 個別エラーを `core/document_extract.py` に伝える契約は ADR-0010 §Phase 13 改訂 (f) §不変条件 4 と一致
+5. **API 表面**: `core/document_extract.extract(path_or_bytes, source_hint=<Google mimeType or extension>)` 形式で local file path / in-memory bytes の両方を受ける形に拡張 (Phase 11 は path-only)。Google Workspace は export bytes を tempfile に書いてから markitdown に渡す経路 vs in-memory 経路の選択は Phase 13 Sub-issue G2 (#276) 実装時に決定。本 ADR は API 表面の拡張のみ pin
+
+採用理由:
+
+- **markitdown 1 本経路の保持** — §決定 (a) で確定した「multi-format → markdown を 1 API」の選定根拠は Workspace export 経由でも崩れない (export 後の docx / pptx / xlsx は MS Office 由来 3 種と同じ markitdown 入力)
+- **3 形式とも MS Office mediatype 経由で統一** — Docs だけ markdown 直接 export を採ると `core/document_extract.py` の経路が `google_doc` のみ別分岐 (markdown export → そのまま body) になり、Sheets / Slides との API 表面整合性が崩れる。3 形式とも markitdown 経由に統一する方が design coherence が高い
+- **Drive API files.export の冪等性** — `files.export` は冪等な GET 系 API で、cursor (`changes.list` page token) と分離して呼べる。Connector は metadata fetch (changes.list) と export (files.export) を別 stage で呼ぶ経路を採れる (ADR-0010 §Phase 13 改訂 (f) §抽出契約フロー)
+- **Phase 11 改訂 (b) と対の関係** — Phase 11 改訂 (b) は local-FS-backed connector (`os.scandir` + stat() + open()) の本文抽出経路、本節 (Phase 13 改訂 §決定 (j)) は Web API connector (Drive API files.export) の本文抽出経路。両者で `core/document_extract.py` 1 module を共通利用 (ADR-0010 §責務 6 body minimization の延伸)
+
 ## Consequences
 
 ### Positive
@@ -301,4 +349,8 @@ operator override 不要で「ほぼすべての Office 文書」を取り込め
 - [ADR-0022: MCP Server Surface](0022-mcp-server-surface.md) — Office 本文も `recall.search` / `source.get` 経由で agent context に流れる際の policy-as-data (annotation) 規律を継承
 - [Phase 11 Plan §1 確定済み事項 + §2 ADR 構成 + §3 Sub-issue F1](../phase-11-plan.md)
 - [Phase 11 epic #233 / Sub-issue F1 #234](https://github.com/ozzy-labs/opshub/issues/234)
+- [Phase 13 Plan §1 OQ3 / §2 改訂 ADR / §3 Sub-issue G1](../phase-13-plan.md) — Google Workspace 3 種 + Workspace export 経路 (本 ADR §決定 (d') / §決定 (j))
+- [Phase 13 epic #274 / Sub-issue G1 #275](https://github.com/ozzy-labs/opshub/issues/275)
 - [microsoft/markitdown (GitHub)](https://github.com/microsoft/markitdown) — 採用ライブラリの公式リポジトリ
+- [Google Drive API v3 files.export](https://developers.google.com/drive/api/v3/reference/files/export) — Phase 13 §決定 (j) Workspace export 経路の API リファレンス
+- [Google Drive API v3 changes.list](https://developers.google.com/drive/api/v3/manage-changes) — ADR-0010 §Phase 13 改訂 (g) cursor 戦略の API リファレンス
