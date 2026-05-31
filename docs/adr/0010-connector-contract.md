@@ -1,7 +1,7 @@
 # 0010. Connector Contract
 
-- Status: Accepted (revised 2026-05-31 for Phase 13 Sub-issue G1)
-- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外); 2026-05-31 (Phase 11 改訂: Teams 追加 + 本文抽出契約 + delta-link cursor + User Token principal); 2026-05-31 (Phase 13 改訂: Google Workspace 追加 + Drive `changes.list` cursor + TTL fallback + Workspace export 本文抽出契約 + Google Refresh Token principal = MS365 / Box pattern 明文化)
+- Status: Accepted (revised 2026-05-31 for Phase 14 Sub-issue G1)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外); 2026-05-31 (Phase 11 改訂: Teams 追加 + 本文抽出契約 + delta-link cursor + User Token principal); 2026-05-31 (Phase 13 改訂: Google Workspace 追加 + Drive `changes.list` cursor + TTL fallback + Workspace export 本文抽出契約 + Google Refresh Token principal = MS365 / Box pattern 明文化); 2026-05-31 (Phase 14 改訂: Gmail + Google Calendar 追加 + delta-cursor 型 connector 全般 への TTL fallback 一般化 + Outlook 流本文抽出契約を Gmail / Calendar に拡張)
 - Deciders: ozzy
 
 ## Context
@@ -349,6 +349,139 @@ Google Workspace User Token の運用:
 
 採用理由の根拠は ADR-0014 §Phase 7 Validation MS365 / Box validation と全く同じため詳細は ADR-0014 を参照。本 ADR §Phase 13 改訂 (h) は ADR-0014 の MS365 / Box pattern を **Google Workspace にも適用する確認** + **Teams pattern との並立を明文化** にとどまる。
 
+## Phase 14 改訂 (Sub-issue G1、2026-05-31)
+
+Phase 14 (epic #292) で Gmail + Google Calendar 新コネクタを Phase 13 で確立した Google OAuth principal の流用 (scope 拡張: `drive.readonly` → `drive.readonly + gmail.readonly + calendar.readonly`) として導入するにあたり、本 ADR を改訂し以下 5 点を追加する (Phase 10 改訂節 §禁止事項 7 / Phase 11 改訂節 (a)-(d) / Phase 13 改訂節 (e)-(h) は **保持**、本節は **加算改訂**)。
+
+### Phase 14 改訂 (i) — Gmail + Google Calendar 新コネクタを契約対象に追加
+
+Phase 14 Sub-issue G3 / G4 (#295 / #296) で **`connectors/google_mail/` + `connectors/google_calendar/` connector** を新設し、本 ADR の `Connector` Protocol + 責務 1-6 + 禁止事項 1-7 をそのまま適用する。
+
+- **Gmail connector** — Gmail API v1 `users.messages.list` (initial sync) + `users.history.list` (delta) 経由で message 単位を fetch し、`source_type="gmail_message"` で `sources` projection に persist
+- **Google Calendar connector** — Google Calendar API v3 `events.list(syncToken=...)` 経由で master event を fetch し、`source_type="google_calendar"` で `sources` projection に persist。recurring event の override (Google API が独立 event として返す `recurringEventId` + `originalStartTime` 持ち) は別 record として retain (本 ADR §責務 4 と整合、master event instance の動的展開は projection 層の責務として Phase 15+ defer)
+- **Protocol signature 変更なし** — Phase 3 で確定し Phase 7-13 で適合済の Connector Protocol を再利用 (本 ADR §Phase 11 改訂 (a) / §Phase 13 改訂 (e) と同じ追加パターン)
+- **本 ADR の禁止事項 1-7 すべて適用** — Task / Decision / Link 直接生成禁止 / projection 直接更新禁止 / Application Service 経由必須 / vendor 固有 event 名禁止 / write-back ban (§禁止事項 7) を Gmail / Calendar にも継承。**Gmail send API (`users.messages.send` / `users.drafts.create` / `users.drafts.send`) / Calendar write API (`events.insert` / `events.update` / `events.delete` / `events.patch`) を connector に実装しない** ことで構造的に書き戻し経路を不在にする (§禁止事項 7 の Gmail / Calendar への自然延長)
+- **能動性禁止の延長: Gmail / Calendar push notification (`users.watch` / Calendar `events.watch`) 禁止** — Phase 13 改訂 (e) で Drive `files.watch` を禁止した方針と同型。Gmail / Calendar push channel を張る code path を connector に実装しないことで構造的に不在を保証 (能動性混入は形 A scope 抵触)。`history.list` poll / `events.list(syncToken)` poll のみに制限
+- **Google OAuth principal は Phase 13 改訂 (h) を流用** — Gmail / Calendar 専用 keyring slot を追加せず、`connector:google_workspace:refresh_token` の 1 slot を 3 connector (Drive / Gmail / Calendar) が共有 (詳細は本 ADR §Phase 14 改訂 (m) を参照)
+
+### Phase 14 改訂 (j) — delta-cursor 型 connector 全般への TTL fallback 一般化 (改訂 (g) generalize)
+
+Phase 11 改訂 (c) で Microsoft Graph delta query 限定として導入し、Phase 13 改訂 (g) で Drive API `changes.list` page token に拡張した **delta-cursor + 失効時 full-pass fallback 義務** を、Phase 14 で **delta-cursor 型 connector 全般 (Drive `changes.list` / Gmail History API / Calendar sync token / 後続 delta-cursor 型 connector)** に generalize する。本契約 §(j) は §改訂 (c) / §改訂 (g) の SSOT を統合する位置付けで、両条文は本契約 §(j) の specialization として継続有効。
+
+統一規約 (本 ADR が pin する delta-cursor 型 connector 全般の共通契約):
+
+1. **正常時** — vendor 固有の delta token / page token / sync token (opaque string) を `connector_cursors.cursor` に永続化。次回 sync は token 起点で差分のみ取得
+2. **TTL 失効時** — vendor 側が「token expired」相当のエラーを返した場合 (vendor 別 status code は下表)、**自動 fallback**:
+   1. `WARNING` log: `event="connector.<cursor_kind>.expired"`, `connector=<name>`, `since=<original_token>` (token は credential を含み得るため sanitised、未含有でも安全側で sanitised)
+   2. **full-pass** モードで直近 N 日 (`fallback_window_days`、default `30`、`opshub.toml` 上書き可) を vendor 固有の time-window query (e.g. Gmail `q="after:..."` / Calendar `timeMin` / Drive `modifiedTime >= ...`) で fetch、各 record を SourceObserved として append (重複は SourceObserved の dedup key で吸収、append-only の自然な挙動)
+   3. fallback 完了時に **新しい cursor token を取得** し `connector_cursors.cursor` を更新 (次回 sync から差分 mode に復帰)
+3. **fallback 自体が失敗** — vendor API への接続失敗 / 認証エラー / 全件取得中の throttling 等で fallback も完遂しない場合、`ConnectorSyncFailed` event を append して fail-fast (本 ADR §責務 4 と整合)
+
+vendor 別の TTL 失効検知 trigger:
+
+| Connector | API / cursor 種別 | TTL 失効 trigger | `event` log 名 |
+|---|---|---|---|
+| ms365 (Outlook / OneDrive) / teams | Microsoft Graph delta query | `410 Gone` / `invalidatedDeltaToken` 系 | `connector.delta_link.expired` |
+| google_workspace | Drive API `changes.list` page token | `400 invalidToken` / `404 startPageToken expired` / `410 Gone` | `connector.changes_list.expired` |
+| google_mail (Phase 14) | Gmail API History API (`users.history.list`) | `404 historyId not found` / `410 Gone` (7 日 TTL、Google documented) | `connector.history.expired` |
+| google_calendar (Phase 14) | Google Calendar API `events.list` syncToken | `410 Gone` (sync token invalidated) | `connector.sync_token.expired` |
+| 後続 delta-cursor 型 connector | TBD | 各 vendor の token expiration 仕様に従う | `connector.<kind>.expired` |
+
+`fallback_window_days` の設定例:
+
+```toml
+[connectors.google_mail]
+fallback_window_days = 30  # default 30; 0 = disable fallback (非推奨)
+
+[connectors.google_calendar]
+fallback_window_days = 30  # default 30; 0 = disable fallback (非推奨)
+```
+
+Gmail / Calendar の time-window fetch 詳細:
+
+- **Gmail full-pass**: `users.messages.list?q="after:<unix_ts>"` で `now - fallback_window_days` 以降の message を全件取得。`users.messages.get(id, format="full")` で payload を取り直し SourceObserved emit
+- **Calendar full-pass**: `events.list?timeMin=<now - past_window>&timeMax=<now + future_window>` で window 内の event を全件取得。window 設計は Phase 14 plan OQ11 (default は過去 90 日 + 未来 365 日、`opshub.toml` 上書き可) で確定
+
+採用理由 (一般化の根拠):
+
+- **delta-cursor 型は構造的に同型** — Drive / Gmail / Calendar / Graph delta は API は異なれど cursor 戦略 (opaque token + TTL + full-pass fallback) は構造的に同型。connector ごとに別契約として書き分けると 4 つの「ほぼ同じ条文」が ADR に並ぶ。本 §(j) で 1 条文化することで operator メンタルモデルを 1 つに保つ
+- **Phase 11 改訂 (c) / Phase 13 改訂 (g) との関係** — 本 §(j) は両条文の generalization であり、両条文は本 §(j) の specialization として継続有効。改訂 (c) は Microsoft Graph delta query 限定の歴史的経緯を、改訂 (g) は Drive `changes.list` 限定の歴史的経緯を凍結する目的で残置
+- **Phase 15+ で追加され得る後続 delta-cursor 型 connector** — Notion (last_edited_time + cursor) / Jira (issue search since updated) / Confluence (cql with lastModified) 等の後続 connector が delta-cursor 型を採る場合、本 §(j) が自動的に契約として適用される (改訂不要)
+
+### Phase 14 改訂 (k) — 本文抽出契約: Outlook 流継承 (Gmail / Calendar)
+
+Phase 14 Sub-issue G3 / G4 (#295 / #296) で Gmail / Google Calendar の本文を取り込むにあたり、本 ADR §責務 1-2 (external API fetch + source normalization) と §責務 6 (body の minimization) を **Outlook 流 (Phase 11 ms365 outlook mapper) を継承する形** で pin する。本契約 §(k) は Phase 11 改訂 (b) の markitdown 経路 (バイナリ文書) とは **別系統** であり、text-only 本文取り込み経路の Outlook / Slack / Teams chat ファミリーに Gmail / Calendar を加える位置付け。
+
+Gmail 本文取り込みの不変条件:
+
+1. **text/plain 優先 → text/html 生保持** — Gmail API `users.messages.get(format="full")` payload を mapper が parse、`text/plain` part が存在すればそれを `SourceObserved.body` に載せる。text/plain が不在で text/html のみの場合は HTML を **生のまま** body に載せる (markitdown / html2text 等の中間変換を **しない**)。HTML → markdown 変換は host LLM / skill 側の rendering 責務 (Outlook と完全 symmetric、mapper / skill 側の logic 分岐を防ぐ)
+2. **添付 retain なし** — Gmail attachments (`payload.parts[].body.attachmentId`) は Phase 14 scope では **取り込まない**。`users.messages.attachments.get` を connector が呼ばない。添付 retain は Phase 15+ で `users.messages.attachments.get` + markitdown 経路 (ADR-0025 拡張) として別 Phase で切る
+3. **threadId は field 保持、replied_to link 化は Phase 15+ defer** — Gmail `threadId` は `SourceObserved` の field として保持 (event store immutability 整合、thread 単位の dynamic 集約は projection 層の責務として後続 Phase)。Gmail thread 単位の source_type (`gmail_thread` 等) は **作らない** (message 単位 `gmail_message` で固定、Outlook と symmetric)
+4. **label は body 埋め込みのみ (構造化 field 追加なし)** — Gmail `labelIds` は mapper が body の冒頭に `[Labels: <label1>, <label2>, ...]` 形式で prepend するのみ。SourceObserved に `labels` field を追加しない (Outlook の `attendees_count` 流に揃える、domain 改変なし)
+5. **body 上限** — Outlook 流の `[gmail body truncated: N / M chars]` tag を mapper layer で。閾値は Phase 14 plan OQ10 で確定 (Outlook と揃えるか `[office.gmail] max_body_chars` separate override を切るか)
+
+Google Calendar 本文取り込みの不変条件:
+
+1. **summary フォーマット = `start_iso - end_iso (N attendees)`** — MS365 Calendar mapper (`ms365_calendar`) と完全 symmetric。例: `"2026-06-15T10:00:00Z - 2026-06-15T11:00:00Z (5 attendees)"`
+2. **attendee email list / 議題 / 会議室は body 埋め込みのみ** — Calendar API `attendees[].email` / `description` / `location` は mapper が body に prepend / append する形で保持 (Outlook と同型)。SourceObserved に `attendees` field / `location` field を追加しない (構造化 filter は Phase 15+ defer)
+3. **RRULE は field 保持、instance 展開は Phase 15+ projection 層** — Calendar API `recurrence[]` (RRULE / EXDATE 等) は SourceObserved の field として保持。master event のみを source として取り込み、recurring instance の動的展開は projection 層の責務として Phase 15+ で `ms365_calendar` / `google_calendar` 両 calendar 同時に切る (Phase 14 では projection 層 instance 展開を作らない)
+4. **override は別 record として取り込み** — Google Calendar API は recurring event の修正済み instance を独立 event として返す (`recurringEventId` + `originalStartTime` を持つ)。これらを master event とは別 record として `SourceObserved` emit (Phase 14 plan OQ3 確定)
+5. **markitdown 経由を要さない** — Outlook / Slack / Teams chat と同じく text-only 経路、`core/document_extract.py` は介在しない (Phase 11 改訂 (b) §バイナリ文書経路 / Phase 13 改訂 (f) §Workspace export 経路とは異なる系統)
+
+text-only 本文取り込み経路の全体像 (Phase 14 時点):
+
+| Connector | Source type | Body 構築経路 | markitdown 経由 |
+|---|---|---|---|
+| slack (Phase 7) | `slack_message` | vendor SDK plain text を直接 body 載せ | No |
+| ms365 outlook (Phase 7 + Phase 11 改訂 (b)) | `ms365_outlook` | Graph API text/plain 優先 → text/html 生保持 | No |
+| ms365 calendar (Phase 7) | `ms365_calendar` | Graph API summary + body 構造化 | No |
+| teams (Phase 11 改訂 (a)) | `teams_message` | Graph delta query plain text | No |
+| **google_mail (Phase 14)** | **`gmail_message`** | **Gmail API text/plain 優先 → text/html 生保持** | **No** |
+| **google_calendar (Phase 14)** | **`google_calendar`** | **Calendar API summary + body 構造化** | **No** |
+| box_drive / onedrive_drive (Phase 11) | `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` | local file → markitdown | Yes |
+| google_workspace (Phase 13) | `google_doc` / `google_slides` / `google_sheets` | Drive API files.export → MS Office mediatype → markitdown | Yes |
+
+### Phase 14 改訂 (l) — Gmail unit + Calendar unit + label / attendee 表現契約
+
+Phase 14 Sub-issue G3 / G4 で取り込み単位を以下に確定する (Phase 14 plan OQ2 / OQ3 / OQ7 と整合)。本契約 §(l) は §(k) (本文抽出) と分離して unit 設計を独立 pin することで、将来の thread aggregation / instance 展開 projection 追加時の改訂 surface を明確化する目的で独立条文化。
+
+1. **Gmail unit = message 単位 (`gmail_message`)** — Outlook (`ms365_outlook`) と symmetric。thread 単位 source_type (`gmail_thread` 等) は作らない、threadId は field 保持で表現 (Phase 14 改訂 (k) §不変条件 3)。event store immutability と摩擦するため (thread = 複数 message の動的集約、message append 毎に thread record を再書きすると event log が無限増殖)
+2. **Calendar unit = master event のみ (`google_calendar`)** — MS365 Calendar (`ms365_calendar`) と symmetric。recurring instance の動的展開は projection 層の責務として Phase 15+ で両 calendar 同時に切る。RRULE は field 保持で表現 (Phase 14 改訂 (k) §不変条件 3)
+3. **Calendar override = 別 record** — Google Calendar API が recurring の修正済み instance を独立 event として返す場合、これを master event とは別 record として `SourceObserved` emit (Phase 14 plan OQ3 確定)。`recurringEventId` + `originalStartTime` field で master との関係を保持
+4. **Gmail label は summary / body 埋め込みのみ** — `labelIds` を body の冒頭に `[Labels: ...]` 形式で prepend するのみ、新 field 追加なし (Outlook の `attendees_count` 流、domain 改変なし)
+5. **Calendar attendee は summary / body 埋め込みのみ** — `attendees[].email` を body に list として埋め込み、`attendees_count` も Outlook 同型で summary に `(N attendees)` 形式で出すのみ。新 field 追加なし
+
+採用理由:
+
+- **event store immutability 整合** — message 単位 / master event 単位は append-only の自然な単位、thread / instance 展開は集約 = derived state なので projection 層に分離するほうが ADR-0002 と素直
+- **Outlook / MS365 Calendar との mapper symmetry** — Phase 14 plan §決定事項 §mapper symmetry 不変方針と整合、skill 側 (personal-brief / meeting-prep / next-actions) で source_type 別に分岐する logic を増やさず recall を均一に扱える
+- **構造化 field 追加を避けるメリット** — `labels` / `attendees` / `location` を SourceObserved の field に持たせると Phase 15+ で migration が発生する、Phase 14 時点では body 埋め込みで足り、構造化 filter は Phase 15+ で需要顕在化時に切る
+- **override 別 record の根拠** — master event を mutating する形で取り込むと event store の append-only 原則に反する、override = 別事象として SourceObserved emit するのが event-sourced と整合
+
+### Phase 14 改訂 (m) — Google OAuth principal の scope 拡張 (shared auth foundation)
+
+Phase 13 改訂 (h) で `connector:google_workspace:refresh_token` keyring slot 単独で Drive 専用 (`drive.readonly`) として確定した Google OAuth principal を、Phase 14 で **scope 拡張 (`drive.readonly + gmail.readonly + calendar.readonly`)** + **3 connector 共有 (Drive + Gmail + Calendar)** + **shared auth foundation 抽出 (`connectors/google_common/auth.py`)** に拡張する。本契約 §(m) は Phase 13 改訂 (h) の principal 設計を流用する位置付け (新 keyring slot 追加 **なし**、1 Google account = 1 principal を維持)。詳細は ADR-0014 §Phase 7 Validation 節を参照 (Phase 13 G1 で追加した google_workspace slot の scope 拡張を Phase 14 G1 で同節改訂)。
+
+要点:
+
+1. **keyring slot 単一性維持** — `connector:google_workspace:refresh_token` 1 slot を Drive / Gmail / Calendar 3 connector が共有。新 slot 追加なし (`connector:google_mail:refresh_token` / `connector:google_calendar:refresh_token` は **作らない**)。1 Google account = 1 principal が opshub 秘書 MVP の前提
+2. **scope 拡張** — `drive.readonly` から `drive.readonly + gmail.readonly + calendar.readonly` に拡大 (Phase 14 plan OQ6 確定)。`gmail.metadata` / `gmail.modify` 等の追加 scope は要求しない (read-only 3 scope のみ、書き戻し ban § 禁止事項 7 との整合)
+3. **scope 宣言 = `auth.py` 内固定 list** — connector ごとの subset 宣言 (`google_mail` は gmail.readonly のみ要求、等) は **不採用**。固定 list 案を採用 (Phase 14 plan §X §設計選択の trade-off 参照)
+4. **env override 名称はそのまま** — `OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN` (CI / 緊急用) を Drive / Gmail / Calendar 3 connector が共有
+5. **shared auth foundation = `connectors/google_common/auth.py`** — Phase 13 で `src/opshub/connectors/google_workspace/auth.py` に置いた token lifecycle (refresh + rotation 書き戻し + paste-code flow) を Phase 14 G2 で **`src/opshub/connectors/google_common/auth.py` に抽出**。Phase 13 既存の `google_workspace` connector は新場所から import に re-wire。token lifecycle pin test (`test_get_access_token_persists_rotated_refresh_token`) は shared 側に 1 本集約 (3 connector 分の重複を避ける)
+6. **既存 operator への影響 = 1 回 re-consent** — scope 拡張により Google OAuth は既存 refresh token を invalidate する。Phase 14 release 時に operator は `opshub connector auth set google_workspace` を再実行して全 scope を 1 回で取得 (詳細手順は `docs/upgrading.md` Phase 14 行 + `docs/google-workspace-setup.md` で記載、G5 で更新)
+7. **`google_common` 命名は仮置き** — catch-all 化リスクあり (`google_common/cursor.py` / `google_common/mapper.py` を後付けで増やすと「Google 系の共通置き場」になり境界が曖昧化)。G2 着手時に `google_auth` / `google_oauth` への rename を再評価 (Phase 14 plan §X §設計選択の trade-off 参照)
+
+採用理由 (新 slot 追加せず scope 拡張のみ):
+
+- **1 Google account = 1 principal が opshub 秘書 MVP の前提** — operator 1 名前提 (ADR-0018 同根拠)、同一 Google account から Drive / Gmail / Calendar を取り込むのが自然な操作モデル
+- **scope 拡張は Google OAuth incremental authorization で吸収可能** — 1 回 re-consent で全 scope を取得、operator UX への影響は scope 拡張時の 1 回のみ
+- **connector ごと subset scope 宣言は overkill** — 「Gmail だけ使いたい / Drive だけ使いたい」 use case は connector enable / disable で表現可能、scope 単位の subset 宣言は実利用シーンとマッチしない
+- **shared auth foundation の必然性** — token refresh + rotation 書き戻しを 3 connector に各々実装すると pin test も 3 つ並ぶ、shared 化で 1 本に集約することで「rotation 書き戻し忘れ regression」を構造的に防ぐ
+- **Teams pattern との比較** — Teams は別 OAuth tenant (Microsoft Identity) + verbatim user token で別 keyring slot (`connector:teams:token`) を要する、Google は 1 OAuth tenant + 3 connector を 1 slot 共有が成立する非対称性は Microsoft / Google それぞれの OAuth エコシステムの違いに由来 (Microsoft は app registration 単位の token、Google は Google account 単位の token + scope 拡張)
+
+採用理由の根拠は ADR-0014 §Phase 7 Validation 節 (Phase 13 G1 で追加した google_workspace slot を Phase 14 G1 で scope 拡張) と全く同じため詳細は ADR-0014 を参照。本 ADR §Phase 14 改訂 (m) は Phase 13 改訂 (h) の MS365 / Box pattern 適用を **scope 拡張 + 3 connector 共有 + shared auth foundation 抽出** に延伸する確認にとどまる。
+
 ## 関連
 
 - [Principles 7 (Connector Contract)](../principles.md)
@@ -363,3 +496,4 @@ Google Workspace User Token の運用:
 - [ADR-0025: Office Document Content Extraction](0025-office-document-content-extraction.md) — Phase 11 Sub-issue F1 で新規起票、本 ADR §Phase 11 改訂 (b) 本文抽出契約の実装層を pin
 - [Phase 11 Plan §2 ADR 構成 + §3 Sub-issue F](../phase-11-plan.md)
 - [Phase 13 Plan §2 改訂 ADR + §3 Sub-issue G](../phase-13-plan.md) — Google Workspace コネクタ (本 ADR §Phase 13 改訂 (e)-(h))
+- [Phase 14 Plan §2 改訂 ADR + §3 Sub-issue G](../phase-14-plan.md) — Gmail + Google Calendar コネクタ (本 ADR §Phase 14 改訂 (i)-(m))
