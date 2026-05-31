@@ -517,6 +517,7 @@ def test_phase14_mapper_symmetry_pin_module_is_loadable() -> None:
     pin_tests = [name for name in dir(pin) if name.startswith("test_")]
     assert pin_tests, (
         "tests/unit/connectors/test_mapper_symmetry.py exists but exposes "
-        "no test_ functions — Phase 14 G3 + G4 added 6 + 4 cases; if those "
+        "no test_ functions — Phase 14 G3 + G4 added 8 + 6 = 14 cases "
+        "(Outlook ↔ Gmail 8 + ms365_calendar ↔ google_calendar 6); if those "
         "were removed, the mapper symmetry contract is no longer pinned."
     )

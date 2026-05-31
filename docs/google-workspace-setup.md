@@ -5,7 +5,7 @@ Slides / Sheets の metadata + 本文を取り込む (Phase 13)。Phase 14 で�
 OAuth principal を共有する `google_mail` (Gmail API v1) と `google_calendar`
 (Calendar API v3) の 2 connector が追加された。**3 connector で 1 Google account
 = 1 principal を共有** し、scope は固定 list `drive.readonly + gmail.readonly +
-calendar.readonly` を 1 回の paste-code flow で取得 ([Phase 14 plan §1 OQ6](phase-14-plan.md))。
+calendar.readonly` を 1 回の paste-code flow で取得 ([Phase 14 plan §1 OQ6](phase-14-plan.md#1-確定済み事項))。
 auth.py は Phase 14 G2 で `connectors/google_auth/auth.py` に shared module
 として抽出された (`connectors/google_workspace/` は新場所から import に re-wire)。
 
@@ -27,7 +27,7 @@ Workspace export 経由で再利用 ([ADR-0025](adr/0025-office-document-content
 symmetric** = text/plain 優先 → text/html 生保持、markitdown なし、添付 retain なし
 ([ADR-0010](adr/0010-connector-contract.md) §Phase 14 改訂 (k))。Symmetry は
 `tests/unit/connectors/test_mapper_symmetry.py` で機械検証 (Outlook ↔ Gmail
-6 ケース + ms365_calendar ↔ google_calendar 4 ケース)。
+8 ケース + ms365_calendar ↔ google_calendar 6 ケース = 計 14 ケース)。
 
 ## 対応 platform
 
@@ -235,8 +235,9 @@ Drive `files.watch` push notification は禁止 = 形 A 整合):
 
 - **添付ファイル本文以外の Drive Comments / Suggestions は取り込まれない**
   (Phase 13 MVP は files の本文 + metadata のみ)。決定経緯の context source
-  としての Comments / Suggestions 取り込みは Phase 14+ candidate。
-- **画像 OCR なし** (Phase 13 から繰り越し、Phase 14+ candidate)。
+  としての Comments / Suggestions 取り込みは Phase 15+ candidate
+  (Phase 14 では Gmail + Calendar が優先され着手せず)。
+- **画像 OCR なし** (Phase 13 から繰り越し、Phase 14 を経て再 defer、Phase 15+ candidate)。
 - **書き戻し非対応** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7)。
   Drive write API (`files.update` / `files.create` / `files.copy` /
   `comments.create` / `permissions.*`) は connector に実装しない。
@@ -254,7 +255,7 @@ Drive `files.watch` push notification は禁止 = 形 A 整合):
   `supportsAllDrives=true + includeItemsFromAllDrives=true` を含めるかを
   確定 (OQ10)。
 - **multi-account 非対応** (single-slot principal、Phase 13 plan §Alternatives
-  §7)。operator 個人 GCP + 業務 Workspace の併用は Phase 14+ で
+  §7)。operator 個人 GCP + 業務 Workspace の併用は Phase 15+ で
   multi-account extension として検討。
 
 ## トラブルシューティング
@@ -348,8 +349,8 @@ opshub connector sync google_calendar
 ### Mapper symmetry pin test
 
 両 connector の mapper は `tests/unit/connectors/test_mapper_symmetry.py` で
-Outlook ↔ Gmail (6 ケース) / ms365_calendar ↔ google_calendar (4 ケース) の
-field / summary / body フォーマット同形性を機械検証する。mapper を fork して
+Outlook ↔ Gmail (8 ケース) / ms365_calendar ↔ google_calendar (6 ケース) =
+計 14 ケースの field / summary / body フォーマット同形性を機械検証する。mapper を fork して
 vendor-specific な調整を入れた場合は、この pin test を確認して divergence が
 intentional か判断すること。
 

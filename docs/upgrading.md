@@ -377,7 +377,7 @@ Phase 14 ([ADR-0010](adr/0010-connector-contract.md) revision §Phase 14 (i)-(m)
 
 ### Re-consent required (existing operators)
 
-If you already configured the `google_workspace` connector in Phase 13, **your existing refresh token covers only `drive.readonly`** and will not work for the new Gmail / Calendar APIs. Phase 14 expands the shared OAuth principal to the 3-scope fixed list `drive.readonly + gmail.readonly + calendar.readonly` (1 Google account = 1 principal shared across Drive + Gmail + Calendar, [Phase 14 plan §1 OQ6](phase-14-plan.md#1-decisions-snapshot)). To upgrade:
+If you already configured the `google_workspace` connector in Phase 13, **your existing refresh token covers only `drive.readonly`** and will not work for the new Gmail / Calendar APIs. Phase 14 expands the shared OAuth principal to the 3-scope fixed list `drive.readonly + gmail.readonly + calendar.readonly` (1 Google account = 1 principal shared across Drive + Gmail + Calendar, [Phase 14 plan §1 OQ6](phase-14-plan.md#1-確定済み事項)). To upgrade:
 
 1. **Re-register scopes in the Google Cloud Console.** Open your existing OAuth client → OAuth consent screen → **Add or Remove Scopes** → add `gmail.readonly` and `calendar.readonly` (`drive.readonly` is already there from Phase 13). Submit for verification if your project is in production mode. Full walkthrough: [`docs/google-workspace-setup.md`](google-workspace-setup.md) §Scopes.
 2. **Re-run the paste-code flow once.** A single re-consent applies to all three connectors:
@@ -431,7 +431,7 @@ Bodies are extracted **symmetrically with the Phase 11 Outlook mapper**: `text/p
 opshub connector sync google_calendar
 ```
 
-The connector reads Calendar API v3 `events.list(syncToken=...)` for delta. When Google returns 410 GONE (`SyncTokenExpiredError`), the connector logs `connector.events_list.expired` and falls back to a `events.list(timeMin, timeMax)` window walk (`singleEvents=false` + `showDeleted=true` pinned) before resuming sync-token mode. Override events (`recurringEventId` + `originalStartTime` set) are emitted as **separate `SourceObserved` records sharing `source_type="google_calendar"`** with a body back-pointer `Override of: <master_id> (originalStart: <iso>)` — symmetric in spirit with how the MS365 calendar mapper handles master events ([Phase 14 plan §G4 / OQ3](phase-14-plan.md#1-decisions-snapshot)).
+The connector reads Calendar API v3 `events.list(syncToken=...)` for delta. When Google returns 410 GONE (`SyncTokenExpiredError`), the connector logs `connector.events_list.expired` and falls back to a `events.list(timeMin, timeMax)` window walk (`singleEvents=false` + `showDeleted=true` pinned) before resuming sync-token mode. Override events (`recurringEventId` + `originalStartTime` set) are emitted as **separate `SourceObserved` records sharing `source_type="google_calendar"`** with a body back-pointer `Override of: <master_id> (originalStart: <iso>)` — symmetric in spirit with how the MS365 calendar mapper handles master events ([Phase 14 plan §G4 / OQ3](phase-14-plan.md#1-確定済み事項)).
 
 Summaries follow `f"{start_iso} - {end_iso} ({attendees_count} attendees)"`; attendee email list / description / location are appended to the body; RRULE is kept as a field. Instance expansion (master + RRULE → individual instances) is a Phase 15+ projection-layer candidate (ms365 + google simultaneously).
 
