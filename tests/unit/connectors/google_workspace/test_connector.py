@@ -196,8 +196,12 @@ def _patch_auth_and_client(
     Returns the patched ``DriveClient`` instance so tests can assert
     against its method calls.
     """
+    # Phase 14 G2 (#294): the shared OAuth helper moved to
+    # ``opshub.connectors.google_auth.auth``; the connector resolves the
+    # ``GoogleWorkspaceAuth`` name lazily inside ``sync()`` from this new
+    # path, so the monkeypatch target tracks that source binding.
     monkeypatch.setattr(
-        "opshub.connectors.google_workspace.auth.GoogleWorkspaceAuth",
+        "opshub.connectors.google_auth.auth.GoogleWorkspaceAuth",
         MagicMock(),
     )
     fake_client = MagicMock()

@@ -36,7 +36,7 @@ pytest.importorskip(
 
 import httpx
 
-from opshub.connectors.google_workspace.auth import GoogleWorkspaceAuth
+from opshub.connectors.google_auth.auth import GoogleWorkspaceAuth
 from opshub.connectors.google_workspace.client import (
     DRIVE_API_BASE,
     DriveClient,
@@ -66,7 +66,9 @@ class _StubAuth:
     The fetcher only calls ``get_access_token`` so we expose just that
     method. Using a real :class:`GoogleWorkspaceAuth` would force the
     OAuth round-trip mock on every test (overkill for client coverage
-    where the auth surface is orthogonal).
+    where the auth surface is orthogonal). Phase 14 G2 (#294) moved
+    the real helper to :mod:`opshub.connectors.google_auth.auth`; the
+    cast target is updated accordingly.
     """
 
     def get_access_token(self) -> str:

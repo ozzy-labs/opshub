@@ -9,10 +9,13 @@ Google Docs / Sheets / Slides (via Drive API v3 ``changes.list`` +
 
 Module surface (Phase 13 plan §3 Sub-issue G3 5-module structure):
 
-* :mod:`opshub.connectors.google_workspace.auth` — OAuth helper that
-  drives the paste-code flow and refreshes / rotates Refresh Tokens
-  per ADR-0014 §Phase 7 Validation (MS365 / Box pattern; Teams pattern
-  is explicitly **not** applied per ADR-0010 §Phase 13 改訂 (h)).
+* :mod:`opshub.connectors.google_auth.auth` — OAuth helper that drives
+  the paste-code flow and refreshes / rotates Refresh Tokens per
+  ADR-0014 §Phase 7 Validation (MS365 / Box pattern; Teams pattern is
+  explicitly **not** applied per ADR-0010 §Phase 13 改訂 (h)). Phase
+  14 G2 (#294) extracted this helper out of ``google_workspace`` so
+  Gmail / Calendar can reuse the same token-rotation logic without
+  re-implementing the rotation pin test in each connector.
 * :mod:`opshub.connectors.google_workspace.client` — ``httpx``-backed
   Drive REST wrapper exposing ``changes.getStartPageToken`` and
   ``changes.list`` with cursor-aware iteration + 429 / 5xx exponential

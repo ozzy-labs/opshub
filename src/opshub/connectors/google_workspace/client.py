@@ -88,7 +88,8 @@ from opshub.core.errors import ConfigError, ConnectorFailedError
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from opshub.connectors.google_workspace.auth import GoogleWorkspaceAuth
+    # Phase 14 G2 (#294): auth helper moved to the shared google_auth package.
+    from opshub.connectors.google_auth.auth import GoogleWorkspaceAuth
 
 
 __all__ = [

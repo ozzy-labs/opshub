@@ -81,7 +81,8 @@ pytest.importorskip(
 
 import httpx
 
-from opshub.connectors.google_workspace.auth import GoogleWorkspaceAuth
+# Phase 14 G2 (#294): shared OAuth helper lives under google_auth now.
+from opshub.connectors.google_auth.auth import GoogleWorkspaceAuth
 from opshub.connectors.google_workspace.client import DRIVE_API_BASE, DriveClient
 from opshub.connectors.google_workspace.mapper import (
     GOOGLE_DOC_SOURCE_TYPE,
@@ -140,7 +141,9 @@ class _StubAuth:
 
     :class:`DriveClient` only calls :meth:`get_access_token` on the
     auth helper, so a tiny stub is enough — the OAuth round-trip is
-    covered by :mod:`tests.unit.connectors.google_workspace.test_auth`.
+    covered by :mod:`tests.unit.connectors.google_auth.test_auth`
+    (Phase 14 G2 moved the helper + its tests to
+    :mod:`opshub.connectors.google_auth`).
     """
 
     def get_access_token(self) -> str:

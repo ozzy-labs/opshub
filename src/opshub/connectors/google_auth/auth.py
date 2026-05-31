@@ -1,4 +1,4 @@
-"""Google Workspace connector auth (Phase 13 Sub-issue G3).
+"""Shared Google OAuth helper (Phase 14 G2 — Sub-issue #294).
 
 OAuth 2.0 authorization-code flow with paste-code completion. Targets
 Google's *Installed Application* client type — the public client variant
@@ -14,7 +14,10 @@ The structural pattern mirrors :mod:`opshub.connectors.ms365.auth`
   localhost-callback flows).
 * The **refresh token** is persisted in the OS keyring under
   ``connector:google_workspace:refresh_token`` (ADR-0014 §Phase 7
-  Validation rotation pin list, Phase 13 改訂で 3 件目として追加).
+  Validation rotation pin list, 3rd entry). The slot string is
+  unchanged from Phase 13 so existing operator credentials keep
+  working across the G2 module move; **only the on-disk Python module
+  path changes**.
 * The **access token** is short-lived (~1 hour per Google's docs) and
   held in-memory only.
 * Refresh-token rotation is supported: when Google returns a fresh
@@ -23,27 +26,63 @@ The structural pattern mirrors :mod:`opshub.connectors.ms365.auth`
   drift to a stale token and Google's next ``refresh`` call would
   return ``invalid_grant``).
 
+Phase 14 changes vs Phase 13
+----------------------------
+1. **Module location**: moved from
+   ``opshub.connectors.google_workspace.auth`` to
+   ``opshub.connectors.google_auth.auth`` (see
+   ``opshub/connectors/google_auth/__init__.py`` for the rationale).
+2. **Scope set**: widened from Drive-only
+   (``drive.readonly``) to the **fixed three-scope list**
+   ``drive.readonly + gmail.readonly + calendar.readonly``. The plan
+   §1 OQ6 + §X.1 confirms the choice: one Google account = one
+   principal, three connectors (Drive / Gmail / Calendar) share the
+   same refresh token. Per-connector subset declarations were
+   considered and rejected (overkill — re-consent on every
+   connector-enable would degrade operator UX, and all three scopes
+   are read-only so over-scope risk is bounded).
+3. **Keyring slot string preserved**: the constant value
+   ``connector:google_workspace:refresh_token`` (along with the
+   ``OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN`` env-override
+   name) is unchanged, so existing tokens survive the G2 move. The
+   Python identifier is still
+   :data:`GOOGLE_WORKSPACE_REFRESH_TOKEN_SECRET_KEY` for symmetry with
+   the Phase 13 codebase.
+4. **Operator action on upgrade**: because the scope set grows, Google
+   invalidates the existing refresh token on first use and the
+   operator must re-run ``opshub connector auth set google_workspace``
+   to consent to all three scopes in one paste-code round (see
+   ``docs/upgrading.md`` Phase 14 section).
+
 Why this pattern and not Teams' verbatim user token (ADR-0010 §Phase 13
 改訂 (h))
 ----------------------------------------------------------------------
 
-Google Drive API access tokens are documented at ~1 hour TTL. Teams
-keeps the operator's pre-resolved Graph User Token verbatim in keyring
-because the operator's MSAL device-code flow produces a token they
-intend to inject directly; opshub's Teams connector therefore never
-runs the OAuth dance in-process. Google's installed-app pattern does
-the opposite: the operator drives an interactive consent flow once and
-opshub holds the refresh token, so the connector MUST refresh +
-rotate just like MS365 / Box do (otherwise re-auth every hour is the
-operator UX). ADR-0010 §Phase 13 改訂 (h) makes the choice explicit.
+Google Drive / Gmail / Calendar API access tokens are documented at
+~1 hour TTL. Teams keeps the operator's pre-resolved Graph User Token
+verbatim in keyring because the operator's MSAL device-code flow
+produces a token they intend to inject directly; opshub's Teams
+connector therefore never runs the OAuth dance in-process. Google's
+installed-app pattern does the opposite: the operator drives an
+interactive consent flow once and opshub holds the refresh token, so
+the connector MUST refresh + rotate just like MS365 / Box do (otherwise
+re-auth every hour is the operator UX). ADR-0010 §Phase 13 改訂 (h) +
+§Phase 14 改訂 (m) make the choice explicit.
 
-Required scope (Phase 13 plan §1 OQ6): ``drive.readonly`` **alone**.
-The narrower ``drive.metadata.readonly`` is a strict subset of
-``drive.readonly``; combining the two would only add noise to the
-consent screen + a future "over-scoped" flag inside the operator's IT
-review. ``drive.activity.readonly`` is not requested because
-``changes.list`` poll is sufficient for delta detection (Phase 13 plan
-§Alternatives §2).
+Required scopes (Phase 14 plan §1 OQ6 + §X.1):
+
+* ``https://www.googleapis.com/auth/drive.readonly`` — Google Drive
+  metadata + Workspace export (Phase 13 G3 / G4 surfaces).
+* ``https://www.googleapis.com/auth/gmail.readonly`` — Gmail message
+  metadata + body (Phase 14 G3 surface).
+* ``https://www.googleapis.com/auth/calendar.readonly`` — Google
+  Calendar events read (Phase 14 G4 surface).
+
+Per Phase 14 plan §X.1 the scopes are declared as a **single fixed
+list** in this module; per-connector subset declarations are not
+supported. Disable a connector via its ``[connectors.<name>] enabled``
+flag if the operator wishes to limit which surfaces opshub actually
+queries — the OAuth consent stays one-and-done.
 
 Cold-start guard (ADR-0001): ``httpx`` is imported lazily inside
 :meth:`GoogleWorkspaceAuth.__init__`. This module's only module-level
@@ -87,17 +126,24 @@ OAUTH_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 #: Google's OAuth 2.0 token endpoint (code exchange + refresh).
 OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
-#: Default OAuth scopes requested by the Phase 13 MVP. ``drive.readonly``
-#: is a single broad scope (per OQ6 / ADR-0010 §Phase 13 改訂); the
-#: narrower ``drive.metadata.readonly`` is *not* added because Google
-#: documents it as a strict subset, and combining them only inflates
-#: the consent screen. ``email`` + ``profile`` (or
-#: ``userinfo.email`` / ``userinfo.profile``) are not requested because
-#: opshub never displays the operator's Google identity — Drive API
-#: round-trips authenticate by token only and the
-#: :meth:`GoogleWorkspaceAuth.test_token` API call returns the
-#: drive-owner identity directly.
-DEFAULT_SCOPES: list[str] = ["https://www.googleapis.com/auth/drive.readonly"]
+#: Default OAuth scopes requested by the Phase 14 G2 shared auth
+#: foundation. The list spans **all three** Google read surfaces opshub
+#: ingests in Phase 13 + Phase 14 — Drive + Gmail + Calendar — so a
+#: single ``opshub connector auth set google_workspace`` paste-code
+#: round grants every Google connector access. Per Phase 14 plan §X.1
+#: the scope set is a **fixed list shared by every Google connector**;
+#: per-connector subset declarations were considered and rejected
+#: (re-consent on every connector enable / disable would churn
+#: operator UX). All three scopes are read-only so over-scope risk is
+#: bounded. ``email`` / ``profile`` / ``userinfo.*`` are **not**
+#: requested because opshub never displays the operator's Google
+#: identity directly — ``about.get`` returns it under
+#: ``drive.readonly``.
+DEFAULT_SCOPES: list[str] = [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/calendar.readonly",
+]
 
 #: Google's "out of band" redirect URI for installed apps. Google
 #: rolled this URI off in 2022 for *new* clients but the documented
@@ -118,6 +164,11 @@ DEFAULT_REDIRECT_URI = "http://localhost"
 #: :data:`opshub.connectors.ms365.auth.MS365_REFRESH_TOKEN_SECRET_KEY`.
 #: ADR-0014 §Phase 7 Validation rotation pin list lists this slot
 #: explicitly as the 3rd entry (after MS365 and Box) per Phase 13 改訂.
+#: Phase 14 G2 preserves the **slot string verbatim** — only the
+#: Python module path moves to :mod:`opshub.connectors.google_auth`.
+#: Reusing the same slot for Drive / Gmail / Calendar (1 Google
+#: account = 1 principal) is the explicit Phase 14 改訂 (m) /
+#: ADR-0014 §Phase 7 Validation update.
 GOOGLE_WORKSPACE_REFRESH_TOKEN_SECRET_KEY = "connector:google_workspace:refresh_token"
 
 
@@ -158,7 +209,20 @@ class GoogleAuthError(ConfigError):
 
 
 class GoogleWorkspaceAuth:
-    """OAuth 2.0 auth helper for Google Drive API (paste-code flow).
+    """OAuth 2.0 auth helper for the Google read APIs (paste-code flow).
+
+    Phase 13 introduced this class for the Google Drive connector
+    alone; Phase 14 G2 promotes it to the **shared foundation** for
+    every Google-vendor connector (Drive / Gmail / Calendar). The
+    class name is retained from Phase 13 — every existing call site
+    refers to it as ``GoogleWorkspaceAuth`` and the rename surface
+    would be wide for no semantic benefit (renaming the class would
+    also break the public surface ``connectors/google_workspace/``
+    exposes to downstream readers of the codebase). The class
+    represents the OAuth principal tied to the
+    ``connector:google_workspace:refresh_token`` keyring slot which
+    itself keeps the ``google_workspace`` name verbatim
+    (slot-string compat).
 
     Typical lifecycle:
 
@@ -166,15 +230,17 @@ class GoogleWorkspaceAuth:
     2. CLI constructs :class:`GoogleWorkspaceAuth` from configured
        ``client_id`` / ``client_secret`` / ``redirect_uri`` and calls
        :meth:`start_auth_flow` to get the auth URL.
-    3. Operator opens the URL in a browser, consents, then pastes the
-       redirect URL (or the bare ``code`` parameter) back into the CLI.
+    3. Operator opens the URL in a browser, consents to **all three**
+       scopes (drive.readonly + gmail.readonly + calendar.readonly),
+       then pastes the redirect URL (or the bare ``code`` parameter)
+       back into the CLI.
     4. CLI calls :meth:`complete_auth_flow` which exchanges the code
        for tokens and persists the refresh token via
        :mod:`opshub.core.secrets`.
-    5. At sync time the client calls :meth:`get_access_token` — that
-       path loads the refresh token from keyring on first call and
-       caches the resulting access token in-memory until just before
-       its reported expiry.
+    5. At sync time any of the three Google connectors calls
+       :meth:`get_access_token` — that path loads the refresh token
+       from keyring on first call and caches the resulting access
+       token in-memory until just before its reported expiry.
 
     Construction is intentionally lazy w.r.t. the ``httpx`` import so
     importing this module never forces the
@@ -222,8 +288,12 @@ class GoogleWorkspaceAuth:
             Google.
         scopes:
             OAuth scopes to request. Defaults to a copy of
-            :data:`DEFAULT_SCOPES` (``drive.readonly`` alone). Pass an
-            explicit list to widen / narrow the consent prompt.
+            :data:`DEFAULT_SCOPES` (Drive + Gmail + Calendar read
+            scopes — fixed list per Phase 14 plan §X.1). The kwarg is
+            retained primarily for test seams; in production every
+            Google connector implicitly relies on the shared default
+            list (per-connector subset declarations are explicitly
+            rejected by Phase 14 plan §X.1).
         """
         if not client_id:
             raise ConfigError(
@@ -244,7 +314,10 @@ class GoogleWorkspaceAuth:
         # Lazy import: keeps the cold-start path free of ``httpx`` and
         # surfaces a clean ConfigError when the operator forgot the
         # ``[connectors-google-workspace]`` extras. Same pattern the
-        # MS365 / Box / Teams modules use.
+        # MS365 / Box / Teams modules use. Phase 14 G2 does **not**
+        # introduce a separate extras name — the existing
+        # ``[connectors-google-workspace]`` extras covers Drive / Gmail
+        # / Calendar (Phase 14 plan §Alternatives §9).
         try:
             import httpx
         except ImportError as exc:
@@ -283,9 +356,12 @@ class GoogleWorkspaceAuth:
 
         ``include_granted_scopes=true`` lets a later phase widen the
         scope set without forcing the operator to re-consent the
-        existing ``drive.readonly`` grant (`incremental authorization`
-        per Google's docs). Phase 13 only ships ``drive.readonly`` so
-        the flag is precautionary.
+        existing grant (`incremental authorization` per Google's
+        docs). Phase 14 G2 still requests all three scopes
+        unconditionally — the flag is retained for the future
+        possibility of widening further (e.g. Gmail send, Calendar
+        write) without breaking existing grants, even though those
+        write surfaces are forbidden by ADR-0010 §禁止事項 7 today.
         """
         params = {
             "client_id": self._client_id,
@@ -377,6 +453,10 @@ class GoogleWorkspaceAuth:
         pick up from the new value (Phase 13 改訂 (h) — Google rotates
         refresh tokens periodically per its docs, so the rotation
         write-back is the MS365 / Box pattern not the Teams pattern).
+        Phase 14 G2 keeps the rotation pin test on the shared module
+        side (``tests/unit/connectors/google_auth/test_auth.py``) so
+        the three downstream connectors (Drive / Gmail / Calendar) do
+        not redundantly each carry their own copy.
 
         Raises
         ------
@@ -453,7 +533,11 @@ class GoogleWorkspaceAuth:
         2. Hits ``https://www.googleapis.com/drive/v3/about?fields=user``
            with the access token. ``about.get`` is the canonical Drive
            v3 endpoint for "who am I" and works under the
-           ``drive.readonly`` scope (no extra consent needed).
+           ``drive.readonly`` scope (no extra consent needed). Phase 14
+           G2 keeps the verifier on the Drive surface — it is the only
+           Google surface available in **every** consent variant
+           opshub has shipped, so the test stays consistent across
+           Phase 13 and Phase 14 operator installs.
 
         Parameters
         ----------

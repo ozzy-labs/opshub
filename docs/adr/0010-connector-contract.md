@@ -460,7 +460,7 @@ Phase 14 Sub-issue G3 / G4 で取り込み単位を以下に確定する (Phase 
 
 ### Phase 14 改訂 (m) — Google OAuth principal の scope 拡張 (shared auth foundation)
 
-Phase 13 改訂 (h) で `connector:google_workspace:refresh_token` keyring slot 単独で Drive 専用 (`drive.readonly`) として確定した Google OAuth principal を、Phase 14 で **scope 拡張 (`drive.readonly + gmail.readonly + calendar.readonly`)** + **3 connector 共有 (Drive + Gmail + Calendar)** + **shared auth foundation 抽出 (`connectors/google_common/auth.py`)** に拡張する。本契約 §(m) は Phase 13 改訂 (h) の principal 設計を流用する位置付け (新 keyring slot 追加 **なし**、1 Google account = 1 principal を維持)。詳細は ADR-0014 §Phase 7 Validation 節を参照 (Phase 13 G1 で追加した google_workspace slot の scope 拡張を Phase 14 G1 で同節改訂)。
+Phase 13 改訂 (h) で `connector:google_workspace:refresh_token` keyring slot 単独で Drive 専用 (`drive.readonly`) として確定した Google OAuth principal を、Phase 14 で **scope 拡張 (`drive.readonly + gmail.readonly + calendar.readonly`)** + **3 connector 共有 (Drive + Gmail + Calendar)** + **shared auth foundation 抽出 (`connectors/google_auth/auth.py`、G1 plan の `google_common` 仮置きから G2 着手時に rename 採用、下記要点 7)** に拡張する。本契約 §(m) は Phase 13 改訂 (h) の principal 設計を流用する位置付け (新 keyring slot 追加 **なし**、1 Google account = 1 principal を維持)。詳細は ADR-0014 §Phase 7 Validation 節を参照 (Phase 13 G1 で追加した google_workspace slot の scope 拡張を Phase 14 G1 で同節改訂)。
 
 要点:
 
@@ -468,9 +468,9 @@ Phase 13 改訂 (h) で `connector:google_workspace:refresh_token` keyring slot 
 2. **scope 拡張** — `drive.readonly` から `drive.readonly + gmail.readonly + calendar.readonly` に拡大 (Phase 14 plan OQ6 確定)。`gmail.metadata` / `gmail.modify` 等の追加 scope は要求しない (read-only 3 scope のみ、書き戻し ban § 禁止事項 7 との整合)
 3. **scope 宣言 = `auth.py` 内固定 list** — connector ごとの subset 宣言 (`google_mail` は gmail.readonly のみ要求、等) は **不採用**。固定 list 案を採用 (Phase 14 plan §X §設計選択の trade-off 参照)
 4. **env override 名称はそのまま** — `OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN` (CI / 緊急用) を Drive / Gmail / Calendar 3 connector が共有
-5. **shared auth foundation = `connectors/google_common/auth.py`** — Phase 13 で `src/opshub/connectors/google_workspace/auth.py` に置いた token lifecycle (refresh + rotation 書き戻し + paste-code flow) を Phase 14 G2 で **`src/opshub/connectors/google_common/auth.py` に抽出**。Phase 13 既存の `google_workspace` connector は新場所から import に re-wire。token lifecycle pin test (`test_get_access_token_persists_rotated_refresh_token`) は shared 側に 1 本集約 (3 connector 分の重複を避ける)
+5. **shared auth foundation = `connectors/google_auth/auth.py`** — Phase 13 で `src/opshub/connectors/google_workspace/auth.py` に置いた token lifecycle (refresh + rotation 書き戻し + paste-code flow) を Phase 14 G2 で **`src/opshub/connectors/google_auth/auth.py` に抽出**。Phase 13 既存の `google_workspace` connector は新場所から import に re-wire。token lifecycle pin test (`test_get_access_token_persists_rotated_refresh_token`) は shared 側 (`tests/unit/connectors/google_auth/test_auth.py`) に 1 本集約 (3 connector 分の重複を避ける)。**G1 時点では `google_common` を仮置き名としていたが、G2 着手時に下記 7 の rename 評価を実施し、catch-all 化リスクを回避するため `google_auth` を採用**
 6. **既存 operator への影響 = 1 回 re-consent** — scope 拡張により Google OAuth は既存 refresh token を invalidate する。Phase 14 release 時に operator は `opshub connector auth set google_workspace` を再実行して全 scope を 1 回で取得 (詳細手順は `docs/upgrading.md` Phase 14 行 + `docs/google-workspace-setup.md` で記載、G5 で更新)
-7. **`google_common` 命名は仮置き** — catch-all 化リスクあり (`google_common/cursor.py` / `google_common/mapper.py` を後付けで増やすと「Google 系の共通置き場」になり境界が曖昧化)。G2 着手時に `google_auth` / `google_oauth` への rename を再評価 (Phase 14 plan §X §設計選択の trade-off 参照)
+7. **命名は `google_auth` を採用** — G1 時点では `google_common` を仮置きとしていたが、G2 着手時に再評価し catch-all 化リスク (`google_common/cursor.py` / `google_common/mapper.py` を後付けで増やすと「Google 系の共通置き場」になり境界が曖昧化) を回避するため **`google_auth` に rename して採用**。Phase 14 範囲で shared 化対象は auth.py のみで、cursor / mapper / settings は 3 connector で独立であることが G2 着手時に確認できたため、責務を狭く明示する `google_auth` が最適 (Phase 14 plan §X.3 §設計選択の trade-off 参照)
 
 採用理由 (新 slot 追加せず scope 拡張のみ):
 

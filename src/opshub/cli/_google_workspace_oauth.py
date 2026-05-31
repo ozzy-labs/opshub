@@ -14,14 +14,21 @@ Google. We therefore intercept the ``google_workspace`` target in
    ``client_secret`` are rejected up front with a friendly hint
    pointing at the configuration path the operator must populate.
 2. Constructs an
-   :class:`opshub.connectors.google_workspace.auth.GoogleWorkspaceAuth`
-   instance, prints the auth URL, and waits for the operator to paste
-   the redirect URL (or bare code).
+   :class:`opshub.connectors.google_auth.auth.GoogleWorkspaceAuth`
+   instance (Phase 14 G2 moved the helper from
+   ``connectors.google_workspace.auth`` into the shared
+   ``connectors.google_auth.auth`` so Gmail / Calendar can reuse it),
+   prints the auth URL, and waits for the operator to paste the
+   redirect URL (or bare code).
 3. Calls :meth:`GoogleWorkspaceAuth.complete_auth_flow` which persists
    the refresh token via :mod:`opshub.core.secrets` (keyring +
    ``OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN`` env-var
    override per ADR-0014 §Phase 7 Validation, rotation pin リスト 3
-   件目).
+   件目). Phase 14 G2 widens the requested OAuth scope set from
+   Drive-only to **Drive + Gmail + Calendar read** in a single
+   paste-code round; the keyring slot string is preserved so existing
+   tokens stay reachable (only the new scope set triggers a
+   re-consent on first refresh).
 
 The helper lives behind a ``_`` prefix so the static cold-start guard
 (``tests/integration/test_cli_imports``) does not require this file to
@@ -74,7 +81,9 @@ def run_paste_code_flow() -> None:
     # Lazy imports keep this module's import cost negligible — the
     # parent ``opshub.cli.connector`` already defers loading us until
     # the operator actually targets ``google_workspace``.
-    from opshub.connectors.google_workspace.auth import GoogleWorkspaceAuth
+    # Phase 14 G2 (#294): the OAuth helper lives in the shared
+    # ``google_auth`` package so Gmail / Calendar can reuse it.
+    from opshub.connectors.google_auth.auth import GoogleWorkspaceAuth
     from opshub.core.config import OpsHubSettings
     from opshub.core.errors import ConfigError
 
@@ -119,7 +128,8 @@ def run_paste_code_flow() -> None:
     auth_url = auth.start_auth_flow()
     typer.echo(
         "Open the following URL in a browser, sign in to your Google account, "
-        "and approve the requested permissions (drive.readonly):"
+        "and approve the requested permissions "
+        "(drive.readonly + gmail.readonly + calendar.readonly):"
     )
     typer.echo("")
     typer.echo(auth_url)
