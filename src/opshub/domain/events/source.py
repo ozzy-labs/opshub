@@ -120,6 +120,18 @@ class SourceObserved(DomainEvent):
       (mapper symmetry pinned by
       ``tests/unit/connectors/test_mapper_symmetry.py`` so the host
       LLM / skill side treats both calendars uniformly).
+    * Phase 14 Gmail (G3 #295, ADR-0010 §Phase 14 改訂 (k) + plan §1 OQ8):
+      ``"gmail_message"`` — vendor-brand discriminator parallel to
+      ``"ms365_outlook"``. Published as
+      :data:`opshub.connectors.google_mail.mapper.GMAIL_SOURCE_TYPE`
+      (``Final[Literal["gmail_message"]]``). The connector emits one
+      :class:`SourceObserved` per Gmail message; thread aggregation is
+      a Phase 15+ projection responsibility (Phase 14 plan §X.2 +
+      §Phase 15+ outlook). Body extraction follows the Outlook recipe
+      (text/plain preferred → text/html fallback, kept verbatim, no
+      markitdown, no attachment retention; Phase 14 plan §1 OQ4 +
+      ADR-0010 §Phase 14 改訂 (k)) so secretary skills treat Gmail
+      and Outlook messages symmetrically.
 
     ``title`` is the human-readable label. ``url`` and ``summary`` are
     optional, both bounded; ``summary`` is intentionally short — full
