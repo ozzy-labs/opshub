@@ -176,7 +176,7 @@ def connector_sync(name: str) -> None:
         pass
 
     try:
-        import opshub.connectors.google_workspace  # noqa: F401  # pyright: ignore[reportUnusedImport]
+        import opshub.connectors.google_workspace  # pyright: ignore[reportUnusedImport]
     except ImportError:
         # Google Workspace connector module imports cleanly without
         # the extras (the heavy ``httpx`` imports stay inside the auth
@@ -184,6 +184,20 @@ def connector_sync(name: str) -> None:
         # only trigger if a future refactor adds a top-level SDK
         # import (Phase 13 G3 — ADR-0001 cold-start guard, ADR-0010
         # §Phase 13 改訂).
+        pass
+
+    try:
+        import opshub.connectors.google_mail  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    except ImportError:
+        # Gmail connector module imports cleanly without the extras
+        # (the heavy ``httpx`` imports stay inside the auth / client
+        # constructors); this branch is defensive and would only
+        # trigger if a future refactor adds a top-level SDK import
+        # (Phase 14 G3 — ADR-0001 cold-start guard, ADR-0010 §Phase 14
+        # 改訂 (i)). Shares the
+        # ``[connectors-google-workspace]`` extras with Drive / Calendar
+        # per Phase 14 plan §Alternatives §9 — no separate
+        # ``[connectors-google-mail]`` extras.
         pass
     from opshub.connectors import discover_connectors
     from opshub.connectors.context import ConnectorContext
@@ -317,6 +331,26 @@ def auth_set(
 
         run_box()
         return
+
+    if name in ("google_mail", "google_calendar"):
+        # Phase 14 G3 / G4 (ADR-0010 §Phase 14 改訂 (m)): Gmail +
+        # Calendar reuse the Phase 13 Google Workspace OAuth principal
+        # (1 Google account = 1 principal, 1 paste-code consent grants
+        # all three scopes per Phase 14 plan §1 OQ6 + §X.1). Operators
+        # who type ``opshub connector auth set google_mail`` get
+        # redirected to the canonical ``google_workspace`` flow instead
+        # of opshub silently writing nothing — the keyring slot
+        # ``connector:google_workspace:refresh_token`` is the shared
+        # one (no per-vendor slot).
+        typer.echo(
+            f"{name} connector reuses the shared Google OAuth principal "
+            f"(1 Google account = 1 principal per ADR-0010 §Phase 14 改訂 (m)). "
+            "Run `opshub connector auth set google_workspace` once — it "
+            "grants drive.readonly + gmail.readonly + calendar.readonly "
+            "in one paste-code round.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
 
     if name == "google_workspace":
         # Phase 13 G3 (ADR-0010 §Phase 13 改訂 + ADR-0014 §Phase 7

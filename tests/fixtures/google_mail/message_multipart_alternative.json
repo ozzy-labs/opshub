@@ -1,0 +1,32 @@
+{
+  "id": "MSG-MULTI-001",
+  "threadId": "TH-MULTI-001",
+  "historyId": "1003",
+  "snippet": "Multipart plain body...",
+  "internalDate": "1735862400000",
+  "labelIds": ["INBOX", "IMPORTANT", "STARRED"],
+  "payload": {
+    "mimeType": "multipart/alternative",
+    "headers": [
+      { "name": "Subject", "value": "Multipart message" },
+      { "name": "From", "value": "Bob Smith <bob@example.com>" }
+    ],
+    "body": { "size": 0 },
+    "parts": [
+      {
+        "mimeType": "text/plain",
+        "body": {
+          "size": 21,
+          "data": "TXVsdGlwYXJ0IHBsYWluIGJvZHku"
+        }
+      },
+      {
+        "mimeType": "text/html",
+        "body": {
+          "size": 41,
+          "data": "PGh0bWw-PGJvZHk-TXVsdGlwYXJ0IEhUTUwgYm9keS48L2JvZHk-PC9odG1sPg"
+        }
+      }
+    ]
+  }
+}

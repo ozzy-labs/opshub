@@ -1,0 +1,21 @@
+{
+  "id": "MSG-PLAIN-001",
+  "threadId": "TH-PLAIN-001",
+  "historyId": "1001",
+  "snippet": "Hello, this is a plain text message...",
+  "internalDate": "1735689600000",
+  "labelIds": ["INBOX", "UNREAD"],
+  "payload": {
+    "mimeType": "text/plain",
+    "headers": [
+      { "name": "Subject", "value": "Plain text only" },
+      { "name": "From", "value": "alice@example.com" },
+      { "name": "To", "value": "operator@example.com" },
+      { "name": "Date", "value": "Wed, 01 Jan 2025 00:00:00 +0000" }
+    ],
+    "body": {
+      "size": 49,
+      "data": "SGVsbG8sIHRoaXMgaXMgYSBwbGFpbiB0ZXh0IG1lc3NhZ2UuClNlY29uZCBsaW5lLg"
+    }
+  }
+}

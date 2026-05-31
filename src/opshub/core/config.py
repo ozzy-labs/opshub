@@ -573,6 +573,73 @@ class GoogleWorkspaceConnectorSettings(BaseModel):
     fallback_window_days: int = 30
 
 
+class GoogleMailConnectorSettings(BaseModel):
+    """Gmail connector configuration (Phase 14 Sub-issue G3, ADR-0010 §Phase 14 改訂).
+
+    The Gmail connector reads Gmail API v1
+    ``users.history.list`` with a single ``startHistoryId`` cursor and
+    a TTL expiry fallback (Gmail returns 404 ``historyNotFound`` once
+    a stored historyId crosses the ~7-day vendor window; the connector
+    bootstraps a fresh historyId via ``users.getProfile`` after a
+    ``users.messages.list?q=after:...`` backfill and walks forward).
+    Phase 14 plan §1 OQ5 + ADR-0010 §Phase 14 改訂 (j) pin the
+    contract.
+
+    ``enabled = False`` is the default per Phase 7 plan §1 #2 — every
+    SaaS connector is opt-in so a fresh ``uv tool install`` never
+    tries to reach an external API.
+
+    OAuth credentials and Refresh Token are **shared** with the
+    Phase 13 Google Workspace (Drive) connector per the
+    ``connector:google_workspace:refresh_token`` keyring slot + the
+    scope expansion in Phase 14 G2 (#294, ADR-0010 §Phase 14 改訂 (m)
+    — drive.readonly + gmail.readonly + calendar.readonly fixed-list).
+    1 Google account = 1 principal: ``client_id`` / ``client_secret`` /
+    ``redirect_uri`` live on :class:`GoogleWorkspaceConnectorSettings`
+    and the Gmail connector reads them from there at sync time. This
+    settings class therefore intentionally carries **no OAuth fields**
+    — only the Gmail-specific knobs below.
+
+    ``fallback_window_days`` controls how far back the connector scans
+    when Gmail rejects the stored ``startHistoryId`` with 404
+    ``historyNotFound`` (ADR-0010 §Phase 14 改訂 (j) TTL fallback).
+    The same window also drives the first-sync backfill so an operator
+    on day 1 sees their recent inbox instead of waiting for new
+    messages. Defaults to ``30`` — long enough to cover a typical
+    vacation / outage window without slurping years of history (a
+    temporary ``365`` for re-onboarding is the documented pattern).
+    A value of ``0`` disables both the backfill and the recovery
+    full-pass — the connector then bootstraps a fresh historyId
+    without backfilling any messages, meaning any changes that
+    occurred while the historyId was expired are lost (discouraged
+    but allowed for operators who explicitly opt out of the recovery
+    cost). Mirrors :class:`TeamsConnectorSettings.fallback_window_days`
+    + :class:`GoogleWorkspaceConnectorSettings.fallback_window_days`
+    (Phase 11 / Phase 13 precedent) so all three delta-cursor
+    connectors expose one operator-facing knob shape.
+
+    ``max_body_chars`` is the per-message body length ceiling the
+    mapper enforces (Phase 14 plan §8 OQ10). Defaults to ``500_000``
+    — same value
+    :data:`opshub.connectors.ms365.mapper.MAX_OUTLOOK_BODY_CHARS` uses
+    so Gmail and Outlook bodies are capped uniformly without the
+    operator having to keep two knobs in sync. Over-cap bodies get
+    the deterministic ``[gmail body truncated: N / M chars]`` suffix
+    appended (ADR-0010 §Phase 14 改訂 (k) §Gmail 不変条件 4 — Outlook
+    流継承). The override path lives here on
+    ``[connectors.google_mail] max_body_chars`` rather than in
+    ``[office.gmail]`` because the Office section governs
+    ``markitdown`` / Workspace export intake which Gmail bodies
+    deliberately do not traverse (text-only family per Phase 14 plan
+    §1 OQ4); putting Gmail's knob there would imply a structural
+    relationship that does not exist.
+    """
+
+    enabled: bool = False
+    fallback_window_days: int = 30
+    max_body_chars: int = 500_000
+
+
 class TeamsConnectorSettings(BaseModel):
     """Microsoft Teams connector configuration (Phase 11 F5).
 
@@ -625,6 +692,13 @@ class ConnectorSettings(BaseModel):
     改訂) adds :class:`GoogleWorkspaceConnectorSettings` for the Google
     Drive API v3 connector — OAuth Refresh Token + ``changes.list``
     cursor + (G4 で対応予定の) ``files.export``-based body extraction.
+    Phase 14 G3 (ADR-0010 §Phase 14 改訂 (i)/(j)/(k)/(l)) adds
+    :class:`GoogleMailConnectorSettings` for the Gmail connector —
+    History API delta + 7-day TTL fallback + Outlook-symmetric message
+    mapper. OAuth credentials are **shared** with the Phase 13
+    Workspace slot (1 Google account = 1 principal per ADR-0010 §Phase
+    14 改訂 (m)), so this settings class carries only the Gmail-specific
+    knobs (``enabled`` / ``fallback_window_days`` / ``max_body_chars``).
 
     The section is intentionally separate from :class:`LLMSettings` /
     :class:`EmbeddingSettings` so per-connector overrides like
@@ -645,6 +719,7 @@ class ConnectorSettings(BaseModel):
     google_workspace: GoogleWorkspaceConnectorSettings = Field(
         default_factory=GoogleWorkspaceConnectorSettings
     )
+    google_mail: GoogleMailConnectorSettings = Field(default_factory=GoogleMailConnectorSettings)
 
 
 class LLMSettings(BaseModel):

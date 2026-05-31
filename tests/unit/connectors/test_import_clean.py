@@ -59,6 +59,11 @@ _CONNECTORS: list[tuple[str, str]] = [
     ("opshub.connectors.ms365", "ms365"),
     ("opshub.connectors.box", "box"),
     ("opshub.connectors.box_drive", "box_drive"),
+    # Phase 14 G3 (#295): Gmail connector. Shares the
+    # ``[connectors-google-workspace]`` extras (no per-vendor extras
+    # per Phase 14 plan §Alternatives §9), so the same blocking script
+    # exercises both the Gmail package and the shared auth foundation.
+    ("opshub.connectors.google_mail", "google_mail"),
 ]
 
 

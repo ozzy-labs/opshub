@@ -109,6 +109,24 @@ class SourceObserved(DomainEvent):
       lookup table on purpose: the connector short-circuits these rows
       to metadata-only (``body=None``) without spending an export
       round-trip (`connector.py::_maybe_extract_body`).
+    * Phase 14 Gmail (G3 #295, ADR-0010 §Phase 14 改訂 (i)/(k)/(l)):
+      ``"gmail_message"`` — produced by
+      :func:`opshub.connectors.google_mail.mapper.map_gmail_message`
+      and symmetric with the Phase 7 MS365 Outlook
+      :data:`~opshub.connectors.ms365.mapper.OUTLOOK_SOURCE_TYPE`.
+      Message-unit mapping (Phase 14 plan §1 OQ2): the threadId is
+      retained on the raw payload but not elevated to a structured
+      column, and no ``gmail_thread`` discriminator is minted —
+      thread aggregation is projection-layer responsibility deferred
+      to Phase 15+ (Phase 14 plan §Phase 15+ outlook). The literal is
+      published as
+      :data:`opshub.connectors.google_mail.mapper.GMAIL_SOURCE_TYPE`
+      (``Final[Literal["gmail_message"]]``) so static analysis catches
+      typos at import time, and the Outlook ↔ Gmail mapper symmetry
+      contract (text/plain preferred → text/html, ``[Labels: ...]``
+      prepend, ``[gmail body truncated: N / M chars]`` tag) is
+      machine-pinned in
+      ``tests/unit/connectors/test_mapper_symmetry.py``.
 
     ``title`` is the human-readable label. ``url`` and ``summary`` are
     optional, both bounded; ``summary`` is intentionally short — full

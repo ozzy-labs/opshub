@@ -1,0 +1,19 @@
+{
+  "id": "MSG-HTML-001",
+  "threadId": "TH-HTML-001",
+  "historyId": "1002",
+  "snippet": "This is an HTML message...",
+  "internalDate": "1735776000000",
+  "labelIds": ["INBOX", "CATEGORY_PROMOTIONS"],
+  "payload": {
+    "mimeType": "text/html",
+    "headers": [
+      { "name": "Subject", "value": "HTML only newsletter" },
+      { "name": "From", "value": "Newsletter <news@example.com>" }
+    ],
+    "body": {
+      "size": 60,
+      "data": "PGh0bWw-PGJvZHk-PHA-VGhpcyBpcyBhbiBIVE1MIG1lc3NhZ2UuPC9wPjwvYm9keT48L2h0bWw-"
+    }
+  }
+}

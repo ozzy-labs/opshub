@@ -1,0 +1,42 @@
+{
+  "id": "MSG-ATTACH-001",
+  "threadId": "TH-ATTACH-001",
+  "historyId": "1004",
+  "snippet": "Message with attachment body text...",
+  "internalDate": "1735948800000",
+  "labelIds": ["INBOX"],
+  "payload": {
+    "mimeType": "multipart/mixed",
+    "headers": [
+      { "name": "Subject", "value": "Quarterly report" },
+      { "name": "From", "value": "ceo@example.com" }
+    ],
+    "body": { "size": 0 },
+    "parts": [
+      {
+        "mimeType": "multipart/alternative",
+        "body": { "size": 0 },
+        "parts": [
+          {
+            "mimeType": "text/plain",
+            "body": {
+              "size": 34,
+              "data": "TWVzc2FnZSB3aXRoIGF0dGFjaG1lbnQgYm9keSB0ZXh0Lg"
+            }
+          }
+        ]
+      },
+      {
+        "mimeType": "application/pdf",
+        "filename": "Q4-report.pdf",
+        "headers": [
+          { "name": "Content-Disposition", "value": "attachment; filename=Q4-report.pdf" }
+        ],
+        "body": {
+          "size": 524288,
+          "attachmentId": "ATT-PDF-XYZ"
+        }
+      }
+    ]
+  }
+}

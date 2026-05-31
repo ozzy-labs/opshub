@@ -1,0 +1,31 @@
+{
+  "historyId": "2001",
+  "history": [
+    {
+      "id": "1500",
+      "messages": [{ "id": "MSG-PLAIN-001", "threadId": "TH-PLAIN-001" }],
+      "messagesAdded": [
+        {
+          "message": {
+            "id": "MSG-PLAIN-001",
+            "threadId": "TH-PLAIN-001",
+            "labelIds": ["INBOX", "UNREAD"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "1501",
+      "messages": [{ "id": "MSG-HTML-001", "threadId": "TH-HTML-001" }],
+      "messagesAdded": [
+        {
+          "message": {
+            "id": "MSG-HTML-001",
+            "threadId": "TH-HTML-001",
+            "labelIds": ["INBOX"]
+          }
+        }
+      ]
+    }
+  ]
+}
