@@ -411,6 +411,75 @@ class OneDriveDriveConnectorSettings(BaseModel):
     content_extraction: bool = False
 
 
+class ExcelOfficeSettings(BaseModel):
+    """Excel-specific extraction caps (Phase 11 audit Cluster B, ADR-0025 §決定 (e)).
+
+    Per-sheet and per-workbook cell ceilings layered on top of the
+    unified character cap in :class:`OfficeSettings`. ADR-0025 §決定 (e)
+    pinned both numbers as the operator override path while the
+    Phase 11 MVP relied on the character cap alone (markitdown's
+    XlsxConverter already collapses huge sheets into compact markdown
+    tables). The settings exist here so an opt-in toml override is
+    available the moment the cell-level refinement lands; the
+    extractor function (:func:`opshub.core.document_extract.extract_document`)
+    already accepts both as parameters for API-shape stability.
+
+    Defaults match ADR-0025 §決定 (e) exactly:
+
+    * ``max_cells_per_sheet = 10_000`` — single-sheet cap.
+    * ``max_cells_per_workbook = 50_000`` — sum across all sheets.
+
+    Pass ``0`` to either field to disable the corresponding cap (matches
+    the file-size / char-cap "0 = unlimited (非推奨)" convention in
+    :class:`OfficeSettings`).
+    """
+
+    max_cells_per_sheet: int = 10_000
+    max_cells_per_workbook: int = 50_000
+
+
+class OfficeSettings(BaseModel):
+    """Office document extraction tuning (Phase 11 audit Cluster B, ADR-0025).
+
+    Operator-facing settings for the
+    :func:`opshub.core.document_extract.extract_document` Office body
+    extractor. ADR-0025 §決定 (b) pinned both caps as the two-layer
+    defence against context-window explosion and storage blow-up; this
+    section is the documented override path the ADR promises.
+
+    Defaults track ADR-0025 §決定 (b) one-for-one:
+
+    * ``max_file_size_mb = 50`` — pre-extraction file size ceiling. Box
+      Drive / OneDrive Desktop documents that exceed this skip
+      extraction entirely (``body=None`` + ``skip_reason="file too
+      large"``) so a single 100MB-plus workbook never blocks the scan.
+    * ``max_chars = 500_000`` — post-extraction markdown char cap. The
+      extractor head-truncates beyond this and appends a deterministic
+      ``[truncated: original=<N> chars, limit=<M>]`` notice so callers
+      (recall, brief, propose) see the truncation cue without extra
+      plumbing.
+    * ``excel.max_cells_per_sheet = 10_000`` /
+      ``excel.max_cells_per_workbook = 50_000`` — ADR-0025 §決定 (e)
+      cell ceilings; surfaced for shape stability ahead of the
+      cell-level refinement landing.
+
+    Env-var override pattern follows the standard nested delimiter
+    (``__``): ``OPSHUB_OFFICE__MAX_FILE_SIZE_MB=100``,
+    ``OPSHUB_OFFICE__MAX_CHARS=1000000``,
+    ``OPSHUB_OFFICE__EXCEL__MAX_CELLS_PER_SHEET=20000``.
+
+    The ``[connectors.box_drive] content_extraction`` /
+    ``[connectors.onedrive_drive] content_extraction`` opt-in still
+    gates whether the extractor is invoked at all; this section only
+    tunes the per-call caps once an operator opts in (ADR-0019 §(b')
+    + ADR-0025 §決定 (g) two-key composition).
+    """
+
+    max_file_size_mb: int = 50
+    max_chars: int = 500_000
+    excel: ExcelOfficeSettings = Field(default_factory=ExcelOfficeSettings)
+
+
 class TeamsConnectorSettings(BaseModel):
     """Microsoft Teams connector configuration (Phase 11 F5).
 
@@ -529,6 +598,7 @@ class OpsHubSettings(BaseSettings):
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     connectors: ConnectorSettings = Field(default_factory=ConnectorSettings)
+    office: OfficeSettings = Field(default_factory=OfficeSettings)
 
     @model_validator(mode="after")
     def _apply_llm_backend_env_shortcut(self) -> OpsHubSettings:

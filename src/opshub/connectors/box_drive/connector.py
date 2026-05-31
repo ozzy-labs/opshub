@@ -243,6 +243,13 @@ class BoxDriveConnector:
             # ``[connectors.box_drive] content_extraction = true``.
             # Default ``False`` keeps Phase 9 behaviour bit-for-bit.
             content_extraction=cfg.content_extraction,
+            # Phase 11 audit Cluster B: thread the
+            # ``opshub.toml [office]`` overrides through so the
+            # extractor's per-call caps reflect the operator's
+            # settings (50 MB / 500K chars defaults, override via
+            # ``OPSHUB_OFFICE__MAX_FILE_SIZE_MB`` /
+            # ``OPSHUB_OFFICE__MAX_CHARS`` etc.).
+            office_settings=settings.office,
         )
 
     @staticmethod

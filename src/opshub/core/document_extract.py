@@ -87,6 +87,7 @@ from typing import Final, Literal
 
 from opshub.core.logging import get_logger
 from opshub.core.sanitise import sanitise_error_message
+from opshub.core.text_limits import truncate_with_marker
 
 __all__ = [
     "DEFAULT_MAX_CELLS_PER_SHEET",
@@ -159,6 +160,18 @@ DEFAULT_MAX_CELLS_PER_SHEET: Final[int] = 10_000
 
 #: Default per-workbook cell cap (ADR-0025 §決定 (e-2)).
 DEFAULT_MAX_CELLS_PER_WORKBOOK: Final[int] = 50_000
+
+#: Marker template appended when the extracted markdown exceeds
+#: ``max_chars``. Composed through
+#: :func:`opshub.core.text_limits.truncate_with_marker` so the Outlook
+#: mapper and this extractor share the same truncation arithmetic. The
+#: literal shape ``"\n\n[truncated: original=<N> chars, limit=<M>]"``
+#: is pinned by ``tests/integration/test_phase11_office_lifecycle.py``
+#: and downstream regex consumers, so the placeholder names
+#: (``original`` / ``kept``) must be kept stable.
+_DOCUMENT_EXTRACT_TRUNCATION_MARKER: Final[str] = (
+    "\n\n[truncated: original={original} chars, limit={kept}]"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,19 +366,22 @@ def extract_document(
 
     text: str = result.text_content or ""
 
-    if max_chars > 0 and len(text) > max_chars:
-        # Head-truncate so the leading prose / table headers (the parts
-        # an embedder / brief would actually use) survive. The notice
-        # shape is stable for downstream parsers / regex assertions.
-        original_length = len(text)
-        truncated_body = (
-            text[:max_chars]
-            + f"\n\n[truncated: original={original_length} chars, limit={max_chars}]"
-        )
+    # Head-truncate via the shared :mod:`opshub.core.text_limits` SSOT
+    # so this path and the ms365 Outlook mapper share one truncation
+    # implementation (Phase 11 audit Cluster B INFO E2). The leading
+    # prose / table headers (the parts an embedder / brief would
+    # actually use) survive on purpose; the notice shape is stable for
+    # downstream parsers and regex assertions.
+    truncated_body, was_truncated = truncate_with_marker(
+        text,
+        max_chars=max_chars,
+        marker_template=_DOCUMENT_EXTRACT_TRUNCATION_MARKER,
+    )
+    if was_truncated:
         logger.warning(
             "document_extract.truncated",
             path=str(path),
-            original_length=original_length,
+            original_length=len(text),
             limit=max_chars,
         )
         return ExtractResult(

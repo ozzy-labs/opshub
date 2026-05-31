@@ -283,3 +283,64 @@ def test_onedrive_scanner_content_extraction_failure_is_fail_safe(tmp_path: Path
     assert results["bad.docx"].office_source_type == "word_document"
     assert results["bad.docx"].body_skip_reason is not None
     assert results["bad.docx"].body_skip_reason.startswith("extraction failed")
+
+
+# ---------------------------------------------------------------------------
+# Phase 11 audit Cluster B — office_settings wire (ADR-0025 §決定 (b)/(e))
+# ---------------------------------------------------------------------------
+
+
+def test_onedrive_scanner_forwards_office_settings_to_extract_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``office_settings`` overrides propagate through the subclass too.
+
+    Symmetric to the box_drive test. The OneDrive subclass shares the
+    base scanner's ``_maybe_extract`` hook, so this test catches a
+    regression where the subclass somehow shadows the hook with a
+    stale path (= dropping the operator override silently).
+    """
+    from opshub.connectors.box_drive.scanner import BoxDriveScanner
+    from opshub.core.config import ExcelOfficeSettings, OfficeSettings
+    from opshub.core.document_extract import ExtractResult
+
+    (tmp_path / "doc.docx").write_text("payload")
+
+    captured: list[dict[str, Any]] = []
+
+    def fake_extract(path: Path, **kwargs: Any) -> ExtractResult:
+        captured.append({"path": path, **kwargs})
+        return ExtractResult(
+            body="stub",
+            truncated=False,
+            skip_reason=None,
+            source_type="word_document",
+        )
+
+    monkeypatch.setattr("opshub.core.document_extract.extract_document", fake_extract)
+
+    settings = OfficeSettings(
+        max_file_size_mb=42,
+        max_chars=123_456,
+        excel=ExcelOfficeSettings(
+            max_cells_per_sheet=7_000,
+            max_cells_per_workbook=42_000,
+        ),
+    )
+    scanner = OneDriveDriveScanner(
+        root_path=tmp_path,
+        content_extraction=True,
+        office_settings=settings,
+    )
+    # Sanity: the subclass shares the base class type so the constructor
+    # accepting the extra keyword is the MRO contract under test.
+    assert isinstance(scanner, BoxDriveScanner)
+
+    list(scanner.scan(prior_fingerprints={}))
+
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["max_file_bytes"] == 42 * 1024 * 1024
+    assert call["max_chars"] == 123_456
+    assert call["max_cells_per_sheet"] == 7_000
+    assert call["max_cells_per_workbook"] == 42_000

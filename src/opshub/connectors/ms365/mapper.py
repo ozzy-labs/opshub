@@ -73,6 +73,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from opshub.core.errors import ConnectorFailedError
 from opshub.core.logging import get_logger
+from opshub.core.text_limits import truncate_with_marker
 from opshub.core.time import now_utc
 from opshub.domain.events.source import SourceObserved
 
@@ -299,6 +300,14 @@ def _body_from_raw(raw: dict[str, Any]) -> str | None:
     return content
 
 
+#: Marker template shared between Phase 11 F3 (Outlook body) and the
+#: Phase 11 audit Cluster B :mod:`opshub.core.text_limits` SSOT. Kept
+#: as a module constant so the regex assertion in
+#: ``tests/integration/test_phase11_office_lifecycle.py`` can pin the
+#: shape without re-encoding the literal.
+_OUTLOOK_TRUNCATION_MARKER = "\n\n[outlook body truncated: {kept} / {original} chars]"
+
+
 def _truncate_outlook_body(body: str | None, *, message_id: str) -> str | None:
     """Clip ``body`` to :data:`MAX_OUTLOOK_BODY_CHARS` with an audit suffix.
 
@@ -311,9 +320,12 @@ def _truncate_outlook_body(body: str | None, *, message_id: str) -> str | None:
 
     ``"\\n\\n[outlook body truncated: <kept> / <original> chars]"``
 
-    The bracket marker matches the F2 (``core/text_limits``) shape that
-    Phase 11 plan §3 F3 anticipates, so a future migration is a single
-    constant redirect rather than a payload-shape change. Keeping the
+    The bracket marker matches the
+    :mod:`opshub.core.text_limits` shape the Phase 11 audit Cluster B
+    landed; this function now composes
+    :func:`opshub.core.text_limits.truncate_with_marker` so the
+    truncation arithmetic has a single SSOT shared with
+    :func:`opshub.core.document_extract.extract_document`. Keeping the
     marker inside the body itself (rather than a sidecar field) means
     every consumer that reads ``SourceObserved.body`` — projection,
     recall, secretary skills — sees the truncation cue without needing
@@ -327,18 +339,20 @@ def _truncate_outlook_body(body: str | None, *, message_id: str) -> str | None:
     """
     if body is None:
         return None
-    if len(body) <= MAX_OUTLOOK_BODY_CHARS:
+    truncated_body, was_truncated = truncate_with_marker(
+        body,
+        max_chars=MAX_OUTLOOK_BODY_CHARS,
+        marker_template=_OUTLOOK_TRUNCATION_MARKER,
+    )
+    if not was_truncated:
         return body
-    original_chars = len(body)
-    head = body[:MAX_OUTLOOK_BODY_CHARS]
-    suffix = f"\n\n[outlook body truncated: {MAX_OUTLOOK_BODY_CHARS} / {original_chars} chars]"
     _log.warning(
         "mapper.outlook.body_truncated",
         message_id=message_id,
-        original_chars=original_chars,
+        original_chars=len(body),
         kept_chars=MAX_OUTLOOK_BODY_CHARS,
     )
-    return head + suffix
+    return truncated_body
 
 
 def _build_source_observed(
