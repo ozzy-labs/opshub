@@ -653,17 +653,25 @@ def _iter_message_ids(record: dict[str, Any]) -> Iterator[str]:
     * ``labelsAdded[*].message.id`` — label changes (e.g. STARRED).
     * ``labelsRemoved[*].message.id`` — label changes.
 
-    Phase 14 G3 emits a :class:`SourceObserved` for every referenced
-    message (re-emission of an existing message is absorbed by the
-    projection's natural-key dedup). The mapper distinguishes
-    "this run was a label change only" vs "new content" via the
-    ``[Labels: ...]`` prepend, so emitting a re-observation on label
-    changes is the right shape for the secretary recall path.
-    Deleted messages are also referenced via ``messagesDeleted`` but
-    Gmail returns a 404 for ``users.messages.get`` on them; the
-    connector layer skips those with a structlog warning rather than
-    failing the sync (ADR-0020 retain-everything via the metadata-only
-    last-known state in the projection).
+    Phase 14 G3 walks **three** of the four sub-arrays
+    (``messagesAdded`` / ``labelsAdded`` / ``labelsRemoved``) and
+    yields each referenced message id once per record. Re-emission of
+    an existing message is absorbed by the projection's natural-key
+    dedup; the mapper distinguishes "this run was a label change
+    only" vs "new content" via the ``[Labels: ...]`` prepend so
+    emitting a re-observation on label changes is the right shape
+    for the secretary recall path.
+
+    ``messagesDeleted`` is **deliberately skipped** — fetching those
+    ids via ``users.messages.get`` would return 404 on every entry
+    and waste a round-trip per deletion. The last-known projection
+    row keeps the metadata-only state for retained recall
+    (ADR-0020), and a future Phase 15+ extension can introduce a
+    soft-delete event if the operator surface needs it. The
+    connector layer's 404-tolerant ``_emit_message`` still handles
+    the rarer "message disappeared between history.list and
+    messages.get" race so transient races during the sync window
+    do not abort the run.
     """
     for key in ("messagesAdded", "labelsAdded", "labelsRemoved"):
         sub = record.get(key)

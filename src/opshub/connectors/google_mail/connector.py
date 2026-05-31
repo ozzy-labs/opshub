@@ -438,11 +438,14 @@ class GoogleMailConnector:
             raw = client.get_message(message_id=message_id)
         except ConnectorFailedError as exc:
             # ``ConnectorFailedError`` message shape from
-            # :meth:`GmailClient._request` is
-            # ``"Gmail request returned 404: GET <url>"`` for deleted
-            # messages. We pattern-match conservatively on "404" so
-            # transient 5xx-after-retry still bubbles up.
-            if "404" in str(exc):
+            # :meth:`GmailClient._request` on a 404 is exactly
+            # ``"Gmail request returned 404: GET <url>"``. We anchor
+            # on that full prefix (not just "404") so a URL or status
+            # message that happens to contain the digits 404 elsewhere
+            # cannot accidentally trip the silent-swallow branch —
+            # transient 5xx-after-retry must bubble up to
+            # :class:`ConnectorSyncFailed`.
+            if "Gmail request returned 404" in str(exc):
                 get_logger(__name__).warning(
                     "connector.message_not_found",
                     connector=self.name,
