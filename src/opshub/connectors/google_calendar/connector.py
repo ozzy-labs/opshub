@@ -262,6 +262,12 @@ class GoogleCalendarConnector:
         iterator = client.fetch_events_delta(calendar_id=calendar_id, sync_token=sync_token)
         for event, advanced_cursor in iterator:
             cursor = advanced_cursor
+            # The delta iterator emits a final ``(None, next_sync_token)``
+            # sentinel so the cursor surfaces even when this delta sync
+            # had zero changes — skip the observe step on the sentinel,
+            # but the cursor capture above has already done its job.
+            if event is None:
+                continue
             if _is_excluded(event, excludes):
                 continue
             mapped = map_calendar_event(event)
@@ -306,6 +312,13 @@ class GoogleCalendarConnector:
         for event, advanced_cursor in iterator:
             if advanced_cursor is not None:
                 cursor = advanced_cursor
+            # The window iterator emits a final ``(None, next_sync_token)``
+            # sentinel so the cursor surfaces even when the window
+            # returned zero events — skip the observe step on the
+            # sentinel, but the cursor capture above has already done
+            # its job.
+            if event is None:
+                continue
             if _is_excluded(event, excludes):
                 continue
             mapped = map_calendar_event(event)

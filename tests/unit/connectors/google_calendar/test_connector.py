@@ -176,8 +176,8 @@ def _raw_event(
 def _patch_auth_and_client(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    delta_pages: list[list[tuple[RawCalendarEvent, str]]] | None = None,
-    window_pages: list[list[tuple[RawCalendarEvent, str | None]]] | None = None,
+    delta_pages: list[list[tuple[RawCalendarEvent | None, str]]] | None = None,
+    window_pages: list[list[tuple[RawCalendarEvent | None, str | None]]] | None = None,
     raise_expired_first: bool = False,
 ) -> MagicMock:
     """Stub :class:`GoogleWorkspaceAuth` + :class:`CalendarClient`.
@@ -200,12 +200,12 @@ def _patch_auth_and_client(
     )
     fake_client = MagicMock()
 
-    delta_queue: list[list[tuple[RawCalendarEvent, str]]] = list(delta_pages or [])
+    delta_queue: list[list[tuple[RawCalendarEvent | None, str]]] = list(delta_pages or [])
     expired_pending = {"flag": raise_expired_first}
 
     def fetch_events_delta(
         *, calendar_id: str, sync_token: str
-    ) -> Iterator[tuple[RawCalendarEvent, str]]:
+    ) -> Iterator[tuple[RawCalendarEvent | None, str]]:
         del calendar_id, sync_token
         if expired_pending["flag"]:
             expired_pending["flag"] = False
@@ -216,11 +216,11 @@ def _patch_auth_and_client(
 
     fake_client.fetch_events_delta.side_effect = fetch_events_delta
 
-    window_queue: list[list[tuple[RawCalendarEvent, str | None]]] = list(window_pages or [])
+    window_queue: list[list[tuple[RawCalendarEvent | None, str | None]]] = list(window_pages or [])
 
     def fetch_events_window(
         *, calendar_id: str, time_min: str, time_max: str
-    ) -> Iterator[tuple[RawCalendarEvent, str | None]]:
+    ) -> Iterator[tuple[RawCalendarEvent | None, str | None]]:
         del calendar_id, time_min, time_max
         if not window_queue:
             return iter([])
@@ -322,6 +322,34 @@ def test_first_sync_walks_window_and_persists_new_sync_token(
     assert (CURSOR_EVENTS, "ST_FRESH", False) in service.cursor_history
 
 
+def test_first_sync_empty_calendar_still_persists_sync_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """First sync on an empty calendar still persists the new sync token.
+
+    Regression pin: without the client's empty-window sentinel the
+    connector would observe ``cursor=None`` and skip the eager
+    ``cursor_set`` write, forcing a full window re-walk on every
+    subsequent sync.
+    """
+    _patch_settings(monkeypatch)
+    _patch_excludes(monkeypatch, tmp_path)
+    _patch_auth_and_client(
+        monkeypatch,
+        # Empty window — only the sentinel reaches the consumer.
+        window_pages=[[(None, "ST_FRESH")]],  # pyright: ignore[reportArgumentType]
+    )
+    service = _RecordingSourceService()
+
+    result = GoogleCalendarConnector().sync(_context(service, cursor=None))
+
+    assert result.observed_count == 0
+    assert result.new_cursor == "ST_FRESH"
+    # Eager cursor commit fired so the next sync hits the delta path
+    # straight away.
+    assert (CURSOR_EVENTS, "ST_FRESH", False) in service.cursor_history
+
+
 # ----- resume / delta path -----------------------------------------------
 
 
@@ -350,6 +378,34 @@ def test_resume_replays_stored_cursor_and_advances(
     call_kwargs = fake_client.fetch_events_delta.call_args.kwargs
     assert call_kwargs["sync_token"] == "ST_OLD"
     assert call_kwargs["calendar_id"] == "primary"
+
+
+def test_resume_no_changes_advances_cursor_via_sentinel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A delta sync with zero changes still advances the cursor via the sentinel.
+
+    Regression pin: without the sentinel emission a "no changes since
+    last sync" delta would re-store the old cursor and miss any new
+    sync token Calendar issued (Calendar can rotate sync tokens
+    silently on the server side).
+    """
+    _patch_settings(monkeypatch)
+    _patch_excludes(monkeypatch, tmp_path)
+    _patch_auth_and_client(
+        monkeypatch,
+        delta_pages=[
+            # Zero events but the iterator still yields the sentinel
+            # carrying the fresh sync token.
+            [(None, "ST_NEW")],
+        ],
+    )
+    service = _RecordingSourceService()
+
+    result = GoogleCalendarConnector().sync(_context(service, cursor="ST_OLD"))
+
+    assert result.observed_count == 0
+    assert result.new_cursor == "ST_NEW"
 
 
 # ----- 410 TTL fallback --------------------------------------------------

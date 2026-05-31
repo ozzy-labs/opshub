@@ -289,7 +289,7 @@ class CalendarClient:
         *,
         calendar_id: str = "primary",
         sync_token: str,
-    ) -> Iterator[tuple[RawCalendarEvent, str]]:
+    ) -> Iterator[tuple[RawCalendarEvent | None, str]]:
         """Yield ``(event, cursor)`` for every change since ``sync_token``.
 
         Uses the delta variant of ``events.list``: Calendar returns
@@ -309,6 +309,15 @@ class CalendarClient:
           and no ``nextPageToken``) the yielded cursor is the fresh
           ``nextSyncToken`` — the caller persists it and the next
           sync resumes there.
+        * **Final sentinel** (no-changes case): after the last events
+          page is drained the iterator emits one ``(None, cursor)``
+          tuple carrying the freshly-minted sync token. Without the
+          sentinel a "no changes since last sync" run would never
+          yield, the caller would keep replaying the old token, and
+          we would miss any new sync token Calendar issued. The
+          connector's ``_consume_delta`` consumes the sentinel by
+          skipping ``observe`` when ``event is None`` and capturing
+          the cursor verbatim.
 
         Raises
         ------
@@ -342,13 +351,12 @@ class CalendarClient:
             # ``nextSyncToken`` and the absence of
             # ``nextPageToken``. When we are on that page the cursor
             # we hand out advances to the new sync token.
-            page_cursor = (
-                next_sync_token
-                if isinstance(next_sync_token, str)
+            is_final_page = (
+                isinstance(next_sync_token, str)
                 and next_sync_token
                 and not isinstance(next_page_token, str)
-                else cursor_in_flight
             )
+            page_cursor: str = cast(str, next_sync_token) if is_final_page else cursor_in_flight
 
             for raw_event in items:
                 event = _normalise_event(raw_event)
@@ -369,6 +377,11 @@ class CalendarClient:
                 params["pageToken"] = next_page_token
                 cursor_in_flight = page_cursor
             else:
+                # Emit a final sentinel so the caller observes the new
+                # sync token even when no events changed in this delta
+                # (the common "nothing happened" case).
+                if is_final_page:
+                    yield None, page_cursor
                 return
 
     def fetch_events_window(
@@ -377,7 +390,7 @@ class CalendarClient:
         calendar_id: str = "primary",
         time_min: str,
         time_max: str,
-    ) -> Iterator[tuple[RawCalendarEvent, str | None]]:
+    ) -> Iterator[tuple[RawCalendarEvent | None, str | None]]:
         """Yield ``(event, cursor)`` for every event in ``[time_min, time_max]``.
 
         Used both for first-sync bootstrap (when the stored cursor is
@@ -405,13 +418,26 @@ class CalendarClient:
 
         Yields
         ------
-        tuple[RawCalendarEvent, str | None]
+        tuple[RawCalendarEvent | None, str | None]
             Each tuple carries the event plus the latest cursor
             value the iterator has observed (``None`` on every page
             except the final one; on the final page the cursor is
             the freshly-minted ``nextSyncToken``). The connector
             persists the final cursor so subsequent syncs resume on
             the delta path.
+
+            **Final sentinel**: after the last events page is drained
+            the iterator yields one extra tuple
+            ``(None, next_sync_token)`` carrying the freshly-minted
+            sync token even when the window contained zero events.
+            This is the load-bearing path for empty calendars (and
+            for TTL-fallback recovery on calendars with no events in
+            the configured window) — without the sentinel the
+            connector would never observe the new ``nextSyncToken``
+            and would re-trigger the full-pass on every subsequent
+            sync. The connector's ``_consume_window`` consumes the
+            sentinel by skipping ``observe`` when ``event is None``
+            and capturing the cursor verbatim.
 
         Raises
         ------
@@ -438,13 +464,12 @@ class CalendarClient:
 
             next_page_token = body.get("nextPageToken")
             next_sync_token = body.get("nextSyncToken")
-            page_cursor: str | None = (
-                next_sync_token
-                if isinstance(next_sync_token, str)
+            is_final_page = (
+                isinstance(next_sync_token, str)
                 and next_sync_token
                 and not isinstance(next_page_token, str)
-                else last_cursor
             )
+            page_cursor: str | None = next_sync_token if is_final_page else last_cursor
 
             for raw_event in items:
                 event = _normalise_event(raw_event)
@@ -456,6 +481,11 @@ class CalendarClient:
                 params["pageToken"] = next_page_token
                 last_cursor = page_cursor
             else:
+                # Emit a final sentinel so the caller observes the new
+                # sync token even on an empty calendar / empty fallback
+                # window. ``event=None`` is the documented marker.
+                if is_final_page:
+                    yield None, page_cursor
                 return
 
     def close(self) -> None:

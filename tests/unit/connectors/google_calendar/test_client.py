@@ -123,7 +123,10 @@ def test_fetch_events_delta_single_page() -> None:
     client = _client_with_handler(handler)
     results = list(client.fetch_events_delta(sync_token="ST_OLD"))
 
-    assert len(results) == 1
+    # One event + one sentinel emission (the sentinel carries the
+    # fresh sync token so callers can observe the new cursor even on
+    # zero-event deltas — see the empty-window test).
+    assert len(results) == 2
     event, cursor = results[0]
     # On the final page (no nextPageToken, with nextSyncToken) the
     # yielded cursor advances to the new sync token.
@@ -135,6 +138,10 @@ def test_fetch_events_delta_single_page() -> None:
     assert event.end_iso == "2026-06-01T11:00:00Z"
     assert event.attendees_count == 2
     assert event.organizer_email == "alice@example.com"
+    # Final sentinel carries None + the same cursor.
+    sentinel_event, sentinel_cursor = results[1]
+    assert sentinel_event is None
+    assert sentinel_cursor == "ST_NEW"
 
     # singleEvents=false is the load-bearing pin (Phase 14 OQ3); any
     # regression that drops it would silently expand recurring events.
@@ -196,12 +203,21 @@ def test_fetch_events_delta_multi_page_cursor_holds_then_advances() -> None:
     client = _client_with_handler(handler)
     results = list(client.fetch_events_delta(sync_token="ST_OLD"))
 
-    assert [r[0].id for r in results] == ["evt-1", "evt-2"]
+    # Two events + final sentinel.
+    assert len(results) == 3
+    # Real events come first; the sentinel is the trailing entry.
+    event_ids = [r[0].id for r in results if r[0] is not None]
+    assert event_ids == ["evt-1", "evt-2"]
     # First page: cursor holds at incoming sync_token (so a mid-walk
     # crash does not advance past unconsumed pages).
     assert results[0][1] == "ST_OLD"
-    # Final page: cursor advances to the freshly-minted nextSyncToken.
+    # Final page event: cursor advances to the freshly-minted nextSyncToken.
     assert results[1][1] == "ST_NEW"
+    # Sentinel mirrors the same cursor (the load-bearing path for the
+    # zero-events delta case).
+    sentinel_event, sentinel_cursor = results[2]
+    assert sentinel_event is None
+    assert sentinel_cursor == "ST_NEW"
 
     # First call sent syncToken; second call swapped to pageToken
     # (Calendar refuses to combine the two).
@@ -242,6 +258,43 @@ def test_fetch_events_delta_410_raises_sync_token_expired() -> None:
 
 
 # ----- fetch_events_window: bootstrap + fallback path --------------------
+
+
+def test_fetch_events_window_yields_sync_token_sentinel_for_empty_window() -> None:
+    """Empty window still emits a ``(None, next_sync_token)`` sentinel.
+
+    Regression pin for the empty-calendar / empty-fallback-window
+    edge case: without the sentinel the connector would never observe
+    the freshly-minted ``nextSyncToken`` and would re-trigger the
+    full-pass on every subsequent sync (or, on first-sync, would
+    re-bootstrap from scratch every time). The sentinel keeps the
+    cursor advance idempotent across "nothing changed" cases.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={
+                "kind": "calendar#events",
+                "nextSyncToken": "ST_FRESH",
+                "items": [],
+            },
+        )
+
+    client = _client_with_handler(handler)
+    results = list(
+        client.fetch_events_window(
+            time_min="2026-03-01T00:00:00Z",
+            time_max="2027-06-01T00:00:00Z",
+        )
+    )
+
+    # One sentinel emission with the new sync token.
+    assert len(results) == 1
+    event, cursor = results[0]
+    assert event is None
+    assert cursor == "ST_FRESH"
 
 
 def test_fetch_events_window_yields_next_sync_token_on_final_page() -> None:
@@ -300,12 +353,18 @@ def test_fetch_events_window_yields_next_sync_token_on_final_page() -> None:
         )
     )
 
-    assert len(results) == 2
+    # Two events + final sentinel (the iterator yields the sentinel on
+    # the final page so callers always see the new sync token).
+    assert len(results) == 3
     # First page: cursor is None (no sync token captured yet).
     assert results[0][1] is None
-    # Final page: cursor is the freshly-minted sync token so the
+    # Final page event: cursor is the freshly-minted sync token so the
     # connector's _consume_window persists it as the new cursor.
     assert results[1][1] == "ST_FRESH"
+    # Trailing sentinel mirrors the final cursor.
+    sentinel_event, sentinel_cursor = results[2]
+    assert sentinel_event is None
+    assert sentinel_cursor == "ST_FRESH"
 
     # Both calls carry the timeMin / timeMax window plus the
     # singleEvents=false / showDeleted=true pins.
@@ -348,10 +407,13 @@ def test_normaliser_lifts_override_pointer_fields() -> None:
 
     client = _client_with_handler(handler)
     results = list(client.fetch_events_delta(sync_token="ST_OLD"))
-    assert len(results) == 1
+    # 1 event + 1 sentinel.
+    assert len(results) == 2
     event = results[0][0]
+    assert event is not None
     assert event.recurring_event_id == "evt-master"
     assert event.original_start_iso == "2026-05-18T10:00:00Z"
+    assert results[1][0] is None
 
 
 def test_normaliser_lifts_master_recurrence_rule() -> None:
@@ -382,6 +444,7 @@ def test_normaliser_lifts_master_recurrence_rule() -> None:
     client = _client_with_handler(handler)
     results = list(client.fetch_events_delta(sync_token="ST_OLD"))
     event = results[0][0]
+    assert event is not None
     assert event.recurrence == ("RRULE:FREQ=WEEKLY;BYDAY=MO",)
     # Master event has no override pointer fields.
     assert event.recurring_event_id == ""
@@ -415,6 +478,7 @@ def test_normaliser_handles_all_day_events() -> None:
     client = _client_with_handler(handler)
     results = list(client.fetch_events_delta(sync_token="ST_OLD"))
     event = results[0][0]
+    assert event is not None
     # All-day events render with the YYYY-MM-DD shape verbatim — the
     # mapper renders the summary the same way as timed events with
     # only the time-component shape differing.
@@ -450,8 +514,8 @@ def test_rate_limit_429_retries_with_retry_after() -> None:
     client = _client_with_handler(handler)
     with patch.object(time, "sleep", _noop_sleep):
         results = list(client.fetch_events_delta(sync_token="ST_OLD"))
-    # Second attempt succeeds and yields no events (empty page).
-    assert results == []
+    # Second attempt succeeds and yields only the empty-window sentinel.
+    assert results == [(None, "ST_NEW")]
     assert call_count["n"] == 2
 
 
@@ -485,7 +549,7 @@ def test_rate_limit_403_user_rate_limit_exceeded_retries() -> None:
     client = _client_with_handler(handler)
     with patch.object(time, "sleep", _noop_sleep):
         results = list(client.fetch_events_delta(sync_token="ST_OLD"))
-    assert results == []
+    assert results == [(None, "ST_NEW")]
     assert call_count["n"] == 2
 
 
@@ -510,7 +574,7 @@ def test_5xx_transient_retries_then_succeeds() -> None:
     client = _client_with_handler(handler)
     with patch.object(time, "sleep", _noop_sleep):
         results = list(client.fetch_events_delta(sync_token="ST_OLD"))
-    assert results == []
+    assert results == [(None, "ST_NEW")]
     assert call_count["n"] == 2
 
 
