@@ -8,6 +8,47 @@ caller (Phase 11 F4 box_drive / onedrive_drive scanners, Phase 11.x
 mappers) can use to decide between body persistence, ``body=None``
 skip, and a truncated body with an inline notice.
 
+Phase 13 G2 (ADR-0025 §決定 (d') / §決定 (j))
+---------------------------------------------
+
+Phase 13 G2 (#276) extends this module with the **Google Workspace
+export 経路** so the Drive API connector (G3 #277, G4 #278) can route
+Google native Docs / Slides / Sheets through the same markitdown sink
+without forking the extraction pipeline:
+
+* :data:`GOOGLE_DOC_SOURCE_TYPE` / :data:`GOOGLE_SLIDES_SOURCE_TYPE` /
+  :data:`GOOGLE_SHEETS_SOURCE_TYPE` — three ``Final[Literal[...]]``
+  source_type discriminators that mirror :data:`WORD_SOURCE_TYPE` /
+  :data:`EXCEL_SOURCE_TYPE` / :data:`POWERPOINT_SOURCE_TYPE` but tag
+  the Workspace origin so ``opshub source list --type google_doc`` etc.
+  can filter on it (ADR-0025 §決定 (d')).
+* :data:`GOOGLE_WORKSPACE_SOURCE_TYPES` — runtime ``tuple[str, ...]``
+  for iteration (sub-issue #277 G3 uses it for the mimeType → source_type
+  lookup and to keep the ``Literal`` value pin test in lockstep).
+* :data:`GOOGLE_WORKSPACE_MIMETYPE_TO_SOURCE_TYPE` — the
+  ``application/vnd.google-apps.<kind>`` → :data:`GoogleWorkspaceSourceType`
+  lookup table the Drive connector imports to normalise Drive API
+  metadata into the source_type discriminator. The table is the
+  authoritative mapping (single source of truth) so a future enum
+  migration touches one place (same pattern as
+  :data:`SOURCE_TYPE_BY_EXTENSION` for the Phase 11 Office path).
+* :func:`extract_workspace_export` — the thin core-side wrapper that
+  takes the already-exported MS Office bytes from
+  ``Drive API files.export(fileId, mimeType=<Office mediatype>)``
+  and feeds them into the same markitdown converter
+  :func:`extract_document` uses, then stamps the Google Workspace
+  source_type on the returned :class:`ExtractResult`. The Drive
+  API parameter selection (mimeType → export target mediatype) stays
+  on the connector side per the G2 / G3 responsibility split.
+
+The 50 MB / 500K chars caps, fail-safe contract, Excel 10K-cell limit
+and PowerPoint speaker-notes coverage from §決定 (b)/(c)/(e)/(f) carry
+over verbatim to the Workspace export path. Whether the 50 MB cap
+needs a ``[office.google_workspace] max_file_size_mb`` separate
+override is the Phase 13 plan OQ9 measurement (G2 #276); the API
+surface is shaped so adding an override later is a kwarg addition, not
+a signature break.
+
 ADR-0025 context
 ----------------
 
@@ -95,12 +136,19 @@ __all__ = [
     "DEFAULT_MAX_CHARS",
     "DEFAULT_MAX_FILE_BYTES",
     "EXCEL_SOURCE_TYPE",
+    "GOOGLE_DOC_SOURCE_TYPE",
+    "GOOGLE_SHEETS_SOURCE_TYPE",
+    "GOOGLE_SLIDES_SOURCE_TYPE",
+    "GOOGLE_WORKSPACE_MIMETYPE_TO_SOURCE_TYPE",
+    "GOOGLE_WORKSPACE_SOURCE_TYPES",
     "POWERPOINT_SOURCE_TYPE",
     "SOURCE_TYPE_BY_EXTENSION",
     "WORD_SOURCE_TYPE",
     "ExtractResult",
+    "GoogleWorkspaceSourceType",
     "OfficeSourceType",
     "extract_document",
+    "extract_workspace_export",
 ]
 
 logger = get_logger(__name__)
@@ -140,6 +188,89 @@ SOURCE_TYPE_BY_EXTENSION: Final[dict[str, OfficeSourceType]] = {
     ".xls": EXCEL_SOURCE_TYPE,
     ".pptx": POWERPOINT_SOURCE_TYPE,
     ".ppt": POWERPOINT_SOURCE_TYPE,
+}
+
+
+# --------------------------------------------------------------------- (d')
+# Phase 13 G2 — Google Workspace source_type discriminators
+# ---------------------------------------------------------------------
+
+#: ``source_type`` discriminator for Google Docs
+#: (``application/vnd.google-apps.document``, ADR-0025 §決定 (d')).
+GOOGLE_DOC_SOURCE_TYPE: Final[Literal["google_doc"]] = "google_doc"
+
+#: ``source_type`` discriminator for Google Slides
+#: (``application/vnd.google-apps.presentation``, ADR-0025 §決定 (d')).
+GOOGLE_SLIDES_SOURCE_TYPE: Final[Literal["google_slides"]] = "google_slides"
+
+#: ``source_type`` discriminator for Google Sheets
+#: (``application/vnd.google-apps.spreadsheet``, ADR-0025 §決定 (d')).
+GOOGLE_SHEETS_SOURCE_TYPE: Final[Literal["google_sheets"]] = "google_sheets"
+
+
+#: Narrow Literal alias for the three Google Workspace ``source_type``
+#: discriminators. The Phase 13 G3 (#277) Drive API mapper imports this
+#: alias so a typo silently routing a Google Doc through the Sheets
+#: path fails at type-check time (mirrors :data:`OfficeSourceType` for
+#: the Phase 11 Office path).
+GoogleWorkspaceSourceType = Literal[
+    "google_doc",
+    "google_slides",
+    "google_sheets",
+]
+
+
+#: Runtime tuple of the three Google Workspace ``source_type`` strings.
+#: Phase 13 G3 (#277) imports this for the mimeType → source_type lookup
+#: pin tests and ``opshub source list --type`` enumeration; keeping the
+#: order stable so reviewers can spot accidental reorderings in a diff.
+#: The G2 PR ships a value-pin test (
+#: ``tests/unit/core/test_document_extract.py
+#: ::test_google_workspace_source_types_tuple_pin``) so G3 cannot
+#: regress the mapping without also tripping the G2 test pin.
+GOOGLE_WORKSPACE_SOURCE_TYPES: Final[tuple[GoogleWorkspaceSourceType, ...]] = (
+    GOOGLE_DOC_SOURCE_TYPE,
+    GOOGLE_SLIDES_SOURCE_TYPE,
+    GOOGLE_SHEETS_SOURCE_TYPE,
+)
+
+
+#: Authoritative mapping from Google Workspace native ``mimeType`` →
+#: :data:`GoogleWorkspaceSourceType` discriminator. The Drive API
+#: connector (Phase 13 G3 #277) imports this table to normalise the
+#: Drive ``files.list`` / ``changes.list`` ``mimeType`` field; the table
+#: is the single source of truth so a future taxonomy change touches
+#: one place (same pattern as :data:`SOURCE_TYPE_BY_EXTENSION` for the
+#: Phase 11 Office path).
+#:
+#: The choice of *export target* mediatype (``.docx`` / ``.pptx`` /
+#: ``.xlsx``) — i.e. the ``mimeType`` parameter passed to
+#: ``Drive API files.export(fileId, mimeType=...)`` — is the
+#: connector's responsibility per the G2 / G3 responsibility split
+#: (ADR-0025 §決定 (j) §不変条件 2: "Workspace export → MS Office
+#: mediatype → markitdown"). G2 owns the *intake* side
+#: (:func:`extract_workspace_export`); G3 owns the *outbound* Drive
+#: API parameter generation.
+GOOGLE_WORKSPACE_MIMETYPE_TO_SOURCE_TYPE: Final[dict[str, GoogleWorkspaceSourceType]] = {
+    "application/vnd.google-apps.document": GOOGLE_DOC_SOURCE_TYPE,
+    "application/vnd.google-apps.presentation": GOOGLE_SLIDES_SOURCE_TYPE,
+    "application/vnd.google-apps.spreadsheet": GOOGLE_SHEETS_SOURCE_TYPE,
+}
+
+
+#: Mapping from :data:`GoogleWorkspaceSourceType` → the file extension
+#: of the MS Office mediatype the Drive API ``files.export`` call is
+#: expected to return. Used by :func:`extract_workspace_export` to
+#: pick the tempfile suffix so markitdown's converter dispatcher routes
+#: the bytes through the correct Word / Excel / PowerPoint converter.
+#: ADR-0025 §決定 (j) §不変条件 2 fixes the three pairings — Docs →
+#: ``.docx`` (we deliberately do *not* take the Google-native
+#: ``text/markdown`` export for Docs, so the three Workspace formats
+#: share one extraction path), Slides → ``.pptx``, Sheets → ``.xlsx``.
+_GOOGLE_WORKSPACE_EXPORT_EXTENSION: Final[dict[GoogleWorkspaceSourceType, str]] = {
+    GOOGLE_DOC_SOURCE_TYPE: ".docx",
+    GOOGLE_SLIDES_SOURCE_TYPE: ".pptx",
+    GOOGLE_SHEETS_SOURCE_TYPE: ".xlsx",
 }
 
 
@@ -198,18 +329,30 @@ class ExtractResult:
         ``"file too large"`` / ``"unsupported format"`` /
         ``"extraction failed: <ExceptionClassName>"``.
     source_type:
-        The ``OfficeSourceType`` derived from the file extension via
-        :data:`SOURCE_TYPE_BY_EXTENSION`. Always populated when the
-        extension is one of the 6 supported (`.doc`/`.docx`/...);
-        ``None`` for unknown extensions (the caller should not even
-        be invoking :func:`extract_document` in that case — the
-        ``None`` is defensive).
+        The ``source_type`` discriminator stamped on the result.
+
+        * :func:`extract_document` populates it from the file
+          extension via :data:`SOURCE_TYPE_BY_EXTENSION`, so the value
+          is an :data:`OfficeSourceType` (``"word_document"`` /
+          ``"excel_spreadsheet"`` / ``"powerpoint_slide_deck"``) for
+          the 6 supported extensions and ``None`` for unknown
+          extensions (defensive).
+        * :func:`extract_workspace_export` populates it from the
+          caller-supplied :data:`GoogleWorkspaceSourceType`
+          (``"google_doc"`` / ``"google_slides"`` /
+          ``"google_sheets"``) so the Phase 13 G4 (#278) Drive mapper
+          can stamp the Workspace origin on
+          :class:`~opshub.domain.events.source.SourceObserved` rather
+          than the underlying export-target mediatype's discriminator
+          (a Google Sheet exported as ``.xlsx`` stays
+          ``"google_sheets"``, never collapses into
+          ``"excel_spreadsheet"``).
     """
 
     body: str | None
     truncated: bool
     skip_reason: str | None
-    source_type: OfficeSourceType | None
+    source_type: OfficeSourceType | GoogleWorkspaceSourceType | None
 
 
 def extract_document(
@@ -395,5 +538,191 @@ def extract_document(
         body=text,
         truncated=False,
         skip_reason=None,
+        source_type=source_type,
+    )
+
+
+# --------------------------------------------------------------------- (d') (j)
+# Phase 13 G2 — Google Workspace export 経路
+# ---------------------------------------------------------------------
+
+
+def extract_workspace_export(
+    export_bytes: bytes,
+    source_type: GoogleWorkspaceSourceType,
+    *,
+    max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    max_chars: int = DEFAULT_MAX_CHARS,
+    max_cells_per_sheet: int = DEFAULT_MAX_CELLS_PER_SHEET,
+    max_cells_per_workbook: int = DEFAULT_MAX_CELLS_PER_WORKBOOK,
+) -> ExtractResult:
+    """Extract a Google Workspace export through the markitdown path.
+
+    Phase 13 G2 (#276) ADR-0025 §決定 (j): the Drive API connector
+    (G3 #277 + G4 #278) calls
+    ``files.export(fileId, mimeType=<Office mediatype>)`` to materialise
+    a Google Doc / Slide / Sheet as the MS Office equivalent, then
+    hands the bytes to this helper. The helper writes the bytes to a
+    short-lived tempfile (``markitdown`` is path-oriented) and
+    delegates to :func:`extract_document` so the markitdown invocation,
+    caps, fail-safe and truncation marker stay literally one
+    code path. Only the final :class:`ExtractResult` is re-stamped
+    with the Workspace-origin ``source_type`` so the downstream
+    :class:`~opshub.domain.events.source.SourceObserved` carries
+    ``"google_doc"`` / ``"google_slides"`` / ``"google_sheets"`` rather
+    than the underlying Office-export discriminator (a Google Sheet
+    that was exported as ``.xlsx`` stays ``"google_sheets"`` for
+    ``opshub source list --type`` filters and find-document queries).
+
+    The G2 / G3 responsibility split (ADR-0025 §決定 (j)):
+
+    * G2 owns the *intake* side — i.e. "given these exported bytes
+      and the Workspace source_type, produce an ``ExtractResult``".
+    * G3 owns the *outbound* side — i.e. "given a Google
+      ``mimeType``, decide which export target ``mimeType`` to pass
+      to ``Drive API files.export``". G3 imports
+      :data:`GOOGLE_WORKSPACE_MIMETYPE_TO_SOURCE_TYPE` to perform the
+      ``mimeType`` → ``source_type`` lookup that drives this
+      function's ``source_type`` argument.
+
+    Parameters
+    ----------
+    export_bytes:
+        Raw bytes from ``Drive API files.export``. The caller is
+        responsible for asking the Drive API for the MS Office
+        mediatype that matches the Workspace ``source_type``
+        (``"google_doc"`` → ``.docx``, ``"google_slides"`` →
+        ``.pptx``, ``"google_sheets"`` → ``.xlsx``); the helper picks
+        the tempfile suffix from :data:`GoogleWorkspaceSourceType` so
+        ``markitdown`` dispatches the bytes through the right
+        converter.
+
+        Passing an empty ``bytes`` (e.g. when ``files.export``
+        returned 200 OK with an empty body, which Drive does for a
+        legitimately empty Doc) short-circuits to ``body=""`` rather
+        than touching the disk or invoking markitdown — empty bytes
+        carry no fingerprintable content, so writing them to a
+        tempfile only to get an empty extraction back wastes I/O.
+    source_type:
+        The Google Workspace discriminator the result should carry.
+        Must be one of :data:`GOOGLE_WORKSPACE_SOURCE_TYPES`; the
+        :data:`GoogleWorkspaceSourceType` ``Literal`` makes
+        misrouting a type-check failure rather than a runtime bug.
+    max_file_bytes, max_chars, max_cells_per_sheet, max_cells_per_workbook:
+        Same semantics as :func:`extract_document` — ADR-0025 §決定
+        (b)/(e) caps carry over verbatim to the Workspace export
+        path. The size cap is applied to the *export bytes* length
+        (the size the operator actually pays for in agent context,
+        not the Google native file size which Drive does not even
+        expose for native Docs / Sheets / Slides).
+
+    Returns
+    -------
+    ExtractResult
+        Same value object as :func:`extract_document`. ``body`` is the
+        extracted markdown (or ``None`` on skip / failure);
+        ``source_type`` carries the supplied
+        :data:`GoogleWorkspaceSourceType`; ``skip_reason`` follows the
+        same vocabulary as the Phase 11 Office path
+        (``"file too large"`` / ``"extraction failed: <ExcCls>"`` /
+        ``"markitdown not installed"``).
+
+    Notes
+    -----
+    The fail-safe contract from §決定 (c) extends to the Workspace
+    path: this function never raises. A 50 MB+ export, a markitdown
+    crash, a missing ``[office]`` extras install all surface as
+    ``body=None`` + a stable ``skip_reason`` so the Drive sync loop
+    never gets blocked by a single bad export.
+    """
+    # Empty-bytes short-circuit. An empty Doc legitimately exports to
+    # zero bytes; we treat that as a successful extraction with an
+    # empty body so the connector still emits ``SourceObserved``
+    # (metadata-only) and the consumer can render "no body" without
+    # needing a magic ``skip_reason``.
+    if not export_bytes:
+        return ExtractResult(
+            body="",
+            truncated=False,
+            skip_reason=None,
+            source_type=source_type,
+        )
+
+    # Apply the size cap *before* touching the disk so a 100 MB export
+    # never lands in tempdir. This mirrors :func:`extract_document`'s
+    # pre-flight check (ADR-0025 §決定 (b-1)).
+    file_size = len(export_bytes)
+    if max_file_bytes > 0 and file_size > max_file_bytes:
+        logger.warning(
+            "document_extract.workspace_export_too_large",
+            source_type=source_type,
+            file_size=file_size,
+            limit=max_file_bytes,
+        )
+        return ExtractResult(
+            body=None,
+            truncated=False,
+            skip_reason="file too large",
+            source_type=source_type,
+        )
+
+    suffix = _GOOGLE_WORKSPACE_EXPORT_EXTENSION[source_type]
+
+    # ``markitdown`` is path-oriented; the canonical way to hand it
+    # in-memory bytes is via a tempfile with the right extension so
+    # the converter dispatcher picks the docx / xlsx / pptx path
+    # instead of falling back to the "plain bytes" guesser. We use
+    # ``delete=False`` + an explicit ``os.unlink`` in the ``finally``
+    # block so we control cleanup on every branch (including the
+    # markitdown-raises branch where the context manager's automatic
+    # cleanup on Windows would also race with markitdown's reader).
+    import tempfile
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="wb",
+        suffix=suffix,
+        prefix="opshub_workspace_export_",
+        delete=False,
+    )
+    try:
+        tmp.write(export_bytes)
+        tmp.flush()
+        tmp.close()
+        # Delegate to the existing extractor so caps / fail-safe /
+        # truncation marker stay one code path. We pass
+        # ``max_file_bytes=0`` to skip the inner pre-flight (we
+        # already validated the size on the bytes above) — the
+        # tempfile's on-disk size equals ``len(export_bytes)`` so the
+        # inner cap would be a redundant check, but skipping it also
+        # avoids a TOCTOU race where the tempdir could be cleared
+        # between our write and the extractor's ``os.stat``.
+        result = extract_document(
+            Path(tmp.name),
+            max_file_bytes=0,
+            max_chars=max_chars,
+            max_cells_per_sheet=max_cells_per_sheet,
+            max_cells_per_workbook=max_cells_per_workbook,
+        )
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            # Tempfile cleanup is best-effort — a stale tempfile is
+            # not worth blocking the sync. The OS reaps ``TMPDIR``
+            # eventually and the path is in our private prefix so a
+            # leak is grep-able by an operator.
+            pass
+
+    # Re-stamp the ``source_type`` with the Workspace discriminator.
+    # The inner :func:`extract_document` derived an Office
+    # discriminator from the tempfile's ``.docx`` / ``.xlsx`` /
+    # ``.pptx`` suffix; that's the *underlying* format we exported to,
+    # not the *origin* the operator cares about. ADR-0025 §決定 (d')
+    # is explicit that a Google Sheet stays ``"google_sheets"`` even
+    # when the export path went through ``.xlsx``.
+    return ExtractResult(
+        body=result.body,
+        truncated=result.truncated,
+        skip_reason=result.skip_reason,
         source_type=source_type,
     )
