@@ -7,6 +7,8 @@ description: 「返信案を考えて」「下書き作って」「これに返�
 
 opshub の MCP write tool `propose.generate`（mode: `reply_to_source_id`、PR #231 で実装、`src/opshub/mcp/_registry.py` の `WriteCategory.PROPOSE_GENERATE`）と `propose.apply`（Phase 12 H1 で MCP に露出、`WriteCategory.PROPOSE_APPLY`、idempotent）を第一経路として返信下書きを作る。Phase 10 Sub-issue D で書き、Sub-issue E (#217 merged) で `ReplyDraftCandidatePayload` が実装済み。ADR-0016 §決定 (i)+(j)+(k) で吸収された。Phase 11 で Outlook body deep retention (#244 / ADR-0020 改訂) が入り、`ms365_outlook` への reply-draft が本格機能化した（差出人の本文を full payload で context 注入できるようになった）。
 
+pair: draft family (`handoff-draft` / `announcement-draft` と同族、ただし本 skill のみ persist する。返信元 source の有無で persist 境界が分かれる、ADR-0016 §決定 (l)(a))。
+
 ## 何が起きるか
 
 1. ユーザーが「これに返信下書き作って」「この slack に返信案」「メール返信どうする?」と頼む
@@ -126,4 +128,4 @@ apply は durable state を変える (`ProposalApplied` event を発行)。ホ�
 - Phase 12 H1 (MCP `propose.apply` write tool、idempotent semantics)
 - Phase 11 plan (`docs/phase-11-plan.md`)
 - Phase 12 plan (`docs/phase-12-plan.md` §3 H1)
-- docs/secretary-agent.md
+- docs/secretary-agent.md (Skill catalog SSOT、14 skills 責務マップ)

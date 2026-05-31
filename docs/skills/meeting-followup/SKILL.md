@@ -1,11 +1,11 @@
 ---
 name: meeting-followup
-description: 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」「昨日の会議どうだった」「打ち合わせのフォロー」と頼まれたら、opshub MCP の source.list (source_type=calendar_event) で直近の会議を集め、source.get で議事録 / 関連やりとりを recall.search で引いた上で propose.generate (mode=meeting_followup) で task / decision 候補を生成し、ユーザー確認後に propose.apply で承認分のみ HITL 保存する。auto-apply 経路は存在しない (ADR-0016 §決定 (c))。
+description: 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」「昨日の会議どうだった」「打ち合わせのフォロー」と頼まれたら、opshub MCP の source.list (source_type=ms365_calendar) で直近の会議を集め、source.get で議事録 / 関連やりとりを recall.search で引いた上で propose.generate (mode=meeting_followup) で task / decision 候補を生成し、ユーザー確認後に propose.apply で承認分のみ HITL 保存する。auto-apply 経路は存在しない (ADR-0016 §決定 (c))。
 ---
 
 # meeting-followup — 直近の会議から action items を抽出する (HITL)
 
-opshub MCP の `source.list`（read tool、`source_type=calendar_event` + `observed_after` / `observed_before` の時間フィルタは Phase 12 H1 で追加）で直近の会議を集め、`source.get` + `recall.search` で議事録や関連やりとりを context として引き、`propose.generate`（`mode=meeting_followup`、Phase 12 H4 で追加された dispatch key、ADR-0016 改訂 §決定 (l)(b)）で task / decision 候補を生成し、ユーザーが個別承認した候補のみ `propose.apply`（Phase 12 H1 で MCP に露出、`WriteCategory.PROPOSE_APPLY`、`read_only=false` + `idempotent=true`）で durable state に書き戻す。
+opshub MCP の `source.list`（read tool、`source_type=ms365_calendar` + `observed_after` / `observed_before` の時間フィルタは Phase 12 H1 で追加）で直近の会議を集め、`source.get` + `recall.search` で議事録や関連やりとりを context として引き、`propose.generate`（`mode=meeting_followup`、Phase 12 H4 で追加された dispatch key、ADR-0016 改訂 §決定 (l)(b)）で task / decision 候補を生成し、ユーザーが個別承認した候補のみ `propose.apply`（Phase 12 H1 で MCP に露出、`WriteCategory.PROPOSE_APPLY`、`read_only=false` + `idempotent=true`）で durable state に書き戻す。
 
 `meeting-prep`（会議前）と pair をなす HITL write skill。
 
@@ -13,7 +13,7 @@ opshub MCP の `source.list`（read tool、`source_type=calendar_event` + `obser
 
 1. ユーザーが「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」と頼む
 2. ホストが本 skill を発火
-3. ホストが `source.list` で直近 24h (or 指定 window) の `calendar_event` を集める
+3. ホストが `source.list` で直近 24h (or 指定 window) の `ms365_calendar` を集める
 4. ホストが対象会議の `source.get` + `recall.search` で議事録 / 関連やりとりを context 化
 5. ホストが `propose.generate`（`mode=meeting_followup`、`topic` = 会議トピック）を呼び、候補 (task / decision) を生成（`ProposalGenerated` event を durable log に書く）
 6. ホストが候補をユーザーに整形して提示
@@ -28,7 +28,7 @@ opshub 側で外部 SaaS に通知 / 投稿する経路は **存在しない**�
 ```text
 tool: source.list
 input:
-  source_type: "calendar_event"
+  source_type: "ms365_calendar"
   observed_after: "<24h 前 ISO 8601>"
   observed_before: "<now ISO 8601>"
   limit: 20
@@ -41,7 +41,7 @@ input:
 ```text
 tool: source.get
 input:
-  source_id: "<calendar_event ULID>"
+  source_id: "<ms365_calendar ULID>"
 ```
 
 戻り値の `body` / `summary` / `title` から会議トピック・参加者・議題を抽出。複数会議を対象にする場合は `source.get` を会議ごとに呼ぶ。

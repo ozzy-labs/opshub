@@ -317,7 +317,7 @@ MCP セットアップ手順は [docs/mcp-setup.md](mcp-setup.md) を参照。�
    | `reply-draft` | (draft family) | 「返信案 / 下書き」 | `recall.search` + `propose.generate` (`reply_to_source_id`) + `propose.apply` (HITL、idempotent) | generate / apply とも人確認 |
    | `inbox-triage` | ↔ source-extract | 「受信箱整理」「inbox 仕分け」 | `inbox.list` (`state=open`) + `propose.generate` (`mode=inbox_triage`) + `propose.apply` (HITL) | generate / apply とも人確認 |
    | `source-extract` | ↔ inbox-triage | 「この資料から task 抽出」「<source_id> から候補」 | `source.get` + `propose.generate` (`mode=source_extract`) + `propose.apply` (HITL) | generate / apply とも人確認 |
-   | `meeting-followup` | ↔ meeting-prep | 「会議後の action items」「議事録から task 抽出」 | `source.list` (`source_type=calendar_event` + `observed_after/before`) + `source.get` + `recall.search` + `propose.generate` (`mode=meeting_followup`) + `propose.apply` (HITL) | generate / apply とも人確認 |
+   | `meeting-followup` | ↔ meeting-prep | 「会議後の action items」「議事録から task 抽出」 | `source.list` (`source_type=ms365_calendar` + `observed_after/before`) + `source.get` + `recall.search` + `propose.generate` (`mode=meeting_followup`) + `propose.apply` (HITL) | generate / apply とも人確認 |
 
    **Pair structure** (4 pair、host LLM の routing 精度向上のための対称軸):
 

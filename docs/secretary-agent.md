@@ -32,14 +32,14 @@ opshub 本体が **持たない** もの:
 | 「次に何やる?」「やること教えて」「今週やること」「優先度高いのは?」 | [next-actions](skills/next-actions/SKILL.md) | 優先度順の next-actions リスト。新規 task 追加は人確認付き (`task.create` HITL) |
 | 「これに返信案考えて」「下書き作って」 | [reply-draft](skills/reply-draft/SKILL.md) | 返信下書き候補。送信は行わずユーザーが手で貼り付け (HITL apply、idempotent) |
 | 「PR #N レビューして」「この差分どう?」 | [pr-review](skills/pr-review/SKILL.md) | 関連 decision / task / 過去議論を引いてレビュー観点を提示 |
-| 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」 | [find-document](skills/find-document/SKILL.md) | 本文ベース横断検索で Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Office 文書 (Word / Excel / PowerPoint、Phase 11 ADR-0025) から該当 source (Phase 12 H1 で `search` FTS5 MCP tool 直接呼び化) |
+| 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」 | [find-document](skills/find-document/SKILL.md) | 本文ベース横断検索で Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Office 文書 (Word / Excel / PowerPoint、Phase 11 ADR-0025) から該当 source を返す (Phase 12 H1 で `search` FTS5 MCP tool を直接呼ぶよう変更) |
 | 「来週の会議準備」「明日のミーティング前確認」「<会議名> の準備して」「打ち合わせ前に状況教えて」 | [meeting-prep](skills/meeting-prep/SKILL.md) | 対象 calendar event の目的 / 過去関連やりとり / 関連 decisions / 参考 sources を会議前に集約 (Phase 12 H2、read-only、pair = meeting-followup) |
 | 「<X> について調べて」「<Y> の経緯」「<トピック> 網羅的に教えて」 | [research](skills/research/SKILL.md) | トピック横断調査 (semantic recall + FTS5 + graph 拡張 + LLM 統合要約) を実行し、sources 一覧 / 関連 entities / 経緯サマリを返す (Phase 12 H2) |
 | 「上司向け週次報告」「クライアント向け進捗まとめ」「外向きステータス」「マネージャーに送る report」 | [external-brief](skills/external-brief/SKILL.md) | 対象期間の完了 task + 確定 decision を外向き tone で集約 (Phase 12 H3、persist なし、pair = personal-brief) |
 | 「あの決定はなぜ」「X を選んだ理由」「Y の決定経緯」「なんで A じゃなくて B にしたんだっけ」 | [decision-rationale](skills/decision-rationale/SKILL.md) | 決定 + 直接の根拠 source + 先行 decision + 関連 context を `graph.trace` で provenance を遡って提示 (Phase 12 H3) |
 | 「受信箱整理して」「inbox 仕分けて」「未処理アイテム捌いて」「pending を片付けて」 | [inbox-triage](skills/inbox-triage/SKILL.md) | 未処理 inbox を集めて `propose.generate (mode=inbox_triage)` で各 item の action 候補を生成、HITL apply で承認分のみ保存 (Phase 12 H4、pair = source-extract) |
 | 「この資料から task 抽出」「これに含まれる decisions 教えて」「<source_id> から候補を」「このドキュメントから ToDo 拾って」 | [source-extract](skills/source-extract/SKILL.md) | 1 source の本文を取得し `propose.generate (mode=source_extract)` で task / decision / reply_draft 候補を生成、HITL apply (Phase 12 H4、pair = inbox-triage) |
-| 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」「昨日の会議どうだった」 | [meeting-followup](skills/meeting-followup/SKILL.md) | 直近の `calendar_event` を集め `source.get` + `recall.search` で context 化、`propose.generate (mode=meeting_followup)` で候補生成、HITL apply (Phase 12 H4、pair = meeting-prep) |
+| 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」「昨日の会議どうだった」 | [meeting-followup](skills/meeting-followup/SKILL.md) | 直近の `ms365_calendar` を集め `source.get` + `recall.search` で context 化、`propose.generate (mode=meeting_followup)` で候補生成、HITL apply (Phase 12 H4、pair = meeting-prep) |
 | 「引き継ぎ書作って」「handoff 書く」「後任向け資料まとめて」「業務引継メモほしい」 | [handoff-draft](skills/handoff-draft/SKILL.md) | task.list (state=in_progress) + decision.list + recall.search + graph.related から引き継ぎ書 text を構成して返す (Phase 12 H5、persist なし、text-only) |
 | 「リリース告知文書いて」「announcement 作って」「アナウンス文章まとめて」「release notes 草案」 | [announcement-draft](skills/announcement-draft/SKILL.md) | recall.search + decision.list (`recorded_after=last_release`) + brief で告知文 text を構成して返す (Phase 12 H5、persist なし、text-only) |
 
@@ -58,7 +58,7 @@ host LLM が auto-approve できる read 系。MCP annotation = `readOnlyHint=tr
 | [pr-review](skills/pr-review/SKILL.md) | stand-alone | 「PR #N レビューして」「この差分どう?」 | `recall.search` + `decision.list` (`recorded_after/before`) + `task.list` + `graph.related` / `graph.trace` | レビュー観点リスト (関連 decision + 過去 review + 関連 task) |
 | [find-document](skills/find-document/SKILL.md) | stand-alone | 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」 | `search` (FTS5、Phase 12 H1) + 補助 `recall.search` / `source.list` (`observed_after/before`) / `source.get` | source 一覧 (source_type 別 / 新しい順、snippet 200 字) |
 | [meeting-prep](skills/meeting-prep/SKILL.md) | ↔ meeting-followup | 「来週の会議準備」「明日のミーティング前確認」「<会議名> の準備して」 | `source.list` (`source_type=ms365_calendar` + `observed_after/before`) + `recall.search` + `graph.related` | 会議ごとに「目的 / 過去関連やりとり / 関連 decisions / 参考 sources」 |
-| [research](skills/research/SKILL.md) | stand-alone | 「<X> について調べて」「<Y> の経緯」「<トピック> 網羅的に教えて」 | `recall.search` (semantic) + `search` (FTS5) + `graph.related` / `graph.expand` + `brief` | sources 一覧 + 関連 entities + 経緯サマリ |
+| [research](skills/research/SKILL.md) | stand-alone | 「<X> について調べて」「<Y> の経緯」「<トピック> 網羅的に教えて」 | `recall.search` (semantic) + `search` (FTS5) + `graph.related` / `graph.expand` + `brief` (+ `graph.trace` / `source.get` 任意) | sources 一覧 + 関連 entities + 経緯サマリ |
 | [external-brief](skills/external-brief/SKILL.md) | ↔ personal-brief | 「上司向け週次報告」「クライアント向け進捗まとめ」「外向きステータス」 | `task.list` (`state=completed` + `updated_after`) + `decision.list` (`recorded_after`) + `brief` (外向き tone) | 外向き report (要点先出し / 進捗 + 確定事項 / 主観抑制) |
 | [decision-rationale](skills/decision-rationale/SKILL.md) | stand-alone | 「あの決定はなぜ」「X を選んだ理由」「Y の決定経緯」 | `decision.list` (topic 絞り) + `graph.trace` + `recall.search` | 決定 + 直接の根拠 source + 先行 decision + 関連 context |
 | [handoff-draft](skills/handoff-draft/SKILL.md) | draft family | 「引き継ぎ書作って」「handoff 書く」「後任向け資料まとめて」 | `task.list` (`state=in_progress`) + `decision.list` + `recall.search` + `graph.related` | 引き継ぎ書 text (Markdown、persist なし、ADR-0016 §決定 (l)(a)) |
@@ -73,13 +73,13 @@ host LLM が user 確認必須 (`propose.generate` で候補生成 → user 確�
 | [reply-draft](skills/reply-draft/SKILL.md) | draft family | 「返信案考えて」「下書き作って」「これに返信したい」 | `recall.search` + `propose.generate` (`reply_to_source_id`) + `propose.apply` (HITL、idempotent) | 返信下書き候補 (persist = `ReplyDraftCandidatePayload`、`reply_to_source_id` が natural key、user が手で SaaS に貼り付け) |
 | [inbox-triage](skills/inbox-triage/SKILL.md) | ↔ source-extract | 「受信箱整理して」「inbox 仕分けて」「未処理アイテム捌いて」 | `inbox.list` (`state=open`) + `propose.generate` (`mode=inbox_triage`) + `propose.apply` (HITL) | 各 inbox item への action 候補 (task / decision)、user 個別承認分のみ保存 |
 | [source-extract](skills/source-extract/SKILL.md) | ↔ inbox-triage | 「この資料から task 抽出」「これに含まれる decisions 教えて」「<source_id> から候補を」 | `source.get` + `propose.generate` (`mode=source_extract`) + `propose.apply` (HITL) | 1 source から抽出された task / decision / reply_draft 候補、user 個別承認分のみ保存 |
-| [meeting-followup](skills/meeting-followup/SKILL.md) | ↔ meeting-prep | 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」 | `source.list` (`source_type=calendar_event` + `observed_after/before`) + `source.get` + `recall.search` + `propose.generate` (`mode=meeting_followup`) + `propose.apply` (HITL) | 会議からの task / decision 候補、user 個別承認分のみ保存 |
+| [meeting-followup](skills/meeting-followup/SKILL.md) | ↔ meeting-prep | 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」 | `source.list` (`source_type=ms365_calendar` + `observed_after/before`) + `source.get` + `recall.search` + `propose.generate` (`mode=meeting_followup`) + `propose.apply` (HITL) | 会議からの task / decision 候補、user 個別承認分のみ保存 |
 
 skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。実際の配布は Phase 12 では opshub からの **手動 install** ([§8 セットアップ](#8-セットアップ) 参照)。`@ozzylabs/skills` Renovate preset 経由の配布は Phase 13+ に defer (ADR-0004 §決定 (c) backout)。
 
 ## 4. Pair structure
 
-host LLM の routing 精度向上のため、14 skills のうち 10 件を 4 pair として対称軸で配置。pair の向き / タイミング / 粒度の軸で区別する。
+host LLM の routing 精度向上のため、14 skills のうち 9 件を 4 pair として対称軸で配置 (draft family のみ 1:2 で reply-draft / handoff-draft / announcement-draft の 3 件)。pair の向き / タイミング / 粒度の軸で区別する。
 
 | pair | A 側 | B 側 | 軸 |
 |---|---|---|---|
@@ -88,7 +88,7 @@ host LLM の routing 精度向上のため、14 skills のうち 10 件を 4 pai
 | 集合 ↔ 個別 | inbox-triage (集合、inbox 全体を一気に仕分け、複数 item の action 候補を batch 生成) | source-extract (個別、1 source から候補抽出、source 本文に依拠) | 粒度 |
 | draft family | reply-draft (persist、`reply_to_source_id` が natural key) | handoff-draft / announcement-draft (text-only、persist なし、自発生成で natural key なし、ADR-0016 §決定 (l)(a)) | persist 境界 |
 
-stand-alone (pair なし、4 件): `next-actions` / `pr-review` / `find-document` / `research` / `decision-rationale`。stand-alone は用途が直交しているため pair 化せず単独で機能する (例: `find-document` は特定 1 ファイルを引く、`research` はトピック網羅。両者は用途が異なるが routing は別軸で発火する)。
+stand-alone (pair なし、5 件): `next-actions` / `pr-review` / `find-document` / `research` / `decision-rationale`。14 - pair 9 = stand-alone 5。stand-alone は用途が直交しているため pair 化せず単独で機能する (例: `find-document` は特定 1 ファイルを引く、`research` はトピック網羅。両者は用途が異なるが routing は別軸で発火する)。
 
 ## 5. HITL boundary
 
@@ -115,7 +115,7 @@ auto-apply 経路は構造的に存在しない (ADR-0016 §決定 (c))。`opshu
 
 ### 5.3 外部書き戻し非存在 (構造的禁止)
 
-- すべての connector package で `send` / `post` / `write` / `comment_create` callable を持たない (ADR-0010 §禁止事項 7、`tests/integration/test_phase11_office_lifecycle.py` + Phase 12 H6 e2e test で構造的に pin)
+- すべての connector package で `send` / `post` / `write` / `comment_create` callable を持たない (ADR-0010 §禁止事項 7、`tests/integration/test_phase11_office_lifecycle.py` + Phase 12 H6 e2e test (`tests/integration/test_phase12_secretary_lifecycle.py`) で構造的に pin)
 - reply-draft / handoff-draft / announcement-draft は draft text を生成するだけで、SaaS への送信経路を持たない。ユーザーが手で SaaS に貼り付ける
 - 将来 SaaS 書き戻しが必要になっても、新 ADR + ADR-0004 revisit + ADR-0016 §決定 (c) 整合の 3 要件すべてを要求する (ADR-0010 §禁止事項 7 改訂は引き続き保持)
 
@@ -127,18 +127,18 @@ auto-apply 経路は構造的に存在しない (ADR-0016 §決定 (c))。`opshu
 
 | MCP tool | personal-brief | next-actions | reply-draft | pr-review | find-document | meeting-prep | research | external-brief | decision-rationale | handoff-draft | announcement-draft | inbox-triage | source-extract | meeting-followup |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| `recall.search` | ✓ | ✓ | ✓ | ✓ | (✓) | ✓ | ✓ |  | ✓ | ✓ | ✓ |  |  | ✓ |
+| `recall.search` | ✓ | ✓ | ✓ | ✓ | (✓) | ✓ | ✓ |  | ✓ | ✓ | ✓ |  | (✓) | ✓ |
 | `task.list` | ✓ | ✓ |  | ✓ |  |  |  | ✓ |  | ✓ |  |  |  |  |
 | `inbox.list` | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |
 | `decision.list` | ✓ |  |  | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ |  |  |  |
 | `brief` | ✓ |  |  |  |  |  | ✓ | ✓ |  |  | ✓ |  |  |  |
 | `graph.related` |  |  |  | ✓ |  | ✓ | ✓ |  |  | ✓ |  |  |  |  |
-| `graph.trace` |  |  |  | ✓ |  |  |  |  | ✓ |  |  |  |  |  |
+| `graph.trace` |  |  |  | ✓ |  |  | (✓) |  | ✓ |  |  |  |  |  |
 | `graph.expand` |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
-| `source.list` |  |  |  |  | (✓) | ✓ |  |  |  |  |  |  |  | ✓ |
-| `source.get` |  |  |  |  | (✓) |  |  |  |  |  |  |  | ✓ | ✓ |
+| `source.list` |  |  |  |  | (✓) | ✓ |  |  |  |  |  |  | (✓) | ✓ |
+| `source.get` |  |  |  |  | (✓) | (✓) | (✓) |  | (✓) |  |  |  | ✓ | ✓ |
 | `embeddings.find_duplicates` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `search` (FTS5、Phase 12 H1) |  |  |  |  | ✓ |  | ✓ |  |  |  |  |  |  |  |
+| `search` (FTS5、Phase 12 H1) |  |  |  |  | ✓ |  | ✓ |  |  |  |  |  | (✓) |  |
 
 ### 6.2 Write tools (5、HITL)
 

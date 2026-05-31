@@ -664,6 +664,30 @@ def test_meeting_prep_uses_calendar_source_type() -> None:
     )
 
 
+def test_meeting_followup_uses_calendar_source_type() -> None:
+    """``meeting-followup`` must filter ``source.list`` by ``ms365_calendar``.
+
+    Phase 12 audit cluster A pinned a catalog drift bug: the SKILL.md
+    referenced the legacy ``calendar_event`` token, but the Phase 11
+    ms365 connector maps Calendar events to
+    ``source_type = "ms365_calendar"`` (SSOT:
+    ``src/opshub/connectors/ms365/mapper.py``
+    ``CALENDAR_SOURCE_TYPE``). The skill body MUST reference the
+    literal that connectors actually emit so the host filters the
+    right rows. Mirrors ``test_meeting_prep_uses_calendar_source_type``.
+    """
+    path = _SKILLS_DIR / "meeting-followup" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert "ms365_calendar" in text, (
+        f"{path} must reference the ``ms365_calendar`` source_type "
+        f"(SSOT: src/opshub/connectors/ms365/mapper.py)"
+    )
+    assert "calendar_event" not in text, (
+        f"{path} must not reference the legacy ``calendar_event`` token "
+        f"(catalog drift, fixed in Phase 12 audit cluster A)"
+    )
+
+
 def test_meeting_prep_uses_h1_observed_time_filter() -> None:
     """``meeting-prep`` must use the H1 ``observed_after`` / ``observed_before`` filter.
 
