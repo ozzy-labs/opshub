@@ -1,0 +1,19 @@
+{
+  "id": "msg-nolabel-005",
+  "threadId": "thread-nolabel-005",
+  "labelIds": [],
+  "snippet": "No-label message body.",
+  "historyId": "12349",
+  "internalDate": "1736006400000",
+  "payload": {
+    "mimeType": "text/plain",
+    "headers": [
+      { "name": "From", "value": "system@example.com" },
+      { "name": "Subject", "value": "Auto-archived notification" }
+    ],
+    "body": {
+      "size": 22,
+      "data": "Tm8tbGFiZWwgbWVzc2FnZSBib2R5Lg"
+    }
+  }
+}

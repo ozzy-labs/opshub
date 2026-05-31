@@ -1,0 +1,20 @@
+{
+  "id": "msg-plain-001",
+  "threadId": "thread-plain-001",
+  "labelIds": ["INBOX", "IMPORTANT", "CATEGORY_PERSONAL"],
+  "snippet": "Hello from text/plain.",
+  "historyId": "12345",
+  "internalDate": "1735660800000",
+  "payload": {
+    "mimeType": "text/plain",
+    "headers": [
+      { "name": "From", "value": "Alice Example <alice@example.com>" },
+      { "name": "Subject", "value": "Plain text only message" },
+      { "name": "Date", "value": "Wed, 31 Dec 2024 12:00:00 +0000" }
+    ],
+    "body": {
+      "size": 47,
+      "data": "SGVsbG8gZnJvbSB0ZXh0L3BsYWluLgpUaGlzIGlzIHRoZSBtZXNzYWdlIGJvZHku"
+    }
+  }
+}

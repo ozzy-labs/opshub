@@ -1,0 +1,19 @@
+{
+  "id": "msg-html-002",
+  "threadId": "thread-html-002",
+  "labelIds": ["INBOX", "UNREAD"],
+  "snippet": "HTML only body.",
+  "historyId": "12346",
+  "internalDate": "1735747200000",
+  "payload": {
+    "mimeType": "text/html",
+    "headers": [
+      { "name": "From", "value": "newsletter@vendor.example" },
+      { "name": "Subject", "value": "HTML-only newsletter" }
+    ],
+    "body": {
+      "size": 47,
+      "data": "PGh0bWw-PGJvZHk-PHA-SFRNTCBvbmx5IGJvZHkuPC9wPjwvYm9keT48L2h0bWw-"
+    }
+  }
+}
