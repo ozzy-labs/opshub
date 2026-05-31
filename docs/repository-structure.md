@@ -47,12 +47,12 @@ opshub/
 │   ├── adr/                        # Architecture Decision Records
 │   ├── secretary-agent.md          # Phase 10: 秘書エージェント層 (形A) の使い方
 │   ├── mcp-setup.md                # Phase 10: エージェント host から MCP 経由で叩く手順
-│   ├── skills/                     # Phase 10: 秘書 5 Skill の SSOT (daily-brief / next-actions / reply-draft / pr-review / file-lookup) [P10]
-│   │   ├── daily-brief/SKILL.md
+│   ├── skills/                     # Phase 10: 秘書 5 Skill の SSOT (Phase 12 H1 rename 済: personal-brief / next-actions / reply-draft / pr-review / find-document) [P10, P12]
+│   │   ├── personal-brief/SKILL.md
 │   │   ├── next-actions/SKILL.md
 │   │   ├── reply-draft/SKILL.md
 │   │   ├── pr-review/SKILL.md
-│   │   └── file-lookup/SKILL.md
+│   │   └── find-document/SKILL.md
 │   └── runbook/                    # 未作成
 ├── tools/                          # Phase 10: skill security scan (4 カテゴリ + frontmatter 隠しユニコード検出) [P10]
 │   └── skill_scan.py

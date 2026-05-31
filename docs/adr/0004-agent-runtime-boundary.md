@@ -1,7 +1,7 @@
 # 0004. Agent Runtime Boundary
 
-- Status: Accepted (revised 2026-05-30 for Phase 10 form-A absorption)
-- Date: 2026-05-16 (initial); 2026-05-30 (Phase 10 §(e) form-A revision: MCP as authorised write path, opshub holds no agent runtime, Agent Skills distributed via `ozzy-labs/skills` preset)
+- Status: Accepted (revised 2026-05-31 for Phase 12 H1 Skill SSOT relocation)
+- Date: 2026-05-16 (initial); 2026-05-30 (Phase 10 §(e) form-A revision: MCP as authorised write path, opshub holds no agent runtime, Agent Skills distributed via `ozzy-labs/skills` preset); 2026-05-31 (Phase 12 H1 revision: Skill SSOT moved into opshub `docs/skills/`, `ozzy-labs/skills` distribution mechanism deferred to Phase 13+, Skill catalog SSOT pinned to `docs/secretary-agent.md` with 14-skill matrix)
 - Deciders: ozzy
 
 ## Context
@@ -90,24 +90,38 @@ MCP 経路でも以下の不変条件は保たれる:
 
 旧版 (2026-05-16) の Alternatives §3 「MCP サーバー経由でツール公開 (CLI でなく)」は MVP 段階での delay 判断であり、Phase 10 で ADR-0022 とともに採用された。本 ADR の現在版では MCP は CLI と並列の正規経路であり、Alternatives §3 は historical context として残す (下記 Alternatives §3 を改訂)。
 
-### (c) Agent Skills は `ozzy-labs/skills` preset 配布 (Phase 10 で追加)
+### (c) Agent Skills の SSOT 配置 (Phase 12 H1 改訂、初版 Phase 10 で追加)
 
-秘書 Agent Skills (Phase 10 Sub-issue D の 5 skill: daily-brief / next-actions / reply-draft / pr-review / file-lookup) は **opshub 本体に同梱しない**。`ozzy-labs/skills` リポに SKILL.md の実体を置き、handbook ADR-0016 の `@ozzylabs/skills` Renovate preset 経由で外部ホストの `.claude/skills/` 配下に配布する。
+秘書 Agent Skills (Phase 10 Sub-issue D で導入した 5 skill: `daily-brief` / `next-actions` / `reply-draft` / `pr-review` / `file-lookup` — 後に Phase 12 H1 で `personal-brief` / `next-actions` / `reply-draft` / `pr-review` / `find-document` に rename) は **`docs/skills/<name>/SKILL.md` を opshub リポ内 SSOT として持つ**。配信機構 (`ozzy-labs/skills` 側 CI + `@ozzylabs/skills` Renovate preset) は Phase 13+ に defer する。
 
-opshub 本体リポでは以下のみを保持する:
+**Phase 12 H1 改訂理由 (2026-05-31)**: Phase 10 改訂時 (2026-05-30) は `ozzy-labs/skills` preset 配布完成を前提に「opshub には SKILL.md の実体を持たない / 仕様・catalog のみ保持」と書いた。しかし Phase 10〜11 を通して `ozzy-labs/skills` 側の CI / preset の整備が未完で、結果として opshub `docs/skills/<name>/SKILL.md` が **事実上の SSOT** として運用されてきた (test_skill_specs / skill_scan / secretary-agent.md からのリンクすべてが本リポ内 path を参照)。Phase 12 で 14 skill 体制へ拡張する際、preset 配布完成を待ってから skill を増やすか、本リポ SSOT を正式に認めるかの 2 択になり、後者を採用する。配信機構の整備は Phase 13+ に切り出し、Phase 12 ではユーザーがホストへ手動 install する経路 (`docs/mcp-setup.md` に手順記載) を採る。
 
-- **仕様・catalog** — `docs/secretary-agent.md` (秘書 5 skill の一覧・使い方・MCP tool マッピング・できること/できないこと)
-- **skill security scan ロジック** — `tools/skill_scan.py` 等の検出 module (QwenPaw 由来 4 カテゴリ: プロンプトインジェクション / コマンドインジェクション / ハードコード鍵 / データ持ち出し + frontmatter の隠しユニコード / 「ignore previous instructions」類のパターン検出)。`ozzy-labs/skills` の CI lint に組み込む想定で、本リポでは scan ロジックの実装と本リポ内の skill 仕様への適用テストまでを scope とする
-- **MCP セットアップ** — `docs/mcp-setup.md` (外部ホストから MCP 経由で opshub を使う手順)
+opshub 本体リポが保持するもの:
+
+- **SKILL.md の実体** — `docs/skills/<name>/SKILL.md` (Phase 12 H1 で 14 skill = 既存 5 + 新規 9)。Phase 10 改訂時に「仕様・catalog のみ」と書いた境界を本改訂で「SKILL.md 本体も SSOT」へ拡げる
+- **Skill catalog SSOT** — `docs/secretary-agent.md` を Skill catalog の SSOT に位置づける (Phase 12 H1 で新規 §決定として追記、下記 §決定 (c-2) 参照)。14 skills 責務マップ・HITL boundary・MCP tool 依存マップ・pair structure を集約
+- **skill security scan ロジック** — `tools/skill_scan.py` (4 カテゴリ + frontmatter 隠しユニコード検出)。Phase 13+ で `ozzy-labs/skills` 側 CI への組み込みを再開
+- **MCP セットアップ** — `docs/mcp-setup.md` (外部ホストから MCP 経由で opshub を使う手順 + 手動 install 手順)
 
 これにより:
 
-- **skill の lifecycle が ①コアと分離** — skill 改訂サイクル (頻繁) と opshub release サイクル (semver) を独立に回せる
-- **ozzy-labs エコシステム共通機構と整合** — handbook ADR-0016 の skill 配布機構 (`@ozzylabs/skills` preset) を再利用、配布経路を二重化しない
-- **複数ホスト間の skill 同期が単純** — 各ホストは preset 更新で skill を pull、opshub 本体の install / update とは独立
-- **opshub 本体の install image が肥大化しない** — `uv tool install opshub` の payload は ①コアのみで、skill ファイルは含まない
+- **skill の lifecycle と opshub release を一致させる** — skill 改訂が opshub PR / release を経由するため、改訂は audit 可能 + 各 host への配布タイミングは ユーザーが opshub のバージョンを上げた時 (もしくは手動 sync)
+- **配信機構整備を Phase 13+ に分離** — 機構整備と skill 開発を直列化しない (Phase 11 で 14 skill 追加が確定したため、skill 追加と機構整備を並列化できないと plan が組めない)
+- **opshub 本体の install image は ①コアのみ** — `uv tool install opshub` の payload は依然として ①コアのみで、`docs/skills/` は repo source tree にのみ存在 (install されない)
 
 skill の人格設定・常駐実装・状態持ちコードは opshub に持ち込まない (本 ADR §決定 (a) 形A の延長)。これらは外部ホスト側 (Claude Code の `~/.claude/` や Codex CLI の equivalent) の責務である。
+
+### (c-2) Skill catalog SSOT は `docs/secretary-agent.md` (Phase 12 H1 で追加)
+
+Phase 12 H1 で 14 skill 体制 (`personal-brief` / `next-actions` / `pr-review` / `find-document` / `meeting-prep` / `research` / `external-brief` / `decision-rationale` / `handoff-draft` / `announcement-draft` の 10 read 自律 OK + `reply-draft` / `inbox-triage` / `meeting-followup` / `source-extract` の 4 HITL write) へ拡張する。
+
+skill 単位の責務 (使う MCP tool / 自律範囲 / pair / 出力形式) は SKILL.md 個別ファイルに書くが、**catalog (一覧 + 横断的な責務マップ + HITL boundary + pair structure)** は `docs/secretary-agent.md` を SSOT として集約する。
+
+ADR ではなく `docs/secretary-agent.md` を SSOT にする理由:
+
+- **更新頻度が ADR と相性悪い** — skill 追加 / rename / description 拡張は Phase 単位で何度も発生する。ADR は「決定の根拠」を凍結するドキュメントタイプであり、頻繁な改訂と相性悪い
+- **横断ビューの一元化** — 個別 SKILL.md は責務を縦に書くが、pair structure (`personal-brief ↔ external-brief` 等) や HITL boundary のような横断ビューは 1 か所に集約する方が drift を防ぎやすい
+- **ユーザー向け catalog としての役割** — README から「秘書に何を頼めるか」へ誘導する受け口として `docs/secretary-agent.md` が既に機能している
 
 ## Consequences
 

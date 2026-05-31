@@ -7,7 +7,7 @@ embeddings, surface through the same MCP read tools that drive the
 secretary skills, and the write-back path remains structurally absent.
 
 Phase 11 ships **no new MCP tools** — the existing read surface
-(``recall.search`` + ``source.list`` + ``source.get`` + the daily-brief
+(``recall.search`` + ``source.list`` + ``source.get`` + the personal-brief
 tools) automatically widens to the new ``source_type`` discriminators
 because the projection is the SSOT. This test follows the
 :mod:`test_phase10_secretary_lifecycle` pattern: an in-process MCP
@@ -30,7 +30,7 @@ What this pins
    source_types (``word_document`` / ``excel_spreadsheet`` /
    ``powerpoint_slide_deck``) are observable via ``source.list`` and
    the underlying projection, so secretary skills can filter on them
-   when desired (e.g. "PPT only" file-lookup).
+   when desired (e.g. "PPT only" find-document).
 4. **Write-back path absence** — the 2 new connector packages
    (``teams`` / ``onedrive_drive``) and the Phase 11-extended
    ``box_drive`` / ``ms365`` connectors expose no ``send`` / ``post``
@@ -338,7 +338,7 @@ def test_phase11_office_lifecycle(
        - ``source.list`` filtered to the Phase 11 ``source_type``
          discriminators to prove they are observable as first-class
          citizens (operator UX for "PPT only" / "Excel only"
-         file-lookup).
+         find-document).
     4. Assert connector packages **do not** expose any ``send`` /
        ``post`` / ``write`` / ``comment_create`` callable — proves the
        structural absence of a write-back path (mirrors the Phase 10
@@ -384,7 +384,7 @@ def test_phase11_office_lifecycle(
         specs = build_tool_specs_for_engine(engine)
         specs_by_name = {spec.name: spec for spec in specs}
 
-        # ---- 3a. file-lookup-style cross-source recall ----------------
+        # ---- 3a. find-document-style cross-source recall ----------------
         # The Q3 architecture review phrase appears in the Teams body
         # and the Outlook body verbatim, and is implied by the
         # extracted Office bodies. The recall.search hit list must

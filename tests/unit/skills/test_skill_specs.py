@@ -1,12 +1,14 @@
 """Format / boundary tests for secretary skill specs under ``docs/skills/``.
 
 The skills live in ``docs/skills/<name>/SKILL.md`` as the reference
-spec for the ``ozzy-labs/skills`` distribution (ADR-0004 §(c)).
+spec referenced from ``docs/secretary-agent.md`` (ADR-0004 改訂,
+Phase 12 H1 — SSOT moved into opshub itself, distribution deferred).
 These tests pin five invariants the Phase 10 plan §3-D / §4-D DoD
 requires:
 
-1. All five secretary skills exist (daily-brief / next-actions /
-   reply-draft / pr-review / file-lookup).
+1. All five existing secretary skills exist (personal-brief /
+   next-actions / reply-draft / pr-review / find-document — the
+   Phase 12 H1 rename targets, see ``docs/phase-12-plan.md`` §3 H1-c).
 2. Each file is a valid Anthropic SKILL.md — leading YAML frontmatter
    with ``name`` and ``description`` strings.
 3. The body fits inside the 5k-token budget Phase 10 plan §3-D pins
@@ -32,13 +34,16 @@ from pathlib import Path
 import pytest
 from tools.skill_scan import parse_frontmatter, scan_skill_file
 
-# The five secretary skills committed in Phase 10 Sub-issue D.
+# The five existing secretary skills as of Phase 12 H1 (post-rename).
+# Phase 12 H1 renames the original brief / lookup pair to
+# ``personal-brief`` and ``find-document``; ``next-actions`` /
+# ``reply-draft`` / ``pr-review`` keep their names.
 _REQUIRED_SKILLS: tuple[str, ...] = (
-    "daily-brief",
+    "personal-brief",
     "next-actions",
     "reply-draft",
     "pr-review",
-    "file-lookup",
+    "find-document",
 )
 
 # Repo-root-relative path to the catalog of spec files. We climb up
@@ -142,16 +147,16 @@ def test_skill_mentions_mcp_or_cli_path(name: str) -> None:
     has_mcp_tool = bool(
         re.search(
             # Phase 10 C2 baseline + Step 1 widening (brief, graph.*,
-            # source.*, embeddings.find_duplicates, propose.generate).
-            # Keep the alternation single-line so the regex compiles as
-            # one literal — ruff RUF003 / RUF002 don't apply in raw strings
-            # here but readability still suffers above ~120 chars.
+            # source.*, embeddings.find_duplicates, propose.generate) +
+            # Phase 12 H1 (search, propose.apply). Keep the alternation
+            # single-line so the regex compiles as one literal.
             r"\b("
             r"recall\.search|task\.list|inbox\.list|decision\.list"
             r"|task\.create|inbox\.add|connector\.sync"
             r"|brief|graph\.related|graph\.trace|graph\.expand"
             r"|source\.list|source\.get|embeddings\.find_duplicates"
-            r"|propose\.generate"
+            r"|propose\.generate|propose\.apply"
+            r"|search"
             r")\b",
             text,
         )
@@ -188,12 +193,13 @@ def test_skill_passes_security_scan(name: str) -> None:
 # can't silently re-drift the SKILL.md.
 
 
-# Phase 11 source_type literals that ``file-lookup`` SKILL.md must
-# enumerate so the host can post-filter ``recall.search`` hits by
-# user vocabulary ("Teams で", "Word 文書", etc.). The connector
+# Phase 11 source_type literals that ``find-document`` SKILL.md
+# (Phase 12 H1 rename target) must enumerate so the host
+# can post-filter ``search`` / ``recall.search`` hits by user
+# vocabulary ("Teams で", "Word 文書", etc.). The connector
 # implementations under ``src/opshub/connectors/<name>/mapper.py``
 # are the SSOT for these literals.
-_FILE_LOOKUP_PHASE_11_SOURCE_TYPES: tuple[str, ...] = (
+_FIND_DOCUMENT_PHASE_11_SOURCE_TYPES: tuple[str, ...] = (
     "teams_message",
     "word_document",
     "excel_spreadsheet",
@@ -201,16 +207,16 @@ _FILE_LOOKUP_PHASE_11_SOURCE_TYPES: tuple[str, ...] = (
 )
 
 
-@pytest.mark.parametrize("source_type", _FILE_LOOKUP_PHASE_11_SOURCE_TYPES)
-def test_file_lookup_lists_phase_11_source_types(source_type: str) -> None:
-    """``file-lookup`` SKILL.md must enumerate Phase 11 source_types.
+@pytest.mark.parametrize("source_type", _FIND_DOCUMENT_PHASE_11_SOURCE_TYPES)
+def test_find_document_lists_phase_11_source_types(source_type: str) -> None:
+    """``find-document`` SKILL.md must enumerate Phase 11 source_types.
 
     Phase 11 (Sub-issue F1-F6) added Teams chat + Office document
-    extraction. file-lookup is the user-facing entry point for
+    extraction. find-document is the user-facing entry point for
     "find me that file" — drift here makes the new content
     effectively invisible to users even though it's indexed.
     """
-    path = _SKILLS_DIR / "file-lookup" / "SKILL.md"
+    path = _SKILLS_DIR / "find-document" / "SKILL.md"
     text = path.read_text(encoding="utf-8")
     assert source_type in text, (
         f"{path} must mention Phase 11 source_type {source_type!r} "
@@ -218,19 +224,124 @@ def test_file_lookup_lists_phase_11_source_types(source_type: str) -> None:
     )
 
 
-def test_file_lookup_mentions_onedrive_drive_connector() -> None:
-    """``file-lookup`` SKILL.md must mention the new ``onedrive_drive`` connector.
+def test_find_document_mentions_onedrive_drive_connector() -> None:
+    """``find-document`` SKILL.md must mention the ``onedrive_drive`` connector.
 
     Phase 11 F6 (PR #248) added the ``onedrive_drive`` local-FS
-    connector parallel to ``box_drive``. file-lookup needs to
+    connector parallel to ``box_drive``. find-document needs to
     advertise it so users know to search the OneDrive Desktop
     sync root, not just Box Drive.
     """
-    path = _SKILLS_DIR / "file-lookup" / "SKILL.md"
+    path = _SKILLS_DIR / "find-document" / "SKILL.md"
     text = path.read_text(encoding="utf-8")
     assert "onedrive_drive" in text, (
         f"{path} must mention the ``onedrive_drive`` connector "
         f"(Phase 11 Sub-issue F6, src/opshub/connectors/onedrive_drive/)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. Phase 12 H1 semantic pins (per-skill MCP dispatch pin)
+# ---------------------------------------------------------------------------
+#
+# Phase 12 H1 (docs/phase-12-plan.md §3 H1-c) pins the MCP-direct-call
+# contract: every existing Tier 1 skill must reference at least one
+# MCP tool name verbatim so a host-side router can dispatch the skill
+# through MCP rather than the CLI fallback. The general
+# ``test_skill_mentions_mcp_or_cli_path`` already allows the disjoint
+# OR (MCP OR CLI), but Phase 12 H1 narrows the existing 5 to MCP-only.
+
+_PHASE_12_H1_MCP_DIRECT_SKILLS: tuple[str, ...] = (
+    "personal-brief",
+    "next-actions",
+    "reply-draft",
+    "pr-review",
+    "find-document",
+)
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H1_MCP_DIRECT_SKILLS)
+def test_skill_mentions_at_least_one_mcp_tool_name(name: str) -> None:
+    """Phase 12 H1 (ADR-0022 改訂): existing 5 skills must mention MCP tools.
+
+    The general "MCP or CLI" pin (``test_skill_mentions_mcp_or_cli_path``)
+    above accepts CLI references as well, which was the Phase 10 ladder.
+    Phase 12 H1 (``docs/phase-12-plan.md`` §3 H1-c) pins the existing 5
+    skills to MCP-direct-call: the SKILL.md must reference at least one
+    MCP tool name verbatim so the host can route the skill through MCP
+    rather than shelling out to ``opshub``.
+    """
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    mcp_tool_pattern = re.compile(
+        r"\b("
+        r"recall\.search|task\.list|inbox\.list|decision\.list"
+        r"|task\.create|inbox\.add|connector\.sync"
+        r"|brief|graph\.related|graph\.trace|graph\.expand"
+        r"|source\.list|source\.get|embeddings\.find_duplicates"
+        r"|propose\.generate|propose\.apply"
+        r"|search"
+        r")\b"
+    )
+    assert mcp_tool_pattern.search(text), (
+        f"{path} must reference at least one MCP tool name verbatim"
+        " (Phase 12 H1 §3 H1-c MCP-direct-call contract)"
+    )
+
+
+def test_find_document_uses_search_mcp_tool() -> None:
+    """``find-document`` must reference the Phase 12 H1 ``search`` MCP tool.
+
+    The Phase 12 plan H1-c calls out ``find-document`` specifically:
+    its description and body must move from CLI-based ``opshub search``
+    fallback to the MCP ``search`` (FTS5) tool. A regression that drops
+    the ``search`` reference is exactly what this guard catches.
+    """
+    path = _SKILLS_DIR / "find-document" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert re.search(r"\bsearch\b", text), (
+        f"{path} must reference the MCP ``search`` (FTS5) tool (Phase 12 H1 §3 H1-c)"
+    )
+
+
+def test_personal_brief_description_mentions_period_vocabulary() -> None:
+    """``personal-brief`` description must advertise period vocabulary.
+
+    Phase 12 H1 (``docs/phase-12-plan.md`` §3 H1-c) expands the
+    ``personal-brief`` description to include 今日 / 今週 / 今月 /
+    先週 / 先月 so the host router fires the skill on these
+    common time-window prompts.
+    """
+    path = _SKILLS_DIR / "personal-brief" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    frontmatter, _body = parse_frontmatter(text)
+    description = str(frontmatter.get("description", ""))
+    # At least three of the five period vocabulary tokens must appear
+    # so a near-miss (e.g. only 今日 + 最近) still flags the regression.
+    period_tokens = ("今日", "今週", "今月", "先週", "先月")
+    hits = [token for token in period_tokens if token in description]
+    assert len(hits) >= 3, (
+        f"{path} description must advertise period vocabulary"
+        f" (Phase 12 H1 §3 H1-c). Found {hits!r} in description={description!r}"
+    )
+
+
+def test_next_actions_description_mentions_period_vocabulary() -> None:
+    """``next-actions`` description must advertise period vocabulary.
+
+    Phase 12 H1 plan extends the ``next-actions`` description with
+    今日 / 今週 / 来週 so the host router fires for "今週やること"
+    style prompts.
+    """
+    path = _SKILLS_DIR / "next-actions" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    frontmatter, _body = parse_frontmatter(text)
+    description = str(frontmatter.get("description", ""))
+    period_tokens = ("今日", "今週", "来週")
+    hits = [token for token in period_tokens if token in description]
+    assert len(hits) >= 2, (
+        f"{path} description must advertise period vocabulary"
+        f" (Phase 12 H1 §3 H1-c). Found {hits!r} in description={description!r}"
     )
 
 

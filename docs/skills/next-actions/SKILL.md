@@ -1,6 +1,6 @@
 ---
 name: next-actions
-description: 「次に何をする?」「やること教えて」「タスク何が残ってる?」と聞かれたら、opshub MCP の task.list と recall.search を使って優先度順の next-actions を組み立てる。新規 task の作成は task.create が write tool のためホスト側で人確認を促す (ADR-0022 §(c))。
+description: 「次に何をする?」「やること教えて」「タスク何が残ってる?」「今日やること」「今週やること」「来週やること」「優先度高いのは?」と聞かれたら、opshub MCP の task.list と recall.search を使って優先度順の next-actions を組み立てる。期間指定がある場合は task.list の updated_after / updated_before (ISO 8601、tasks.updated_at ベース) でフィルタする。新規 task の作成は task.create が write tool のためホスト側で人確認を促す (ADR-0022 §(c))。
 ---
 
 # next-actions — 「次にやること」を opshub から組み立てる
@@ -24,10 +24,22 @@ opshub MCP server (`opshub mcp serve`、ADR-0022) 経由で「次にやること
 tool: task.list
 input:
   state: "active"
+  updated_after: "<期間開始 ISO 8601>"   # 期間指定がある場合のみ (今日 / 今週 / 来週 等)
   limit: 50
 ```
 
-戻り値の `tasks[]` をホストが優先度 (priority field / due_at / 直近更新) でソートし上位を抽出。
+戻り値の `items[]` をホストが優先度 (priority field / due_at / 直近更新) でソートし上位を抽出。
+
+期間指定例（ホスト側で解釈）：
+
+| ユーザー語彙 | フィルタ |
+|---|---|
+| 今日やること | `updated_after=今日00:00` |
+| 今週やること | `updated_after=今週月曜00:00` |
+| 来週やること | （現在 / 完了タスクの「来週着手予定」は body / title から判定、`updated_*` は不向き） |
+| 優先度高いのは? | フィルタなし、ホスト側で priority field sort |
+
+Phase 12 H1 (ADR-0022 改訂) で `task.list` に物理列ベースの時間フィルタ `updated_after` / `updated_before` (`tasks.updated_at` 半開区間) が追加された。
 
 ### Step 2: 必要に応じて recall で文脈補強
 
@@ -57,7 +69,7 @@ input:
 
 - `task.create` は write tool (`destructiveHint=true`)。ホストは必ず人確認 (HITL) を取る
 - 確認なしで auto-call しないこと (ADR-0004 §(b) / ADR-0022 §(c))。tool poisoning 攻撃面 (auto-approve 84% / HITL <5%) の非対称が直撃する
-- MCP schema は `title` (必須) と `body` (任意) のみ受け付ける (`src/opshub/mcp/_registry.py` の Phase 10 surface)。`priority` 等の付加メタデータは body 文中に inline するか、apply 後にホストが `opshub task` CLI で更新する経路にする
+- MCP schema は `title` (必須) と `body` (任意) のみ受け付ける (`src/opshub/mcp/_registry.py` の Phase 10 surface)。`priority` 等の付加メタデータは body 文中に inline する
 
 ## 出力フォーマット (ホスト側)
 

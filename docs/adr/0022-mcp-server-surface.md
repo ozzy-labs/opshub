@@ -1,7 +1,7 @@
 # 0022. MCP Server Surface
 
-- Status: Accepted
-- Date: 2026-05-30
+- Status: Accepted (revised 2026-05-31 for Phase 12 H1 widening)
+- Date: 2026-05-30 (initial); 2026-05-31 (Phase 12 H1 改訂: + `search` FTS5 + `propose.apply` HITL idempotent + 4 read tools 物理列ベース時間フィルタ + MCP 引数名 → projection 物理列 写像表追加)
 - Deciders: ozzy
 
 ## Context
@@ -119,6 +119,52 @@ MCP tool 呼び出し (= ②から①への boundary 横断) を **OpenTelemetry
 **フル計装はしない、opt-in exporter のみ**。opshub 本体は OTel SDK を core dependency にしない (ADR-0001 配布制約)。OTel exporter は `[project.optional-dependencies]` の `mcp-otel` extras (本 ADR の C2 PR では未実装、将来の opt-in 経路として予約) に隔離する。
 
 これにより、将来 OTel collector に流したい operator は `opshub[mcp-otel]` を install して env var で endpoint を指定すれば動く形を予約しつつ、default では structlog の JSON ログのみで完結する。
+
+### (f) Phase 12 H1 surface 拡張 (2026-05-31 改訂)
+
+Phase 12 H1 (`docs/phase-12-plan.md` §3 H1-b) で MCP surface を 7 (Phase 10 C2) + 8 (Step 1 widening PR #231) → **+ 4 追加** に広げる。すべて既存の 5 不変条件 (stdio 一択 / token passthrough 禁止 / read/write 分離 / context 効率 / OTel naming) は維持する。
+
+#### (f-1) `search` (新規 read tool、`ReadCategory.SEARCH`)
+
+- 既存 `opshub.services.search_service.SearchService.search` を MCP に露出。FTS5 `sources_fts` 仮想表に MATCH を投げ、`sources` projection に join 戻して title / url / summary を返す
+- **phrase quote default** で、CLI `opshub search --raw-query` の `raw_query` flag は **MCP schema から除外**する。host LLM が free-form token streams を投げても FTS5 syntax 文字 (括弧 / コロン等) のエスケープ不要 (CLI 経由の操作者は power-user 想定で生 syntax を許容、MCP 経由の host LLM は安全側に倒す)
+- annotation: `readOnlyHint=true, destructiveHint=false, idempotent=true, openWorldHint=false` (`recall.search` と同パターン、SQLite ローカルのみ)
+- Tier 1 skill `find-document` が直接呼ぶ surface
+
+#### (f-2) `propose.apply` (新規 HITL write tool、`WriteCategory.PROPOSE_APPLY`)
+
+- 既存 `opshub.services.proposals.ProposalService.apply` を MCP に露出。`(proposal_id, candidate_index)` を受け取り、`TaskCreated` / `DecisionRecorded` / `ReplyDraftApplied` 系の durable state 遷移 + `ProposalApplied` event を発行
+- annotation: **`readOnlyHint=false, destructiveHint=false, idempotent=true, openWorldHint=false`**。`destructive=false` は本 ADR 史上初の write 例外。**handler 層で `OpsHubError("already applied/rejected")` を catch → `{ok:true, already_applied:true, applied_entity_type, applied_entity_id}` に正規化**することで idempotent semantics を成立させる。具体的には event log を `aggregate_id=proposal_id` + `event_type=ProposalApplied` で scan して該当 `candidate_index` の `applied_entity_*` を取り出し、初回 apply と同一 payload を返す
+- `read_only=false` は維持 — 初回 apply は durable event を append するため、host が `readOnlyHint=false` で人確認を出す既存の境界は変えない
+- `already rejected` および unrelated `OpsHubError` (not found / index 範囲外) は正規化せず MCP `isError` として上位に伝播
+- Tier 1 skill `reply-draft` (および Phase 12 H4 で追加される `inbox-triage` / `source-extract` / `meeting-followup`) が直接呼ぶ surface
+
+#### (f-3) 既存 4 read tools の入力 schema 拡張 (physical-column ベース時間フィルタ)
+
+`task.list` / `inbox.list` / `decision.list` / `source.list` の入力 schema に **物理列ベースの独立した時間フィルタ argument** を追加する。tool 別に名前を分けることで、operator (host LLM) が「どの projection の物理列を絞っているか」を意識せざるをえなくする。これは「business 時間 vs 物理列」の混線（例: task の `completed_at` を projection が持たないのに `completed_after` を作ると mismatch する）を構造的に避ける。
+
+| MCP tool | argument 名 | 対応 projection 物理列 | 区間 |
+|---|---|---|---|
+| `task.list` | `updated_after` / `updated_before` | `tasks.updated_at` | 半開 (`>= after` / `< before`) |
+| `inbox.list` | `created_after` / `created_before` | `inbox_items.created_at` | 半開 |
+| `decision.list` | `recorded_after` / `recorded_before` | `decisions.recorded_at` | 半開 |
+| `source.list` | `observed_after` / `observed_before` | `sources.observed_at` | 半開 |
+
+- 値: ISO 8601 `date-time` string (`Z` suffix 受け付け)。optional、両方とも省略すれば従来通り全件返す
+- annotation 変化なし — フィルタ拡張は schema 拡張のみで、`readOnlyHint=true` などのポリシーは Phase 10 C2 のまま
+- `decision.list` は ADR-0002 (event-sourced immutability) で immutable のため `recorded_at` のみ。`task.list` の "completed_after" のような business 概念列は projection に存在しないため意図的に非露出 (operator が必要なら `state=completed` + `updated_after` を組み合わせる、`docs/skills/personal-brief/SKILL.md` がその擬似コードを示す)
+
+#### Phase 12 H1 後の surface 一覧 (合計 17 = 13 read + 4 write)
+
+read (13): `recall.search` / `task.list` / `inbox.list` / `decision.list` / `brief` / `graph.related` / `graph.trace` / `graph.expand` / `source.list` / `source.get` / `embeddings.find_duplicates` / **`search`** (Phase 12 H1)
+
+write (4): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` / **`propose.apply`** (Phase 12 H1) — 計数上 5 だが `propose.generate` と `propose.apply` を 1 pair として読むと 4 write 系列
+
+#### Phase 12 H1 で導入される invariant
+
+- **`destructive=false` write の policy guard**: `tests/unit/mcp/test_registry_policy` で `_NON_DESTRUCTIVE_WRITES = frozenset({"propose.apply"})` 集合を明示的に carve-out し、それ以外の write は `destructive=true` を強制継続。将来 `destructive=false` write を増やすには本 ADR §(f-2) 改訂と guard 集合への追加の両方が必須
+- **`search` schema に `raw_query` 不在**: `test_search_does_not_expose_raw_query` が input_schema の properties を点検。CLI の `--raw-query` は power-user 経路として残るが MCP 面には出さない
+- **時間フィルタの物理列写像**: `test_list_tools_expose_physical_column_time_filters` が tool → (`*_after`, `*_before`) の対応表を pin。drift は即時 fail
 
 ## Consequences
 

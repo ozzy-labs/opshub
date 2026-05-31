@@ -16,7 +16,7 @@ What this pins
    Drive) land in ``sources`` with full bodies + provenance tags
    (ADR-0020 §(e)). The FTS5 index (migration 0019) and embeddings
    path treat them uniformly.
-2. **MCP read tools** — the daily-brief / next-actions surfaces
+2. **MCP read tools** — the personal-brief / next-actions surfaces
    (``task.list`` / ``inbox.list`` / ``decision.list`` / ``recall.search``)
    return data through the dispatch wrapper, with `redact_secrets`
    guard active.
@@ -323,8 +323,8 @@ _SOURCE_FIXTURES: tuple[_SourceFixture, ...] = (
         title="epic: Phase 10 Secretary Agent Platform",
         body=(
             "Phase 10 brings full local body retention, encryption at rest, "
-            "MCP server surface, and the secretary 5 skills (daily-brief, "
-            "next-actions, reply-draft, pr-review, file-lookup)."
+            "MCP server surface, and the secretary 5 skills (personal-brief, "
+            "next-actions, reply-draft, pr-review, find-document)."
         ),
         provenance_origin="external",
     ),
@@ -388,10 +388,10 @@ def test_phase10_secretary_lifecycle(
        material to brief / search / reply about.
     2. Drive ``opshub embeddings rebuild`` so the body-based vector
        store is populated (the recall MCP tool needs embeddings).
-    3. Replay the agent host's daily-brief tool call sequence
+    3. Replay the agent host's personal-brief tool call sequence
        (``task.list`` / ``inbox.list`` / ``decision.list`` /
        ``recall.search``) and assert each returns a structured payload.
-    4. Replay the agent host's file-lookup query
+    4. Replay the agent host's find-document query
        (``recall.search`` with a body-derived term) and assert it
        crosses connectors (returns hits sourced from at least two
        different ``connector_name`` columns).
@@ -429,12 +429,11 @@ def test_phase10_secretary_lifecycle(
         specs = build_tool_specs_for_engine(engine)
         specs_by_name = {spec.name: spec for spec in specs}
 
-        # Sanity: the Phase 10 C2 baseline plus the Step 1 widening
-        # (post Phase 10) surface advertises 15 tools (11 read, 4
-        # write). A regression that drops one would surface here.
-        # The Step 1 widening adds ``brief`` / ``graph.*`` / ``source.*``
-        # / ``embeddings.find_duplicates`` (read) and ``propose.generate``
-        # (HITL write).
+        # Sanity: the Phase 10 C2 baseline + Step 1 widening + Phase 12
+        # H1 widening advertises 17 tools (12 read, 5 write). A regression
+        # that drops one would surface here. Phase 12 H1 (ADR-0022 改訂)
+        # adds ``search`` (FTS5 read) and ``propose.apply`` (HITL write,
+        # idempotent).
         assert set(specs_by_name) == {
             # Phase 10 C2 baseline.
             "recall.search",
@@ -454,10 +453,13 @@ def test_phase10_secretary_lifecycle(
             "embeddings.find_duplicates",
             # Step 1 widening — HITL write.
             "propose.generate",
+            # Phase 12 H1 widening (ADR-0022 改訂).
+            "search",
+            "propose.apply",
         }
 
-        # ---- 4. daily-brief script (read-only tool calls) --------------
-        # These are the four read tools the secretary daily-brief and
+        # ---- 4. personal-brief script (read-only tool calls) --------------
+        # These are the four read tools the secretary personal-brief and
         # next-actions skills auto-approve (ADR-0022 §(c)). Each call
         # must succeed and return the documented envelope ({items:
         # [...]} for list tools, {hits: [...]} for recall.search). We
@@ -489,7 +491,7 @@ def test_phase10_secretary_lifecycle(
             "ADR-0022 §(d) — recall.search must advertise truncated_snippets=True"
         )
 
-        # ---- 5. file-lookup cross-connector search ---------------------
+        # ---- 5. find-document cross-connector search ---------------------
         # A query that should hit multiple connectors thanks to body
         # retention. The Slack body and the GitHub body both mention
         # "Phase 10" / "secretary skills"; we assert that recall.search

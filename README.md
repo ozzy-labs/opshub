@@ -71,11 +71,11 @@ Once you wire OpsHub into an agent host over MCP (see [Connect an agent host](#c
 
 | You ask | Skill that fires | What it does |
 |---|---|---|
-| "What should I do next?" / "今日のまとめ" | `daily-brief` / `next-actions` | Top signals from the last 24h + active tasks + untriaged inbox |
+| "What should I do next?" / "今日のまとめ" / "今週どうなってる" | `personal-brief` / `next-actions` | Signals over the requested window (今日 / 今週 / 今月 / 先週 / 先月) + active tasks + untriaged inbox |
 | "Draft a reply to that Slack thread" / "返信案考えて" | `reply-draft` | LLM-generated draft grounded in your past sending style (you copy-paste — OpsHub never sends) |
 | "Review PR #123" | `pr-review` | Pulls related decisions / tasks / past discussion so the agent can review with context |
-| "Find that Box file about X" / "Word/Excel/PPT 探して" | `file-lookup` | Full-text + semantic search across Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive (incl. Office body extraction, Phase 11) |
-| "Summarise that Teams thread" / "Teams スレッド要約して" | `daily-brief` / `file-lookup` | Body-based recall over Teams chat history (Phase 11) |
+| "Find that Box file about X" / "Word/Excel/PPT 探して" | `find-document` | Full-text + semantic search across Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive (incl. Office body extraction, Phase 11) |
+| "Summarise that Teams thread" / "Teams スレッド要約して" | `personal-brief` / `find-document` | Body-based recall over Teams chat history (Phase 11) |
 
 The five secretary skills ship through [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) via the `@ozzylabs/skills` Renovate preset (handbook ADR-0016). See [`docs/secretary-agent.md`](docs/secretary-agent.md) for the full catalog and what OpsHub deliberately does not do (no write-back to SaaS, no always-on runtime, no auto-apply).
 

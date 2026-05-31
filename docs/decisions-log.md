@@ -311,3 +311,46 @@ Phase 11 Sub-issue F1 (2026-05-31) で ADR-0010 (Connector Contract) を改訂�
 | connector が `python-docx` / `openpyxl` / `python-pptx` を直接 import / 呼び出し可能 | `core/document_extract.py` 1 module に markitdown 経路を集中化、connector からの直接呼び出しは禁止 | 3 ライブラリ分の error handling / size 上限 / fail-safe を connector 個別に実装すると Phase 11 改訂 (b) の契約 (size 上限 / fail-safe / source_type) が connector ごとに drift、`core/document_extract.py` 集中化で 1 経路に強制 |
 | Graph delta-link 失効時に `ConnectorSyncFailed` で fail-fast (fallback なし) | 自動 fallback で直近 N 日 full-pass + 新 delta link 取得 | fail-fast だと operator が手動再実行するまで Teams chat の取り込みが完全停止、long-tail TTL 失効が標準運用に組み込まれており fail-fast は運用継続性を破壊、重複は SourceObserved の dedup で吸収可能で fallback の副作用は限定的 |
 | `fallback_window_days` を hard-coded (固定 30 日) | `opshub.toml` operator override 可、default 30 日 | 1 年以上 outage 後の re-onboarding 等で `fallback_window_days = 365` 一時設定が必要、運用調整 escape hatch を残しつつ default は安全側 |
+
+## 24. ADR-0004 改訂 (Phase 12 H1 — Skill SSOT を opshub に移管 + Skill catalog SSOT 確定)
+
+Phase 12 H1 (2026-05-31) で ADR-0004 を改訂し、Phase 10 改訂時の前提 (`ozzy-labs/skills` preset 配布完成) を意図的に backout した上で、`docs/skills/<name>/SKILL.md` を opshub リポ内 SSOT として正式に認める。配信機構整備 (`ozzy-labs/skills` 側 CI + Renovate preset) は Phase 13+ に defer。同時に新 §決定 (c-2) として **Skill catalog SSOT = `docs/secretary-agent.md`** を独立条文化し、14 skills 体制 (Phase 10 で導入した 5 skill のうち `daily-brief` → `personal-brief` / `file-lookup` → `find-document` に rename された 5 + Phase 12 H2-H5 で追加される 9 = 計 14) の責務マップ / HITL boundary / MCP tool 依存マップ / pair structure を集約。Skill catalog を ADR 化しない判断 = 改訂頻度の高さと ADR の「決定の根拠」性質との相性悪さを優先。
+
+| 却下案 | 採用案 | 理由 |
+|---|---|---|
+| `ozzy-labs/skills` 配布完成を待ってから Phase 12 へ進む | `docs/skills/` を SSOT として認め、配信機構整備は Phase 13+ に defer | Phase 10〜11 で `ozzy-labs/skills` 側 CI / preset 整備が未完、Phase 11 完了時点で 14 skill 体制への拡張を続けるためには preset 配布完成を待つ vs SSOT 移管の二択であり、後者の方が phase scope を膨らませない |
+| Skill catalog (14 skills 責務マップ) を新 ADR (ADR-0026 等) として起票 | `docs/secretary-agent.md` を SSOT として集約、ADR 化しない | skill 追加 / rename / description 拡張は Phase 単位で何度も発生、ADR は「決定の根拠」を凍結するドキュメントタイプで頻繁な改訂と相性悪い、横断ビューの一元化として既に `docs/secretary-agent.md` が機能 |
+| skill 単位の責務を `docs/secretary-agent.md` 1 ファイルに集約 | 個別 SKILL.md (責務縦) + secretary-agent.md (catalog 横) の 2 階層維持 | 個別 SKILL.md は host 側 skill loader が直接読む対象、catalog 集約だと skill 単位の load contract が成立しない |
+| `daily-brief` / `file-lookup` の旧名を ADR / decisions-log / phase-10-plan からも sed 置換 | 歴史記録は旧名のまま注釈で対応、grep 0 ゲートはこれら 4 path を除外 | ADR は「いつ何を決めたか」の audit log、旧名で書かれた条文を改名すると過去の意思決定の文脈が読めなくなる、historical context を凍結したまま現行 doc / コード / テストは新名で運用する典型パターン |
+
+## 25. ADR-0022 改訂 (Phase 12 H1 — search FTS5 + propose.apply HITL idempotent + 物理列ベース時間フィルタ)
+
+Phase 12 H1 (2026-05-31) で ADR-0022 (MCP Server Surface) を改訂し、§決定 (f) として 4 つの surface 拡張を独立節として追加。既存 5 不変条件 (stdio 一択 / token passthrough 禁止 / read/write 分離 / context 効率 / OTel naming) は完全維持。
+
+- **(f-1) `search` 新規 read tool**: 既存 `SearchService.search` を MCP に露出。**`raw_query` flag は MCP schema から除外** (phrase quote default で host LLM の free-form token streams を安全に受ける)。`ReadCategory.SEARCH` 新設、annotation = `readOnlyHint=true, destructiveHint=false, idempotent=true, openWorldHint=false` (`recall.search` と同型)
+- **(f-2) `propose.apply` 新規 HITL write tool**: 既存 `ProposalService.apply` を MCP に露出。**handler 層で `OpsHubError("already applied/rejected")` を catch → `{ok:true, already_applied:true, applied_entity_type, applied_entity_id}` に正規化** することで idempotent semantics を成立させる (本 ADR 史上初の `destructive=false` write カテゴリ)。event log を `aggregate_id=proposal_id` + `event_type=ProposalApplied` で scan して該当 `candidate_index` の `applied_entity_*` を取り出す経路で初回 apply と同一 payload を返す。`already rejected` および unrelated `OpsHubError` (not found / index 範囲外) は正規化せず MCP `isError` で上位伝播
+- **(f-3) 既存 4 read tools の入力 schema 拡張**: `task.list` (`updated_after/before` → `tasks.updated_at`) / `inbox.list` (`created_after/before` → `inbox_items.created_at`) / `decision.list` (`recorded_after/before` → `decisions.recorded_at`) / `source.list` (`observed_after/before` → `sources.observed_at`) に **physical-column ベースの独立した時間フィルタ argument** を追加。半開区間 (`>= after` / `< before`)、ISO 8601 `date-time` string optional。annotation 変化なし
+- **新 invariant 3 件**: (1) `_NON_DESTRUCTIVE_WRITES = frozenset({"propose.apply"})` を policy guard test で carve-out (他 write は `destructive=true` を強制継続) / (2) `search` input_schema の properties に `raw_query` が含まれない pin / (3) tool → (`*_after`, `*_before`) 写像表を pin
+
+| 却下案 | 採用案 | 理由 |
+|---|---|---|
+| MCP `search` でも `raw_query` flag を露出 (CLI と対称) | MCP では除外、phrase quote default | host LLM が free-form token streams を投げる経路で FTS5 syntax 文字 (括弧 / コロン等) のエスケープが必要になり安全側に倒せない、CLI の power-user 経路は維持しつつ MCP は安全 default |
+| `propose.apply` の idempotency を service 層で吸収 (CLI も同 semantics) | handler 層で OpsHubError catch + 正規化、CLI は従来通り fail-fast | CLI の operator は明示的に「2 回目です」と認識した上で再実行する想定、service 層を変えると CLI / MCP 双方の挙動を変えてしまい既存 CLI 動作を壊す、MCP 境界の annotation `idempotent=true` を契約として成立させる責任は handler 層が負う |
+| 時間フィルタを business 概念 (`completed_after` 等) で命名 | physical-column 命名 (`updated_after` 等) | `task.list` の `completed_at` 列が projection に存在しない (state=completed + updated_after の組み合わせで近似)、business 命名は projection と乖離した瞬間に drift、物理列命名なら operator が「どの列を絞っているか」を意識せざるをえず混線が起きにくい |
+| 全 tool で共通の `time_after` / `time_before` 命名で統一 | tool 別に独立命名 (`updated_after` / `created_after` / `recorded_after` / `observed_after`) | 共通命名は「どの projection の何の時間を絞るか」が tool 名と argument 名から自明にならない、tool 別命名でツール選択時点で対応列が明示される |
+
+## 26. ADR-0016 改訂 (Phase 12 H1 — draft 系統一方針 §決定 (l) 独立条文化)
+
+Phase 12 H1 (2026-05-31) で ADR-0016 (Action Loop and Structured Output) に §決定 (l) を追加し、Phase 12 で 14 skill 体制に拡張する際の draft 系全体の persist 方針 / `propose.generate` の `mode` 引数の射程 / triage の射程 / Candidate discriminated union freeze を独立条文として pin。
+
+- **(a) persist 境界 = 「返信元 source の有無」で切る**: `reply-draft` は persist (`reply_to_source_id` が natural key)、`handoff-draft` / `announcement-draft` は **text-only** で persist しない。後者は host LLM が `brief` + `recall.search` + `source.get` + `decision.list` の read tool 群を合成して text を組み立てる経路で実装
+- **(b) `mode` 引数の射程**: Phase 12 H4 で導入される `propose.generate` の `mode` 引数 (`inbox_triage` / `source_extract` / `meeting_followup`) は **persist 経路を持つ structured-output dispatch key に限定**。`handoff_draft` / `announcement_draft` は経由しない
+- **(c) Triage 射程**: §決定 (j) の 3 値 triage (`respond` / `notify` / `ignore`) は **reply_draft 専用 signal**、`handoff-draft` / `announcement-draft` / `inbox-triage` 系は triage を持たない
+- **(d) Candidate discriminated union freeze**: `Candidate = TaskCandidatePayload | DecisionCandidatePayload | ReplyDraftCandidatePayload` の 3 kind で freeze。新 candidate kind を追加せず、将来 persist 需要が顕在化したら §決定 (f) versioning パターンで対応
+
+| 却下案 | 採用案 | 理由 |
+|---|---|---|
+| `handoff-draft` / `announcement-draft` も `reply-draft` と同様に persist (`HandoffDraftCandidatePayload` 等を追加) | text-only で persist しない | natural key が存在しない (自発生成、返信元 source なし)、proposal table に保存しても idempotency / 削除 / 編集の semantics が成立しない、使用頻度が週次〜月次でメリットが回収できない |
+| Triage 3 分類を draft 系全体に共通の signal として位置づけ | reply_draft 専用 signal、他 draft type は独自体系 | `handoff-draft` (引き継ぎ書) / `announcement-draft` (告知文) で respond/notify/ignore 3 分類は意味をなさない、§決定 (j) の文面が "draft" を主語にしているため将来 misread されるリスクを本条文で明確化 |
+| `propose.generate` の `mode` を全 draft type で使えるよう拡張 | persist 経路を持つ 4 mode に限定 | `mode=handoff_draft` を許すと structured output dispatch key と persist 経路の境界が曖昧化、host LLM 側で「mode を指定したのに persist されない」混乱が起きる |
+| 新 candidate kind 追加に備えて Candidate union を open (Generic[CandidatePayloadProtocol] 等) | 3 kind で freeze、将来追加は §決定 (f) versioning パターンで対応 | open union は新 candidate kind 追加時に dispatch 分岐 / projection 拡張 / service 層分岐 / test fixture 全てを更新する metabolic load を hide、freeze + versioning パターンの方が「追加コストを払う Phase」を明示できる |

@@ -69,6 +69,7 @@ def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
         build_graph_trace_handler,
         build_inbox_list_handler,
         build_recall_search_handler,
+        build_search_handler,
         build_source_get_handler,
         build_source_list_handler,
         build_task_list_handler,
@@ -76,6 +77,7 @@ def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
     from opshub.mcp._writes import (
         build_connector_sync_handler,
         build_inbox_add_handler,
+        build_propose_apply_handler,
         build_propose_generate_handler,
         build_task_create_handler,
     )
@@ -97,6 +99,9 @@ def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
         "source.get": build_source_get_handler(engine),
         "embeddings.find_duplicates": build_embeddings_find_duplicates_handler(engine),
         "propose.generate": build_propose_generate_handler(engine),
+        # Phase 12 H1 (ADR-0022 改訂): FTS5 search + HITL propose.apply.
+        "search": build_search_handler(engine),
+        "propose.apply": build_propose_apply_handler(engine),
     }
     return build_tool_specs(handlers=handlers)
 

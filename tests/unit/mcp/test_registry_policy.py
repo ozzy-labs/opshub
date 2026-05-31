@@ -58,7 +58,20 @@ _TOOL_NAMES: tuple[str, ...] = (
     "source.get",
     "embeddings.find_duplicates",
     "propose.generate",
+    # Phase 12 H1 (ADR-0022 改訂): FTS5 search + HITL propose.apply.
+    "search",
+    "propose.apply",
 )
+
+# Phase 12 H1: ``propose.apply`` is the only write-class tool with
+# ``destructive=false`` + ``idempotent=true``. The handler layer
+# normalises the idempotency case so a second call with the same
+# ``(proposal_id, candidate_index)`` is observably a no-op (see
+# ``opshub.mcp._writes.build_propose_apply_handler``). The
+# ``destructive`` invariant test below carves this name out so the
+# guard still catches the regression "new write tool forgot
+# destructive=true" for every other write category.
+_NON_DESTRUCTIVE_WRITES: frozenset[str] = frozenset({"propose.apply"})
 
 
 @pytest.fixture
@@ -84,9 +97,21 @@ def test_write_tools_advertise_destructive_and_non_read_only(specs: list[Any]) -
             assert spec.policy.read_only is False, (
                 f"write tool {spec.name!r} must declare read_only=false"
             )
-            assert spec.policy.destructive is True, (
-                f"write tool {spec.name!r} must declare destructive=true"
-            )
+            # Phase 12 H1 (ADR-0022 改訂): ``propose.apply`` is the
+            # documented carve-out — ``destructive=false`` because the
+            # handler normalises the idempotency case (second call is
+            # a no-op). Every other write category must still pin
+            # ``destructive=true``.
+            if spec.name in _NON_DESTRUCTIVE_WRITES:
+                assert spec.policy.destructive is False, (
+                    f"write tool {spec.name!r} is in the documented"
+                    " _NON_DESTRUCTIVE_WRITES carve-out and must declare"
+                    " destructive=false"
+                )
+            else:
+                assert spec.policy.destructive is True, (
+                    f"write tool {spec.name!r} must declare destructive=true"
+                )
 
 
 def test_no_input_schema_accepts_a_secret_field(specs: list[Any]) -> None:
@@ -188,3 +213,101 @@ def test_local_read_tools_are_closed_world(specs: list[Any]) -> None:
             assert spec.policy.open_world is False, (
                 f"read tool {spec.name!r} hits local SQLite only; open_world must be false"
             )
+
+
+# ---------------------------------------------------------------------------
+# Phase 12 H1 (ADR-0022 改訂) semantic pins.
+# ---------------------------------------------------------------------------
+
+
+def test_propose_apply_is_idempotent_non_destructive(specs: list[Any]) -> None:
+    """``propose.apply`` advertises idempotent=true + destructive=false.
+
+    The handler layer (``opshub.mcp._writes.build_propose_apply_handler``)
+    catches ``OpsHubError("already applied/rejected")`` and returns
+    a normalised ``{ok:true, already_applied:true, ...}`` envelope so
+    the annotation contract is honest. Read-only stays false because
+    the first call still emits durable events (TaskCreated /
+    DecisionRecorded / ReplyDraftApplied + ProposalApplied).
+    """
+    for spec in specs:
+        if spec.name == "propose.apply":
+            assert spec.policy.read_only is False
+            assert spec.policy.destructive is False
+            assert spec.policy.idempotent is True
+            assert spec.policy.open_world is False
+            return
+    raise AssertionError("propose.apply spec missing from registry")
+
+
+def test_propose_apply_schema_takes_proposal_id_and_index(specs: list[Any]) -> None:
+    """``propose.apply`` input schema must take ``proposal_id`` + ``candidate_index``."""
+    for spec in specs:
+        if spec.name == "propose.apply":
+            schema_any: Any = spec.input_schema
+            properties: Any = schema_any.get("properties", {})
+            assert "proposal_id" in properties, (
+                "propose.apply must accept ``proposal_id`` as the natural key"
+            )
+            assert "candidate_index" in properties, (
+                "propose.apply must accept ``candidate_index`` for dispatch"
+            )
+            required: Any = schema_any.get("required", [])
+            assert "proposal_id" in required
+            assert "candidate_index" in required
+            return
+    raise AssertionError("propose.apply spec missing from registry")
+
+
+def test_search_does_not_expose_raw_query(specs: list[Any]) -> None:
+    """``search`` input schema must NOT expose the ``raw_query`` flag.
+
+    ADR-0022 改訂 pins the contract: ``raw_query`` is CLI-only so the
+    MCP boundary stays safe for host LLMs that pass free-form token
+    streams (phrase quoting handles FTS5 syntax characters by default).
+    A regressing PR that re-adds the flag here is exactly what this
+    guard catches.
+    """
+    for spec in specs:
+        if spec.name == "search":
+            schema_any: Any = spec.input_schema
+            properties: Any = schema_any.get("properties", {})
+            assert "raw_query" not in properties, (
+                "search MCP schema must NOT expose ``raw_query``"
+                " (ADR-0022 改訂 §決定 — CLI-only flag)"
+            )
+            # And the schema must still take ``query`` as required input.
+            assert "query" in properties
+            assert "query" in schema_any.get("required", [])
+            return
+    raise AssertionError("search spec missing from registry")
+
+
+def test_list_tools_expose_physical_column_time_filters(specs: list[Any]) -> None:
+    """Phase 12 H1 (ADR-0022 改訂): physical-column ``*_after/before`` filters.
+
+    The plan §3 H1-b pins per-tool independent naming so the MCP
+    argument names map 1:1 to the projection physical columns
+    (``tasks.updated_at`` etc.). The mapping table below is the SSOT
+    for this contract — any drift between the registry and the
+    handler's where-clause is caught here.
+    """
+    expected: dict[str, tuple[str, str]] = {
+        "task.list": ("updated_after", "updated_before"),
+        "inbox.list": ("created_after", "created_before"),
+        "decision.list": ("recorded_after", "recorded_before"),
+        "source.list": ("observed_after", "observed_before"),
+    }
+    for spec in specs:
+        pair = expected.get(spec.name)
+        if pair is None:
+            continue
+        properties: Any = spec.input_schema.get("properties", {})
+        for field_name in pair:
+            assert field_name in properties, (
+                f"{spec.name!r} input schema missing physical-column"
+                f" time filter {field_name!r} (Phase 12 H1)"
+            )
+            field_schema: Any = properties[field_name]
+            assert field_schema.get("type") == "string"
+            assert field_schema.get("format") == "date-time"

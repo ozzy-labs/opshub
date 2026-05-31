@@ -42,27 +42,29 @@ opshub mcp tools -f json   # JSON form (matches the MCP annotations)
 
 The output reflects the policy-as-data registry in `src/opshub/mcp/_registry.py`. Read tools advertise `readOnlyHint=true`; write tools advertise `readOnlyHint=false` + `destructiveHint=true`. Hosts that honour the hints (Claude Code 等) will auto-approve reads and require human confirmation for writes (ADR-0022 §(c)).
 
-Current tools (Phase 10 C2 baseline + Step 1 widening):
+Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1):
 
 | Kind  | Name                          | Purpose                                                          |
 | ----- | ----------------------------- | ---------------------------------------------------------------- |
 | read  | `recall.search`               | Hybrid semantic search across tasks / decisions / inbox / sources |
-| read  | `task.list`                   | List tasks (state-filterable)                                     |
-| read  | `inbox.list`                  | List inbox items (state-filterable)                               |
-| read  | `decision.list`               | List recorded decisions                                           |
+| read  | `task.list`                   | List tasks (state + `updated_after` / `updated_before` filterable) |
+| read  | `inbox.list`                  | List inbox items (state + `created_after` / `created_before` filterable) |
+| read  | `decision.list`               | List decisions (`recorded_after` / `recorded_before` filterable)  |
 | read  | `brief`                       | Generate operational briefing (LLM round trip)                    |
 | read  | `graph.related`               | List 1-hop graph neighbours of an entity                          |
 | read  | `graph.trace`                 | Trace entity provenance backward up to N hops                     |
 | read  | `graph.expand`                | Bidirectional N-hop graph subgraph rooted at an entity            |
-| read  | `source.list`                 | List rows from the `sources` projection                           |
+| read  | `source.list`                 | List sources (connector / type + `observed_after` / `observed_before` filterable) |
 | read  | `source.get`                  | Fetch one source row by ULID                                      |
 | read  | `embeddings.find_duplicates`  | Scan embeddings for near-duplicate pairs above a threshold        |
+| read  | `search`                      | Body-level FTS5 search (Phase 12 H1, phrase-quoted by default)    |
 | write | `task.create`                 | Create a new task                                                 |
 | write | `inbox.add`                   | Add an inbox item                                                 |
 | write | `connector.sync`              | Trigger a registered connector's sync                             |
 | write | `propose.generate`            | Generate next-action / reply-draft candidates (HITL apply)        |
+| write | `propose.apply`               | Apply a proposal candidate (HITL, idempotent, Phase 12 H1)        |
 
-Step 1 widening (post Phase 10) added the 7 new read tools and the HITL write `propose.generate` so Tier 1 skills (`daily-brief`, `next-actions`, `pr-review`, `file-lookup`) can call MCP directly instead of falling back to the CLI shell. `propose.generate` writes a `ProposalGenerated` event but the apply step (task / decision creation) still requires an operator-driven `opshub propose apply` invocation (ADR-0016 §決定 (c)).
+Step 1 widening (post Phase 10) added the 7 new read tools and the HITL write `propose.generate`. Phase 12 H1 (ADR-0022 改訂) added `search` (FTS5, phrase-quoted by default — the CLI `--raw-query` flag is intentionally not exposed at the MCP boundary), `propose.apply` (HITL, idempotent — second call for the same `(proposal_id, candidate_index)` returns `{ok: true, already_applied: true, ...}` instead of raising), and physical-column time filters (`updated_after/before` on `task.list`, `created_after/before` on `inbox.list`, `recorded_after/before` on `decision.list`, `observed_after/before` on `source.list`). The Tier 1 skill set (`personal-brief`, `next-actions`, `pr-review`, `find-document`) calls MCP directly instead of falling back to the CLI shell.
 
 ## 4. Wire the agent host
 

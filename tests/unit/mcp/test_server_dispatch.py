@@ -197,6 +197,9 @@ async def test_recall_search_schema_rejects_unknown_field() -> None:
         "source.get",
         "embeddings.find_duplicates",
         "propose.generate",
+        # Phase 12 H1 (ADR-0022 改訂): FTS5 search + HITL propose.apply.
+        "search",
+        "propose.apply",
     )
     specs = build_tool_specs(handlers=dict.fromkeys(tool_names, _stub))
     recall = next(s for s in specs if s.name == "recall.search")

@@ -172,8 +172,9 @@ def test_search_returns_hits_from_multiple_connectors_when_unfiltered(
     the FTS5 index is keyed off ``sources.body`` regardless of which
     connector produced the row. A query for a shared token must
     surface hits from github + slack + box side-by-side so the secretary
-    skill (file-lookup / daily-brief) can cross-correlate evidence
-    across SaaS sources without per-connector fan-out.
+    skill (find-document / personal-brief — Phase 12 H1 renamed)
+    can cross-correlate evidence across SaaS sources without
+    per-connector fan-out.
 
     Pin: seed identical tokens across three connectors; the unfiltered
     search returns all three rows, the connector set covers github /

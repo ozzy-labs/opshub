@@ -33,7 +33,16 @@ input:
 
 ### Step 2: 過去の同コンポーネントの decision を確認
 
-`decision.list` は MCP schema 上 `limit` のみを受け付ける (`src/opshub/mcp/_registry.py` の Phase 10 surface)。component / module path で絞り込みたい場合は `recall.search` を component 名で発火し、戻り値 `hits[]` を `entity_type == "decision"` で post-filter する経路を取る:
+`decision.list` は Phase 12 H1 (ADR-0022 改訂) で physical-column ベースの時間フィルタ `recorded_after` / `recorded_before` (ISO 8601、`decisions.recorded_at`) を取れるようになった。直近 N 週間の decision だけ引きたい場合は:
+
+```text
+tool: decision.list
+input:
+  recorded_after: "<N 週間前 ISO 8601>"
+  limit: 30
+```
+
+component / module path で絞り込みたい場合は `recall.search` を component 名で発火し、戻り値 `hits[]` を `entity_type == "decision"` で post-filter する経路を取る:
 
 ```text
 tool: recall.search
