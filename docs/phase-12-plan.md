@@ -326,9 +326,10 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
 
 ### 7.2 結合テスト（integration）
 
-- **`tests/integration/test_phase12_mcp_search.py`**: 新 search(FTS5) MCP tool が既存 FTS5 と同等の hit を返す。`raw_query` flag が schema に存在しないこと（CLI 専用扱い）も pin
-- **`tests/integration/test_phase12_propose_apply_mcp.py`**: propose.apply MCP tool が既存 CLI と同等の persist を持つ + idempotent semantics（同 `(proposal_id, candidate_index)` への 2 回目呼び出しが `OpsHubError` を投げずに `{ok:true, already_applied:true, applied_entity_id}` を返す）
-- **`tests/integration/test_phase12_time_filter.py`**: 4 tools 全てで physical column ベース時間フィルタの境界動作（task.list=`updated_after/before` / inbox.list=`created_after/before` / decision.list=`recorded_after/before` / source.list=`observed_after/before`）。半開区間（`>= after` / `< before`）、ISO 8601 timezone 解釈、空集合返却、UTC vs offset 一致
+> 実装時に当初想定の 3 個別ファイル（`test_phase12_mcp_search.py` / `test_phase12_propose_apply_mcp.py` / `test_phase12_time_filter.py`）は、**e2e lifecycle 1 本 (`tests/integration/test_phase12_secretary_lifecycle.py`) + handlers 1 本 (`tests/unit/mcp/test_phase12_handlers.py`) の 2 本に統合された**。新 4 tools の境界動作 (search FTS5 / propose.apply HITL idempotent / 4 read tools の physical column ベース時間フィルタ) は handlers 単体テストで pin し、lifecycle 経由でも end-to-end 結合を確認している（重複しないよう lifecycle 側は呼び出し列の整合性に集中）。
+
+- **`tests/unit/mcp/test_phase12_handlers.py`** (handlers 単体): 新 search(FTS5) MCP tool が既存 FTS5 と同等の hit を返すこと + `raw_query` flag が schema に存在しない (CLI 専用扱い) こと + propose.apply MCP tool が既存 CLI と同等の persist を持つこと + idempotent semantics (同 `(proposal_id, candidate_index)` への 2 回目呼び出しが `OpsHubError` を投げずに `{ok:true, already_applied:true, applied_entity_id}` を返す) + 4 read tools 全てで physical column ベース時間フィルタの境界動作 (task.list=`updated_after/before` / inbox.list=`created_after/before` / decision.list=`recorded_after/before` / source.list=`observed_after/before`、半開区間 `>= after` / `< before`、ISO 8601 timezone 解釈、空集合返却、UTC vs offset 一致) を pin
+- **`tests/integration/test_phase12_secretary_lifecycle.py`** (§7.3 参照): 上記 4 tools を含む 14 skills 統合シナリオを台本 MCP クライアントで再現
 
 ### 7.3 e2e lifecycle テスト
 
