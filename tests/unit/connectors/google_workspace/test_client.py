@@ -83,8 +83,8 @@ def _client_with_handler(
     # The DriveClient builds the httpx.Client in __init__; we swap it
     # out here rather than patching httpx.Client globally so each test
     # carries its own scoped transport.
-    client._client.close()  # type: ignore[reportPrivateUsage]
-    client._client = httpx.Client(transport=transport, timeout=5.0)  # type: ignore[reportPrivateUsage]
+    client._client.close()  # pyright: ignore[reportPrivateUsage]
+    client._client = httpx.Client(transport=transport, timeout=5.0)  # pyright: ignore[reportPrivateUsage]
     return client
 
 

@@ -153,7 +153,7 @@ def test_init_copies_default_scopes() -> None:
     # public surface does not need a getter).
     DEFAULT_SCOPES.append("https://example.invalid/test-only")
     try:
-        assert "https://example.invalid/test-only" not in auth._scopes  # type: ignore[reportPrivateUsage]
+        assert "https://example.invalid/test-only" not in auth._scopes  # pyright: ignore[reportPrivateUsage]
     finally:
         DEFAULT_SCOPES.pop()
 
@@ -377,7 +377,7 @@ def test_get_access_token_refreshes_when_expired(
     # Force an expired cache so :meth:`get_access_token` consults the
     # refresh-token path. ``_token`` is the documented private cache
     # attribute (tests for MS365 / Box also patch it directly).
-    auth._token = None  # type: ignore[reportPrivateUsage]
+    auth._token = None  # pyright: ignore[reportPrivateUsage]
     with (
         patch("opshub.core.secrets.get_secret", return_value="RT_stored"),
         patch("opshub.core.secrets.set_secret"),
@@ -447,7 +447,7 @@ def test_get_access_token_skips_rotation_when_unchanged(
 def test_get_access_token_raises_when_no_stored_refresh_token() -> None:
     """Missing refresh token → actionable :class:`ConfigError`."""
     auth = GoogleWorkspaceAuth(client_id="cid", client_secret="cs")
-    auth._token = None  # type: ignore[reportPrivateUsage]
+    auth._token = None  # pyright: ignore[reportPrivateUsage]
     with patch("opshub.core.secrets.get_secret", return_value=None):
         with pytest.raises(ConfigError, match="refresh token not found"):
             auth.get_access_token()
@@ -465,7 +465,7 @@ def test_get_access_token_raises_on_refresh_invalid_grant(
         },
     )
     auth = GoogleWorkspaceAuth(client_id="cid", client_secret="cs")
-    auth._token = None  # type: ignore[reportPrivateUsage]
+    auth._token = None  # pyright: ignore[reportPrivateUsage]
     with patch("opshub.core.secrets.get_secret", return_value="RT"):
         with pytest.raises(GoogleAuthError, match="Token has been expired or revoked"):
             auth.get_access_token()
@@ -577,6 +577,6 @@ def test_expires_in_default_when_missing(monkeypatch: pytest.MonkeyPatch) -> Non
         auth.complete_auth_flow("c")
     # Cached expiry should be roughly 3600 - 60 from now; allow 5 s
     # tolerance for slow CI machines.
-    assert auth._token is not None  # type: ignore[reportPrivateUsage]
-    assert auth._token.expires_at > time.time() + 3000  # type: ignore[reportPrivateUsage]
-    assert auth._token.expires_at < time.time() + 3700  # type: ignore[reportPrivateUsage]
+    assert auth._token is not None  # pyright: ignore[reportPrivateUsage]
+    assert auth._token.expires_at > time.time() + 3000  # pyright: ignore[reportPrivateUsage]
+    assert auth._token.expires_at < time.time() + 3700  # pyright: ignore[reportPrivateUsage]

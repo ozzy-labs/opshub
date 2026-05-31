@@ -158,8 +158,15 @@ def _build_drive_client(handler: Any) -> DriveClient:
     """
     transport = httpx.MockTransport(handler)
     client = DriveClient(cast(GoogleWorkspaceAuth, _StubAuth()))
-    client._client.close()  # type: ignore[reportPrivateUsage]
-    client._client = httpx.Client(transport=transport, timeout=5.0)  # type: ignore[reportPrivateUsage]
+    # ``DriveClient._client`` is documented private (the cast happens
+    # in ``__init__`` for typing reasons). pyright (strict) would flag
+    # the access; ``# pyright: ignore`` is the mypy-clean equivalent of
+    # the same private-access escape hatch the sibling
+    # :mod:`tests.unit.connectors.google_workspace.test_client` uses
+    # (which still uses the older ``# type: ignore[reportPrivateUsage]``
+    # form — that form trips mypy strict's ``unused-ignore`` rule).
+    client._client.close()  # pyright: ignore[reportPrivateUsage]
+    client._client = httpx.Client(transport=transport, timeout=5.0)  # pyright: ignore[reportPrivateUsage]
     return client
 
 
