@@ -287,3 +287,87 @@ Re-run after every opshub upgrade until the distribution mechanism lands. The pr
 - New MCP tool surface: total **17 tools** = 12 read + 5 write (was 13 = 11 read + 2 write before Phase 12 H1; Phase 10 + Step 1 widening PR #231 baseline).
 - **No DB schema changes / no event-schema changes.** Existing rows continue to round-trip cleanly through every query path.
 - External write-back is **still forbidden** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7). All 4 HITL-write skills draft locally; the operator sends.
+
+## Phase 13: Google Workspace connector
+
+Phase 13 ([ADR-0010](adr/0010-connector-contract.md) revision §Phase 13 (e)-(h) + [ADR-0014](adr/0014-saas-token-storage.md) revision (rotation pin list 3rd entry) + [ADR-0025](adr/0025-office-document-content-extraction.md) revision (§決定 (d') + (j))) adds a new `google_workspace` connector that ingests Google Docs / Slides / Sheets via Drive API v3 + OAuth Refresh Token + Workspace export → markitdown. **No DB schema changes** (the existing `sources.body` column + FTS5 index from Phase 10 carry the new bodies), **no breaking CLI changes**, and the external write-back ban remains in force ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7).
+
+### Opt-in: enable the `google_workspace` connector
+
+```bash
+# 1. Install the connectors-google-workspace extras (httpx).
+uv tool install "ozzylabs-opshub[connectors-google-workspace]"
+
+# 2. Register a Google Cloud OAuth client (Installed Application type)
+#    and capture client_id / client_secret. Full walkthrough:
+#    docs/google-workspace-setup.md.
+
+# 3. Configure the OAuth client in opshub.toml.
+# In ~/.config/opshub/config.toml:
+#   [connectors.google_workspace]
+#   enabled = true
+#   client_id = "<your-client-id>.apps.googleusercontent.com"
+#   client_secret = "<your-client-secret>"
+#   redirect_uri = "http://localhost"      # default; matches the value registered in GCP
+#   content_extraction = false             # leave off until you've installed [office]
+#   fallback_window_days = 30              # changes.list TTL invalidation fallback window
+
+# 4. Run the paste-code OAuth flow to obtain a refresh token.
+opshub connector auth set google_workspace        # opens the consent URL; paste the code back
+# Or for CI / non-interactive contexts:
+export OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN="<refresh-token>"
+
+# 5. Sync.
+opshub connector sync google_workspace
+```
+
+The connector reads Drive API v3 `changes.list` with a stored `startPageToken` cursor. When Google invalidates the stored token (`400 invalidToken` / `404 startPageToken expired` / `410 Gone`) the connector logs a warning and falls back to a `changes.getStartPageToken` bootstrap + a one-time full pass over the last `fallback_window_days` (default 30) before resuming differential mode — same shape as the Phase 11 Teams delta-link fallback ([ADR-0010](adr/0010-connector-contract.md) §改訂 (c) → §Phase 13 改訂 (g)).
+
+The Refresh Token lives in the OS keychain under `connector:google_workspace:refresh_token` ([ADR-0014](adr/0014-saas-token-storage.md) §Phase 7 Validation, 3rd rotation pin entry). The connector follows the MS365 / Box pattern: when Google rotates the refresh token, the new value is written back to the keychain so the next process resumes cleanly. This is **separate from the Teams verbatim user-token pattern** ([ADR-0010](adr/0010-connector-contract.md) §Phase 13 改訂 (h) makes the split explicit).
+
+### Opt-in: enable Workspace export body extraction
+
+By default Phase 13 ships metadata-only — `content_extraction = false` keeps the connector cost-free (no `files.export` round-trip, no markitdown invocation). To pull Workspace native bodies into `sources.body`:
+
+```bash
+# 1. Install the office extras (markitdown[docx,xlsx,pptx]).
+uv tool install "ozzylabs-opshub[office]"
+
+# 2. Flip the per-connector config flag.
+# In ~/.config/opshub/config.toml:
+#   [connectors.google_workspace]
+#   content_extraction = true
+
+# 3. Re-sync to pick up the bodies.
+opshub connector sync google_workspace
+opshub embeddings rebuild                        # re-embed with the new body content
+```
+
+When `content_extraction = true`, the connector calls Drive API `files.export(fileId, mimeType=<MS Office mediatype>)` for the three Workspace native source_types (`google_doc` → `.docx`, `google_slides` → `.pptx`, `google_sheets` → `.xlsx`) and routes the bytes through `core/document_extract.extract_workspace_export(bytes, source_type)`. The same caps from Phase 11 apply ([ADR-0025](adr/0025-office-document-content-extraction.md) §決定 (b)):
+
+- Files larger than 50 MB are skipped with `body=None` + a warning log (configurable via `[office] max_file_size_mb`).
+- Extracted text longer than 500 000 chars is head-truncated and annotated (configurable via `[office] max_chars`).
+- Export failures (Drive throttling, file permission loss, malformed export) surface as `body=None` + sanitised warning; the metadata `SourceObserved` is still emitted so the sync never gets blocked on a single bad export.
+
+Non-native files (the catch-all `google_workspace_file` source_type — Drive returns 403 `fileNotExportable` for them) stay metadata-only regardless of `content_extraction`.
+
+### New source_types
+
+Four new `source_type` discriminators land in `sources` ([ADR-0025](adr/0025-office-document-content-extraction.md) §決定 (d')):
+
+| Google mimeType | `source_type` | Body extraction |
+|---|---|---|
+| `application/vnd.google-apps.document` | `google_doc` | docx export → markitdown |
+| `application/vnd.google-apps.presentation` | `google_slides` | pptx export → markitdown |
+| `application/vnd.google-apps.spreadsheet` | `google_sheets` | xlsx export → markitdown |
+| anything else (Workspace folder, uploaded PDF, etc.) | `google_workspace_file` | metadata-only (no export) |
+
+The first three discriminators flow through the same `find-document` / `search` / `recall.search` paths as Phase 11 Office bodies — secretary skills can filter on them when desired (e.g. "Google Sheets only" find-document).
+
+### Phase 13 specifics
+
+- **DB head unchanged** = `0019_create_sources_fts` (Phase 10). Phase 13 ships **no migrations**; bodies flow through the existing `sources.body` column + FTS5 index.
+- **New optional extras**: `connectors-google-workspace` (httpx). Pair with `[office]` extras when enabling `content_extraction = true`.
+- **No CLI breaking changes**. `opshub connector auth set google_workspace` (positional form, not `connector:google_workspace`) and `opshub connector sync google_workspace` are the new sync targets — both are additive.
+- **External write-back is still forbidden** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7). Drive write APIs (`files.update` / `files.create` / `files.copy` / `comments.create` / `permissions.*`) are deliberately not implemented in the connector. Drive push notifications (`files.watch`) are also forbidden — the connector polls via `changes.list` only to preserve form-A (no opshub-internal runtime).
+- Full setup (GCP project, OAuth consent screen, scopes, troubleshooting): [`docs/google-workspace-setup.md`](google-workspace-setup.md).

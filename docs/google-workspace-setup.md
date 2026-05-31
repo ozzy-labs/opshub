@@ -1,0 +1,288 @@
+# Google Workspace Setup (Phase 13 connector)
+
+`google_workspace` connector は Google Drive API v3 経由で Google Docs /
+Slides / Sheets の metadata + 本文を取り込む。**OAuth 2.0 Refresh Token + offline access
++ アプリ層 refresh + rotation 書き戻し** を採用 ([ADR-0010](adr/0010-connector-contract.md)
+§Phase 13 改訂 (h) = MS365 / Box pattern)。Phase 11 で導入した Teams pattern
+(verbatim user token + アプリ層 refresh なし) とは **別系統** であり、両 pattern が
+ADR-0010 内に並立する。
+
+Phase 13 で 8 つ目の connector として追加された Web API 経路の connector で、
+Phase 10 で確立した本文ローカル保持 ([ADR-0020](adr/0020-full-local-content-retention.md))
++ 暗号化 ([ADR-0021](adr/0021-encryption-at-rest.md)) と同じ規律で
+`google_doc` / `google_slides` / `google_sheets` / `google_workspace_file` を
+`sources` projection に persist する。本文抽出経路は Phase 11 で確立した
+markitdown 1 本経路を Workspace export 経由で再利用 ([ADR-0025](adr/0025-office-document-content-extraction.md)
+§決定 (d') + (j))。
+
+## 対応 platform
+
+すべての OS で動作する (httpx の Python 経路、ローカル daemon 不要)。
+ネットワーク到達性のみが要件。Google Drive for Desktop の WSL2 mount は
+不安定なため、本 connector はローカル FS 経路ではなく **Web API 経路** で統一
+(Phase 13 plan §1 OQ1)。
+
+## 1. Google Cloud OAuth client の作成
+
+operator が事前に Google Cloud Console で OAuth client を登録する
+(opshub 側から自動化はしない、IT policy 上の前提共有のため)。
+
+### (a) GCP プロジェクトの用意
+
+1. <https://console.cloud.google.com/> にサインインし、画面上部のプロジェクト
+   セレクタで **New Project** を選ぶ。
+2. 名前は任意 (例: `opshub-google-workspace`)。組織がある場合は IT に
+   相談 (Drive API 利用ポリシーが組織で管理されていることがある)。
+
+### (b) Drive API の有効化
+
+1. 左メニュー **APIs & Services** → **Library** で **Google Drive API**
+   を検索 → **Enable**。
+2. (任意) **Library** で **Google Drive Activity API** も検索できるが、
+   Phase 13 では **使わない** (`changes.list` poll のみで delta 検出可能、
+   activity feed は不要、Phase 13 plan §Alternatives §2)。
+
+### (c) OAuth consent screen の設定
+
+1. 左メニュー **APIs & Services** → **OAuth consent screen**。
+2. **User Type**: 個人 Google アカウントの場合は `External`、Google Workspace
+   組織内利用の場合は `Internal` を選ぶ (`Internal` だと組織外ユーザーに
+   consent を出さなくて済む)。
+3. **App information**: 名前 (例: `OpsHub Google Workspace Connector`) /
+   user support email / developer email を入れる。
+4. **Scopes**: **Add or Remove Scopes** で次を追加:
+   - `https://www.googleapis.com/auth/drive.readonly` (必須、Phase 13 plan
+     §1 OQ6 で `drive.readonly` 単独に確定。`drive.metadata.readonly` は
+     `drive.readonly` の subset なので併記しない = consent UX 改善 +
+     過剰 scope フラグ回避)
+5. **Test users**: テストモード (Publishing status = Testing) のうちは、
+   operator 自身の Google アカウントを **Add Users** で追加する。テスト
+   モードは refresh token が 7 日で失効する制限あり (Google docs)。継続
+   利用するなら次の **Publishing** を進める。
+6. **Publishing**: 個人利用なら Testing のまま (operator アカウントを
+   test users に固定)、組織 Workspace 利用なら **Publish App** で
+   `Internal` 公開を行う (組織外 consent は不要)。組織外公開
+   (`In production`) には Google の verification が必要 (本 connector の
+   用途では不要なはず)。
+
+### (d) Desktop App credential の作成
+
+1. 左メニュー **APIs & Services** → **Credentials** → **Create Credentials**
+   → **OAuth client ID**。
+2. **Application type**: **Desktop app** を選択。Web app / iOS / Android
+   ではない。Desktop App credential は `client_secret` を「文書化された
+   非秘密」として扱う (Google は「installed app の secret は配布バイナリ
+   から抽出可能であり真の secret ではない」と documented; ただし OAuth
+   wire protocol は client_secret を毎回要求する)。
+3. **Name**: 任意 (例: `OpsHub Connector`)。
+4. 作成後、**Download JSON** で `client_id` + `client_secret` を控える。
+
+> **token の取り扱い**: `tests/_secrets.py` の連結ビルド規範に従い、
+> テスト fixture では文字列を分割して保存する (`tests/_secrets.py` 参照)。
+> 実 token は OS keychain (`connector:google_workspace:refresh_token`) で
+> 管理する。`opshub.toml` には refresh token を書かない (ADR-0014)。
+
+## 2. opshub.toml 設定
+
+```toml
+[connectors.google_workspace]
+enabled = true                                  # default: false
+client_id = "<your-client-id>.apps.googleusercontent.com"
+client_secret = "<your-client-secret>"
+redirect_uri = "http://localhost"               # default; GCP Console に登録した値と一致
+content_extraction = false                      # default: false (G3 metadata-only)
+fallback_window_days = 30                       # default: 30 (changes.list TTL 失効時の full-pass 窓)
+```
+
+`excludes.yaml` 側の設定例 (top-level flat key — ADR-0020 §(b)、
+`src/opshub/core/excludes.py` が parse する shape。`google_workspace: { ... }`
+等の nested 形式は `ConfigError` で fail-fast):
+
+```yaml
+paths:
+  - "/Confidential/**"                          # Drive item path に match
+```
+
+## 3. paste-code OAuth flow
+
+```bash
+opshub connector auth set google_workspace
+```
+
+実行すると次の手順が走る (MS365 / Box の paste-code flow と対称):
+
+1. opshub が auth URL を構築 (`access_type=offline` + `prompt=consent` +
+   `scope=drive.readonly`) し、ターミナルに表示する。
+2. operator がブラウザで URL を開き、Google アカウントにサインインして
+   consent。
+3. Google が `http://localhost/?code=...&scope=...` にリダイレクト
+   (opshub はこの URI で listen しない = paste-code flow)。ブラウザの
+   address bar から URL 全体 (または `code=` パラメータの値) をコピー。
+4. opshub のプロンプトに貼り付け。opshub が code を token endpoint に
+   POST して access token + refresh token を取得。
+5. **refresh token** は `connector:google_workspace:refresh_token` keyring
+   slot に永続化 ([ADR-0014](adr/0014-saas-token-storage.md) §Phase 7
+   Validation 3 件目)。**access token** は in-memory のみ (~1 hour TTL、
+   次の sync で自動 refresh)。
+
+### env var override (CI / 一時利用)
+
+```bash
+export OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN="<refresh-token>"
+opshub connector sync google_workspace
+```
+
+env var を設定すると keyring lookup を skip する。CI / container 等では
+こちらが便利。
+
+## 4. sync 実行
+
+```bash
+opshub connector sync google_workspace
+```
+
+差分検出は Drive API v3 `changes.list` の `startPageToken` cursor で行う。
+2 回目以降は前回の page token を再投入し、差分のみ取り込む。
+initial sync は `changes.getStartPageToken` でブートストラップ + 初回の
+`files.list` (全件) を実行。
+
+### page token 失効時の挙動 (ADR-0010 §Phase 13 改訂 (g))
+
+Drive は page token を一定期間 (~30 日) で失効させる (`400 invalidToken` /
+`404 startPageToken expired` / `410 Gone`)。OpsHub は **自動で full-pass
+fallback** に切り替える (Phase 11 Teams delta-link と同パターン、ADR-0010
+§Phase 13 改訂 (g)):
+
+1. WARNING log: `google_workspace page token invalidated; falling back to recent window`
+2. `changes.getStartPageToken` で新しい page token を取得
+3. 直近 `fallback_window_days` (default 30) を `files.list` で full-pass
+4. 新しい page token を `connector_cursors` に保存
+5. 次回 sync は通常の `changes.list` 差分モードに復帰
+
+fallback 自体が失敗した場合は `ConnectorSyncFailed` event を append
+(ADR-0010 §責務 4)。重複は `SourceObserved` の dedup
+(`external_id = <fileId>`) で吸収される。
+
+### Refresh Token rotation (ADR-0010 §Phase 13 改訂 (h))
+
+Google OAuth 2.0 は refresh token を周期的に rotation することがある (Google
+docs)。opshub は **rotation を検出すると新しい値を keyring に書き戻す**
+(`tests/unit/connectors/google_workspace/test_auth.py::test_get_access_token_persists_rotated_refresh_token`
+で pin、ADR-0014 §Phase 7 Validation rotation pin リスト 3 件目)。書き戻しが
+ないと次の sync 起動時に Google が `invalid_grant` で reject する → operator が
+paste-code flow から再認証する羽目になる。
+
+### Workspace export → 本文抽出 (content_extraction = true 時のみ)
+
+```toml
+[connectors.google_workspace]
+content_extraction = true                       # opt-in
+```
+
+`[office]` extras (`uv tool install "ozzylabs-opshub[office]"`) も併用する
+必要がある (markitdown 経路、[ADR-0025](adr/0025-office-document-content-extraction.md))。
+
+`content_extraction = true` の opt-in 時のみ、Workspace native 形式
+(`google_doc` / `google_slides` / `google_sheets`) は Drive API
+`files.export(fileId, mimeType=<MS Office mediatype>)` で MS Office バイト列
+として取得し、`core/document_extract.extract_workspace_export(bytes, source_type)`
+経由で markitdown で抽出 → `sources.body` に persist する。3 形式とも
+MS Office mediatype 経由 (Docs → docx / Slides → pptx / Sheets → xlsx)
+で統一 (Phase 13 plan §1 OQ2、ADR-0025 §決定 (j))。
+
+非 native ファイル (Drive にアップロードされた PDF / 画像 / フォルダ等の
+catch-all `google_workspace_file`) は `files.export` が `403 fileNotExportable`
+で reject するため、`content_extraction = true` 設定下でも `body=None` の
+metadata-only で persist される (Phase 13 G4 #278 の wiring)。
+
+### 定期実行
+
+OS scheduler を operator が設定する (常駐 daemon は Phase 13 scope 外、
+Drive `files.watch` push notification は禁止 = 形 A 整合):
+
+```cron
+# crontab -e
+0 */2 * * * opshub connector sync google_workspace
+```
+
+## 制約事項
+
+- **添付ファイル本文以外の Drive Comments / Suggestions は取り込まれない**
+  (Phase 13 MVP は files の本文 + metadata のみ)。決定経緯の context source
+  としての Comments / Suggestions 取り込みは Phase 14+ candidate。
+- **画像 OCR なし** (Phase 13 から繰り越し、Phase 14+ candidate)。
+- **書き戻し非対応** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7)。
+  Drive write API (`files.update` / `files.create` / `files.copy` /
+  `comments.create` / `permissions.*`) は connector に実装しない。
+  返信下書きは `opshub propose generate --reply-to <source-id>` で **下書き**
+  のみ生成可能 (送信は手動コピペ)。
+- **Drive `files.watch` push notification 禁止** (ADR-0010 §Phase 13 改訂 (e)
+  §禁止事項拡張)。`changes.list` poll のみ。能動性混入 (形 A 抵触) を防ぐ。
+- **`google_workspace_file` (catch-all、非 native) は metadata-only**。
+  Drive にアップロードされた PDF / 画像 / フォルダ等を区別したい場合は
+  `external_id` (= Drive fileId) や `title` で post-filter。
+- **token は keyring か env で operator が管理** (opshub 側で自動 refresh は
+  done、ただし rotation 書き戻し済)。長期失効 (90+ 日 inactive、
+  scope revocation 等) で `invalid_grant` が返ったら再 auth が必要。
+- **Shared Drives (Team Drives) のサポート**: Phase 13 G3 着手時に
+  `supportsAllDrives=true + includeItemsFromAllDrives=true` を含めるかを
+  確定 (OQ10)。
+- **multi-account 非対応** (single-slot principal、Phase 13 plan §Alternatives
+  §7)。operator 個人 GCP + 業務 Workspace の併用は Phase 14+ で
+  multi-account extension として検討。
+
+## トラブルシューティング
+
+### `401 Unauthorized` / `Invalid Credentials`
+
+access token が expire したか refresh に失敗。`opshub connector sync
+google_workspace` が自動 refresh するはずだが、refresh も失敗した場合は
+refresh token 自体が revoked / invalidated されている。Step 3 の paste-code
+flow を再実行して refresh token を取り直す。
+
+### `invalid_grant` / `Token has been expired or revoked`
+
+OAuth consent screen が Testing モードのまま 7 日経過した、もしくは
+operator が Google アカウント設定で当該 OAuth client を revoke した可能性。
+Step 3 の paste-code flow を再実行。長期運用するなら Step 1 (c) の
+Publishing で Internal 公開する。
+
+### `403 fileNotExportable` (content_extraction = true 時のみ)
+
+`google_workspace_file` (catch-all 非 native) は `files.export` 不可。
+これは想定挙動で、metadata-only で persist される。`SourceObserved.body`
+が `None` のままになるが、抽出失敗としてではなく Drive の制約として扱う。
+WARNING log にも出ない (`google_workspace_file` は最初から export を試みない)。
+
+### `400 invalidToken` / `404 startPageToken expired` / `410 Gone`
+
+`changes.list` の page token が失効した。連 connector は自動的に
+full-pass fallback (本 doc Step 4 §page token 失効時の挙動) に切り替わる
+ので、WARNING log を確認しつつ次の sync を待つだけで OK。
+
+### `429 Too Many Requests` / Quota exceeded
+
+Drive API rate limit (per-user 1000 req/100s、per-project 20000 req/100s 程度、
+Google docs)。connector は exponential backoff (1s/2s/4s, max 3 retries) で
+再試行する。それでも超過したら sync 頻度を下げる (`crontab` を 2 時間 → 4 時間)
+か、quota 増加申請 (Google Cloud Console → APIs & Services → Quotas)。
+
+### content_extraction = true で markitdown エラー
+
+`uv tool install "ozzylabs-opshub[office]"` で `[office]` extras を入れて
+いない可能性。markitdown 経路は extras gated。`opshub connector sync
+google_workspace` 時に `ConfigError: markitdown not installed` の skip_reason
+が出ていたら extras 追加 + 再 sync。
+
+## 関連 docs
+
+- [ADR-0010: Connector Contract](adr/0010-connector-contract.md) (Phase 13 改訂 (e)/(f)/(g)/(h))
+- [ADR-0014: SaaS Token Storage](adr/0014-saas-token-storage.md) (Phase 13 改訂 = rotation pin リスト 3 件目)
+- [ADR-0020: Full Local Content Retention](adr/0020-full-local-content-retention.md)
+- [ADR-0025: Office Document Content Extraction](adr/0025-office-document-content-extraction.md) (Phase 13 改訂 (d') + (j))
+- [Phase 13 Plan](phase-13-plan.md)
+- [SECURITY.md](../SECURITY.md) "Phase 13 — Google Workspace ingest" 節
+- Google Drive API v3: <https://developers.google.com/drive/api/v3>
+- Google Drive API v3 changes.list: <https://developers.google.com/drive/api/v3/manage-changes>
+- Google Drive API v3 files.export: <https://developers.google.com/drive/api/v3/reference/files/export>
+- Google OAuth 2.0 for installed apps: <https://developers.google.com/identity/protocols/oauth2/native-app>

@@ -76,7 +76,7 @@ Phase 12 (2026-05-31) widened the secretary skill repertoire from 5 to **14** (1
 | "What should I do next?" / "今日のまとめ" / "今週どうなってる" | `personal-brief` / `next-actions` | Signals over the requested window (今日 / 今週 / 今月 / 先週 / 先月) + active tasks + untriaged inbox |
 | "Draft a reply to that Slack thread" / "返信案考えて" | `reply-draft` | LLM-generated draft grounded in your past sending style (HITL apply, idempotent — OpsHub never sends) |
 | "Review PR #123" | `pr-review` | Pulls related decisions / tasks / past discussion so the agent can review with context |
-| "Find that Box file about X" / "Word/Excel/PPT 探して" | `find-document` | Full-text + semantic search across Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive (incl. Office body extraction, Phase 11; FTS5 over MCP since Phase 12 H1) |
+| "Find that Box file about X" / "Word/Excel/PPT 探して" / "あの Google Doc" / "Sheets 探して" | `find-document` | Full-text + semantic search across Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive / Google Workspace (incl. Office body extraction, Phase 11; Google Docs / Slides / Sheets via Drive API export, Phase 13; FTS5 over MCP since Phase 12 H1) |
 | "Summarise that Teams thread" / "Teams スレッド要約して" | `personal-brief` / `find-document` | Body-based recall over Teams chat history (Phase 11) |
 | "Prep me for tomorrow's meeting" / "明日の会議準備" | `meeting-prep` (Phase 12) | Purpose + prior discussion + related decisions / sources for the upcoming calendar event |
 | "Research X end-to-end" / "<X> について調べて" | `research` (Phase 12) | Cross-cutting topical research (semantic recall + FTS5 + graph expand + briefing) |
@@ -147,7 +147,7 @@ rationale.
 
 ## What's in OpsHub today
 
-Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23. Phase 10 + Phase 11 + Phase 12 shipped 2026-05-31:
+Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23. Phase 10 + Phase 11 + Phase 12 + Phase 13 shipped 2026-05-31:
 
 | Phase | Layer | Highlights |
 |---|---|---|
@@ -163,8 +163,9 @@ Phases 1–8 shipped (2026-05-17, v0.1.0). Phase 9 shipped 2026-05-23. Phase 10 
 | 10 | Secretary agent platform | Full local body retention (ADR-0020) + encryption at rest (ADR-0021) + MCP server (ADR-0022) + `opshub search` (FTS5) + `opshub mcp serve` + secretary 5 Skills (renamed in Phase 12 H1 to `personal-brief` / `next-actions` / `reply-draft` / `pr-review` / `find-document`) + reply-draft (ADR-0016 §決定 (i)) + ADR-0004 revision (form-A: no agent runtime in core) + ADR-0010 revision (write-back ban) + ADR-0017 revision (reply_draft link types) |
 | 11 | MS Office deep-dive | Office content extraction (ADR-0025, markitdown for `.docx`/`.xlsx`/`.pptx`, 50 MB / 500K chars cap, fail-safe) + ADR-0019 revision (`content_extraction` opt-in exception + `onedrive_drive` pattern generalisation) + ADR-0010 revision (Teams connector + body-extraction contract + delta-link cursor + invalidated-token fallback + Teams User Token principal) + new `teams` connector (Microsoft Graph chat delta + `Chat.Read`) + new `onedrive_drive` connector (FS scan, WSL2 `/mnt/onedrive` / macOS `~/OneDrive`) + `box_drive` Office extraction hook + Outlook body deep retention |
 | 12 | Secretary Skills expansion | Secretary skill repertoire grows from 5 to **14** (10 read / 4 HITL write) — `meeting-prep` / `research` / `inbox-triage` / `external-brief` / `decision-rationale` / `handoff-draft` / `announcement-draft` / `meeting-followup` / `source-extract` are new; `daily-brief` / `file-lookup` renamed to `personal-brief` / `find-document`. 4 new MCP tools (`search` FTS5 + `propose.apply` HITL idempotent + physical-column time filters on `task.list` / `inbox.list` / `decision.list` / `source.list`). The original 5 skills now call MCP directly (CLI fallback dropped). ADR-0004 revision (Skills SSOT moves into opshub `docs/skills/`, distribution deferred to Phase 13+) + ADR-0022 revision (4 new MCP tools contract) + ADR-0016 revision (draft-family unified policy: persist boundary by reply-source presence, `mode` arg scope, triage scope, Candidate union freeze). `docs/secretary-agent.md` becomes the 14-skill catalog SSOT (responsibility map + HITL boundary + MCP tool dependency matrix + pair structure) |
+| 13 | Google Workspace connector | New `google_workspace` connector pulls Google Docs / Slides / Sheets via Drive API v3 (`changes.list` cursor + invalidated-token full-pass fallback) + OAuth Refresh Token (offline access + refresh-token rotation write-back = MS365 / Box pattern, deliberately separate from the Teams verbatim-user-token pattern, ADR-0010 §Phase 13 revision (e)-(h)). Workspace native bodies (`google_doc` / `google_slides` / `google_sheets`) are extracted by exporting through MS Office mediatype (`.docx` / `.pptx` / `.xlsx`) and feeding the bytes into the Phase 11 markitdown path (`core/document_extract.extract_workspace_export(bytes, source_type)`, ADR-0025 §決定 (d') + (j)). 3 ADR revisions (ADR-0010 + ADR-0014 + ADR-0025), zero new ADRs (continuing the Phase 11 → 12 single-revision trajectory: 1 new + 2 revisions → 0 new + 3 revisions → 0 new + 3 revisions). Drive `files.watch` push notification is forbidden — `changes.list` poll-only keeps form-A integrity (no proactive runtime). New extras `connectors-google-workspace` (httpx). New setup doc `docs/google-workspace-setup.md` |
 
-Next: **Phase 13+ candidates** — multi-machine sync, proactive secretary (cron-delegated commands), image OCR (PPT figures / slide images), additional connectors (Google Workspace via markitdown reuse / Notion / Jira), external write-back (Teams reply send with HITL), `ozzy-labs/skills` distribution completion. Longer phase-by-phase narrative lives in
+Next: **Phase 14+ candidates** — multi-machine sync, proactive secretary (cron-delegated commands), image OCR (PPT figures / slide images, carried over from Phase 13), additional connectors (Notion / Jira / Linear / Confluence, carried over from Phase 13), Drive Comments / Suggestions ingest (Phase 13 follow-up), external write-back (Teams / Drive reply send with HITL), `ozzy-labs/skills` distribution completion. Longer phase-by-phase narrative lives in
 [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery).
 
 ## Commands
@@ -203,6 +204,8 @@ opshub connector sync box_drive                       # Phase 9: scan local Box 
 opshub connector sync onedrive_drive                  # Phase 11: scan local OneDrive Desktop mount (see docs/onedrive-drive-setup.md)
 opshub connector auth set connector:teams             # Phase 11: store Microsoft Graph User Token (Chat.Read, see docs/teams-setup.md)
 opshub connector sync teams                           # Phase 11: Graph chat delta + invalidated-token fallback
+opshub connector auth set google_workspace            # Phase 13: Google OAuth paste-code (drive.readonly, refresh token in keyring; see docs/google-workspace-setup.md)
+opshub connector sync google_workspace                # Phase 13: Drive API v3 changes.list cursor + invalidated-token fallback (Workspace export → markitdown when content_extraction = true)
 opshub connector list                                 # show registered connectors
 
 # Workspace + projections
@@ -267,6 +270,7 @@ opshub mcp serve                                       # stdio MCP server — ag
 | `llm-ollama` | Ollama daemon client | Small |
 | `connectors-github` / `connectors-slack` / `connectors-ms365` / `connectors-box` | SaaS connectors | Small |
 | `connectors-teams` | Microsoft Teams connector (Phase 11, msal + httpx) | Small |
+| `connectors-google-workspace` | Google Workspace connector (Phase 13, httpx). Pair with `[office]` extras to enable `content_extraction = true` and Workspace export → markitdown body retention for `google_doc` / `google_slides` / `google_sheets` | Small |
 | `office` | Office document content extraction (Phase 11, ADR-0025). Pulls `markitdown` with the `[docx,xlsx,pptx]` sub-extras (i.e. `mammoth` / `openpyxl` / `python-pptx`) so only the three Office sub-formats opshub supports are installed | Small |
 | `secrets` | OS keyring backend | Small |
 | `encryption` | SQLCipher-backed at-rest encryption (Phase 10, ADR-0021) | Small |
@@ -283,6 +287,7 @@ opshub mcp serve                                       # stdio MCP server — ag
 - [`docs/box-drive-setup.md`](docs/box-drive-setup.md) — Phase 9 `box_drive` connector setup (WSL2 / macOS)
 - [`docs/onedrive-drive-setup.md`](docs/onedrive-drive-setup.md) — Phase 11 `onedrive_drive` connector setup (WSL2 / macOS)
 - [`docs/teams-setup.md`](docs/teams-setup.md) — Phase 11 `teams` connector setup (Azure app registration + User Token)
+- [`docs/google-workspace-setup.md`](docs/google-workspace-setup.md) — Phase 13 `google_workspace` connector setup (GCP project + OAuth consent screen + paste-code Refresh Token)
 - [`docs/upgrading.md`](docs/upgrading.md) — version migration notes (when applicable)
 - [`docs/release-notes-v0.1.0.md`](docs/release-notes-v0.1.0.md) — v0.1.0 narrative release notes
 - [`docs/RELEASE_RUNBOOK.md`](docs/RELEASE_RUNBOOK.md) — how to cut a release (maintainers)

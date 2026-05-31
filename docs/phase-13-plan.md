@@ -1,6 +1,6 @@
 # Phase 13 Implementation Plan
 
-> Status: Draft (in active design). Last reviewed: 2026-05-31. Scope: **Google Workspace コネクタ** = Google Docs / Slides / Sheets を Drive API v3 + OAuth Refresh Token (offline access + 自前 refresh + rotation 書き戻し = MS365 / Box pattern) で取り込み、Workspace export → MS Office mediatype (docx / pptx / xlsx) → markitdown (Phase 11 `core/document_extract.py` 再利用) で本文 + provenance を抽出する。Teams pattern (verbatim user token + アプリ層 refresh なし) とは別系統である旨を ADR-0010 改訂で明文化。形A（runtime なし）・能動性なし (Drive `files.watch` 禁止 + `changes.list` poll のみ)・外部書き戻しなしを Phase 10/11/12 から継承。
+> Status: **Phase 13 complete (2026-05-31). Sub-issue G1-G5 すべて merged** (Phase 11 R2-CROSS-06 / Phase 12 H6 教訓継承)。Scope: **Google Workspace コネクタ** = Google Docs / Slides / Sheets を Drive API v3 + OAuth Refresh Token (offline access + 自前 refresh + rotation 書き戻し = MS365 / Box pattern) で取り込み、Workspace export → MS Office mediatype (docx / pptx / xlsx) → markitdown (Phase 11 `core/document_extract.py` 再利用) で本文 + provenance を抽出する。Teams pattern (verbatim user token + アプリ層 refresh なし) とは別系統である旨を ADR-0010 改訂で明文化。形A（runtime なし）・能動性なし (Drive `files.watch` 禁止 + `changes.list` poll のみ)・外部書き戻しなしを Phase 10/11/12 から継承。
 >
 > Sub-issue は **G1〜G5 の 5 つ**（親 epic #274、子 #275〜#279）。**新規 ADR ゼロ、改訂 3 本**（ADR-0010 + ADR-0014 + ADR-0025）で吸収。Phase 11 流の単一改訂路線を踏襲 (Phase 11 = 1 新規 + 2 改訂、Phase 12 = 0 新規 + 3 改訂、Phase 13 = 0 新規 + 3 改訂、と縮退継続)。本 plan が SSOT であり、各 sub-issue body は要点抜粋。
 >

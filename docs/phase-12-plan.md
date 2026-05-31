@@ -369,7 +369,7 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
 
 ## 9. Phase 13 / 以降 outlook
 
-- **Phase 13 候補（確定）= データ拡張系**: 画像 OCR（PPT 画像 + Office 図表、tesseract）/ Google Workspace コネクタ（Docs / Slides / Sheets、markitdown 経路再利用）/ Notion / Jira / Linear / Confluence。
+- **Phase 13（確定 / 完了 2026-05-31、epic #274）= Google Workspace 単独**: Phase 12 検討時の forecast「データ拡張系一括（画像 OCR / Google Workspace / Notion / Jira / Linear / Confluence）」を **Google Workspace 単独に再評価済み**。理由は (i) コネクタごとに OAuth principal / cursor 戦略 / ADR 増分が異なり一括 Phase は粒度が大きすぎる、(ii) Phase 11「MS Office 深掘り」の単一コネクタ集中パターンに揃える方が CI / 計画 / レビューが回しやすい、(iii) `docs/phase-13-plan.md` で markitdown 経路再利用 + MS365 / Box token pattern が決まったため Google Workspace は ADR-0010 / ADR-0014 / ADR-0025 への加算改訂で吸収可能 (Phase 11 流の単一改訂路線継承)。Phase 14+ への移送分: 画像 OCR (PPT 画像 + Office 図表、tesseract / pytesseract) / Notion / Jira / Linear / Confluence は `docs/phase-13-plan.md` §9 Phase 14+ outlook 参照。
 - **Phase 12 から繰り越し**:
   - **ozzy-labs/skills 配布完成**（OQ5=C で defer、Renovate preset + skills repo CI 整備、handbook ADR-0016 機構の正規利用）
   - **削除候補 skills の需要顕在化時の追加**: agenda-builder / retrospective / weekly-plan / options-compare / risk-assessment（OQ1 で 14 採用 + これら除外を確定、需要が見えたら個別追加）
