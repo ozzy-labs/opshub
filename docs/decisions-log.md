@@ -442,7 +442,7 @@ Phase 14 Sub-issue G1 (2026-05-31) で ADR-0014 (SaaS Token Storage) を改訂�
 - **slot 物理アドレス維持の根拠**: keyring key 文字列 `connector:google_workspace:refresh_token` 自体を変更しないことで、既存 operator の re-consent は scope 拡張の 1 回のみに最小化 (Google OAuth incremental authorization の挙動で、scope 拡張時は既存 refresh token を invalidate するが、scope が前回と一致していれば re-consent 不要)
 - **shared auth foundation 抽出の必然性**: token refresh + rotation 書き戻しを 3 connector に各々実装すると pin test も 3 つ並ぶ、shared 化で 1 本に集約することで「rotation 書き戻し忘れ regression」を構造的に防ぐ。Phase 13 G3 で `src/opshub/connectors/google_workspace/auth.py` に置いた logic を G2 で物理移動、Phase 13 既存 google_workspace connector は新場所から import に re-wire
 - **ADR-0010 §Phase 14 改訂 (m) との対応**: ADR-0010 で「Google OAuth principal は scope 拡張 + 3 connector 共有 + shared auth foundation 抽出」を確定したため、token storage 経路の slot scope 拡大 + 抽出方針も本 ADR で同期する自然な帰結
-- **本 ADR §Decision (薄ラッパー + 規約ベースの key 命名 + env var override + `secrets` extras 隔離) は無変更**: signature 変更ゼロ、Phase 14 改訂は §Phase 7 Validation 節への scope 拡張 + 物理移動方針の追記のみ。keyring slot 数据は 6 件のまま (Phase 7 = 4 + Phase 11 Teams = 5 + Phase 13 google_workspace = 6)、env override 数据も 6 件のまま
+- **本 ADR §Decision (薄ラッパー + 規約ベースの key 命名 + env var override + `secrets` extras 隔離) は無変更**: signature 変更ゼロ、Phase 14 改訂は §Phase 7 Validation 節への scope 拡張 + 物理移動方針の追記のみ。keyring slot 件数は 6 件のまま (Phase 7 = 4 + Phase 11 Teams = 5 + Phase 13 google_workspace = 6)、env override 件数も 6 件のまま
 
 | 却下案 | 採用案 | 理由 |
 |---|---|---|
