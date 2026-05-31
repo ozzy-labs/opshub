@@ -238,7 +238,7 @@ opshub mcp serve                                       # stdio MCP server — ag
 | `llm-ollama` | Ollama daemon client | Small |
 | `connectors-github` / `connectors-slack` / `connectors-ms365` / `connectors-box` | SaaS connectors | Small |
 | `connectors-teams` | Microsoft Teams connector (Phase 11, msal + httpx) | Small |
-| `office` | Office document content extraction (Phase 11, markitdown for `.docx`/`.xlsx`/`.pptx`, ADR-0025) | Small |
+| `office` | Office document content extraction (Phase 11, ADR-0025). Pulls `markitdown` with the `[docx,xlsx,pptx]` sub-extras (i.e. `mammoth` / `openpyxl` / `python-pptx`) so only the three Office sub-formats opshub supports are installed | Small |
 | `secrets` | OS keyring backend | Small |
 | `encryption` | SQLCipher-backed at-rest encryption (Phase 10, ADR-0021) | Small |
 | `mcp` | MCP server SDK for `opshub mcp serve` (Phase 10, ADR-0022) | Small |

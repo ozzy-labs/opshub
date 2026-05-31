@@ -30,6 +30,16 @@ ADR-0020 §(b) calls out (channel / sender / repo / path). A connector
 checks only the dimensions that make sense for it (Slack → channel +
 sender, GitHub → repo + sender, box_drive / OneDrive → path).
 
+The four keys are the **only** recognised top-level keys. Historical
+documentation occasionally showed a nested per-connector shape
+(``slack: {channels: [...]}`` / ``teams: {channels: [...]}`` etc.); the
+parser used to silently drop those because no selector named ``slack`` /
+``teams`` existed, which meant an operator who copied the nested form
+believed they had excluded a sensitive channel while the connector
+went on ingesting it. The loader now rejects unknown top-level keys
+with :class:`ConfigError` so that drift fails loud on the next sync
+rather than degrading to a silent ingest of restricted content.
+
 The ``box_drive`` connector keeps reading its own
 ``[connectors.box_drive] exclude_globs`` *and* honours the shared
 ``paths`` selector: the two are merged at the call site so an operator
@@ -179,6 +189,26 @@ def load_excludes(config_dir: Path | None = None) -> ExcludeRules:
         raise ConfigError(f"excludes.yaml must be a mapping at the top level ({path})")
 
     raw = cast(dict[str, object], loaded)
+
+    # Reject unknown top-level keys to fail-fast on the historical
+    # **nested** shape (``slack: { channels: [...] }`` /
+    # ``teams: { channels: [...] }`` etc.) that earlier docs accidentally
+    # documented. Silently ignoring those nested mappings used to let an
+    # operator believe they had excluded a sensitive channel when in
+    # fact ``slack`` is not a recognised selector at all — the worst
+    # possible outcome for ADR-0020 §(b) ("never ingest"). Raise so the
+    # operator notices on the *next* connector sync and corrects the
+    # file, rather than discovering the silent skip via a data audit.
+    allowed = {"channels", "senders", "repos", "paths"}
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise ConfigError(
+            f"excludes.yaml has unknown top-level key(s) {unknown!r} ({path});"
+            f" allowed top-level keys are {sorted(allowed)!r} (ADR-0020 §(b) flat"
+            " schema — nested per-connector forms like 'slack: {channels: [...]}'"
+            " are not accepted)"
+        )
+
     return ExcludeRules(
         channels=frozenset(_string_list(raw, "channels", path)),
         senders=frozenset(_string_list(raw, "senders", path)),
