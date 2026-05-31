@@ -5,6 +5,28 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6](https://github.com/ozzy-labs/opshub/compare/v0.2.5...v0.2.6) (2026-05-31)
+
+
+### Added
+
+* **connectors/google_calendar:** events api sync token + master event mapper + override + cursor + fallback (Phase 14 G4) ([#301](https://github.com/ozzy-labs/opshub/issues/301)) ([a4cefab](https://github.com/ozzy-labs/opshub/commit/a4cefab227439a4316c07bd6898766980c127835))
+* **connectors/google_mail:** gmail api history + message mapper + cursor + fallback ([#303](https://github.com/ozzy-labs/opshub/issues/303)) ([3c621c1](https://github.com/ozzy-labs/opshub/commit/3c621c1d27827f60162e469d3674cf0b7dd49db7))
+
+
+### Changed
+
+* **connectors/google_auth:** shared OAuth foundation + 3-scope expansion (Phase 14 G2) ([#300](https://github.com/ozzy-labs/opshub/issues/300)) ([bd74191](https://github.com/ozzy-labs/opshub/commit/bd741916ac880fa12b5e2b44828e797b27c0ec58))
+
+
+### Documentation
+
+* **adr,plan:** adr-0010 + 0014 amendments + phase-14-plan (Gmail + Google Calendar) ([#298](https://github.com/ozzy-labs/opshub/issues/298)) ([f5d43c8](https://github.com/ozzy-labs/opshub/commit/f5d43c8e6819e07cfcf951bab735b6b870fe31e1))
+* phase 14 audit cluster B2 (Phase 14+ → 15+ unification + anchor links + outlook + mapper symmetry counts) ([#312](https://github.com/ozzy-labs/opshub/issues/312)) ([02667d7](https://github.com/ozzy-labs/opshub/commit/02667d701c644bc7eda1f324f50081efa85db6d0)), closes [#307](https://github.com/ozzy-labs/opshub/issues/307)
+* phase 14 audit cluster C (operator-facing docs vs code drift) ([#310](https://github.com/ozzy-labs/opshub/issues/310)) ([bfefa82](https://github.com/ozzy-labs/opshub/commit/bfefa82f21964af590852c0fe40b94acd8723d01))
+* phase 14 closeout (docs + e2e + status lines + phase-13 forecast realign) ([#304](https://github.com/ozzy-labs/opshub/issues/304)) ([ab0b792](https://github.com/ozzy-labs/opshub/commit/ab0b79224c849050a26d18cc0e1817de9a970c82))
+* **skills:** phase 14 audit cluster B1 (SKILL.md vocabulary 反映漏れ修正) ([#311](https://github.com/ozzy-labs/opshub/issues/311)) ([16504fc](https://github.com/ozzy-labs/opshub/commit/16504fcc9708b29e9b5465cbb986ec13be540805))
+
 ## [0.2.5](https://github.com/ozzy-labs/opshub/compare/v0.2.4...v0.2.5) (2026-05-31)
 
 
