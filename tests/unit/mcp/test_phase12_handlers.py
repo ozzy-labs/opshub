@@ -213,6 +213,283 @@ async def test_time_filter_accepts_z_suffix(engine: Engine) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 1b. Time-filter boundary regression — M6 audit cluster B
+# ---------------------------------------------------------------------------
+#
+# Phase 12 audit Cluster B (M6) calls out an asymmetric coverage gap in
+# the four list handlers: each tool only had partial after/before
+# coverage (``task.list`` had both, ``inbox.list`` after-only,
+# ``decision.list`` before-only, ``source.list`` after-only) plus
+# limited tz parsing coverage (only ``Z`` suffix). The block below
+# pins the half-open ``>= after`` / ``< before`` semantics symmetrically
+# across all four tools plus the empty-result edge cases (after == before
+# and after > before — neither should raise, both should return empty)
+# and the explicit-offset / naive / malformed tz parsing paths.
+
+# Tool descriptor: (handler builder, seeder, after-arg, before-arg).
+_LIST_TOOL_TIME_FILTERS: tuple[tuple[str, Any, Any, str, str], ...] = (
+    (
+        "task.list",
+        build_task_list_handler,
+        _seed_task_at,
+        "updated_after",
+        "updated_before",
+    ),
+    (
+        "inbox.list",
+        build_inbox_list_handler,
+        _seed_inbox_at,
+        "created_after",
+        "created_before",
+    ),
+    (
+        "decision.list",
+        build_decision_list_handler,
+        _seed_decision_at,
+        "recorded_after",
+        "recorded_before",
+    ),
+    (
+        "source.list",
+        build_source_list_handler,
+        _seed_source_at,
+        "observed_after",
+        "observed_before",
+    ),
+)
+
+
+def _seed_for(
+    tool_name: str, seeder: Any, engine: Engine, *, entity_id: str, when: datetime
+) -> None:
+    """Tool-specific kwarg name shim: each seeder uses a different id kwarg."""
+    kwarg = {
+        "task.list": "task_id",
+        "inbox.list": "item_id",
+        "decision.list": "decision_id",
+        "source.list": "source_id",
+    }[tool_name]
+    seeder(engine, **{kwarg: entity_id}, when=when)
+
+
+def _entity_id_for(tool_name: str, suffix: str) -> str:
+    """Build a deterministic 26-char ULID-shaped id keyed by tool + suffix."""
+    prefix_map = {
+        "task.list": "01HTASKBOUND",
+        "inbox.list": "01HINBOXBOUND",
+        "decision.list": "01HDECBOUND",
+        "source.list": "01HSRCBOUND",
+    }
+    base = prefix_map[tool_name] + suffix
+    return base.ljust(26, "Z")[:26]
+
+
+@pytest.mark.parametrize(
+    "tool_name,build_handler,seeder,after_arg,before_arg",
+    _LIST_TOOL_TIME_FILTERS,
+    ids=[t[0] for t in _LIST_TOOL_TIME_FILTERS],
+)
+async def test_list_after_and_before_window_is_half_open(
+    engine: Engine,
+    tool_name: str,
+    build_handler: Any,
+    seeder: Any,
+    after_arg: str,
+    before_arg: str,
+) -> None:
+    """Half-open window ``[after, before)`` symmetric across all 4 tools.
+
+    M6 audit gap pin (Phase 12 Cluster B): every list handler's
+    physical-column time filter must implement ``>= after`` / ``< before``.
+    A row planted exactly at ``after`` IS included; a row planted
+    exactly at ``before`` is NOT. Rows strictly outside the window
+    drop out on both sides. Pins the inequality direction so a
+    regression that swaps ``<`` for ``<=`` (or vice-versa) is caught
+    for every tool, not just the one with the most coverage.
+    """
+    # Seed four rows: outside-low, exactly-at-after, exactly-at-before, outside-high.
+    boundary_lo = _BASE
+    boundary_hi = _BASE + timedelta(days=2)
+    outside_lo_id = _entity_id_for(tool_name, "OL")
+    at_after_id = _entity_id_for(tool_name, "AA")
+    at_before_id = _entity_id_for(tool_name, "AB")
+    outside_hi_id = _entity_id_for(tool_name, "OH")
+
+    _seed_for(
+        tool_name, seeder, engine, entity_id=outside_lo_id, when=boundary_lo - timedelta(hours=1)
+    )
+    _seed_for(tool_name, seeder, engine, entity_id=at_after_id, when=boundary_lo)
+    _seed_for(tool_name, seeder, engine, entity_id=at_before_id, when=boundary_hi)
+    _seed_for(
+        tool_name, seeder, engine, entity_id=outside_hi_id, when=boundary_hi + timedelta(hours=1)
+    )
+
+    handler = build_handler(engine)
+    args: dict[str, Any] = {
+        after_arg: boundary_lo.isoformat(),
+        before_arg: boundary_hi.isoformat(),
+        "limit": 50,
+    }
+    payload = _parse(await handler(args))
+    ids = {row["id"] for row in cast("list[dict[str, Any]]", payload["items"])}
+
+    assert at_after_id in ids, (
+        f"{tool_name!r}: row at exactly ``after`` boundary must be included"
+        " (half-open lower bound is inclusive: ``>= after``)"
+    )
+    assert at_before_id not in ids, (
+        f"{tool_name!r}: row at exactly ``before`` boundary must be excluded"
+        " (half-open upper bound is exclusive: ``< before``)"
+    )
+    assert outside_lo_id not in ids, (
+        f"{tool_name!r}: row strictly before the window must be excluded"
+    )
+    assert outside_hi_id not in ids, (
+        f"{tool_name!r}: row strictly after the window must be excluded"
+    )
+
+
+@pytest.mark.parametrize(
+    "tool_name,build_handler,seeder,after_arg,before_arg",
+    _LIST_TOOL_TIME_FILTERS,
+    ids=[t[0] for t in _LIST_TOOL_TIME_FILTERS],
+)
+async def test_list_after_equals_before_returns_empty(
+    engine: Engine,
+    tool_name: str,
+    build_handler: Any,
+    seeder: Any,
+    after_arg: str,
+    before_arg: str,
+) -> None:
+    """``after == before`` produces an empty set (degenerate half-open).
+
+    M6 audit pin: the half-open ``[t, t)`` interval is the empty set
+    by definition. The handler must NOT raise on this degenerate
+    boundary — it must return zero rows so a caller passing the same
+    instant for both bounds gets a clean empty list rather than an
+    error.
+    """
+    _seed_for(tool_name, seeder, engine, entity_id=_entity_id_for(tool_name, "EQ"), when=_BASE)
+
+    handler = build_handler(engine)
+    boundary = _BASE.isoformat()
+    args: dict[str, Any] = {
+        after_arg: boundary,
+        before_arg: boundary,
+        "limit": 50,
+    }
+    payload = _parse(await handler(args))
+    items = cast("list[dict[str, Any]]", payload["items"])
+    assert items == [], (
+        f"{tool_name!r}: ``after == before`` is the empty half-open interval"
+        f" — handler must return [] (no error). Got {items!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "tool_name,build_handler,seeder,after_arg,before_arg",
+    _LIST_TOOL_TIME_FILTERS,
+    ids=[t[0] for t in _LIST_TOOL_TIME_FILTERS],
+)
+async def test_list_after_greater_than_before_returns_empty(
+    engine: Engine,
+    tool_name: str,
+    build_handler: Any,
+    seeder: Any,
+    after_arg: str,
+    before_arg: str,
+) -> None:
+    """``after > before`` returns empty without raising (defensive contract).
+
+    M6 audit pin: callers may construct windows from natural-language
+    inputs ("between yesterday and tomorrow") that parse to a
+    backwards range. The handler MUST treat this as an empty result
+    rather than a hard error — agent hosts retry on errors and would
+    burn turns on the malformed range. Empty result + caller-side
+    sanity check is the documented contract.
+    """
+    _seed_for(tool_name, seeder, engine, entity_id=_entity_id_for(tool_name, "GT"), when=_BASE)
+
+    handler = build_handler(engine)
+    args: dict[str, Any] = {
+        after_arg: (_BASE + timedelta(days=2)).isoformat(),
+        before_arg: _BASE.isoformat(),
+        "limit": 50,
+    }
+    payload = _parse(await handler(args))
+    items = cast("list[dict[str, Any]]", payload["items"])
+    assert items == [], (
+        f"{tool_name!r}: ``after > before`` must return [] (not raise). Got {items!r}"
+    )
+
+
+# ----- tz parsing edge cases -----
+
+
+async def test_time_filter_accepts_explicit_offset(engine: Engine) -> None:
+    """Explicit ``+09:00`` (JST) offset parses without raising.
+
+    M6 audit pin: ``_parse_iso`` must accept arbitrary explicit
+    offsets — not just ``Z`` / ``+00:00``. The handler relies on
+    :py:meth:`datetime.datetime.fromisoformat` which honours every
+    ISO 8601 offset since Python 3.13; the pin guards against a
+    future refactor that re-introduces a naive ``Z``-only shortcut
+    that would reject explicit-offset strings outright.
+
+    Comparison semantics across tz offsets vs. SQLite's tz-naive
+    storage are the caller's responsibility (the canonical opshub
+    pattern is to normalise to UTC before serialising). What this
+    pin guards is the **parse path**: the handler must not raise
+    on a well-formed ``+09:00`` cutoff.
+    """
+    _seed_task_at(engine, task_id="01HTASKTZJST0000000000000Z", when=_BASE + timedelta(days=1))
+    handler = build_task_list_handler(engine)
+    # The handler must accept the explicit offset and complete normally
+    # — we assert only on the envelope shape, not on row inclusion,
+    # because SQLite stores DateTime(timezone=True) as a tz-naive
+    # ISO string and the cross-tz comparison is lex-string against the
+    # caller's serialised offset (out of scope for this pin).
+    payload = _parse(await handler({"updated_after": "2026-05-31T00:00:00+09:00", "limit": 50}))
+    assert "items" in payload, payload
+
+
+async def test_time_filter_accepts_naive_string(engine: Engine) -> None:
+    """A tz-naive ISO 8601 string parses (no exception) — caller-side concern.
+
+    M6 audit pin: the handler does not reject tz-naive input
+    (``2026-05-30T12:00:00`` without an offset). SQLite's datetime
+    comparison is string-lexicographic for naive values and the
+    sqlalchemy DateTime(timezone=True) column accepts the comparison
+    — what matters for the boundary contract is that the handler
+    does not raise.
+    """
+    _seed_task_at(engine, task_id="01HTASKNAIVE000000000000Z", when=_BASE + timedelta(days=1))
+    handler = build_task_list_handler(engine)
+    # No assertion on rows — the documented contract is "does not raise".
+    # If a future refactor decides to reject tz-naive input the test
+    # below (malformed) keeps the strict error path covered.
+    payload = _parse(await handler({"updated_after": "2026-05-30T00:00:00", "limit": 50}))
+    assert "items" in payload
+
+
+async def test_time_filter_rejects_malformed_string(engine: Engine) -> None:
+    """Malformed ISO 8601 surfaces as ``ValueError`` (not silent NOOP).
+
+    M6 audit pin: ``_parse_iso`` calls ``datetime.fromisoformat``
+    directly, which raises ``ValueError`` on garbage input. The
+    handler propagates that — the MCP server wrapper renders it as
+    an ``isError`` response. A regression that swallows the parse
+    error and silently drops the filter would expand the result set
+    way past the caller's intent and is exactly what this guard
+    catches.
+    """
+    handler = build_task_list_handler(engine)
+    with pytest.raises(ValueError):
+        await handler({"updated_after": "not-a-valid-iso-8601-string", "limit": 5})
+
+
+# ---------------------------------------------------------------------------
 # 2. propose.apply idempotency normalisation
 # ---------------------------------------------------------------------------
 
@@ -230,11 +507,28 @@ class _StubProposalService:
       ``OpsHubError("candidate 0 already applied")`` matching the
       service's literal wording so the handler's substring match
       triggers normalisation.
+
+    ``applied_entity_type`` / ``applied_entity_id`` are parametrised so
+    the per-kind idempotency lookup (``_lookup_applied_entity`` in
+    ``src/opshub/mcp/_writes.py``) is observably exercised for every
+    Phase 12 H1 candidate kind — ``task`` / ``decision`` / ``reply_draft``
+    each writes a distinct ``applied_entity_type`` payload and the
+    handler MUST recover that string verbatim on the second call.
     """
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        *,
+        applied_entity_type: str = "task",
+        applied_entity_id: str = "01HTASKAPPLIED00000000000",
+        event_id: str = "01HEVTAPPLIED0000000000000",
+    ) -> None:
         self._engine = engine
         self._applied: dict[tuple[str, int], tuple[str, str]] = {}
+        self._applied_entity_type = applied_entity_type
+        self._applied_entity_id = applied_entity_id
+        self._event_id = event_id
 
     def apply(self, proposal_id: str, candidate_index: int) -> tuple[str, str]:
         from opshub.core.errors import OpsHubError
@@ -242,7 +536,7 @@ class _StubProposalService:
         key = (proposal_id, candidate_index)
         if key in self._applied:
             raise OpsHubError(f"candidate {candidate_index} already applied")
-        result = ("task", "01HTASKAPPLIED00000000000")
+        result = (self._applied_entity_type, self._applied_entity_id)
         self._applied[key] = result
         # Mimic SqlAlchemyEventStore.append by inserting a row into
         # ``events_table`` with the same shape ``_lookup_applied_entity``
@@ -255,7 +549,7 @@ class _StubProposalService:
         with self._engine.begin() as conn:
             conn.execute(
                 insert(events_table).values(
-                    id="01HEVTAPPLIED0000000000000",
+                    id=self._event_id,
                     aggregate_id=proposal_id,
                     event_type="proposal.applied",
                     schema_version=1,
@@ -324,6 +618,93 @@ async def test_propose_apply_second_call_normalises_to_already_applied(
     assert payload["already_applied"] is True
     assert payload["applied_entity_type"] == "task"
     assert payload["applied_entity_id"] == "01HTASKAPPLIED00000000000"
+
+
+async def test_propose_apply_second_call_returns_decision_entity(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per-kind idempotency pin — ``decision`` candidate normalisation.
+
+    The H3 contract (Phase 12 audit Cluster B): the handler's
+    ``_lookup_applied_entity`` (`src/opshub/mcp/_writes.py`) walks the
+    event log and reads ``applied_entity_type`` straight out of the
+    ``proposal.applied`` payload. When the first apply created a
+    ``decision`` (not a ``task``), the second call MUST return
+    ``applied_entity_type="decision"`` verbatim — not the literal
+    ``"task"`` default that the original stub hard-coded. A
+    regression that hard-codes ``"task"`` somewhere in the lookup
+    path (e.g. via a default in the SELECT clause) is exactly what
+    this guard catches.
+    """
+    stub = _StubProposalService(
+        engine,
+        applied_entity_type="decision",
+        applied_entity_id="01HDECAPPLIED0000000000000",
+        event_id="01HEVTAPPLIEDDEC000000000",
+    )
+
+    def _factory(actor: str = "cli:propose") -> _StubProposalService:
+        _ = actor
+        return stub
+
+    monkeypatch.setattr("opshub.cli._wiring.build_proposal_service", _factory, raising=True)
+    handler = build_propose_apply_handler(engine)
+
+    args: Mapping[str, Any] = {"proposal_id": "01HPROPDEC1", "candidate_index": 0}
+    first = _parse(await handler(args))
+    assert first["already_applied"] is False
+    assert first["applied_entity_type"] == "decision"
+    assert first["applied_entity_id"] == "01HDECAPPLIED0000000000000"
+
+    second = _parse(await handler(args))
+    assert second["ok"] is True
+    assert second["already_applied"] is True
+    assert second["applied_entity_type"] == "decision", (
+        "second call must recover ``decision`` (not ``task``) from the"
+        " event-log lookup — _lookup_applied_entity must read the"
+        " applied_entity_type field from the persisted payload"
+    )
+    assert second["applied_entity_id"] == "01HDECAPPLIED0000000000000"
+
+
+async def test_propose_apply_second_call_returns_reply_draft_entity(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per-kind idempotency pin — ``reply_draft`` candidate normalisation.
+
+    Phase 10 step E2 added the ``reply_draft`` candidate kind
+    (ADR-0016 §決定 (i)). The H3 contract requires
+    ``_lookup_applied_entity`` to recover ``reply_draft`` for the
+    second call exactly like it does for ``task`` / ``decision`` —
+    no kind-specific carve-out, no string-matching on ``"task"``.
+    """
+    stub = _StubProposalService(
+        engine,
+        applied_entity_type="reply_draft",
+        applied_entity_id="01HREPLYAPPLIED000000000R",
+        event_id="01HEVTAPPLIEDRPL000000000",
+    )
+
+    def _factory(actor: str = "cli:propose") -> _StubProposalService:
+        _ = actor
+        return stub
+
+    monkeypatch.setattr("opshub.cli._wiring.build_proposal_service", _factory, raising=True)
+    handler = build_propose_apply_handler(engine)
+
+    args: Mapping[str, Any] = {"proposal_id": "01HPROPRPL1", "candidate_index": 0}
+    first = _parse(await handler(args))
+    assert first["already_applied"] is False
+    assert first["applied_entity_type"] == "reply_draft"
+
+    second = _parse(await handler(args))
+    assert second["ok"] is True
+    assert second["already_applied"] is True
+    assert second["applied_entity_type"] == "reply_draft", (
+        "second call must recover ``reply_draft`` from the event-log"
+        " lookup; the handler must not assume a single canonical kind"
+    )
+    assert second["applied_entity_id"] == "01HREPLYAPPLIED000000000R"
 
 
 async def test_propose_apply_propagates_already_rejected(
@@ -471,3 +852,251 @@ async def test_propose_apply_propagates_unknown_proposal(
     handler = build_propose_apply_handler(engine)
     with pytest.raises(OpsHubError, match="not found"):
         await handler({"proposal_id": "01HUNKNOWN", "candidate_index": 0})
+
+
+# ---------------------------------------------------------------------------
+# 4. search MCP tool — real FTS5 end-to-end (H4 audit Cluster B)
+# ---------------------------------------------------------------------------
+#
+# The lifecycle integration test (``tests/integration/test_phase12_secretary_lifecycle``)
+# covers ``search`` against a fully-migrated SQLite DB, but the
+# unit-level link from the registry's ``build_search_handler`` factory
+# down to the real :class:`SearchService` was only stubbed (see
+# ``test_search_handler_hard_codes_raw_query_false`` above). H4 audit
+# Cluster B asks for a unit-level pin that exercises the real
+# SearchService against a seeded FTS5 index so a regression that
+# (a) breaks the registry → SearchService wiring, (b) flips phrase
+# quoting off, or (c) drops a row from sources_fts surfaces here.
+
+
+def _bootstrap_fts_index(engine: Engine) -> None:
+    """Create the ``sources_fts`` virtual table + sync triggers.
+
+    Mirrors migration ``0019_create_sources_fts`` (the alembic-only path
+    is too heavy for a unit test that already created the projection
+    tables via Table.create()). We bootstrap just enough for the
+    SearchService MATCH query to land — the virtual table + the AFTER
+    INSERT trigger so seeded rows show up. ``unicode61 remove_diacritics 2``
+    matches the migration tokeniser so query semantics are identical
+    to production.
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS sources_fts USING fts5("
+                "body, content='sources', content_rowid='rowid',"
+                " tokenize='unicode61 remove_diacritics 2'"
+                ")"
+            )
+        )
+        # Sync trigger: every new ``sources`` row lands a matching FTS doc.
+        conn.execute(
+            text(
+                "CREATE TRIGGER IF NOT EXISTS sources_fts_ai AFTER INSERT ON sources BEGIN "
+                "INSERT INTO sources_fts(rowid, body) VALUES (new.rowid, new.body); "
+                "END"
+            )
+        )
+
+
+def _seed_source_with_body(
+    engine: Engine,
+    *,
+    source_id: str,
+    body: str,
+    connector_name: str = "github",
+    title: str = "seeded source",
+) -> None:
+    """Insert one fully-populated ``sources`` row (triggers fill FTS)."""
+    with engine.begin() as conn:
+        conn.execute(
+            insert(sources_table).values(
+                id=source_id,
+                connector_name=connector_name,
+                external_id=source_id,
+                source_type="issue",
+                title=title,
+                url=None,
+                summary=body[:200],
+                body=body,
+                provenance_origin="external",
+                provenance_trust="untrusted",
+                observed_at=_BASE,
+                updated_at=_BASE,
+            )
+        )
+
+
+async def test_search_handler_returns_hits_via_real_searchservice(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: registry → ``build_search_handler`` → real ``SearchService``.
+
+    Phase 12 H4 audit Cluster B (high severity): the unit suite stubs
+    ``SearchService`` everywhere, so a regression that breaks the
+    registry → SearchService wiring (e.g. ``build_search_service``
+    constructed against the wrong engine) would only surface in the
+    lifecycle integration test. This pin runs the real ``SearchService``
+    against a freshly-seeded FTS5 index so the entire vertical slice
+    is covered by a fast unit test.
+
+    The seeded body intentionally contains tokens that look like FTS5
+    syntax glyphs (parentheses); phrase quoting MUST handle them so
+    the call returns a hit instead of raising
+    ``sqlite3.OperationalError: fts5: syntax error``.
+    """
+    _bootstrap_fts_index(engine)
+    _seed_source_with_body(
+        engine,
+        source_id="01HSRCFTSA00000000000000A",
+        body="Phase 12 plan covers find_document() and the FTS5 surface.",
+        title="search-fts-a",
+    )
+    _seed_source_with_body(
+        engine,
+        source_id="01HSRCFTSB00000000000000B",
+        body="Unrelated entry about workflow scheduling.",
+        title="search-fts-b",
+    )
+
+    # Force the registry's lazy ``build_search_service`` import to wire
+    # the real service against the test engine — without the override,
+    # it would resolve a fresh engine from the user's settings.
+    from opshub.services.search_service import SearchService
+
+    def _factory() -> SearchService:
+        return SearchService(engine=engine)
+
+    monkeypatch.setattr("opshub.cli._wiring.build_search_service", _factory, raising=True)
+
+    from opshub.mcp._tools import build_search_handler
+
+    handler = build_search_handler(engine)
+    # Free-form multi-token query — phrase quoting is the default per
+    # ADR-0022 改訂 §決定 (f-1). The MATCH must succeed and return the
+    # row whose body contains the literal phrase.
+    payload = _parse(await handler({"query": "Phase 12 plan", "limit": 5}))
+    items = cast("list[dict[str, Any]]", payload["items"])
+    assert len(items) >= 1, payload
+    ids = {row["entity_id"] for row in items}
+    assert "01HSRCFTSA00000000000000A" in ids
+    # The unrelated row stays out — confirms the MATCH filter is real,
+    # not a fallback that returns every row.
+    assert "01HSRCFTSB00000000000000B" not in ids
+
+
+async def test_search_handler_phrase_quote_protects_fts5_syntax(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phrase quoting handles FTS5 syntax glyphs in the query.
+
+    H4 audit Cluster B pin: an operator-supplied query like
+    ``find_document(arg)`` contains parentheses which FTS5 parses as
+    grouping in raw mode. The MCP boundary MUST phrase-quote the
+    query before handing it to FTS5 so it lands as a literal token
+    stream — no OperationalError, no escalation to FTS5 boolean
+    syntax. A regression that flips ``raw_query=True`` here would
+    raise ``sqlite3.OperationalError``.
+    """
+    _bootstrap_fts_index(engine)
+    _seed_source_with_body(
+        engine,
+        source_id="01HSRCFTSC00000000000000C",
+        body="The function find_document is exported from the public surface.",
+        title="search-fts-c",
+    )
+
+    from opshub.services.search_service import SearchService
+
+    def _factory() -> SearchService:
+        return SearchService(engine=engine)
+
+    monkeypatch.setattr("opshub.cli._wiring.build_search_service", _factory, raising=True)
+
+    from opshub.mcp._tools import build_search_handler
+
+    handler = build_search_handler(engine)
+    payload = _parse(await handler({"query": "find_document is exported", "limit": 5}))
+    items = cast("list[dict[str, Any]]", payload["items"])
+    assert any(row["entity_id"] == "01HSRCFTSC00000000000000C" for row in items), payload
+
+
+# ---------------------------------------------------------------------------
+# 5. propose.generate unknown mode → MCP isError via dispatch_tool_call (M8)
+# ---------------------------------------------------------------------------
+
+
+async def test_dispatch_propose_generate_unknown_mode_surfaces_as_iserror(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unknown ``mode`` reaches ``dispatch_tool_call`` as a redacted ``OpsHubError``.
+
+    M8 audit pin: the handler's defence-in-depth check
+    (``mode_raw not in _PROPOSE_GENERATE_MODES``) raises ``OpsHubError``
+    when an out-of-band caller bypasses schema validation. The
+    dispatch wrapper (``opshub.mcp.server.dispatch_tool_call``) MUST
+    re-raise it as ``OpsHubError`` so the MCP SDK lands the response
+    on the ``isError=true`` branch instead of crashing the server. A
+    regression that swallows the error and returns ``ok:true`` would
+    let an agent host silently route past the dispatch guard.
+
+    Note: this pin bypasses the JSON-schema validation layer (which
+    would catch the value before reaching the handler) — the schema
+    enum is the first line of defence, the handler check is the
+    second, and this test exercises the second so a hypothetical SDK
+    that skipped schema validation still cannot ship a bad mode
+    through.
+    """
+    from opshub.core.errors import OpsHubError
+    from opshub.mcp._registry import ReadCategory, ToolPolicy, ToolSpec
+    from opshub.mcp._writes import build_propose_generate_handler
+    from opshub.mcp.server import dispatch_tool_call
+
+    # No-op ProposalService stub — the handler must raise BEFORE
+    # reaching the service when ``mode`` is unknown, so any service
+    # method called would itself be a regression.
+    class _UnreachableService:
+        def generate(self, *args: Any, **kwargs: Any) -> Any:
+            _ = (args, kwargs)
+            raise AssertionError("service.generate must not be called on unknown mode")
+
+        def generate_reply_draft(self, *args: Any, **kwargs: Any) -> Any:
+            _ = (args, kwargs)
+            raise AssertionError("service.generate_reply_draft must not be called on unknown mode")
+
+    def _factory(actor: str = "cli:propose") -> _UnreachableService:
+        _ = actor
+        return _UnreachableService()
+
+    monkeypatch.setattr("opshub.cli._wiring.build_proposal_service", _factory, raising=True)
+
+    handler = build_propose_generate_handler(engine)
+    # Construct a minimal ToolSpec that wraps the handler so
+    # ``dispatch_tool_call`` exercises the full server wrapper path
+    # (OTel record + secret redaction + exception rewrap).
+    spec = ToolSpec(
+        name="propose.generate",
+        title="propose.generate",
+        description="propose.generate",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        policy=ToolPolicy(read_only=False, destructive=True, idempotent=False, open_world=True),
+        # Category is irrelevant for the dispatch wrapper; ReadCategory.BRIEF
+        # is reused only because the dispatch wrapper does not branch on it.
+        category=ReadCategory.BRIEF,
+        handler=handler,
+    )
+
+    with pytest.raises(OpsHubError) as excinfo:
+        await dispatch_tool_call(
+            {spec.name: spec},
+            spec.name,
+            {"topic": "x", "mode": "invalid"},
+        )
+    message = str(excinfo.value)
+    assert "mode" in message, message
+    # The dispatch wrapper re-wraps as ``OpsHubError`` via ``raise ...
+    # from exc`` — confirm the original error survives in __cause__ so
+    # server-side traceback still has context.
+    assert isinstance(excinfo.value.__cause__, OpsHubError)

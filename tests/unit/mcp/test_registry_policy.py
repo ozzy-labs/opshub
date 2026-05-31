@@ -283,6 +283,43 @@ def test_search_does_not_expose_raw_query(specs: list[Any]) -> None:
     raise AssertionError("search spec missing from registry")
 
 
+def test_search_is_read_only_closed_world(specs: list[Any]) -> None:
+    """``search`` advertises ``read_only=true`` + ``destructive=false`` + ``open_world=false``.
+
+    Phase 12 audit Cluster B L8 pin: the existing read-only /
+    closed-world invariants are checked through aggregate per-category
+    loops (``test_read_tools_advertise_read_only_and_non_destructive``
+    / ``test_local_read_tools_are_closed_world``) but the FTS5
+    ``search`` surface deserves a dedicated symbolic pin so a refactor
+    that drops it from :class:`ReadCategory` (e.g. by renaming the
+    enum member) surfaces here with a clear message instead of as a
+    silently-missing per-tool assertion. The four flags below are the
+    canonical contract from ADR-0022 改訂 §決定 (f-1) — phrase-quoted
+    FTS5 MATCH against local SQLite, no LLM round-trip, no external
+    side effect.
+    """
+    for spec in specs:
+        if spec.name == "search":
+            assert spec.policy.read_only is True, (
+                "search policy must have read_only=true (ADR-0022 §決定 (f-1))"
+            )
+            assert spec.policy.destructive is False, (
+                "search policy must have destructive=false (read-only surface)"
+            )
+            assert spec.policy.open_world is False, (
+                "search policy must have open_world=false — FTS5 MATCH"
+                " hits local SQLite only, no LLM / external round-trip"
+            )
+            # Idempotent because the same query against the same DB
+            # snapshot returns the same hits; pin so a future refactor
+            # that flips the flag is caught.
+            assert spec.policy.idempotent is True, (
+                "search policy must have idempotent=true (read tools are safe to retry)"
+            )
+            return
+    raise AssertionError("search spec missing from registry")
+
+
 def test_list_tools_expose_physical_column_time_filters(specs: list[Any]) -> None:
     """Phase 12 H1 (ADR-0022 改訂): physical-column ``*_after/before`` filters.
 
