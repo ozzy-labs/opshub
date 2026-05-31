@@ -5,6 +5,27 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5](https://github.com/ozzy-labs/opshub/compare/v0.2.4...v0.2.5) (2026-05-31)
+
+
+### Added
+
+* **connectors/google_workspace:** oauth (ms365 pattern) + drive api metadata + rate-limit retry ([#283](https://github.com/ozzy-labs/opshub/issues/283)) ([45d0acf](https://github.com/ozzy-labs/opshub/commit/45d0acfcf33c6cd56adae83415cfabc35be0c084))
+* **connectors/google_workspace:** workspace export body + provenance + content_extraction wiring ([#284](https://github.com/ozzy-labs/opshub/issues/284)) ([ec63da8](https://github.com/ozzy-labs/opshub/commit/ec63da89fe1ee966a950431b55ebaea8284edd09))
+* **core,domain:** workspace export path + google workspace source_type literals ([#282](https://github.com/ozzy-labs/opshub/issues/282)) ([23dce1c](https://github.com/ozzy-labs/opshub/commit/23dce1c9b14e3b2bd62c3661bd47f1bcdbd37a09))
+
+
+### Fixed
+
+* **connectors/google_workspace:** TTL fallback full-pass + WARNING log (ADR-0010 §改訂 (g) 整合) ([#290](https://github.com/ozzy-labs/opshub/issues/290)) ([26b150e](https://github.com/ozzy-labs/opshub/commit/26b150ef317476d225051f8590615611c9752b6c))
+
+
+### Documentation
+
+* **adr,plan:** adr-0010 + 0014 + 0025 revisions + phase-13-plan (Google Workspace) ([#280](https://github.com/ozzy-labs/opshub/issues/280)) ([ea32e5d](https://github.com/ozzy-labs/opshub/commit/ea32e5d5e2354c38a6b86cbeb6716fe161560c6f))
+* phase 13 audit cluster B (docs drift + phase 11 residual + phase 13+ → 14+ unification) ([#291](https://github.com/ozzy-labs/opshub/issues/291)) ([2192829](https://github.com/ozzy-labs/opshub/commit/219282933124e25ca4f016a4ba31aba561f48924))
+* phase 13 closeout (docs + e2e + guard + phase-12 forecast realign) ([#285](https://github.com/ozzy-labs/opshub/issues/285)) ([026f67c](https://github.com/ozzy-labs/opshub/commit/026f67c43dd845726ff20e2782fb5cda325496fa))
+
 ## [0.2.4](https://github.com/ozzy-labs/opshub/compare/v0.2.3...v0.2.4) (2026-05-31)
 
 
