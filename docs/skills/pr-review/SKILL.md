@@ -111,6 +111,9 @@ input:
 ## 参考
 
 - ADR-0004 (Agent Runtime Boundary、形A)
-- ADR-0010 §禁止事項 7 (外部 SaaS 書き戻し禁止)
+- ADR-0010 §禁止事項 7 + §改訂 (外部 SaaS 書き戻し禁止、Phase 11 で Teams 追加)
 - ADR-0012 改訂 (本文 embedding で recall 品質)
+- ADR-0020 §改訂 (Outlook body deep retention、Phase 11)
+- ADR-0025 (Office 文書本文抽出)
+- Phase 11 plan (`docs/phase-11-plan.md`)
 - docs/secretary-agent.md

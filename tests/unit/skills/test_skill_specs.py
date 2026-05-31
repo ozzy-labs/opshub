@@ -174,3 +174,79 @@ def test_skill_passes_security_scan(name: str) -> None:
     assert result.ok, f"{path} failed security scan:\n" + "\n".join(
         f"  {f.category.value} {f.rule_id} L{f.line_number}: {f.snippet}" for f in result.findings
     )
+
+
+# ---------------------------------------------------------------------------
+# 6. Phase 11 semantic pins (follow-up audit Cluster A)
+# ---------------------------------------------------------------------------
+#
+# Phase 11 added Teams + Outlook body deep retention + Office document
+# extraction + the ``onedrive_drive`` local-FS connector. Several skill
+# specs surfaced as drifted in the Phase 11 audit (Cluster A). These
+# semantic pins follow the Phase 10 Round 2 pattern (PR #228) — assert
+# the literal source_type / tool name appears so future Phase additions
+# can't silently re-drift the SKILL.md.
+
+
+# Phase 11 source_type literals that ``file-lookup`` SKILL.md must
+# enumerate so the host can post-filter ``recall.search`` hits by
+# user vocabulary ("Teams で", "Word 文書", etc.). The connector
+# implementations under ``src/opshub/connectors/<name>/mapper.py``
+# are the SSOT for these literals.
+_FILE_LOOKUP_PHASE_11_SOURCE_TYPES: tuple[str, ...] = (
+    "teams_message",
+    "word_document",
+    "excel_spreadsheet",
+    "powerpoint_slide_deck",
+)
+
+
+@pytest.mark.parametrize("source_type", _FILE_LOOKUP_PHASE_11_SOURCE_TYPES)
+def test_file_lookup_lists_phase_11_source_types(source_type: str) -> None:
+    """``file-lookup`` SKILL.md must enumerate Phase 11 source_types.
+
+    Phase 11 (Sub-issue F1-F6) added Teams chat + Office document
+    extraction. file-lookup is the user-facing entry point for
+    "find me that file" — drift here makes the new content
+    effectively invisible to users even though it's indexed.
+    """
+    path = _SKILLS_DIR / "file-lookup" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert source_type in text, (
+        f"{path} must mention Phase 11 source_type {source_type!r} "
+        f"(SSOT: src/opshub/connectors/<name>/mapper.py)"
+    )
+
+
+def test_file_lookup_mentions_onedrive_drive_connector() -> None:
+    """``file-lookup`` SKILL.md must mention the new ``onedrive_drive`` connector.
+
+    Phase 11 F6 (PR #248) added the ``onedrive_drive`` local-FS
+    connector parallel to ``box_drive``. file-lookup needs to
+    advertise it so users know to search the OneDrive Desktop
+    sync root, not just Box Drive.
+    """
+    path = _SKILLS_DIR / "file-lookup" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert "onedrive_drive" in text, (
+        f"{path} must mention the ``onedrive_drive`` connector "
+        f"(Phase 11 Sub-issue F6, src/opshub/connectors/onedrive_drive/)"
+    )
+
+
+def test_reply_draft_uses_mcp_propose_generate_as_primary_path() -> None:
+    """``reply-draft`` SKILL.md must reference the MCP ``propose.generate`` write tool.
+
+    PR #231 implemented the MCP ``propose.generate`` write tool
+    (``WriteCategory.PROPOSE_GENERATE``, ``src/opshub/mcp/_registry.py``).
+    Before PR #231, the SKILL.md described the path as "future MCP" /
+    CLI-only — that wording is now stale and must be replaced with
+    the MCP-first contract. The literal ``propose.generate`` is the
+    canonical tool name and must appear in the body.
+    """
+    path = _SKILLS_DIR / "reply-draft" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert "propose.generate" in text, (
+        f"{path} must reference the MCP ``propose.generate`` write tool "
+        f"(PR #231, src/opshub/mcp/_registry.py WriteCategory.PROPOSE_GENERATE)"
+    )
