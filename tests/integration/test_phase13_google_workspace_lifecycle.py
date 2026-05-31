@@ -664,8 +664,11 @@ def test_phase13_google_workspace_lifecycle(
             "opshub.connectors.google_workspace.client.DriveClient",
             fake_drive_client_class,
         )
+        # Phase 14 G2 (#294): patch the shared google_auth source
+        # binding so the lazy import inside ``GoogleWorkspaceConnector``
+        # resolves to the mock.
         monkeypatch.setattr(
-            "opshub.connectors.google_workspace.auth.GoogleWorkspaceAuth",
+            "opshub.connectors.google_auth.auth.GoogleWorkspaceAuth",
             MagicMock(),
         )
 

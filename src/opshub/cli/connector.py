@@ -655,7 +655,8 @@ def _resolve_auth_test_verifier(
         # AND client_secret (Google's installed-app OAuth wire format
         # demands the secret on every refresh round-trip even though
         # Google documents it as non-secret).
-        from opshub.connectors.google_workspace.auth import GoogleWorkspaceAuth
+        # Phase 14 G2 (#294): shared OAuth helper lives under google_auth.
+        from opshub.connectors.google_auth.auth import GoogleWorkspaceAuth
         from opshub.core.config import OpsHubSettings
 
         settings = OpsHubSettings()

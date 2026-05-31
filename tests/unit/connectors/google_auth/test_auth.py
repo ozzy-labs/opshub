@@ -1,27 +1,38 @@
-"""Tests for ``opshub.connectors.google_workspace.auth`` (Phase 13 G3).
+"""Tests for ``opshub.connectors.google_auth.auth`` (Phase 14 G2 — #294).
 
 :class:`GoogleWorkspaceAuth` drives Google's OAuth 2.0 paste-code flow
-for the Drive API connector. Every test mocks Google's OAuth +
-``about.get`` endpoints via :class:`httpx.MockTransport` so the suite
-never reaches the real Google endpoint (Phase 13 plan §7.5 + Phase 7
-mocking precedent). The ``httpx`` extras
-(``connectors-google-workspace``) may not be installed in every
-environment so the whole file is gated behind
-:func:`pytest.importorskip` — same shape Phase 7 / 11 tests use.
+for **every** Google connector (Drive / Gmail / Calendar — Phase 13
+Drive shipped first, Phase 14 G3 / G4 add Gmail / Calendar). Every
+test mocks Google's OAuth + ``about.get`` endpoints via
+:class:`httpx.MockTransport` so the suite never reaches the real
+Google endpoint (Phase 13 plan §7.5 + Phase 7 mocking precedent). The
+``httpx`` extras (``connectors-google-workspace``) may not be
+installed in every environment so the whole file is gated behind
+:func:`pytest.importorskip` — same shape Phase 7 / 11 / 13 tests use.
+
+Phase 14 G2 (#294) consolidates the rotation pin test on the shared
+module side so the three downstream Google connectors do not have to
+re-duplicate the same coverage. The Phase 13 G3 file
+(``tests/unit/connectors/google_workspace/test_auth.py``) is removed
+in this PR.
 
 Coverage map (mirrors :mod:`tests.unit.connectors.ms365.test_auth`):
 
-* refresh-token secret key constant pin
-* default scope set pin
+* refresh-token secret key constant pin (unchanged slot string —
+  Phase 14 G2 preserves ``connector:google_workspace:refresh_token``
+  verbatim per ADR-0014 §Phase 7 Validation)
+* default scope set pin — **Phase 14 expanded to Drive + Gmail +
+  Calendar** (Phase 14 plan §1 OQ6 + §X.1)
 * ``__init__`` rejects empty client_id / client_secret
-* ``start_auth_flow`` URL shape
+* ``start_auth_flow`` URL shape (now spans all three scopes)
 * ``complete_auth_flow`` persists refresh token + access-token caching
 * ``get_access_token`` cached-hit short-circuit
 * ``get_access_token`` refresh round-trip
 * **``test_get_access_token_persists_rotated_refresh_token``** —
-  Phase 13 plan §G3 DoD pin test (MS365 / Box の rotation 書き戻し
-  forget regression を Google でも防ぐ。ADR-0014 §Phase 7 Validation
-  rotation pin リスト 3 件目)
+  Phase 13 plan §G3 DoD pin test moved here in Phase 14 G2 so the
+  rotation guard sits with the shared module rather than each Google
+  connector carrying a duplicate (ADR-0014 §Phase 7 Validation
+  rotation pin リスト 3 件目 + Phase 14 G2 single-source mandate)
 * ``test_get_access_token_skips_rotation_when_unchanged`` — symmetry
   with MS365 / Box
 * code-only paste vs full redirect URL extraction
@@ -45,7 +56,7 @@ pytest.importorskip(
 # unconditionally after the importorskip check.
 import httpx
 
-from opshub.connectors.google_workspace.auth import (
+from opshub.connectors.google_auth.auth import (
     DEFAULT_SCOPES,
     GOOGLE_WORKSPACE_REFRESH_TOKEN_SECRET_KEY,
     OAUTH_TOKEN_URL,
@@ -112,21 +123,37 @@ def test_refresh_token_secret_key_constant() -> None:
     Changing this string would break already-stored tokens silently —
     the test pins the value to make any future drift a deliberate,
     visible change. Phase 13 plan §1 OQ4 + ADR-0014 §Phase 7
-    Validation rotation pin リスト 3 件目.
+    Validation rotation pin リスト 3 件目. Phase 14 G2 explicitly
+    preserves the slot string (1 Google account = 1 principal, Drive
+    / Gmail / Calendar share the same slot per ADR-0010 §Phase 14
+    改訂 (m)); the **Python module path** moves, the **keyring slot
+    string** stays.
     """
     assert GOOGLE_WORKSPACE_REFRESH_TOKEN_SECRET_KEY == "connector:google_workspace:refresh_token"
     assert GoogleWorkspaceAuth.REFRESH_TOKEN_KEY == GOOGLE_WORKSPACE_REFRESH_TOKEN_SECRET_KEY
 
 
-def test_default_scopes_pin_drive_readonly_alone() -> None:
-    """The default scope set is ``drive.readonly`` alone (OQ6).
+def test_default_scopes_pin_three_read_scopes() -> None:
+    """Default scopes span Drive + Gmail + Calendar (Phase 14 plan §1 OQ6).
 
-    Adding ``drive.metadata.readonly`` would be redundant (it is a
-    strict subset of ``drive.readonly``) and would flag the consent
-    screen as over-scoped. Adding ``drive.activity.readonly`` is also
-    rejected by Phase 13 plan §Alternatives §2.
+    The fixed three-scope list was confirmed in the Phase 14 design
+    session (plan §X.1) as the right balance between operator UX (one
+    re-consent grants every Google connector) and minimum
+    over-scope (all three scopes are read-only). Per-connector subset
+    declarations are deliberately not supported: Phase 14 plan §X.1
+    "却下案 (subset 宣言)" trade-off table flagged the implementation
+    cost (incremental authorization handling + re-consent on every
+    enable / disable) as exceeding the minimal-scope benefit. The
+    order of the scopes is significant: the Drive scope sits first so
+    the existing ``about.get`` test path keeps working (the order also
+    matches the operator-facing "Drive + Gmail + Calendar" copy in
+    ``_google_workspace_oauth.py``).
     """
-    assert DEFAULT_SCOPES == ["https://www.googleapis.com/auth/drive.readonly"]
+    assert DEFAULT_SCOPES == [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/calendar.readonly",
+    ]
 
 
 # ----- construction ------------------------------------------------------
@@ -166,7 +193,9 @@ def test_start_auth_flow_url_shape() -> None:
 
     Without these flags Google would not return a refresh token on
     subsequent re-auth runs, which would silently break
-    :meth:`complete_auth_flow`'s fail-fast check.
+    :meth:`complete_auth_flow`'s fail-fast check. Phase 14 G2 also
+    pins that all three scope strings are URL-encoded into the
+    ``scope`` parameter (space-separated per OAuth 2.0).
     """
     auth = GoogleWorkspaceAuth(
         client_id="my-client-id",
@@ -179,7 +208,11 @@ def test_start_auth_flow_url_shape() -> None:
     assert "redirect_uri=http%3A%2F%2Flocalhost" in url
     assert "access_type=offline" in url
     assert "prompt=consent" in url
+    # Phase 14 G2: all three scopes appear in the URL-encoded
+    # ``scope`` query parameter, joined by ``%20`` (space).
     assert "scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.readonly" in url
+    assert "gmail.readonly" in url
+    assert "calendar.readonly" in url
     assert "response_type=code" in url
 
 
@@ -391,13 +424,17 @@ def test_get_access_token_persists_rotated_refresh_token(
 ) -> None:
     """A rotated refresh token is written back to keyring.
 
-    **Phase 13 plan §G3 DoD pin test** (mirrors the MS365 / Box test
-    of the same name per ADR-0014 §Phase 7 Validation rotation pin
-    リスト 3 件目). Forgetting to persist a rotated refresh token
-    silently brings the next process's first refresh to ``invalid_grant``
-    — the failure mode is invisible until after the operator hits it
-    in production. Pinning this in unit tests is the cheap detection
-    layer.
+    **Phase 13 plan §G3 DoD pin test — Phase 14 G2 host** (mirrors the
+    MS365 / Box test of the same name per ADR-0014 §Phase 7 Validation
+    rotation pin リスト 3 件目). Forgetting to persist a rotated
+    refresh token silently brings the next process's first refresh to
+    ``invalid_grant`` — the failure mode is invisible until after the
+    operator hits it in production. Phase 14 G2 (#294) consolidates
+    this guard on the shared module so the three downstream Google
+    connectors (Drive / Gmail / Calendar) share a single source of
+    truth; Phase 14 plan §G2 DoD point 4 ("rotation 書き戻し pin test
+    が shared 側に 1 本に集約") is what this test moving here
+    discharges.
     """
     _patch_token_endpoint(
         monkeypatch,
@@ -555,7 +592,10 @@ def test_get_secret_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     because that is where the env-override semantics live. Confirming
     the slot mapping here keeps Phase 13 plan §7.1 secrets-precedence
     bullet covered (the env var → keyring slot conversion is
-    `OPSHUB_<UPPER(slot, replace ":" → "_", "-" → "_")>`).
+    ``OPSHUB_<UPPER(slot, replace ":" → "_", "-" → "_")>``). Phase 14
+    G2 preserves both the slot string and the env-override name
+    verbatim — so this pin doubles as a Phase 14 regression guard
+    against accidental rename during the module move.
     """
     monkeypatch.setenv("OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN", "from-env")
     from opshub.core.secrets import get_secret

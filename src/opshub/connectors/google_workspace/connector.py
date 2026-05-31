@@ -170,7 +170,10 @@ class GoogleWorkspaceConnector:
         # ``httpx`` imports on first call, which is acceptable here
         # because :meth:`sync` is only reached from the CLI command
         # callback, never the ``opshub --help`` cold path.
-        from opshub.connectors.google_workspace.auth import GoogleWorkspaceAuth
+        # Phase 14 G2 (#294): the OAuth helper moved from
+        # ``connectors.google_workspace.auth`` to the shared
+        # ``connectors.google_auth.auth`` so Gmail / Calendar can reuse it.
+        from opshub.connectors.google_auth.auth import GoogleWorkspaceAuth
         from opshub.connectors.google_workspace.client import DriveClient
         from opshub.core.config import OpsHubSettings
         from opshub.core.excludes import load_excludes

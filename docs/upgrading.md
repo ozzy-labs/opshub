@@ -371,3 +371,44 @@ The first three discriminators flow through the same `find-document` / `search` 
 - **No CLI breaking changes**. `opshub connector auth set google_workspace` (positional form, not `connector:google_workspace`) and `opshub connector sync google_workspace` are the new sync targets — both are additive.
 - **External write-back is still forbidden** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7). Drive write APIs (`files.update` / `files.create` / `files.copy` / `comments.create` / `permissions.*`) are deliberately not implemented in the connector. Drive push notifications (`files.watch`) are also forbidden — the connector polls via `changes.list` only to preserve form-A (no opshub-internal runtime).
 - Full setup (GCP project, OAuth consent screen, scopes, troubleshooting): [`docs/google-workspace-setup.md`](google-workspace-setup.md).
+
+## Phase 14: Gmail + Google Calendar (G2 — shared Google OAuth foundation, scope expansion)
+
+Phase 14 ([ADR-0010](adr/0010-connector-contract.md) §Phase 14 改訂 (i)-(m) + [ADR-0014](adr/0014-saas-token-storage.md) §Phase 7 Validation slot scope expansion) extends the Phase 13 Google connector to **Gmail + Google Calendar** (delivered across G2 / G3 / G4 / G5). **G2 (this section)** lands the shared OAuth foundation: the OAuth helper previously at `opshub.connectors.google_workspace.auth` moves to `opshub.connectors.google_auth.auth` and the requested OAuth scope widens from `drive.readonly` alone to **`drive.readonly + gmail.readonly + calendar.readonly`** so a single paste-code round grants every Google connector access ([Phase 14 plan §1 OQ6](https://github.com/ozzy-labs/opshub/blob/main/docs/phase-14-plan.md#1-確定済み事項)).
+
+### Re-consent is required after upgrading
+
+Because the requested OAuth scope set grows, Google invalidates the existing refresh token on first refresh after the upgrade (Google's installed-app OAuth flow surfaces this as `invalid_grant` from `oauth2.googleapis.com/token`). Re-run the paste-code flow once to consent to all three scopes in a single round:
+
+```bash
+# 1. Update the GCP OAuth consent screen.
+#    APIs & Services -> OAuth consent screen -> Add or Remove Scopes
+#    add (alongside drive.readonly):
+#      https://www.googleapis.com/auth/gmail.readonly
+#      https://www.googleapis.com/auth/calendar.readonly
+#    (Full walkthrough: docs/google-workspace-setup.md §1 (c)).
+
+# 2. Re-run the paste-code OAuth flow. The CLI now opens a consent URL
+#    that requests all three scopes at once; the operator approves the
+#    new combined consent screen and pastes the redirect URL back.
+opshub connector auth set google_workspace
+
+# 3. Next sync picks up the rotated refresh token automatically.
+opshub connector sync google_workspace
+```
+
+The keyring slot string (`connector:google_workspace:refresh_token`) and the env-var override name (`OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN`) are **unchanged** — Phase 14 G2 only moves the Python module path and widens the scope set. Operators using the env-var override should re-paste their refresh token after re-running the consent flow (the previous token will no longer satisfy `gmail.readonly` / `calendar.readonly` requests once Gmail / Calendar connectors land in G3 / G4).
+
+### What does **not** change in G2
+
+- DB head, schema, migrations: **unchanged**.
+- `[connectors-google-workspace]` extras: **unchanged** (Phase 14 plan §Alternatives §9 — Gmail / Calendar reuse the same extras instead of introducing `[connectors-google-mail]` / `[connectors-google-calendar]`).
+- `opshub connector sync google_workspace` (Drive) keeps working bit-for-bit — the connector now imports its auth helper from the shared module, but the contract (cursor, mapper, settings) is invariant.
+- ADR-0010 §禁止事項 7 (no external write-back): **still in force** for Gmail / Calendar too — G2 only ships read scopes, and Phase 14 G3 / G4 will land Gmail / Calendar read connectors. Gmail send / Calendar write are not part of Phase 14.
+
+### Phase 14 G2 specifics
+
+- New module path: `opshub.connectors.google_auth.auth` (shared by Drive / Gmail / Calendar). The Phase 13 `opshub.connectors.google_workspace.auth` import path is **removed** (opshub is pre-userbase — no compatibility shim).
+- New OAuth scope set: 3 fixed scopes (per Phase 14 plan §X.1 — per-connector subset declarations are not supported; disable connectors via `[connectors.<name>] enabled = false` instead).
+- Re-consent is one-time per operator; once the refresh token reflects the new scope set, every subsequent `sync` resumes automatically.
+- Gmail / Calendar connectors land in **Phase 14 G3 / G4** — G2 alone exposes no new CLI subcommand or `source_type`; the G3 / G4 sections of this document will cover those on merge.

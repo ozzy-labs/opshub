@@ -50,11 +50,21 @@ operator が事前に Google Cloud Console で OAuth client を登録する
    consent を出さなくて済む)。
 3. **App information**: 名前 (例: `OpsHub Google Workspace Connector`) /
    user support email / developer email を入れる。
-4. **Scopes**: **Add or Remove Scopes** で次を追加:
-   - `https://www.googleapis.com/auth/drive.readonly` (必須、Phase 13 plan
-     §1 OQ6 で `drive.readonly` 単独に確定。`drive.metadata.readonly` は
-     `drive.readonly` の subset なので併記しない = consent UX 改善 +
-     過剰 scope フラグ回避)
+4. **Scopes**: **Add or Remove Scopes** で次を追加 (Phase 14 G2 以降は
+   3 つすべて必須。Phase 13 までは `drive.readonly` 単独だったが、
+   Phase 14 plan §1 OQ6 + §X.1 で「1 Google account = 1 principal、
+   Drive / Gmail / Calendar を 1 回の consent で取得」を確定):
+   - `https://www.googleapis.com/auth/drive.readonly` (必須、Drive 取り込み)
+   - `https://www.googleapis.com/auth/gmail.readonly` (必須、Phase 14 G3
+     Gmail 取り込み。Phase 14 G3 マージ前は未使用だが、scope は事前に
+     consent しておく方が `incremental authorization` の re-prompt を避
+     けられる)
+   - `https://www.googleapis.com/auth/calendar.readonly` (必須、Phase 14
+     G4 Google Calendar 取り込み。同上)
+
+   `drive.metadata.readonly` は `drive.readonly` の subset なので併記
+   しない。Gmail / Calendar も `readonly` 系のみで外部書き戻しは行わない
+   (ADR-0010 §禁止事項 7)。
 5. **Test users**: テストモード (Publishing status = Testing) のうちは、
    operator 自身の Google アカウントを **Add Users** で追加する。テスト
    モードは refresh token が 7 日で失効する制限あり (Google docs)。継続
@@ -112,7 +122,8 @@ opshub connector auth set google_workspace
 実行すると次の手順が走る (MS365 / Box の paste-code flow と対称):
 
 1. opshub が auth URL を構築 (`access_type=offline` + `prompt=consent` +
-   `scope=drive.readonly`) し、ターミナルに表示する。
+   `scope=drive.readonly gmail.readonly calendar.readonly` — Phase 14 G2
+   以降は 3 scope 同時要求) し、ターミナルに表示する。
 2. operator がブラウザで URL を開き、Google アカウントにサインインして
    consent。
 3. Google が `http://localhost/?code=...&scope=...` にリダイレクト

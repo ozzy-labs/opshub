@@ -70,19 +70,21 @@ Phase 14 の目的は、opshub の秘書射程を **Google 派 operator (Gmail +
 
 **PR G1** `docs(adr,plan): adr-0010 + 0014 改訂 + phase-14-plan (Gmail + Google Calendar)`
 
-### Sub-issue G2: shared auth foundation (connectors/google_common/auth.py 抽出 + scope 拡張) (#294)
+### Sub-issue G2: shared auth foundation (connectors/google_auth/auth.py 抽出 + scope 拡張) (#294)
+
+> G2 着手時に §X.3 の rename 評価を実施し、`google_common` 仮置きから **`google_auth`** に rename して採用済 (catch-all 化リスク回避、scope を狭く明示)。以下の `google_common` 表記は G1 時点の plan で使われていた仮置き名であり、最終的な実装は `google_auth/` に着地している。
 
 - **依存: G1 のみ**
-- `src/opshub/connectors/google_workspace/auth.py` を `src/opshub/connectors/google_common/auth.py` に **物理移動** (Phase 13 既存実装の logic は無変更で物理場所のみ変更)
+- `src/opshub/connectors/google_workspace/auth.py` を `src/opshub/connectors/google_auth/auth.py` に **物理移動** (Phase 13 既存実装の logic は無変更で物理場所のみ変更、G2 着手時に §X.3 の catch-all 化リスク再評価を行い `google_common` 仮置きから `google_auth` への rename を採用 = scope を狭く明示)
 - scope を `drive.readonly` から `drive.readonly + gmail.readonly + calendar.readonly` に拡張 (`SCOPES` 定数 = 3 scope の固定 list、connector ごとの subset 宣言は不採用)
-- `connectors/google_workspace/` 配下から新場所を import に re-wire (`from opshub.connectors.google_common.auth import ...` 形)
-- token lifecycle pin test (`test_get_access_token_persists_rotated_refresh_token`) を `tests/unit/connectors/google_workspace/` から `tests/unit/connectors/google_common/` に物理移動 + shared 側で 1 本に集約 (3 connector 分の重複防止)
+- `connectors/google_workspace/` 配下から新場所を import に re-wire (`from opshub.connectors.google_auth.auth import ...` 形、G2 採用名)
+- token lifecycle pin test (`test_get_access_token_persists_rotated_refresh_token`) を `tests/unit/connectors/google_workspace/` から `tests/unit/connectors/google_auth/` に物理移動 + shared 側で 1 本に集約 (3 connector 分の重複防止、G2 採用名)
 - CLI `opshub connector auth set google_workspace` の挙動を「全 Google scope (drive + gmail + calendar) を 1 回 paste-code flow で取得」に統一 (re-consent 1 回、operator UX 維持)
 - `[connectors-google-common]` extras 名は **作らず**、既存 `[connectors-google-workspace]` extras を流用 (Phase 14 で extras 追加なし、G3 / G4 でも `[connectors-google-workspace]` 配下に Gmail / Calendar 依存を追加)
 - `google_common` 命名は仮、G2 着手時に `google_auth` / `google_oauth` への rename を **本 PR 内で再評価** (catch-all 化リスク回避、§X §設計選択の trade-off と整合)
 - unit tests (scope 引数化 / scope 拡張時の token 取得 / rotation 書き戻し pin / Phase 13 既存 google_workspace round-trip 維持)
 
-**PR G2** `refactor(connectors/google_common): shared auth foundation 抽出 + scope 拡張`
+**PR G2** `refactor(connectors/google_auth): shared auth foundation 抽出 + scope 拡張` (G2 着手時に §X.3 rename 評価で `google_common` → `google_auth` を採用)
 
 ### Sub-issue G3: Gmail connector (httpx + History API + message mapper) (#295)
 
@@ -156,13 +158,13 @@ drive 例: `/drive --merge #293 -> #294 -> #295,#296 -> #297`（Wave 3 で G3/G4
 
 ### G2 — shared auth foundation
 
-- [ ] `src/opshub/connectors/google_common/auth.py` (or rename 後の `google_auth.py` / `google_oauth.py`) が存在し、Phase 13 既存 `connectors/google_workspace/auth.py` の logic を内包
+- [x] `src/opshub/connectors/google_auth/auth.py` が存在し、Phase 13 既存 `connectors/google_workspace/auth.py` の logic を内包 (G2 着手時の §X.3 再評価で `google_common` 仮置きから `google_auth` に rename を採用、catch-all 化リスク回避)
 - [ ] scope = `drive.readonly + gmail.readonly + calendar.readonly` の 3 scope を固定 list で要求
 - [ ] `connectors/google_workspace/` 配下から新場所を import に re-wire 完了
 - [ ] token lifecycle pin test (`test_get_access_token_persists_rotated_refresh_token`) が shared 側に物理移動 (3 connector 分重複なし)
 - [ ] CLI `opshub connector auth set google_workspace` が全 Google scope を 1 回 paste-code flow で取得 (re-consent 1 回)
 - [ ] Phase 13 既存 google_workspace round-trip が 1 byte たりとも壊れない (既存 unit / integration test 全 pass)
-- [ ] `google_common` 命名の rename 決定が本 PR 内で確定 (rename する場合は本 PR 内で完遂、しない場合は理由を PR 本文に記録)
+- [x] 命名の rename 決定が本 PR 内で確定: **`google_common` (仮置き) → `google_auth` を採用**。Phase 14 範囲では shared 化対象が auth.py のみであることが G2 着手時に再確認できたため、責務を狭く明示する `google_auth` を採用 (catch-all 化リスク回避、§X.3 trade-off 表で「狭い (auth 専用、責務明確)」評価の通り)
 
 ### G3 — Gmail connector
 
@@ -208,9 +210,9 @@ drive 例: `/drive --merge #293 -> #294 -> #295,#296 -> #297`（Wave 3 で G3/G4
   - §6 External Content Retention — Gmail / Calendar 本文も保持対象
   - §9 Phased Delivery — Phase 14 行追加
 - **`docs/architecture.md`**:
-  - §Connector Layer — `google_mail` + `google_calendar` 追加、shared auth foundation `connectors/google_common/` の図示 (Phase 13 google_workspace と 3 connector 共有)
+  - §Connector Layer — `google_mail` + `google_calendar` 追加、shared auth foundation `connectors/google_auth/` の図示 (G2 採用名、Phase 13 google_workspace と 3 connector 共有)
   - §9 Phased Delivery — Phase 14 行追加
-- **`docs/repository-structure.md`**: `src/opshub/connectors/google_common/` + `google_mail/` + `google_calendar/` 追加
+- **`docs/repository-structure.md`**: `src/opshub/connectors/google_auth/` (G2 採用名) + `google_mail/` + `google_calendar/` 追加
 - **`docs/decisions-log.md`**: ADR-0010 改訂 + ADR-0014 改訂 entry (2 件、G1 で追加)
 - **`docs/secretary-agent.md`**: personal-brief / meeting-prep / next-actions / reply-draft 表に Gmail / Google Calendar source_type 追加 + 全 source_type 一覧 update
 
@@ -235,7 +237,7 @@ drive 例: `/drive --merge #293 -> #294 -> #295,#296 -> #297`（Wave 3 で G3/G4
 
 ### 7.1 単体テスト (unit)
 
-- **`connectors/google_common/auth.py`** (shared 側): scope 引数化が google_workspace の既存挙動を壊さない pin / scope 拡張時の token 取得 pin / rotation 書き戻し pin (shared 側で 1 本に集約、Phase 13 配置から物理移動)
+- **`connectors/google_auth/auth.py`** (shared 側、G2 採用名): scope 引数化が google_workspace の既存挙動を壊さない pin / scope 拡張時の token 取得 pin / rotation 書き戻し pin (shared 側で 1 本に集約、Phase 13 配置から物理移動)
 - **`connectors/google_mail`**: cursor (History API 正常 / 7 日 TTL 失効 / full-pass fallback + WARN) / client (rate limit 429 retry / httpx mock) / mapper (text/plain 優先 / text/html fallback / `[Labels: ...]` prepend / body truncation + tag / threadId field 保持)
 - **`connectors/google_calendar`**: cursor (sync token 正常 / 410 GONE 失効 / full-pass + timeMin/timeMax window + WARN) / client (rate limit 429 retry) / mapper (master event / override 別 record / RRULE field / attendee body 埋め込み / summary フォーマット)
 - **`core/secrets` 規約**: `connector:google_workspace:refresh_token` keyring slot (3 connector 共有) + `OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN` env override の優先順位 (env > keyring) を pin (Phase 13 から無変更、3 connector 共有を pin)
@@ -262,7 +264,7 @@ drive 例: `/drive --merge #293 -> #294 -> #295,#296 -> #297`（Wave 3 で G3/G4
 
 ### 7.4 持続検証 / guard
 
-- M6 cold-start guard (`google_mail.*` / `google_calendar.*` / `google_common.*` module-level import が `test_cli_imports.py` whitelist に無いこと、extras 未 install で import 失敗しないこと)
+- M6 cold-start guard (`google_mail.*` / `google_calendar.*` / `google_auth.*` (G2 採用名) module-level import が `test_cli_imports.py` whitelist に無いこと、extras 未 install で import 失敗しないこと)
 - `time opshub --help` ≤ 300ms 維持
 - 暗号化平文リーク検出 CI 常駐継続
 - gitleaks / secret scanner 対策: テストフィクスチャは `tests/_secrets.py` から import (連結ビルド規範を Phase 14 でも継続、Google Refresh Token mock も `_secrets.py` 経路)
@@ -354,7 +356,9 @@ Phase 14 着手時に検討した 3 つの設計選択について、採用案�
 
 **採用根拠**: 「source_type が秘書の自然文 query に直接出やすい location」を優先。operator が「Gmail にあった」「Gmail で来た」と発話するのが自然で、`gmail_` prefix の source_type がその発話を直接受ける。一方 module 命名は repo 内 navigation の頻度が高く、Google prefix 統一による発見性を優先。不揃いの代償 (source_type ↔ module 名が 1 hop ずれる) よりも、両者をそれぞれ最適化したメリットの方が大きい。
 
-### X.3 `google_common` 命名の仮置き
+### X.3 `google_common` 命名の仮置き → G2 で `google_auth` に rename 採用
+
+> **G2 着手時の最終決定 (#294)**: 下記 G1 段階の検討を踏まえ、`google_common` 仮置きから **`google_auth`** に rename して採用。Phase 14 範囲で shared 化対象は auth.py のみであることが G2 着手時に再確認できたため、責務を狭く明示する `google_auth` のメリット (catch-all 化リスク回避) を取った。将来 cursor / mapper の shared 化が必要になった場合は新パッケージ (`connectors/google_<新責務>/`) を別途切る。
 
 **採用案 (本 Phase 14 G1 段階)**: shared auth foundation を `connectors/google_common/auth.py` に置く (`google_common` 命名は仮置き、G2 着手時に rename 候補を再評価)。
 
@@ -429,7 +433,7 @@ Phase 14 着手時に検討した 3 つの設計選択について、採用案�
 - ADR-0021 (Encryption at Rest、Gmail / Calendar 本文も保護対象)
 - ADR-0022 (MCP Server Surface、既存 read tools (`search` / `recall.search` / `find-document`) が Gmail / Calendar source_type を自動的に活用する設計)
 - ADR-0025 (Office Document Content Extraction、本 phase では touch せず = Gmail 添付を retain しないため改訂不要、添付対応は Phase 15+)
-- 参考実装: `src/opshub/connectors/google_workspace/auth.py` (shared 化対象、G2 で `connectors/google_common/auth.py` に物理移動) / `src/opshub/connectors/ms365/mapper.py` (Outlook / Calendar mapper symmetry 参照先) / `src/opshub/connectors/google_workspace/cursor.py` (TTL fallback パターン)
+- 参考実装: `src/opshub/connectors/google_auth/auth.py` (Phase 14 G2 で `google_workspace/auth.py` から物理移動済 = shared auth foundation。G1 時点では `google_common` を仮置き名としていたが、G2 着手時の §X.3 再評価で catch-all 化リスク回避のため `google_auth` を採用) / `src/opshub/connectors/ms365/mapper.py` (Outlook / Calendar mapper symmetry 参照先) / `src/opshub/connectors/google_workspace/cursor.py` (TTL fallback パターン)
 - Phase 11 plan §3 Sub-issue F1 (delta-link cursor TTL fallback 起源)
 - Phase 12 plan §9 outlook (Phase 13 candidate に Google Workspace を含めていた forecast)
 - Phase 13 plan §9 outlook (本 Phase 14 で「Gmail + Google Calendar」に再評価、G5 で書き戻し = R2-CROSS-06 教訓)
