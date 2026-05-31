@@ -189,7 +189,13 @@ def test_start_auth_flow_url_shape() -> None:
 def test_complete_auth_flow_persists_refresh_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Successful exchange stores the refresh token via ``set_secret``."""
+    """Successful exchange stores the refresh token via ``set_secret``.
+
+    The keyring is empty (``get_secret`` returns ``None``) so the
+    skip-write guard inside :meth:`complete_auth_flow` does not fire and
+    the freshly-issued refresh token lands in the secrets store via
+    ``set_secret`` exactly once.
+    """
     _patch_token_endpoint(
         monkeypatch,
         {
@@ -200,9 +206,72 @@ def test_complete_auth_flow_persists_refresh_token(
         },
     )
     auth = GoogleWorkspaceAuth(client_id="cid", client_secret="cs")
-    with patch("opshub.core.secrets.set_secret") as set_secret:
+    with (
+        patch("opshub.core.secrets.get_secret", return_value=None),
+        patch("opshub.core.secrets.set_secret") as set_secret,
+    ):
         auth.complete_auth_flow("the-code")
     set_secret.assert_called_once_with("connector:google_workspace:refresh_token", "RT")
+
+
+def test_complete_auth_flow_skips_write_when_token_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A re-issued refresh token identical to the stored one is a no-op for ``set_secret``.
+
+    Phase 13 audit Cluster C A#6 pin (mirrors the
+    :meth:`get_access_token` rotation skip-write for the
+    paste-code flow). When the operator re-runs ``opshub connector auth
+    set google_workspace`` Google may return the same refresh token they
+    already have stored; persisting it again would be a wasted keyring
+    write that can prompt the OS for permission on some platforms
+    (macOS keychain). Behaviour-preserving — the stored refresh token is
+    identical either way — but skipping the write tightens operator UX.
+    Symmetric with the MS365 / Box equivalents.
+    """
+    _patch_token_endpoint(
+        monkeypatch,
+        {
+            "access_token": "AT",
+            "refresh_token": "RT_same",
+            "expires_in": 3600,
+        },
+    )
+    auth = GoogleWorkspaceAuth(client_id="cid", client_secret="cs")
+    with (
+        patch("opshub.core.secrets.get_secret", return_value="RT_same"),
+        patch("opshub.core.secrets.set_secret") as set_secret,
+    ):
+        auth.complete_auth_flow("the-code")
+    set_secret.assert_not_called()
+
+
+def test_complete_auth_flow_writes_when_token_rotated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A different refresh token from the stored one triggers ``set_secret``.
+
+    Sibling pin to :func:`test_complete_auth_flow_skips_write_when_token_unchanged`
+    — confirms the skip-write guard is keyed on equality, not on the
+    presence of any stored token. A rotated value must still land in
+    the keyring or the next process would silently use the stale
+    pre-rotation token.
+    """
+    _patch_token_endpoint(
+        monkeypatch,
+        {
+            "access_token": "AT",
+            "refresh_token": "RT_new",
+            "expires_in": 3600,
+        },
+    )
+    auth = GoogleWorkspaceAuth(client_id="cid", client_secret="cs")
+    with (
+        patch("opshub.core.secrets.get_secret", return_value="RT_old"),
+        patch("opshub.core.secrets.set_secret") as set_secret,
+    ):
+        auth.complete_auth_flow("the-code")
+    set_secret.assert_called_once_with("connector:google_workspace:refresh_token", "RT_new")
 
 
 def test_complete_auth_flow_extracts_code_from_redirect_url(
@@ -231,7 +300,10 @@ def test_complete_auth_flow_extracts_code_from_redirect_url(
 
     monkeypatch.setattr(httpx, "Client", fake_client)
     auth = GoogleWorkspaceAuth(client_id="cid", client_secret="cs")
-    with patch("opshub.core.secrets.set_secret"):
+    with (
+        patch("opshub.core.secrets.get_secret", return_value=None),
+        patch("opshub.core.secrets.set_secret"),
+    ):
         auth.complete_auth_flow("http://localhost/?code=ABC123&scope=drive.readonly&state=xyz")
     assert "code=ABC123" in captured["body"]
 
@@ -282,7 +354,10 @@ def test_get_access_token_returns_cached_token(
         {"access_token": "AT", "refresh_token": "RT", "expires_in": 3600},
     )
     auth = GoogleWorkspaceAuth(client_id="cid", client_secret="cs")
-    with patch("opshub.core.secrets.set_secret"):
+    with (
+        patch("opshub.core.secrets.get_secret", return_value=None),
+        patch("opshub.core.secrets.set_secret"),
+    ):
         auth.complete_auth_flow("c")
     # The cache should hand back the cached token without re-hitting
     # the token endpoint; if it did, the mock queue (now empty) would
@@ -405,7 +480,10 @@ def test_get_access_token_uses_cache_until_near_expiry(
         {"access_token": "AT", "refresh_token": "RT", "expires_in": 3600},
     )
     auth = GoogleWorkspaceAuth(client_id="cid", client_secret="cs")
-    with patch("opshub.core.secrets.set_secret"):
+    with (
+        patch("opshub.core.secrets.get_secret", return_value=None),
+        patch("opshub.core.secrets.set_secret"),
+    ):
         auth.complete_auth_flow("c")
     # Cache hit should not consult the token endpoint at all (queue
     # empty after complete_auth_flow), confirmed by the lack of an
@@ -492,7 +570,10 @@ def test_expires_in_default_when_missing(monkeypatch: pytest.MonkeyPatch) -> Non
         {"access_token": "AT", "refresh_token": "RT"},
     )
     auth = GoogleWorkspaceAuth(client_id="cid", client_secret="cs")
-    with patch("opshub.core.secrets.set_secret"):
+    with (
+        patch("opshub.core.secrets.get_secret", return_value=None),
+        patch("opshub.core.secrets.set_secret"),
+    ):
         auth.complete_auth_flow("c")
     # Cached expiry should be roughly 3600 - 60 from now; allow 5 s
     # tolerance for slow CI machines.
