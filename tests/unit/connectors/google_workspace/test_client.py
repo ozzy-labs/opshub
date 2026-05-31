@@ -153,6 +153,11 @@ def test_fetch_changes_walks_pages_and_advances_cursor_on_final_page() -> None:
     until the final page, where the freshly-returned token replaces
     it. A mid-iteration crash never advances the cursor past unconsumed
     items.
+
+    The test also pins the per-page param shape: the second page must
+    carry the new ``pageToken`` AND the Shared Drives flags (OQ10) —
+    without this assertion an earlier draft of ``fetch_changes`` silently
+    dropped params on the second page (Drive does not echo them forward).
     """
     pages = iter(
         [
@@ -172,8 +177,10 @@ def test_fetch_changes_walks_pages_and_advances_cursor_on_final_page() -> None:
             ),
         ]
     )
+    page_params: list[dict[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
+        page_params.append(dict(request.url.params))
         return next(pages)
 
     client = _client_with_handler(handler)
@@ -187,6 +194,17 @@ def test_fetch_changes_walks_pages_and_advances_cursor_on_final_page() -> None:
         ("F2", "p1"),
         ("F3", "next-token"),
     ]
+    # Regression guard: every page request must carry the Shared
+    # Drives flags + the correct pageToken (the bug the original draft
+    # had was passing ``params=None`` on the 2nd page, which dropped
+    # both).
+    assert len(page_params) == 2
+    assert page_params[0]["pageToken"] == "p1"
+    assert page_params[0]["supportsAllDrives"] == "true"
+    assert page_params[0]["includeItemsFromAllDrives"] == "true"
+    assert page_params[1]["pageToken"] == "p2"
+    assert page_params[1]["supportsAllDrives"] == "true"
+    assert page_params[1]["includeItemsFromAllDrives"] == "true"
 
 
 def test_fetch_changes_pins_shared_drives_params() -> None:

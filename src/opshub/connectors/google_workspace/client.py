@@ -333,14 +333,19 @@ class DriveClient:
             budget is exhausted. Tokens never appear in the error
             message.
         """
-        url: str | None = f"{DRIVE_API_BASE}/changes"
+        url = f"{DRIVE_API_BASE}/changes"
         params: dict[str, str] = dict(_CHANGES_LIST_PARAMS)
         params["pageToken"] = page_token
         cursor_in_flight = page_token
-        next_link: str | None = None  # carried so we can pass params only on the first call
 
-        while url is not None:
-            body = self._request("GET", url, params=params if next_link is None else None)
+        while True:
+            # Drive does not echo the ``$fields`` / ``supportsAllDrives``
+            # flags forward across pages so we keep ``params`` populated
+            # on every call (only the ``pageToken`` value changes when
+            # advancing to the next page). Skipping the params on
+            # subsequent calls would silently drop the Shared Drives
+            # flags and break OQ10 coverage.
+            body = self._request("GET", url, params=params)
             changes_obj = body.get("changes")
             if not isinstance(changes_obj, list):
                 raise ConnectorFailedError(
@@ -369,18 +374,15 @@ class DriveClient:
                     continue
                 yield item, page_cursor
 
-            # Follow ``nextPageToken`` by re-issuing the same URL but
-            # with the updated ``pageToken`` query parameter. We rebuild
-            # the params dict to keep the field selector + Shared
-            # Drives flags pinned on every page (Drive does not carry
-            # them forward implicitly).
+            # Advance to the next page when Drive supplies one;
+            # otherwise the loop exits and the caller persists
+            # ``new_start_page_token`` (the value we already handed
+            # out on the final yield above).
             if isinstance(next_page_token, str) and next_page_token:
-                params = dict(_CHANGES_LIST_PARAMS)
                 params["pageToken"] = next_page_token
-                next_link = url
                 cursor_in_flight = page_cursor
             else:
-                url = None
+                return
 
     def close(self) -> None:
         """Release the underlying ``httpx.Client`` socket.

@@ -202,18 +202,17 @@ def test_connector_name_pin() -> None:
 def test_import_registers_connector() -> None:
     """Importing the package registers the connector with the registry.
 
-    Other tests in the suite call ``unregister_all`` to keep the
-    registry clean between cases; we re-register here to make the
-    assertion robust against test ordering.
+    Other tests in the suite occasionally call ``unregister_all`` to
+    isolate state; we re-register **only** when the slot is empty so
+    we do not trip the registry's "different instance under existing
+    name" guard (a per-import side-effect already registered the
+    canonical instance, and re-registering a fresh one would raise).
     """
     from opshub.connectors import discover_connectors
     from opshub.connectors._registry import register_connector
 
-    # Idempotent re-register: registering the same instance twice is a
-    # no-op per the registry's documented contract. This makes the
-    # test independent of whichever sibling test last cleared the
-    # registry.
-    register_connector(GoogleWorkspaceConnector())
+    if "google_workspace" not in {c.name for c in discover_connectors()}:
+        register_connector(GoogleWorkspaceConnector())
 
     names = [c.name for c in discover_connectors()]
     assert "google_workspace" in names
