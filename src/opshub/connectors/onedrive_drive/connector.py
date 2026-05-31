@@ -165,6 +165,13 @@ class OneDriveDriveConnector:
             follow_symlinks=cfg.follow_symlinks,
             max_files=cfg.max_files,
             content_extraction=cfg.content_extraction,
+            # Phase 11 audit Cluster B: forward the
+            # ``opshub.toml [office]`` overrides so the extractor's
+            # per-call caps reflect operator-tuned values (matches the
+            # box_drive precedent — the two local-FS connectors share
+            # the OfficeSettings instance because both call sites are
+            # the same extractor).
+            office_settings=settings.office,
         )
 
     @staticmethod

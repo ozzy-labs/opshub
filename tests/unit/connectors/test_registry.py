@@ -108,6 +108,23 @@ def _reseed_in_tree_connectors() -> None:
         "opshub.connectors.box_drive.connector",
         "BoxDriveConnector",
     )
+    # Phase 11 additions: re-seed teams + onedrive_drive so tests that
+    # depend on these (e.g. the MCP connector.sync widening guard in
+    # ``tests/unit/mcp/test_writes.py``) see the same baseline a fresh
+    # process import would surface. Without these, the autouse
+    # ``unregister_all`` would leave the registry missing the Phase 11
+    # connectors and any tests relying on side-effect import would
+    # observe a regressed baseline.
+    _seed_connector(
+        "opshub.connectors.onedrive_drive",
+        "opshub.connectors.onedrive_drive.connector",
+        "OneDriveDriveConnector",
+    )
+    _seed_connector(
+        "opshub.connectors.teams",
+        "opshub.connectors.teams.connector",
+        "TeamsConnector",
+    )
 
 
 def _seed_connector(package: str, module: str, class_name: str) -> None:

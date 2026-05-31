@@ -159,7 +159,22 @@ def build_connector_sync_handler(engine: Engine) -> ToolHandler:
         except ImportError:
             pass
         try:
-            import opshub.connectors.box_drive  # noqa: F401  # pyright: ignore[reportUnusedImport]
+            import opshub.connectors.box_drive  # pyright: ignore[reportUnusedImport]
+        except ImportError:
+            pass
+        try:
+            # Phase 11 audit Cluster B (H4): MCP must register the same
+            # connector set as the CLI — Teams and OneDrive Drive
+            # shipped in Phase 11 but the MCP write handler never
+            # imported them, so ``connector.sync`` from an MCP client
+            # raised "unknown connector" for both names. Side-effect
+            # imports register the connector with the global registry
+            # via :func:`opshub.connectors._registry.register_connector`.
+            import opshub.connectors.teams  # pyright: ignore[reportUnusedImport]
+        except ImportError:
+            pass
+        try:
+            import opshub.connectors.onedrive_drive  # noqa: F401  # pyright: ignore[reportUnusedImport]
         except ImportError:
             pass
 

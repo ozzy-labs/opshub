@@ -65,6 +65,7 @@ from opshub.core.errors import ConfigError
 from opshub.core.logging import get_logger
 
 if TYPE_CHECKING:
+    from opshub.core.config import OfficeSettings
     from opshub.core.document_extract import OfficeSourceType
 
 _log = get_logger(__name__)
@@ -215,6 +216,7 @@ class BoxDriveScanner:
         follow_symlinks: bool = False,
         max_files: int = 100_000,
         content_extraction: bool = False,
+        office_settings: OfficeSettings | None = None,
     ) -> None:
         """Construct a scanner pinned to ``root_path``.
 
@@ -258,6 +260,18 @@ class BoxDriveScanner:
             pathway. The extractor is the **sole** open() entry point
             — magic-byte sniffing / SHA hashing / blanket walk-time
             opens stay forbidden under both opt-in states.
+        office_settings:
+            Phase 11 audit Cluster B: operator-tunable extraction caps
+            from :class:`opshub.core.config.OfficeSettings`. When
+            ``None`` (the default — convenient for unit tests that
+            never opt into extraction), the extractor falls back to
+            its ADR-0025 §決定 (b)/(e) hard-coded defaults (50 MB
+            / 500 000 chars / 10 000 cells per sheet / 50 000 cells
+            per workbook). When supplied, the four fields are passed
+            to :func:`opshub.core.document_extract.extract_document`
+            verbatim so an operator override in ``opshub.toml`` flows
+            through to every per-file extraction call. Only consulted
+            when ``content_extraction=True``.
         """
         if not root_path.exists():
             raise ConfigError(
@@ -273,6 +287,7 @@ class BoxDriveScanner:
         self._follow_symlinks = follow_symlinks
         self._max_files = max_files
         self._content_extraction = content_extraction
+        self._office_settings = office_settings
 
     @property
     def root_path(self) -> Path:
@@ -540,7 +555,24 @@ class BoxDriveScanner:
             # files only.
             return (None, None, False, None)
 
-        result = extract_document(path)
+        # Phase 11 audit Cluster B: thread operator-tunable caps from
+        # :class:`opshub.core.config.OfficeSettings` through to the
+        # extractor. When the connector ran without an explicit
+        # ``office_settings`` (unit tests / pre-Cluster-B call sites),
+        # we keep the ADR-0025 §決定 (b)/(e) hard-coded defaults via
+        # the function's own keyword defaults so behaviour stays
+        # bit-for-bit identical to Phase 11 F4.
+        if self._office_settings is None:
+            result = extract_document(path)
+        else:
+            cfg = self._office_settings
+            result = extract_document(
+                path,
+                max_file_bytes=cfg.max_file_size_mb * 1024 * 1024,
+                max_chars=cfg.max_chars,
+                max_cells_per_sheet=cfg.excel.max_cells_per_sheet,
+                max_cells_per_workbook=cfg.excel.max_cells_per_workbook,
+            )
         return (
             result.body,
             result.source_type,

@@ -660,3 +660,105 @@ def test_scanner_content_extraction_on_opens_only_via_extractor(
     # Non-Office file got no body and no discriminator.
     assert results["plain.txt"].body is None
     assert results["plain.txt"].office_source_type is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 11 audit Cluster B — office_settings wire (ADR-0025 §決定 (b)/(e))
+# ---------------------------------------------------------------------------
+
+
+def test_scanner_forwards_office_settings_to_extract_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``office_settings`` overrides land on ``extract_document`` as kwargs.
+
+    Phase 11 audit Cluster B H3 wires
+    :class:`opshub.core.config.OfficeSettings` through the scanner so
+    ``opshub.toml [office]`` overrides reach the extractor. The test
+    stubs :func:`extract_document` and asserts the four documented
+    fields (``max_file_bytes``, ``max_chars``, ``max_cells_per_sheet``,
+    ``max_cells_per_workbook``) arrive with the operator-tuned values
+    rather than the ADR-0025 defaults.
+
+    The instructions name ``max_file_size_mb = 100`` explicitly so the
+    expected byte count is ``100 * 1024 * 1024`` — the scanner is the
+    layer that multiplies MB → bytes; the extractor sees bytes only.
+    """
+    from opshub.core.config import ExcelOfficeSettings, OfficeSettings
+    from opshub.core.document_extract import ExtractResult
+
+    (tmp_path / "doc.docx").write_text("payload")
+
+    captured: list[dict[str, Any]] = []
+
+    def fake_extract(path: Path, **kwargs: Any) -> ExtractResult:
+        captured.append({"path": path, **kwargs})
+        return ExtractResult(
+            body="stub",
+            truncated=False,
+            skip_reason=None,
+            source_type="word_document",
+        )
+
+    monkeypatch.setattr("opshub.core.document_extract.extract_document", fake_extract)
+
+    settings = OfficeSettings(
+        max_file_size_mb=100,
+        max_chars=1_000_000,
+        excel=ExcelOfficeSettings(
+            max_cells_per_sheet=20_000,
+            max_cells_per_workbook=100_000,
+        ),
+    )
+    scanner = BoxDriveScanner(
+        root_path=tmp_path,
+        content_extraction=True,
+        office_settings=settings,
+    )
+    list(scanner.scan(prior_fingerprints={}))
+
+    assert len(captured) == 1
+    call = captured[0]
+    assert call["max_file_bytes"] == 100 * 1024 * 1024
+    assert call["max_chars"] == 1_000_000
+    assert call["max_cells_per_sheet"] == 20_000
+    assert call["max_cells_per_workbook"] == 100_000
+
+
+def test_scanner_without_office_settings_uses_extract_document_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default ``office_settings=None`` leaves the extractor's defaults intact.
+
+    Backwards compatibility guard: every pre-Cluster-B unit test that
+    constructed :class:`BoxDriveScanner` without ``office_settings``
+    relied on :func:`extract_document` falling back to its own
+    ADR-0025-pinned defaults. The scanner now accepts an override but
+    must still call the extractor argument-less when nothing was
+    provided, so that contract stays valid.
+    """
+    from opshub.core.document_extract import ExtractResult
+
+    (tmp_path / "doc.docx").write_text("payload")
+
+    captured: list[dict[str, Any]] = []
+
+    def fake_extract(path: Path, **kwargs: Any) -> ExtractResult:
+        captured.append({"path": path, **kwargs})
+        return ExtractResult(
+            body="stub",
+            truncated=False,
+            skip_reason=None,
+            source_type="word_document",
+        )
+
+    monkeypatch.setattr("opshub.core.document_extract.extract_document", fake_extract)
+
+    scanner = BoxDriveScanner(root_path=tmp_path, content_extraction=True)
+    list(scanner.scan(prior_fingerprints={}))
+
+    # The scanner called extract_document positional-only with the path —
+    # no keyword overrides leaked through. The extractor's signature
+    # defaults take effect.
+    assert len(captured) == 1
+    assert captured[0] == {"path": tmp_path / "doc.docx"}
