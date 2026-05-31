@@ -1050,7 +1050,7 @@ async def test_dispatch_propose_generate_unknown_mode_surfaces_as_iserror(
     through.
     """
     from opshub.core.errors import OpsHubError
-    from opshub.mcp._registry import ReadCategory, ToolPolicy, ToolSpec
+    from opshub.mcp._registry import ToolPolicy, ToolSpec, WriteCategory
     from opshub.mcp._writes import build_propose_generate_handler
     from opshub.mcp.server import dispatch_tool_call
 
@@ -1082,9 +1082,10 @@ async def test_dispatch_propose_generate_unknown_mode_surfaces_as_iserror(
         description="propose.generate",
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         policy=ToolPolicy(read_only=False, destructive=True, idempotent=False, open_world=True),
-        # Category is irrelevant for the dispatch wrapper; ReadCategory.BRIEF
-        # is reused only because the dispatch wrapper does not branch on it.
-        category=ReadCategory.BRIEF,
+        # Category is informational; the dispatch wrapper does not
+        # branch on it. WriteCategory.PROPOSE_GENERATE matches the
+        # real registry entry so a reader recognises the spec shape.
+        category=WriteCategory.PROPOSE_GENERATE,
         handler=handler,
     )
 
