@@ -1,0 +1,31 @@
+{
+  "id": "msg-multi-003",
+  "threadId": "thread-multi-003",
+  "labelIds": ["INBOX"],
+  "snippet": "multi-part plain body",
+  "historyId": "12347",
+  "internalDate": "1735833600000",
+  "payload": {
+    "mimeType": "multipart/alternative",
+    "headers": [
+      { "name": "From", "value": "Carol <carol@example.com>" },
+      { "name": "Subject", "value": "Multipart message" }
+    ],
+    "parts": [
+      {
+        "mimeType": "text/plain",
+        "body": {
+          "size": 21,
+          "data": "bXVsdGktcGFydCBwbGFpbiBib2R5"
+        }
+      },
+      {
+        "mimeType": "text/html",
+        "body": {
+          "size": 27,
+          "data": "PGRpdj5tdWx0aS1wYXJ0IEhUTUw8L2Rpdj4"
+        }
+      }
+    ]
+  }
+}

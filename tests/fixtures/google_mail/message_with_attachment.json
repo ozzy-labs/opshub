@@ -1,0 +1,32 @@
+{
+  "id": "msg-attach-004",
+  "threadId": "thread-attach-004",
+  "labelIds": ["INBOX", "STARRED"],
+  "snippet": "Plain body with attachment.",
+  "historyId": "12348",
+  "internalDate": "1735920000000",
+  "payload": {
+    "mimeType": "multipart/mixed",
+    "headers": [
+      { "name": "From", "value": "Dave <dave@example.com>" },
+      { "name": "Subject", "value": "Quarterly report" }
+    ],
+    "parts": [
+      {
+        "mimeType": "text/plain",
+        "body": {
+          "size": 47,
+          "data": "UGxhaW4gYm9keSB3aXRoIGF0dGFjaG1lbnQuClNlZSBhdHRhY2hlZCBQREYu"
+        }
+      },
+      {
+        "mimeType": "application/pdf",
+        "filename": "report.pdf",
+        "body": {
+          "size": 102400,
+          "attachmentId": "ATT0001"
+        }
+      }
+    ]
+  }
+}

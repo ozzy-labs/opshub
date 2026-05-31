@@ -1,0 +1,8 @@
+{
+  "messages": [
+    { "id": "msg-plain-001", "threadId": "thread-plain-001" },
+    { "id": "msg-html-002", "threadId": "thread-html-002" },
+    { "id": "msg-multi-003", "threadId": "thread-multi-003" }
+  ],
+  "resultSizeEstimate": 3
+}

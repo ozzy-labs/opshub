@@ -634,6 +634,71 @@ class GoogleCalendarConnectorSettings(BaseModel):
     time_max_days: int = 365
 
 
+class GoogleMailConnectorSettings(BaseModel):
+    """Gmail connector configuration (Phase 14 Sub-issue G3, ADR-0010 §Phase 14 改訂).
+
+    The Gmail connector reads Gmail API v1 ``users.history.list`` with
+    a single ``startHistoryId`` cursor and a TTL expiry fallback
+    (Gmail returns 404 ``historyNotFound`` once a stored history id
+    crosses the documented ~7-day vendor window; the connector runs a
+    ``users.messages.list?q=after:<epoch>`` full-pass over the
+    configured ``fallback_window_days`` and then bootstraps a fresh
+    id via ``users.getProfile``). Phase 14 plan §1 OQ5 + ADR-0010
+    §Phase 14 改訂 (j) pin the contract — the same delta-cursor +
+    TTL-fallback recipe Phase 11 Teams and Phase 13 Google Workspace
+    use.
+
+    ``enabled = False`` is the default per Phase 7 plan §1 #2 — every
+    SaaS connector is opt-in so a fresh ``uv tool install`` never
+    tries to reach an external API. Operators flip the flag and rely
+    on the shared :class:`GoogleWorkspaceConnectorSettings`
+    ``client_id`` / ``client_secret`` (Phase 14 plan §1 OQ6 + §X.1:
+    one Google account = one principal, three connectors share the
+    same OAuth client + refresh token + keyring slot). The Gmail
+    connector deliberately does **not** carry its own ``client_id``
+    / ``client_secret`` — adding them would invite operators to
+    register a second OAuth client and split the principal, which
+    contradicts the shared-foundation design and would break the
+    "one consent grants every Google connector" contract.
+
+    ``initial_window_days`` controls how far back the connector walks
+    on first sync (when the cursor is ``None``). Defaults to ``7`` —
+    long enough that the operator's recent inbox shows up in the
+    secretary's first ``personal-brief`` / ``next-actions`` run but
+    short enough that the first sync does not download years of
+    history (a separate ``opshub source backfill`` workflow lives in
+    Phase 15+ for explicit backfills). A value of ``0`` means "skip
+    the initial backfill entirely" — the connector then only sees
+    messages that arrive after the cursor bootstrap.
+
+    ``fallback_window_days`` controls how far back the connector
+    scans when Gmail rejects the stored ``startHistoryId`` with 404
+    ``historyNotFound`` (ADR-0010 §Phase 14 改訂 (j) TTL fallback).
+    Defaults to ``30`` — long enough to cover a typical vacation /
+    outage window without slurping years of history. Operators with
+    longer outages set this higher (a temporary ``365`` for
+    re-onboarding is the documented pattern). A value of ``0``
+    disables the full-pass scan entirely — the connector then
+    bootstraps a fresh history id without backfilling the TTL gap,
+    meaning any messages that arrived while the id was expired are
+    lost (discouraged but allowed for operators who explicitly opt
+    out of the recovery cost). Mirrors
+    :class:`GoogleWorkspaceConnectorSettings.fallback_window_days`
+    so the three delta-cursor connectors (Drive / Gmail / Calendar)
+    expose one operator-facing knob.
+
+    The Refresh Token lives in the shared OS keyring slot
+    ``connector:google_workspace:refresh_token`` per ADR-0014
+    §Phase 7 Validation + Phase 14 改訂 (m) — the Gmail connector
+    does not own a separate token, it shares the Drive / Calendar
+    principal.
+    """
+
+    enabled: bool = False
+    initial_window_days: int = 7
+    fallback_window_days: int = 30
+
+
 class TeamsConnectorSettings(BaseModel):
     """Microsoft Teams connector configuration (Phase 11 F5).
 
@@ -709,6 +774,10 @@ class ConnectorSettings(BaseModel):
     google_calendar: GoogleCalendarConnectorSettings = Field(
         default_factory=GoogleCalendarConnectorSettings
     )
+    # Phase 14 G3 (#295) — Gmail connector. Shares the OAuth client +
+    # refresh token with ``google_workspace`` (Phase 14 plan §1 OQ6 +
+    # §X.1: one Google account = one principal, three connectors).
+    google_mail: GoogleMailConnectorSettings = Field(default_factory=GoogleMailConnectorSettings)
 
 
 class LLMSettings(BaseModel):
