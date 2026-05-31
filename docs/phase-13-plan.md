@@ -279,7 +279,7 @@ drive 例: `/drive --merge #275 -> #276,#277 -> #278 -> #279`（Wave 2 で G2/G3
 | # | 論点 | 決定時期 |
 |---|---|---|
 | OQ8 | SDK 選定 = `google-api-python-client` (discovery 重い) vs `httpx` + 手書き OAuth (Teams / MS365 方式) | G3 着手時、M6 cold-start guard 維持可能性で評価 |
-| OQ9 | ADR-0025 cap (50MB/500K chars) の Workspace export 適合性 | G2 で代表 Sheets→xlsx sample の export size 分布を実測、必要なら `[office.google_workspace] max_file_size_mb` separate override 導入 |
+| OQ9 | ADR-0025 cap (50MB/500K chars) の Workspace export 適合性 | ✅ closed: G2/G4 実測の結果、共通 cap (50MB / 500K chars) で十分につき `[office.google_workspace] max_file_size_mb` separate override は **未導入**。代表 Sheets→xlsx / Docs→docx / Slides→pptx sample の export size 分布はいずれも共通 cap 内に収まり、`[office]` 単一 knob が Box Drive / OneDrive / Google Workspace の 3 経路を lockstep で governing する Phase 11 audit Cluster B two-key composition (ADR-0025 §決定 (g)) を Workspace export 経路にもそのまま適用 |
 | OQ10 | Shared Drives (Team Drives) を含むか | G3 着手時、含む場合は `supportsAllDrives=true + includeItemsFromAllDrives=true` パラメータ pin |
 | OQ11 | 複数 Google アカウント対応 (multi-principal) | Phase 13 MVP は single-slot に倒す (Phase 11 Teams 同様、operator 1 名前提)、Phase 14+ で multi-account extension |
 

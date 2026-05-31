@@ -267,7 +267,7 @@ Two existing skills were renamed (`daily-brief` → `personal-brief`, `file-look
 
 ### Skill install on the host
 
-The `ozzy-labs/skills` distribution channel ([ADR-0004](adr/0004-agent-runtime-boundary.md) §決定 (c) backout) is deferred to Phase 13+; for Phase 12 the **opshub repo (`docs/skills/<name>/SKILL.md`) is the SSOT** and the host installs them manually:
+The `ozzy-labs/skills` distribution channel ([ADR-0004](adr/0004-agent-runtime-boundary.md) §決定 (c) backout) is deferred to Phase 14+ (Phase 13 shipped Google Workspace, not the skills distribution channel); the **opshub repo (`docs/skills/<name>/SKILL.md`) is the SSOT** and the host installs them manually:
 
 ```bash
 # Claude Code (project-level)

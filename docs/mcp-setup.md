@@ -75,7 +75,7 @@ Phase 12 H1 also unified the original 5 skills (`personal-brief`, `next-actions`
 
 ## 3a. Install the 14 secretary skills on the agent host (Phase 12)
 
-Phase 12 ships **14 secretary skills** as opshub-resident SKILL.md files under `docs/skills/<name>/SKILL.md` (SSOT, ADR-0004 §決定 (c)). The `@ozzylabs/skills` Renovate preset distribution is deferred to Phase 13+; in Phase 12, copy them into each host's skill loader manually:
+Phase 12 ships **14 secretary skills** as opshub-resident SKILL.md files under `docs/skills/<name>/SKILL.md` (SSOT, ADR-0004 §決定 (c)). The `@ozzylabs/skills` Renovate preset distribution is deferred to Phase 14+ (Phase 13 shipped Google Workspace, not the skills distribution channel); copy them into each host's skill loader manually:
 
 ```sh
 # Claude Code (user-level)
