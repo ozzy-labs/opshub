@@ -157,7 +157,7 @@ rename 戦略（audit 2026-05-31 で確定）：
 
 - `docs/skills/inbox-triage/SKILL.md`：inbox.list (state=open) + propose.generate (mode=inbox_triage) + propose.apply (HITL)
 - `docs/skills/source-extract/SKILL.md`：source.get + propose.generate (mode=source_extract) + propose.apply (HITL)
-- `docs/skills/meeting-followup/SKILL.md`：source.list (source_type=calendar_event, observed_before=now, observed_after=last_24h) + source.get + recall.search + propose.generate (mode=meeting_followup) + propose.apply (HITL)
+- `docs/skills/meeting-followup/SKILL.md`：source.list (source_type=ms365_calendar, observed_before=now, observed_after=last_24h) + source.get + recall.search + propose.generate (mode=meeting_followup) + propose.apply (HITL)
 - 3 skill とも HITL boundary 厳守：generate は read 自律 OK、apply は host LLM の user 確認必須
 - skill_scan pass + per-skill MCP dispatch pin tests + HITL boundary test pin
 
@@ -224,7 +224,7 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
 ### H2 — info gathering skills
 
 - [ ] meeting-prep / research の SKILL.md が `docs/skills/` 配下に追加
-- [ ] meeting-prep が source.list (source_type=calendar_event, `observed_after` / `observed_before`) + recall + graph.related を組み立てる
+- [ ] meeting-prep が source.list (source_type=ms365_calendar, `observed_after` / `observed_before`) + recall + graph.related を組み立てる
 - [ ] research が recall + search(FTS5) + graph.related/expand + brief を組み立てる
 - [ ] skill_scan pass + per-skill MCP dispatch pin tests pass
 - [ ] MCP tool 利用が H1 で追加した surface と整合（time filter / search tool 名）
