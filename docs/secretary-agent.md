@@ -32,7 +32,7 @@ opshub 本体が **持たない** もの:
 | 「次に何やる?」「やること教えて」「今週やること」「優先度高いのは?」 | [next-actions](skills/next-actions/SKILL.md) | 優先度順の next-actions リスト。新規 task 追加は人確認付き (`task.create` HITL) |
 | 「これに返信案考えて」「下書き作って」 | [reply-draft](skills/reply-draft/SKILL.md) | 返信下書き候補。送信は行わずユーザーが手で貼り付け (HITL apply、idempotent) |
 | 「PR #N レビューして」「この差分どう?」 | [pr-review](skills/pr-review/SKILL.md) | 関連 decision / task / 過去議論を引いてレビュー観点を提示 |
-| 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」 | [find-document](skills/find-document/SKILL.md) | 本文ベース横断検索で Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Office 文書 (Word / Excel / PowerPoint、Phase 11 ADR-0025) から該当 source を返す (Phase 12 H1 で `search` FTS5 MCP tool を直接呼ぶよう変更) |
+| 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」「あの Google Doc」「Sheets の <X>」「Google Slides で説明したやつ」 | [find-document](skills/find-document/SKILL.md) | 本文ベース横断検索で Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Google Workspace (Docs / Slides / Sheets、Phase 13) / Office 文書 (Word / Excel / PowerPoint、Phase 11 ADR-0025) から該当 source を返す (Phase 12 H1 で `search` FTS5 MCP tool を直接呼ぶよう変更) |
 | 「来週の会議準備」「明日のミーティング前確認」「<会議名> の準備して」「打ち合わせ前に状況教えて」 | [meeting-prep](skills/meeting-prep/SKILL.md) | 対象 calendar event の目的 / 過去関連やりとり / 関連 decisions / 参考 sources を会議前に集約 (Phase 12 H2、read-only、pair = meeting-followup) |
 | 「<X> について調べて」「<Y> の経緯」「<トピック> 網羅的に教えて」 | [research](skills/research/SKILL.md) | トピック横断調査 (semantic recall + FTS5 + graph 拡張 + LLM 統合要約) を実行し、sources 一覧 / 関連 entities / 経緯サマリを返す (Phase 12 H2) |
 | 「上司向け週次報告」「クライアント向け進捗まとめ」「外向きステータス」「マネージャーに送る report」 | [external-brief](skills/external-brief/SKILL.md) | 対象期間の完了 task + 確定 decision を外向き tone で集約 (Phase 12 H3、persist なし、pair = personal-brief) |
@@ -56,7 +56,7 @@ host LLM が auto-approve できる read 系。MCP annotation = `readOnlyHint=tr
 | [personal-brief](skills/personal-brief/SKILL.md) | ↔ external-brief | 「今日 / 今週 / 今月 / 先週 / 先月 のまとめ」「最近どうなってる」「状況教えて」 | `brief` または `recall.search` + `task.list` (`updated_after/before`) + `inbox.list` (`created_after/before`) + `decision.list` (`recorded_after/before`) | 散文サマリ + signals (期間 + 主要動き + active task + 未処理 inbox) |
 | [next-actions](skills/next-actions/SKILL.md) | stand-alone | 「次に何やる?」「やること教えて」「今週やること」「優先度高いのは?」 | `task.list` (`updated_after/before`) + `recall.search` (+ HITL `task.create`) | 優先度順リスト (state + due + 関連 source) |
 | [pr-review](skills/pr-review/SKILL.md) | stand-alone | 「PR #N レビューして」「この差分どう?」 | `recall.search` + `decision.list` (`recorded_after/before`) + `task.list` + `graph.related` / `graph.trace` | レビュー観点リスト (関連 decision + 過去 review + 関連 task) |
-| [find-document](skills/find-document/SKILL.md) | stand-alone | 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」 | `search` (FTS5、Phase 12 H1) + 補助 `recall.search` / `source.list` (`observed_after/before`) / `source.get` | source 一覧 (source_type 別 / 新しい順、snippet 200 字) |
+| [find-document](skills/find-document/SKILL.md) | stand-alone | 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」「あの Google Doc」「Sheets の <X>」「Google Slides で説明したやつ」 | `search` (FTS5、Phase 12 H1) + 補助 `recall.search` / `source.list` (`observed_after/before`) / `source.get` | source 一覧 (source_type 別 / 新しい順、snippet 200 字) |
 | [meeting-prep](skills/meeting-prep/SKILL.md) | ↔ meeting-followup | 「来週の会議準備」「明日のミーティング前確認」「<会議名> の準備して」 | `source.list` (`source_type=ms365_calendar` + `observed_after/before`) + `recall.search` + `graph.related` | 会議ごとに「目的 / 過去関連やりとり / 関連 decisions / 参考 sources」 |
 | [research](skills/research/SKILL.md) | stand-alone | 「<X> について調べて」「<Y> の経緯」「<トピック> 網羅的に教えて」 | `recall.search` (semantic) + `search` (FTS5) + `graph.related` / `graph.expand` + `brief` (+ `graph.trace` / `source.get` 任意) | sources 一覧 + 関連 entities + 経緯サマリ |
 | [external-brief](skills/external-brief/SKILL.md) | ↔ personal-brief | 「上司向け週次報告」「クライアント向け進捗まとめ」「外向きステータス」 | `task.list` (`state=completed` + `updated_after`) + `decision.list` (`recorded_after`) + `brief` (外向き tone) | 外向き report (要点先出し / 進捗 + 確定事項 / 主観抑制) |
@@ -152,9 +152,11 @@ auto-apply 経路は構造的に存在しない (ADR-0016 §決定 (c))。`opshu
 
 `inbox.add` と `connector.sync` は 14 skills のいずれからも primary 経路として呼ばれない (host LLM の自律判断で呼ぶ余地は残す)。`embeddings.find_duplicates` も同様 (現状は CLI / operator が直接叩く用途)。
 
-### 6.3 Phase 11 source_type 列挙
+### 6.3 Phase 11 / Phase 13 source_type 列挙
 
-Phase 11 で追加された source_type (`teams_message` / `ms365_outlook` (body deep retention) / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`) は、14 skills 全てから `recall.search` / `search` / `source.list` / `source.get` 経由で透過的に利用可能。mapper が `sources.body` に persist する限り skill 側に追加の変更は不要 (Phase 11 plan §7.3 step 1)。
+Phase 11 で追加された source_type (`teams_message` / `ms365_outlook` (body deep retention) / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`) と Phase 13 で追加された source_type (`google_doc` / `google_slides` / `google_sheets` / `google_workspace_file` catch-all) は、14 skills 全てから `recall.search` / `search` / `source.list` / `source.get` 経由で透過的に利用可能。mapper が `sources.body` に persist する限り skill 側に追加の変更は不要 (Phase 11 plan §7.3 step 1 / Phase 13 plan §7.3 step 4)。
+
+find-document が利用できる本文系 source_type は計 6 種 (Phase 11 office 3 種 + Phase 13 Google Workspace native 3 種) + その他 metadata + body 各 connector で 1 つ MCP / 1 つ search だけで横断可能。`google_workspace_file` (catch-all、非 native = Drive にアップロードされた PDF / 画像 / フォルダ等) は metadata-only (`body=None`) で persist されるため、find-document の対象になるのは title / URL / observed_at のみ。
 
 ### 6.4 Phase 12 H1 で追加された physical column ベース時間フィルタ
 
@@ -179,6 +181,11 @@ Phase 11 で追加された source_type (`teams_message` / `ms365_outlook` (body
   - **Teams chat 本文** (`teams_message`、Microsoft Graph delta query 経由、[Teams setup](teams-setup.md))
   - **Outlook 本文 deep retention** (Phase 10 で取り込み始めた summary に加え、Phase 11 で本文も `sources.body` に persist)
   - **Office 文書本文** (`.docx`/`.xlsx`/`.pptx`、markitdown 経由、`box_drive` / `onedrive_drive` の `content_extraction = true` opt-in、[ADR-0025](adr/0025-office-document-content-extraction.md))
+- Phase 13 で追加された **Google Workspace 由来の文脈**を秘書の素材として使う (14 skills 全てが `source.body` ベースで透過的に対応):
+  - **Google Docs 本文** (`google_doc`、Drive API `files.export(fileId, mimeType=docx)` → markitdown、`google_workspace` の `content_extraction = true` opt-in、[Google Workspace setup](google-workspace-setup.md))
+  - **Google Slides 本文** (`google_slides`、Drive API export → pptx → markitdown)
+  - **Google Sheets 本文** (`google_sheets`、Drive API export → xlsx → markitdown)
+  - **Google Workspace metadata only** (`google_workspace_file` catch-all = Workspace 非 native ファイル / フォルダ、metadata のみ persist。Phase 13 G3 default 挙動)
 - Phase 12 で追加された **秘書らしいユースケース** に対応 (5 → 14 skills 拡張):
   - 「会議準備 / 会議後フォロー」(`meeting-prep` ↔ `meeting-followup`)
   - 「トピック横断調査」(`research`、recall + FTS5 + graph 拡張 + brief 統合)

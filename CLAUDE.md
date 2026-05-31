@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-共通方針は AGENTS.md を参照（Phase 1-12 完了状態の記載含む）。以下は Claude Code 固有の設定。
+共通方針は AGENTS.md を参照（Phase 1-13 完了状態の記載含む）。以下は Claude Code 固有の設定。
 
 ## 基本ルール
 
@@ -23,7 +23,7 @@
 
 ### 秘書エージェント Skills (Phase 10 で 5 Skill 開始、Phase 12 で 14 Skill 体制に拡張、opshub MCP 経由)
 
-opshub は形A (ADR-0004) に基づき秘書 **14 Skill** を提供する。SKILL.md の SSOT は `docs/skills/<name>/SKILL.md` に置く (Phase 12 H1 で opshub を SSOT に確定、ADR-0004 §決定 (c))。配信機構は Phase 13+ に defer されたため、Phase 12 ではホスト側に手動 install (詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8)。発火条件は自然文 (skill description) で表現されており、自分で叩く必要はない。
+opshub は形A (ADR-0004) に基づき秘書 **14 Skill** を提供する。SKILL.md の SSOT は `docs/skills/<name>/SKILL.md` に置く (Phase 12 H1 で opshub を SSOT に確定、ADR-0004 §決定 (c))。配信機構 (`ozzy-labs/skills` CI + Renovate preset) は引き続き Phase 14+ に defer されているため、Phase 13 までは host 側に手動 install (詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8)。発火条件は自然文 (skill description) で表現されており、自分で叩く必要はない。
 
 **read 自律 OK (10 件)**:
 

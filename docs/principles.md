@@ -12,6 +12,8 @@ Phase 10 で本文をローカル保持する設計 ([ADR-0020](adr/0020-full-lo
 
 Phase 11 では SaaS デスクトップクライアントが OS に同期する **ローカル FS** を一級経路として扱う設計を汎化した ([ADR-0019](adr/0019-local-filesystem-backed-connector.md) §決定 (j))。Box Drive (`/mnt/b` on WSL2 / `~/Box` on macOS) に加え OneDrive Desktop (`/mnt/onedrive` on WSL2 / `~/OneDrive` on macOS) も同じ FS scan パターンで扱える。両者とも Web API egress が IT policy で塞がれている環境でも operational memory に取り込めるため、local-first の不変条件を「SaaS の Web API 経路が無くてもユースケースが成立する」レベルまで持ち上げる。
 
+Phase 13 では Google Workspace を Web API 経路 (Drive API v3 + OAuth Refresh Token) で取り込む経路を追加した ([ADR-0010](adr/0010-connector-contract.md) §Phase 13 改訂 (e)-(h))。Google Drive for desktop の WSL2 mount は不安定なため、ローカル FS 経路ではなく Drive API + Workspace export → MS Office mediatype → markitdown ([ADR-0025](adr/0025-office-document-content-extraction.md) §決定 (j)) で本文を取り込む。形 A・能動性なし・外部書き戻しなしの不変条件 (Drive `files.watch` 禁止 / `changes.list` poll のみ) は維持され、取り込まれた本文は §6 (Full Local Content Retention) の枠内で `sources.body` に persist される — Web API 経由でも「source of truth はローカル」の不変条件は崩れない。
+
 ## 2. Event-Sourced
 
 state の authoritative layer は **append-only domain events**。projection (tables / markdown / vector index) は disposable であり、event 列から rebuildable。「何が起きたか」「なぜ起きたか」「誰が起こしたか」「どう変化したか」を保持する。
@@ -62,6 +64,8 @@ Phase 10 以降は次を保持する:
 - **provenance タグ** (`provenance_origin` ＝ external/internal、`provenance_trust` ＝ trusted/untrusted、[ADR-0020](adr/0020-full-local-content-retention.md) §(e))
 
 Phase 11 では「本文」の対象が Office 文書 (Word/Excel/PowerPoint) 由来のテキスト抽出結果まで広がる ([ADR-0025](adr/0025-office-document-content-extraction.md))。markitdown 経由で `.docx` / `.xlsx` / `.pptx` を markdown 化したテキストを `sources.body` に載せる。本文取り込みは local-FS-backed connector の `content_extraction = true` opt-in 経路でのみ発火し、抽出失敗は warning log + `body=None` の fail-safe で skip (§6 と同じ provenance タグ規律を継承)。
+
+Phase 13 では Google Workspace native 形式 (`google_doc` / `google_slides` / `google_sheets`) も同じ Phase 11 markitdown 経路で `sources.body` に取り込めるようになった ([ADR-0025](adr/0025-office-document-content-extraction.md) §決定 (d') + (j))。Drive API `files.export` で Google native → MS Office mediatype (docx / pptx / xlsx) → markitdown → markdown text と変換することで、Phase 11 で確立した 1 つの抽出経路 (`core/document_extract.py`) を再利用する。Workspace export 経路は `[connectors.google_workspace] content_extraction = true` opt-in でのみ起動し、size cap (50MB) / chars cap (500K) / fail-safe / provenance タグ規律は Phase 11 と同じ。
 
 保持に伴う安全策はセットで組み込む:
 
@@ -119,6 +123,7 @@ CI でこの不変条件を検証する。
 | 10 | Secretary Agent Platform: ADR-0020 (full local content retention、ADR-0005 supersede) + ADR-0021 (encryption at rest、SQLCipher + keyring) + ADR-0022 (MCP server surface、stdio + policy-as-data + redact + OTel naming) + ADR-0004 改訂 (形A: opshub は MCP + Agent Skills のみ提供、runtime なし) + ADR-0016 改訂 (`ReplyDraftCandidatePayload`) + ADR-0017 改訂 (`reply_draft_replies_to` / `referenced_in_reply_draft` link types) + ADR-0010 改訂 (write-back 明示禁止) + 本文ベース embedding + SQLite FTS5 + `opshub search` CLI + `opshub mcp serve` CLI + 秘書 5 Skills (Phase 12 H1 で `personal-brief` / `next-actions` / `reply-draft` / `pr-review` / `find-document` に rename 済) + `tools/skill_scan.py` (epic #203) | ✅ Complete (2026-05-31) |
 | 11 | MS Office 深掘り: ADR-0025 (Office Document Content Extraction、markitdown 経路、50 MB / 500K chars cap、source_type 3 種 `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`、fail-safe) + ADR-0019 改訂 (`content_extraction = true` opt-in 例外節 + onedrive_drive パターン汎化) + ADR-0010 改訂 (Teams connector 追加 + 本文抽出契約 + delta-link cursor + 失効時 full-pass fallback + Teams User Token principal) + `core/document_extract.py` + `connectors/teams/` (Graph delta query、User Token) + `connectors/onedrive_drive/` (FS scan、WSL2 `/mnt/onedrive` / macOS `~/OneDrive` platform default) + `connectors/box_drive` の Office content extraction hook + `connectors/ms365/mapper` の outlook body deep retention (epic #233) | ✅ Complete (2026-05-31) |
 | 12 | Secretary Skills 拡張: 秘書 Skill レパートリーを **5 → 14** に拡張 (新規 9 = meeting-prep / research / inbox-triage / external-brief / decision-rationale / handoff-draft / announcement-draft / meeting-followup / source-extract + 既存 5 のうち rename 2 = daily-brief → personal-brief / file-lookup → find-document) + 4 新 MCP tools 露出 (`search` (FTS5、phrase-quoted default、`raw_query` flag は CLI 専用で MCP schema 除外) + `propose.apply` (HITL、idempotent 正規化、`destructive=false`) + 既存 4 read tools の physical column ベース時間フィルタ = `task.list.updated_after/before` / `inbox.list.created_after/before` / `decision.list.recorded_after/before` / `source.list.observed_after/before`) + 既存 5 SKILL.md を MCP 直接呼びに統一 (CLI fallback 廃止) + ADR 改訂 3本 (ADR-0004 改訂 (Skills SSOT を opshub `docs/skills/` に移管 + Skill catalog SSOT = `docs/secretary-agent.md` 独立条文化) + ADR-0022 改訂 (4 新 MCP tools 契約化) + ADR-0016 改訂 (draft 系統一方針 §決定 (l): persist 境界 = 返信元 source の有無 / `mode` 引数射程 = persist 経路を持つ 4 mode のみ / triage = reply_draft 専用 / Candidate union freeze)) + `docs/secretary-agent.md` を 14 skills 責務マップ SSOT に拡張 (epic #253) | ✅ Complete (2026-05-31) |
+| 13 | Google Workspace コネクタ: ADR-0010 改訂 (§Phase 13 改訂 (e)-(h) = `google_workspace` 新コネクタ + Drive `files.watch` 禁止 + Workspace export 経路の本文抽出契約 + Drive `changes.list` cursor + TTL 失効時 full-pass fallback + Refresh Token principal = MS365 / Box pattern、Teams pattern とは別系統である旨を明文化) + ADR-0014 改訂 (§Phase 7 Validation rotation pin リストに `connector:google_workspace:refresh_token` を 3 件目として追加 + env override `OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN` + Phase 7 keyring keys 一覧に Phase 13 Google Workspace を追記) + ADR-0025 改訂 (§決定 (d') 新 source_type 3 種 `google_doc` / `google_slides` / `google_sheets` + §決定 (j) Workspace export 経路 = Drive API `files.export` → MS Office mediatype (`.docx`/`.pptx`/`.xlsx`) → markitdown 統一、`core/document_extract.extract_workspace_export(bytes, source_type)` で API 表面を拡張) + `connectors/google_workspace/` (5 module 構成 = `auth.py` OAuth paste-code + refresh token rotation 書き戻し / `client.py` Drive API v3 `changes.list` + httpx + rate-limit retry / `cursor.py` page token + TTL fallback / `mapper.py` Google mimeType → source_type 分岐 + provenance / `connector.py` content_extraction opt-in + files.export 経由 markitdown 抽出) + `[connectors-google-workspace]` extras (httpx)、epic #274 | ✅ Complete (2026-05-31) |
 
 各 phase で価値検証してから次へ進む。Phase をスキップしない。
 
@@ -130,7 +135,7 @@ Python 3.13+ / uv / Typer / SQLAlchemy Core / Pydantic v2 を採用。ただし 
 
 ## Open Questions
 
-> Phase 10 完了時点で残る Open Question は §5 (Multi-machine sync) と §能動性 (常駐 / cron) のみ。
+> Phase 10 完了時点で残る Open Question は §5 (Multi-machine sync) と §能動性 (常駐 / cron) のみ。Phase 13 完了時点でも同じ。
 > ADR-0015 §決定 (a) (Local LLM deferred) は Phase 6 A4 (Ollama) で closeout され、ADR-0016 §決定 (h) として記録された。
 
 検討中の項目 (本ドキュメントの今後の更新対象、番号は旧 Open Q list を継承):

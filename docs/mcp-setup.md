@@ -200,7 +200,11 @@ These illustrate the new surface in JSON form. Inputs match `inputSchema`; outpu
 ### `source.list` / `source.get`
 
 ```json
-// source.list
+// source.list — Phase 13 widens the connector_name vocabulary to
+// {github, slack, ms365, box, box_drive, onedrive_drive, teams,
+//  google_workspace} and the source_type vocabulary to include
+// google_doc / google_slides / google_sheets / google_workspace_file
+// alongside the Phase 11 office source_types.
 {"connector_name": "github", "source_type": "pull_request", "limit": 50}
 
 // source.get
@@ -308,6 +312,7 @@ Tool arguments and tool outputs are deliberately **not** logged — they may con
 | `recall.search` fails with a ConfigError                 | No embedder backend configured. See `[embedding]` in `opshub.toml`.       |
 | `connector.sync` fails with `ConnectorSyncFailed`        | Connector credentials missing. Run `opshub connector auth set <name>`.    |
 | `unknown connector` error from `connector.sync`          | Connector extras not installed (`--extra connectors-<name>`).             |
+| `connector.sync google_workspace` fails with `ConfigError: ... client_id`| Google OAuth client not configured. Set `[connectors.google_workspace] client_id` / `client_secret` (see `docs/google-workspace-setup.md`) and re-run `opshub connector auth set google_workspace`. |
 
 ## 9. Related
 
