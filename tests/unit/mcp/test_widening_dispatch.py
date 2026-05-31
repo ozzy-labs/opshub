@@ -203,6 +203,7 @@ class _StubProposalService:
         self,
         topic: str,
         *,
+        scope: str = "all",
         from_briefing_id: str | None = None,
         max_candidates: int = 5,
         max_tokens: int = 2000,
@@ -211,13 +212,14 @@ class _StubProposalService:
         self.generate_calls.append(
             {
                 "topic": topic,
+                "scope": scope,
                 "from_briefing_id": from_briefing_id,
                 "max_candidates": max_candidates,
                 "max_tokens": max_tokens,
                 "expand_graph": expand_graph,
             }
         )
-        return _make_stub_proposal(topic=topic, briefing_id=from_briefing_id)
+        return _make_stub_proposal(topic=topic, scope=scope, briefing_id=from_briefing_id)
 
     def generate_reply_draft(
         self,
@@ -336,6 +338,99 @@ async def test_propose_generate_rejects_empty_call(
     msg = str(excinfo.value)
     assert "topic" in msg
     assert "reply_to_source_id" in msg
+
+
+# --------------------------------- Phase 12 H4 ``mode`` dispatch tests
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["inbox_triage", "source_extract", "meeting_followup"],
+)
+async def test_propose_generate_h4_mode_stamps_scope(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    """Phase 12 H4 (ADR-0016 §決定 (l)(b)): ``mode`` stamps proposal scope.
+
+    Each H4 ``mode`` value must route through ``ProposalService.generate``
+    with ``scope=<mode>`` so the persisted ``proposals.scope`` row
+    records the originating skill. This is the audit / observability
+    contract the ADR pins.
+    """
+    service = _StubProposalService()
+    monkeypatch.setattr(
+        "opshub.cli._wiring.build_proposal_service",
+        _proposal_factory(service),
+    )
+    handler = build_propose_generate_handler(engine=cast("Any", None))
+    payload = json.loads(
+        await handler(
+            {
+                "topic": f"context for {mode}",
+                "mode": mode,
+                "max_candidates": 3,
+            }
+        )
+    )
+    assert payload["ok"] is True
+    assert payload["scope"] == mode, (
+        f"propose.generate must stamp scope={mode!r} (ADR-0016 §決定 (l)(b))"
+    )
+    # Routed to the topic path with the H4 scope label, not reply-draft.
+    assert service.reply_calls == []
+    assert len(service.generate_calls) == 1
+    call = service.generate_calls[0]
+    assert call["topic"] == f"context for {mode}"
+    assert call["scope"] == mode
+
+
+async def test_propose_generate_rejects_mode_with_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``mode`` is mutually exclusive with ``reply_to_source_id``.
+
+    ADR-0016 §決定 (l)(b): the implicit reply-draft mode is signalled
+    by ``reply_to_source_id``, not by ``mode=reply_draft``. Combining
+    the two is a configuration error and must fail loud.
+    """
+    from opshub.core.errors import OpsHubError
+
+    service = _StubProposalService()
+    monkeypatch.setattr(
+        "opshub.cli._wiring.build_proposal_service",
+        _proposal_factory(service),
+    )
+    handler = build_propose_generate_handler(engine=cast("Any", None))
+    with pytest.raises(OpsHubError) as excinfo:
+        await handler(
+            {
+                "reply_to_source_id": "01HSRC00000000000000000R03",
+                "mode": "inbox_triage",
+            }
+        )
+    msg = str(excinfo.value)
+    assert "mode" in msg
+    assert "reply_to_source_id" in msg
+
+
+async def test_propose_generate_default_scope_when_mode_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without ``mode``, ``ProposalService.generate`` keeps ``scope='all'``.
+
+    Backward-compat pin: legacy Phase 6 callers that pass only
+    ``topic`` must continue to land in the historical ``scope='all'``
+    bucket so audit queries against existing proposals stay valid.
+    """
+    service = _StubProposalService()
+    monkeypatch.setattr(
+        "opshub.cli._wiring.build_proposal_service",
+        _proposal_factory(service),
+    )
+    handler = build_propose_generate_handler(engine=cast("Any", None))
+    await handler({"topic": "legacy call", "max_candidates": 1})
+    call = service.generate_calls[0]
+    assert call["scope"] == "all"
 
 
 # --------------------------------------- embeddings.find_duplicates
