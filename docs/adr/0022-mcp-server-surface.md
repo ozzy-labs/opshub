@@ -154,11 +154,11 @@ Phase 12 H1 (`docs/phase-12-plan.md` §3 H1-b) で MCP surface を 7 (Phase 10 C
 - annotation 変化なし — フィルタ拡張は schema 拡張のみで、`readOnlyHint=true` などのポリシーは Phase 10 C2 のまま
 - `decision.list` は ADR-0002 (event-sourced immutability) で immutable のため `recorded_at` のみ。`task.list` の "completed_after" のような business 概念列は projection に存在しないため意図的に非露出 (operator が必要なら `state=completed` + `updated_after` を組み合わせる、`docs/skills/personal-brief/SKILL.md` がその擬似コードを示す)
 
-#### Phase 12 H1 後の surface 一覧 (合計 17 = 13 read + 4 write)
+#### Phase 12 H1 後の surface 一覧 (合計 17 = 12 read + 5 write)
 
-read (13): `recall.search` / `task.list` / `inbox.list` / `decision.list` / `brief` / `graph.related` / `graph.trace` / `graph.expand` / `source.list` / `source.get` / `embeddings.find_duplicates` / **`search`** (Phase 12 H1)
+read (12): `recall.search` / `task.list` / `inbox.list` / `decision.list` / `brief` / `graph.related` / `graph.trace` / `graph.expand` / `source.list` / `source.get` / `embeddings.find_duplicates` / **`search`** (Phase 12 H1)
 
-write (4): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` / **`propose.apply`** (Phase 12 H1) — 計数上 5 だが `propose.generate` と `propose.apply` を 1 pair として読むと 4 write 系列
+write (5): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` / **`propose.apply`** (Phase 12 H1) — `propose.generate` と `propose.apply` を 1 pair として読むと 4 write 系列
 
 #### Phase 12 H1 で導入される invariant
 
