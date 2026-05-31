@@ -1,11 +1,11 @@
 ---
 name: meeting-followup
-description: 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」「昨日の会議どうだった」「打ち合わせのフォロー」と頼まれたら、opshub MCP の source.list (source_type=ms365_calendar) で直近の会議を集め、source.get で議事録 / 関連やりとりを recall.search で引いた上で propose.generate (mode=meeting_followup) で task / decision 候補を生成し、ユーザー確認後に propose.apply で承認分のみ HITL 保存する。auto-apply 経路は存在しない (ADR-0016 §決定 (c))。
+description: 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」「昨日の会議どうだった」「打ち合わせのフォロー」「Google Calendar の会議後 action」と頼まれたら、opshub MCP の source.list (source_type は ms365_calendar または google_calendar) で直近の会議を集め、source.get で議事録 / 関連やりとりを recall.search で引いた上で propose.generate (mode=meeting_followup) で task / decision 候補を生成し、ユーザー確認後に propose.apply で承認分のみ HITL 保存する。Phase 14 で Google Calendar (`google_calendar`、`google_calendar` connector) も対象に追加。auto-apply 経路は存在しない (ADR-0016 §決定 (c))。
 ---
 
 # meeting-followup — 直近の会議から action items を抽出する (HITL)
 
-opshub MCP の `source.list`（read tool、`source_type=ms365_calendar` + `observed_after` / `observed_before` の時間フィルタは Phase 12 H1 で追加）で直近の会議を集め、`source.get` + `recall.search` で議事録や関連やりとりを context として引き、`propose.generate`（`mode=meeting_followup`、Phase 12 H4 で追加された dispatch key、ADR-0016 改訂 §決定 (l)(b)）で task / decision 候補を生成し、ユーザーが個別承認した候補のみ `propose.apply`（Phase 12 H1 で MCP に露出、`WriteCategory.PROPOSE_APPLY`、`read_only=false` + `idempotent=true`）で durable state に書き戻す。
+opshub MCP の `source.list`（read tool、`source_type=ms365_calendar` または `source_type=google_calendar` + `observed_after` / `observed_before` の時間フィルタは Phase 12 H1 で追加、`google_calendar` は Phase 14 で追加された Google Calendar connector 由来）で直近の会議を集め、`source.get` + `recall.search` で議事録や関連やりとりを context として引き、`propose.generate`（`mode=meeting_followup`、Phase 12 H4 で追加された dispatch key、ADR-0016 改訂 §決定 (l)(b)）で task / decision 候補を生成し、ユーザーが個別承認した候補のみ `propose.apply`（Phase 12 H1 で MCP に露出、`WriteCategory.PROPOSE_APPLY`、`read_only=false` + `idempotent=true`）で durable state に書き戻す。
 
 `meeting-prep`（会議前）と pair をなす HITL write skill。
 
@@ -13,7 +13,7 @@ opshub MCP の `source.list`（read tool、`source_type=ms365_calendar` + `obser
 
 1. ユーザーが「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」と頼む
 2. ホストが本 skill を発火
-3. ホストが `source.list` で直近 24h (or 指定 window) の `ms365_calendar` を集める
+3. ホストが `source.list` で直近 24h (or 指定 window) の `ms365_calendar` / `google_calendar` を集める (Phase 14 で google_calendar 追加)
 4. ホストが対象会議の `source.get` + `recall.search` で議事録 / 関連やりとりを context 化
 5. ホストが `propose.generate`（`mode=meeting_followup`、`topic` = 会議トピック）を呼び、候補 (task / decision) を生成（`ProposalGenerated` event を durable log に書く）
 6. ホストが候補をユーザーに整形して提示
@@ -25,23 +25,25 @@ opshub 側で外部 SaaS に通知 / 投稿する経路は **存在しない**�
 
 ### Step 1: 直近の会議を列挙
 
+ms365 / Google Calendar のどちらか、または両方を対象にする。`source.list` は 1 呼び出しに 1 source_type なので両方扱う場合は呼び分ける。
+
 ```text
 tool: source.list
 input:
-  source_type: "ms365_calendar"
+  source_type: "ms365_calendar"   # または "google_calendar" (Phase 14)
   observed_after: "<24h 前 ISO 8601>"
   observed_before: "<now ISO 8601>"
   limit: 20
 ```
 
-`observed_after` / `observed_before` は Phase 12 H1 で追加された physical column ベースの時間フィルタ（`sources.observed_at` 半開区間）。ユーザーが「昨日の」「先週の」と言ったら window を調整する。
+`observed_after` / `observed_before` は Phase 12 H1 で追加された physical column ベースの時間フィルタ（`sources.observed_at` 半開区間）。ユーザーが「昨日の」「先週の」と言ったら window を調整する。`source_type = "google_calendar"` は Phase 14 で追加された Google Calendar connector 由来 (`src/opshub/connectors/google_calendar/mapper.py` の `GOOGLE_CALENDAR_SOURCE_TYPE = "google_calendar"`、SSOT、ADR-0010 §改訂)。
 
 ### Step 2: 会議の本文を取得
 
 ```text
 tool: source.get
 input:
-  source_id: "<ms365_calendar ULID>"
+  source_id: "<ms365_calendar / google_calendar ULID>"
 ```
 
 戻り値の `body` / `summary` / `title` から会議トピック・参加者・議題を抽出。複数会議を対象にする場合は `source.get` を会議ごとに呼ぶ。
@@ -144,7 +146,7 @@ input:
 ## 参考
 
 - ADR-0004 (Agent Runtime Boundary、形A)
-- ADR-0010 §禁止事項 7（write-back 禁止契約、Phase 11 で Teams 追加）
+- ADR-0010 §禁止事項 7（write-back 禁止契約、Phase 11 で Teams 追加、Phase 14 で Gmail + Google Calendar 追加）
 - ADR-0016 (Action Loop、§決定 (c) auto-apply 禁止、§決定 (l) draft 系統一方針 + `mode` 引数射程)
 - ADR-0017 §(e)+(f)（graph 1-hop expand）
 - ADR-0020 §改訂（Outlook body deep retention、Phase 11）

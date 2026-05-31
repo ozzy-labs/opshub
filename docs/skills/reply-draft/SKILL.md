@@ -1,11 +1,11 @@
 ---
 name: reply-draft
-description: 「返信案を考えて」「下書き作って」「これに返信したい」と頼まれたら、opshub MCP の propose.generate (reply_to_source_id 指定) で返信下書きを生成し、ユーザー確認後に propose.apply で保存する。外部 SaaS への送信は行わず、ユーザーが下書きを確認して手で送る。Sub-issue E で実装済みの ReplyDraftCandidatePayload を利用。
+description: 「返信案を考えて」「下書き作って」「これに返信したい」「Gmail への返信下書き」「この Gmail に返信」と頼まれたら、opshub MCP の propose.generate (reply_to_source_id 指定) で返信下書きを生成し、ユーザー確認後に propose.apply で保存する。Phase 14 で Gmail (`gmail_message`) も返信元 source_type として利用可能。外部 SaaS への送信は行わず、ユーザーが下書きを確認して手で送る。Sub-issue E で実装済みの ReplyDraftCandidatePayload を利用。
 ---
 
 # reply-draft — 返信下書きを opshub に生成させる
 
-opshub の MCP write tool `propose.generate`（mode: `reply_to_source_id`、PR #231 で実装、`src/opshub/mcp/_registry.py` の `WriteCategory.PROPOSE_GENERATE`）と `propose.apply`（Phase 12 H1 で MCP に露出、`WriteCategory.PROPOSE_APPLY`、idempotent）を第一経路として返信下書きを作る。Phase 10 Sub-issue D で書き、Sub-issue E (#217 merged) で `ReplyDraftCandidatePayload` が実装済み。ADR-0016 §決定 (i)+(j)+(k) で吸収された。Phase 11 で Outlook body deep retention (#244 / ADR-0020 改訂) が入り、`ms365_outlook` への reply-draft が本格機能化した（差出人の本文を full payload で context 注入できるようになった）。
+opshub の MCP write tool `propose.generate`（mode: `reply_to_source_id`、PR #231 で実装、`src/opshub/mcp/_registry.py` の `WriteCategory.PROPOSE_GENERATE`）と `propose.apply`（Phase 12 H1 で MCP に露出、`WriteCategory.PROPOSE_APPLY`、idempotent）を第一経路として返信下書きを作る。Phase 10 Sub-issue D で書き、Sub-issue E (#217 merged) で `ReplyDraftCandidatePayload` が実装済み。ADR-0016 §決定 (i)+(j)+(k) で吸収された。Phase 11 で Outlook body deep retention (#244 / ADR-0020 改訂) が入り、`ms365_outlook` への reply-draft が本格機能化した（差出人の本文を full payload で context 注入できるようになった）。Phase 14 で Gmail (`gmail_message`、`google_mail` connector) が追加され、Outlook と symmetric な body 取得経路が成立したため、Gmail への reply-draft も同様に本格機能化した (ADR-0010 §改訂)。
 
 pair: draft family (`handoff-draft` / `announcement-draft` と同族、ただし本 skill のみ persist する。返信元 source の有無で persist 境界が分かれる、ADR-0016 §決定 (l)(a))。
 
@@ -85,6 +85,7 @@ input:
 apply は durable state を変える (`ProposalApplied` event を発行)。ホストは必ずユーザーに「この下書きを保存しますか?」と確認する (ADR-0016 §決定 (c) HITL 必須)。
 
 戻り値：
+
 - 1 回目：`{"ok": true, "already_applied": false, "applied_entity_type": "reply_draft", "applied_entity_id": "<ULID>"}`
 - 2 回目（同じ `(proposal_id, candidate_index)` で再呼び出し）：`{"ok": true, "already_applied": true, "applied_entity_type": "reply_draft", "applied_entity_id": "<同じ ULID>"}` — `OpsHubError` を投げず idempotent semantics 成立
 
@@ -95,7 +96,7 @@ apply は durable state を変える (`ProposalApplied` event を発行)。ホ�
 
 ## 返信元
 - source_id: ...
-- source_type: slack_message / ms365_outlook / teams_message / issue / pull_request / ...
+- source_type: slack_message / ms365_outlook / gmail_message / teams_message / issue / pull_request / ...
 
 ## 候補 1
 > <下書き本文>
@@ -118,7 +119,7 @@ apply は durable state を変える (`ProposalApplied` event を発行)。ホ�
 
 ## 参考
 
-- ADR-0010 §禁止事項 7 + §改訂 (write-back 禁止契約、Phase 11 で Teams 追加)
+- ADR-0010 §禁止事項 7 + §改訂 (write-back 禁止契約、Phase 11 で Teams 追加、Phase 14 で Gmail + Google Calendar 追加)
 - ADR-0016 §決定 (i)(j)(k) (reply_draft candidate / triage / style-source recall)
 - ADR-0017 §決定 (b) (link_type `reply_draft_replies_to` / `referenced_in_reply_draft`)
 - ADR-0020 §改訂 (Outlook body deep retention、Phase 11 #244)

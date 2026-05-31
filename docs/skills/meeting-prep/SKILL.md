@@ -1,6 +1,6 @@
 ---
 name: meeting-prep
-description: 「来週の会議準備」「明日のミーティング前確認」「次の会議の context」「<会議名> の準備して」「打ち合わせ前に状況教えて」と頼まれたら、opshub MCP の source.list (source_type=ms365_calendar, observed_after/before で対象期間) で該当 calendar event を引き、recall.search で過去の関連やりとり、graph.related で関連 decisions / sources を辿って会議準備サマリ (目的 / 過去文脈 / 関連 decisions / 参考 sources) を組み立てる。read-only、persist なし。pair: meeting-followup (会議後) と対をなす。
+description: 「来週の会議準備」「明日のミーティング前確認」「次の会議の context」「<会議名> の準備して」「打ち合わせ前に状況教えて」「Google Calendar の予定」「明日の Google Calendar」と頼まれたら、opshub MCP の source.list (source_type は ms365_calendar または google_calendar、observed_after/before で対象期間) で該当 calendar event を引き、recall.search で過去の関連やりとり、graph.related で関連 decisions / sources を辿って会議準備サマリ (目的 / 過去文脈 / 関連 decisions / 参考 sources) を組み立てる。Phase 14 で Google Calendar (`google_calendar`、`google_calendar` connector) も対象に追加。read-only、persist なし。pair: meeting-followup (会議後) と対をなす。
 ---
 
 # meeting-prep — 次の会議の context を opshub から組み立てる
@@ -36,16 +36,18 @@ opshub 側で能動的に「会議 N 分前にリマインダ」を打つ runtim
 
 ### Step 1: 対象期間の calendar event を `source.list` で列挙
 
+ms365 / Google Calendar のどちらか、または両方を対象にする。複数 source_type を扱う場合は呼び分ける (`source.list` は 1 呼び出しに 1 source_type)。
+
 ```text
 tool: source.list
 input:
-  source_type: "ms365_calendar"
+  source_type: "ms365_calendar"   # または "google_calendar" (Phase 14)
   observed_after: "<期間開始 ISO 8601>"
   observed_before: "<期間終了 ISO 8601>"
   limit: 20
 ```
 
-戻り値の `items[]` 各行は `{entity_id, connector_name, source_type, title, url, summary, observed_at, ...}`。`source_type = "ms365_calendar"` は ms365 connector の Calendar event 由来 (`src/opshub/connectors/ms365/mapper.py` の `CALENDAR_SOURCE_TYPE = "ms365_calendar"`、SSOT)。Phase 11 で本文 deep retention が追加されているため、summary には会議の招集メッセージ / アジェンダ本文が含まれる。
+戻り値の `items[]` 各行は `{entity_id, connector_name, source_type, title, url, summary, observed_at, ...}`。`source_type = "ms365_calendar"` は ms365 connector の Calendar event 由来 (`src/opshub/connectors/ms365/mapper.py` の `CALENDAR_SOURCE_TYPE = "ms365_calendar"`、SSOT)。`source_type = "google_calendar"` は Phase 14 で追加された Google Calendar connector 由来 (`src/opshub/connectors/google_calendar/mapper.py` の `GOOGLE_CALENDAR_SOURCE_TYPE = "google_calendar"`、SSOT、ADR-0010 §改訂)。Phase 11 で ms365_calendar に本文 deep retention が追加されており、Phase 14 の google_calendar も `summary` + `description` を本文として持つため、両者とも会議の招集メッセージ / アジェンダ本文を context に入れられる。
 
 「次の会議 1 件」を解釈する場合、戻り値を `observed_at` 昇順で 1 件目に絞り Step 2 に進む。
 
@@ -135,7 +137,7 @@ input:
 ## 参考
 
 - ADR-0004 (Agent Runtime Boundary、形A)
-- ADR-0010 §改訂 (connector contract、Phase 11 で Teams 追加)
+- ADR-0010 §改訂 (connector contract、Phase 11 で Teams 追加、Phase 14 で Gmail + Google Calendar 追加)
 - ADR-0012 改訂 (本文 embedding で recall 品質、Phase 10 §18)
 - ADR-0016 改訂 (Action Loop、Phase 12 H1 で draft 系統一方針追加)
 - ADR-0017 (Knowledge Graph、graph.related)
