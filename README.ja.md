@@ -68,15 +68,26 @@ opshub propose apply <proposal-id> 0                  # オペレーター承認
 
 エージェント host を MCP 経由で繋ぐと（[エージェント host を接続する (MCP)](#エージェント-host-を接続する-mcp) を参照）、自然文で秘書に頼めるようになります。エージェントが裏で適切な OpsHub コマンドを呼びます。
 
+Phase 12（2026-05-31）で秘書 Skill レパートリーを 5 → **14** に拡張しました（read 自律 OK 10 / HITL write 4）。下表は代表的な発火例で、責務マップ全体は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。
+
 | こう頼むと | 発火する Skill | 何をするか |
 |---|---|---|
 | 「今日のまとめ」「次に何やる?」「今週どうなってる」 | `personal-brief` / `next-actions` | 指定期間（今日 / 今週 / 今月 / 先週 / 先月）の主要シグナル + active task + 未処理 inbox |
-| 「あの Slack スレッドに返信案考えて」 | `reply-draft` | LLM が過去の自分の送信文体を踏まえて下書きを生成（送信は手動・OpsHub は外送信しない） |
+| 「あの Slack スレッドに返信案考えて」 | `reply-draft` | LLM が過去の自分の送信文体を踏まえて下書きを生成（HITL apply、idempotent、OpsHub は外送信しない） |
 | 「PR #123 をレビューして」 | `pr-review` | 関連 decision / task / 過去議論を引いてレビュー観点を提示 |
-| 「Box にあった X の資料」「Word / Excel / PPT 探して」 | `find-document` | Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive を本文ベースで横断検索（Phase 11 で Office 文書本文も対象） |
+| 「Box にあった X の資料」「Word / Excel / PPT 探して」 | `find-document` | Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive を本文ベースで横断検索（Phase 11 で Office 文書本文も対象、Phase 12 H1 で `search` FTS5 を MCP 経由で直接利用） |
 | 「Teams スレッド要約して」 | `personal-brief` / `find-document` | Phase 11 で取り込んだ Teams chat 本文に対する横断 recall |
+| 「明日の会議準備」「次のミーティング前に context」 | `meeting-prep` (Phase 12) | 対象 calendar event の目的 / 過去関連やりとり / 関連 decisions / 参考 sources を集約 |
+| 「<X> について調べて」「<トピック> 網羅的に」 | `research` (Phase 12) | トピック横断調査（semantic recall + FTS5 + graph 拡張 + LLM 統合要約） |
+| 「上司向け週次報告」「クライアント向け進捗まとめ」 | `external-brief` (Phase 12) | 外向き report（完了 task + 確定 decision 中心、tone 制御）— pair = personal-brief |
+| 「あの決定はなぜ」「X を選んだ理由」 | `decision-rationale` (Phase 12) | 決定 + 直接の根拠 source + 先行 decision を `graph.trace` で provenance 遡って提示 |
+| 「受信箱整理して」「inbox 仕分けて」 | `inbox-triage` (Phase 12、HITL) | 未処理 inbox を集めて action 候補を生成、user 個別承認分のみ保存 |
+| 「この資料から task 抽出」「<source_id> から候補を」 | `source-extract` (Phase 12、HITL) | 1 source から task / decision / reply_draft 候補を抽出、HITL apply |
+| 「会議後の action items」「議事録から task 抽出」 | `meeting-followup` (Phase 12、HITL) | 直近の calendar event から action items を抽出 — pair = meeting-prep |
+| 「引き継ぎ書作って」「handoff 書く」 | `handoff-draft` (Phase 12) | task.list (in_progress) + decision.list + recall + graph から引き継ぎ書 text を構成（persist なし、text-only） |
+| 「リリース告知文書いて」「announcement 作って」 | `announcement-draft` (Phase 12) | recall + decision + brief で告知文 text を構成（persist なし、text-only） |
 
-5 つの秘書 Skill は [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) リポから `@ozzylabs/skills` Renovate preset 経由で各ホストに配布されます (handbook ADR-0016)。Skills カタログと「できること / できないこと」（外部書き戻し / 常駐 / auto-apply はしない）の詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。
+14 件の秘書 Skill は [`docs/skills/<name>/SKILL.md`](docs/skills/) を SSOT として保持しています（Phase 12 H1 で opshub を SSOT に確定、ADR-0004 §決定 (c)）。既存 5 件のうち 2 件を rename（`daily-brief` → `personal-brief` / `file-lookup` → `find-document`）し、新規 9 件を Phase 12 H2-H5 で追加しました。`@ozzylabs/skills` Renovate preset 経由の配布は Phase 13+ に defer（ADR-0004 §決定 (c) backout）。Phase 12 ではホスト側に手動 install します（[秘書 Skill を install する](#秘書-skill-を-install-する) 参照）。Skills カタログ（責務マップ / MCP tool 依存マップ / pair structure / HITL boundary）と「できること / できないこと」（外部書き戻し / 常駐 / auto-apply はしない）の詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。
 
 ## エージェント host を接続する (MCP)
 
@@ -99,6 +110,23 @@ opshub mcp tools           # read / write tool 一覧を確認 (policy-as-data �
 
 詳細（他ホスト / 暗号化 / トラブルシュート）: [`docs/mcp-setup.md`](docs/mcp-setup.md)。
 
+## 秘書 Skill を install する
+
+Phase 12 で 14 件の秘書 Skill を提供します（[`docs/skills/<name>/SKILL.md`](docs/skills/) を opshub SSOT として保持、[ADR-0004 §決定 (c)](docs/adr/0004-agent-runtime-boundary.md)）。`@ozzylabs/skills` Renovate preset 経由の配布は Phase 13+ に defer されているため、Phase 12 ではホスト側に手動 copy します:
+
+```bash
+# Claude Code（ユーザー単位）
+cp -r path/to/opshub/docs/skills/* ~/.claude/skills/
+
+# Codex CLI / GitHub Copilot CLI（ユーザー単位）
+cp -r path/to/opshub/docs/skills/* ~/.agents/skills/
+
+# プロジェクト単位（任意のホスト）
+cp -r path/to/opshub/docs/skills/* ./.claude/skills/   # または ./.agents/skills/
+```
+
+Skill description に日本語トリガが含まれるため、「今日のまとめ」「会議準備」のような自然文でホストが該当 Skill を発火します。最新の install 手順と Phase 13+ の配布完成計画は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 (セットアップ) を参照。
+
 ## LLM backend の設定（任意）
 
 OpsHub は LLM なしでも動作します — `task` / `decision` / `inbox` /
@@ -118,7 +146,7 @@ ollama serve && ollama pull llama3.2:3b
 
 ## OpsHub に今あるもの
 
-Phase 1–8 を出荷済み（2026-05-17, v0.1.0）。Phase 9 出荷 2026-05-23。Phase 10・Phase 11 出荷 2026-05-31:
+Phase 1–8 を出荷済み（2026-05-17, v0.1.0）。Phase 9 出荷 2026-05-23。Phase 10・Phase 11・Phase 12 出荷 2026-05-31:
 
 | Phase | レイヤ | ハイライト |
 |---|---|---|
@@ -133,8 +161,9 @@ Phase 1–8 を出荷済み（2026-05-17, v0.1.0）。Phase 9 出荷 2026-05-23�
 | 9 | Local-FS connectors | `box_drive` (Box Drive デスクトップ → ローカル FS scan、ADR-0019) |
 | 10 | Secretary agent platform | 本文ローカル保持 (ADR-0020) + 保存時暗号化 (ADR-0021) + MCP server (ADR-0022) + `opshub search` (FTS5) + `opshub mcp serve` + 秘書 5 Skills + reply-draft (ADR-0016 §決定 (i)) + ADR-0004 改訂 (形A: runtime をコアに持たない) + ADR-0010 改訂 (write-back 禁止) + ADR-0017 改訂 (reply_draft link types) |
 | 11 | MS Office 深掘り | Office 文書本文抽出 (ADR-0025、markitdown 経路で `.docx`/`.xlsx`/`.pptx`、50 MB / 500K chars cap、fail-safe) + ADR-0019 改訂 (`content_extraction` opt-in 例外節 + `onedrive_drive` パターン汎化) + ADR-0010 改訂 (Teams connector + 本文抽出契約 + delta-link cursor + 失効時 full-pass fallback + Teams User Token principal) + 新 `teams` connector (Microsoft Graph chat delta + `Chat.Read`) + 新 `onedrive_drive` connector (FS scan、WSL2 `/mnt/onedrive` / macOS `~/OneDrive`) + `box_drive` の Office 抽出 hook + Outlook 本文 deep retention |
+| 12 | Secretary Skills 拡張 | 秘書 Skill レパートリーを 5 → **14** に拡張 (read 自律 OK 10 / HITL write 4)。新規 9 = `meeting-prep` / `research` / `inbox-triage` / `external-brief` / `decision-rationale` / `handoff-draft` / `announcement-draft` / `meeting-followup` / `source-extract`、rename 2 = `daily-brief` → `personal-brief` / `file-lookup` → `find-document`。4 新 MCP tools (`search` (FTS5) + `propose.apply` (HITL idempotent) + 既存 4 read tools の物理列ベース時間フィルタ = `task.list` / `inbox.list` / `decision.list` / `source.list`)。既存 5 SKILL.md を MCP 直接呼びに統一 (CLI fallback 廃止)。ADR-0004 改訂 (Skills SSOT を opshub `docs/skills/` に移管、配布は Phase 13+ defer) + ADR-0022 改訂 (4 新 MCP tools 契約化) + ADR-0016 改訂 (draft 系統一方針: persist 境界 = 返信元 source の有無 / `mode` 引数射程 / triage 射程 / Candidate union freeze)。`docs/secretary-agent.md` を 14 skills 責務マップ SSOT に拡張（責務マップ / HITL boundary / MCP tool 依存マップ / pair structure） |
 
-次は **Phase 12+ 候補** — multi-machine sync / 能動性段階 1-4 (cron 委譲 / 記憶キュレーション / 通知 / filewatch) / 画像 OCR (PPT 内画像 / Office 図表) / 追加コネクタ (Google Workspace = markitdown 経路再利用 / Notion / Jira) / 外部書き戻し (Teams 返信送信 + HITL、要 新 ADR)。phase ごとの詳細は [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery) に。
+次は **Phase 13+ 候補** — multi-machine sync / 能動性段階 1-4 (cron 委譲 / 記憶キュレーション / 通知 / filewatch) / 画像 OCR (PPT 内画像 / Office 図表) / 追加コネクタ (Google Workspace = markitdown 経路再利用 / Notion / Jira) / 外部書き戻し (Teams 返信送信 + HITL、要 新 ADR) / `ozzy-labs/skills` 配布完成。phase ごとの詳細は [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery) に。
 
 ## コマンド
 

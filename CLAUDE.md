@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-共通方針は AGENTS.md を参照（Phase 1-11 完了状態の記載含む）。以下は Claude Code 固有の設定。
+共通方針は AGENTS.md を参照（Phase 1-12 完了状態の記載含む）。以下は Claude Code 固有の設定。
 
 ## 基本ルール
 
@@ -21,17 +21,31 @@
 - `/ship` — lint・コミット・PR 作成を一括実行
 - `/drive` — implement + ship + review loop（Issue から merge-ready な PR まで自律駆動）
 
-### 秘書エージェント Skills (Phase 10、opshub MCP 経由)
+### 秘書エージェント Skills (Phase 10 で 5 Skill 開始、Phase 12 で 14 Skill 体制に拡張、opshub MCP 経由)
 
-opshub は形A (ADR-0004) に基づき秘書 5 Skill を提供する。SKILL.md の SSOT は `docs/skills/<name>/SKILL.md` に置き、配布は `ozzy-labs/skills` リポを経由する。発火条件は自然文 (skill description) で表現されており、自分で叩く必要はない。
+opshub は形A (ADR-0004) に基づき秘書 **14 Skill** を提供する。SKILL.md の SSOT は `docs/skills/<name>/SKILL.md` に置く (Phase 12 H1 で opshub を SSOT に確定、ADR-0004 §決定 (c))。配信機構は Phase 13+ に defer されたため、Phase 12 ではホスト側に手動 install (詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8)。発火条件は自然文 (skill description) で表現されており、自分で叩く必要はない。
+
+**read 自律 OK (10 件)**:
 
 - `personal-brief` — 「今日のまとめ」「今週どうなってる」「先月の振り返り」「最近どうなってる」「状況教えて」
 - `next-actions` — 「次に何やる?」「やること教えて」「今週やること」「優先度高いのは?」
-- `reply-draft` — 「これに返信案考えて」「下書き作って」 (外送信なし、apply は HITL)
 - `pr-review` — 「PR #N レビューして」「この差分どう?」
-- `find-document` — 「Box にあったあの資料」「<キーワード>含むファイル」
+- `find-document` — 「Box にあったあの資料」「<キーワード>含むファイル」 (Phase 12 H1 で `search` FTS5 MCP tool 直接利用)
+- `meeting-prep` (Phase 12 H2) — 「来週の会議準備」「明日のミーティング前確認」
+- `research` (Phase 12 H2) — 「<X> について調べて」「<トピック> 網羅的に教えて」
+- `external-brief` (Phase 12 H3) — 「上司向け週次報告」「クライアント向け進捗まとめ」 (pair = personal-brief)
+- `decision-rationale` (Phase 12 H3) — 「あの決定はなぜ」「X を選んだ理由」
+- `handoff-draft` (Phase 12 H5) — 「引き継ぎ書作って」「handoff 書く」 (text-only、persist なし)
+- `announcement-draft` (Phase 12 H5) — 「リリース告知文書いて」「announcement 作って」 (text-only、persist なし)
 
-詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。MCP セットアップは [`docs/mcp-setup.md`](docs/mcp-setup.md)。
+**HITL write (4 件)** (外送信なし、apply は HITL):
+
+- `reply-draft` — 「これに返信案考えて」「下書き作って」 (idempotent apply)
+- `inbox-triage` (Phase 12 H4) — 「受信箱整理して」「inbox 仕分けて」 (pair = source-extract)
+- `source-extract` (Phase 12 H4) — 「この資料から task 抽出」「<source_id> から候補を」
+- `meeting-followup` (Phase 12 H4) — 「会議後の action items」「議事録から task 抽出」 (pair = meeting-prep)
+
+詳細 (責務マップ / pair structure / MCP tool 依存マップ / HITL boundary) は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。MCP セットアップは [`docs/mcp-setup.md`](docs/mcp-setup.md)。
 
 ## Skills の共通ルール
 

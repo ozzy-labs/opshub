@@ -47,14 +47,23 @@ opshub/
 │   ├── adr/                        # Architecture Decision Records
 │   ├── secretary-agent.md          # Phase 10: 秘書エージェント層 (形A) の使い方
 │   ├── mcp-setup.md                # Phase 10: エージェント host から MCP 経由で叩く手順
-│   ├── skills/                     # Phase 10: 秘書 5 Skill の SSOT (Phase 12 H1 rename 済: personal-brief / next-actions / reply-draft / pr-review / find-document) [P10, P12]
-│   │   ├── personal-brief/SKILL.md
+│   ├── skills/                     # Phase 10: 秘書 5 Skill SSOT → Phase 12 で 14 Skill 体制に拡張 (rename 2: daily-brief → personal-brief / file-lookup → find-document、新規 9: meeting-prep / research / inbox-triage / external-brief / decision-rationale / handoff-draft / announcement-draft / meeting-followup / source-extract、`ozzy-labs/skills` 配布機構は Phase 13+ defer、ADR-0004 §決定 (c) backout) [P10, P12]
+│   │   ├── personal-brief/SKILL.md         # rename from daily-brief (P12 H1)
 │   │   ├── next-actions/SKILL.md
 │   │   ├── reply-draft/SKILL.md
 │   │   ├── pr-review/SKILL.md
-│   │   └── find-document/SKILL.md
+│   │   ├── find-document/SKILL.md          # rename from file-lookup (P12 H1)
+│   │   ├── meeting-prep/SKILL.md           # P12 H2 新規 (info gathering)
+│   │   ├── research/SKILL.md               # P12 H2 新規 (info gathering)
+│   │   ├── external-brief/SKILL.md         # P12 H3 新規 (analysis、pair = personal-brief)
+│   │   ├── decision-rationale/SKILL.md     # P12 H3 新規 (analysis)
+│   │   ├── inbox-triage/SKILL.md           # P12 H4 新規 (HITL write、pair = source-extract)
+│   │   ├── source-extract/SKILL.md         # P12 H4 新規 (HITL write、pair = inbox-triage)
+│   │   ├── meeting-followup/SKILL.md       # P12 H4 新規 (HITL write、pair = meeting-prep)
+│   │   ├── handoff-draft/SKILL.md          # P12 H5 新規 (draft family、text-only)
+│   │   └── announcement-draft/SKILL.md     # P12 H5 新規 (draft family、text-only)
 │   └── runbook/                    # 未作成
-├── tools/                          # Phase 10: skill security scan (4 カテゴリ + frontmatter 隠しユニコード検出) [P10]
+├── tools/                          # Phase 10: skill security scan (4 カテゴリ + frontmatter 隠しユニコード検出)、Phase 12 で 14 skills 全てに対する per-skill MCP dispatch pin + scan を実行 [P10, P12]
 │   └── skill_scan.py
 ├── src/
 │   └── opshub/                     # 項目 2 で詳細
@@ -89,7 +98,7 @@ opshub/
 
 ## 2. Python パッケージ構成 (src/opshub/)
 
-各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P5+8]` / `[P6]` / `[P6+8]` / `[P6.x]` / `[P7]` / `[P7.x]` / `[P7+11]` / `[P8]` / `[P8.x]` / `[P9]` / `[P9+11]` / `[P9.x]` / `[P10]` / `[P11]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで、`[P7]` は Phase 7 (Connectors Wave 2、Slack + Microsoft 365 + Box) で、`[P8]` は Phase 8 (Knowledge graph layer、ADR-0017 + `links` projection + 4 自動抽出 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration) で merge 済 (2026-05-17)、`[P9]` は Phase 9 (Local-filesystem-backed Connector Layer、ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector + `core/platform.py` + `opshub connector sync box_drive`) で merge 済 (2026-05-23)、`[P10]` は Phase 10 (Secretary Agent Platform、ADR-0020 + ADR-0021 + ADR-0022 + ADR-0004/0016/0017/0010 改訂、本文ベース embedding + SQLite FTS5 + `opshub search` + `opshub mcp serve` + 秘書 5 Skills) で merge 済 (2026-05-31)、`[P11]` は Phase 11 (MS Office 深掘り、ADR-0025 + ADR-0019 改訂 + ADR-0010 改訂、`core/document_extract.py` + `connectors/teams/` + `connectors/onedrive_drive/` + `connectors/box_drive` Office 抽出 hook + `connectors/ms365/mapper` outlook body deep retention) で merge 済 (2026-05-31)。複合 tag (例: `[P5+8]` / `[P6+8]` / `[P1+2+3+9]` / `[P6+10]` / `[P7+11]` / `[P9+11]`) は当該 Phase で初出 + 後続 Phase で拡張が入った module を示す。`[P6.x]` は Phase 6 完了後の継続作業、`[P7.x]` は Phase 7 完了後、`[P8.x]` は Phase 8 完了後、`[P9.x]` は Phase 9 完了後、`[future]` は Phase 12 (multi-machine sync / 能動性段階 1-4 / 画像 OCR / 追加コネクタ) 以降。
+各エントリの末尾にある `[P1]` / `[P1+2]` / `[P1+2+3]` / `[P1+2+3+4]` / `[P1+2+3+4+5]` / `[P1+2+3+4+5+6]` / `[P2]` / `[P3]` / `[P3.x]` / `[P4]` / `[P5]` / `[P5.x]` / `[P5+8]` / `[P6]` / `[P6+8]` / `[P6.x]` / `[P7]` / `[P7.x]` / `[P7+11]` / `[P8]` / `[P8.x]` / `[P9]` / `[P9+11]` / `[P9.x]` / `[P10]` / `[P11]` / `[future]` は実装が入る (or 入った) Phase を示す。`[P1]` は Phase 1 で、`[P1+2]` は Phase 2 までで、`[P1+2+3]` は Phase 3 までで、`[P1+2+3+4]` は Phase 4 までで、`[P1+2+3+4+5]` / `[P5]` は Phase 5 までで、`[P1+2+3+4+5+6]` / `[P6]` は Phase 6 までで、`[P7]` は Phase 7 (Connectors Wave 2、Slack + Microsoft 365 + Box) で、`[P8]` は Phase 8 (Knowledge graph layer、ADR-0017 + `links` projection + 4 自動抽出 + manual link CRUD + `LinkService` traversal + `opshub link` / `opshub graph` CLI + `--expand-graph` integration) で merge 済 (2026-05-17)、`[P9]` は Phase 9 (Local-filesystem-backed Connector Layer、ADR-0019 + `sources.fingerprint` 列 (migration 0017) + `box_drive` connector + `core/platform.py` + `opshub connector sync box_drive`) で merge 済 (2026-05-23)、`[P10]` は Phase 10 (Secretary Agent Platform、ADR-0020 + ADR-0021 + ADR-0022 + ADR-0004/0016/0017/0010 改訂、本文ベース embedding + SQLite FTS5 + `opshub search` + `opshub mcp serve` + 秘書 5 Skills) で merge 済 (2026-05-31)、`[P11]` は Phase 11 (MS Office 深掘り、ADR-0025 + ADR-0019 改訂 + ADR-0010 改訂、`core/document_extract.py` + `connectors/teams/` + `connectors/onedrive_drive/` + `connectors/box_drive` Office 抽出 hook + `connectors/ms365/mapper` outlook body deep retention) で merge 済 (2026-05-31)、`[P12]` は Phase 12 (Secretary Skills 拡張、ADR-0004 改訂 + ADR-0022 改訂 + ADR-0016 改訂、14 skills 体制 (新規 9 + rename 2) + 4 新 MCP tools (`search` (FTS5) + `propose.apply` (HITL idempotent) + 既存 4 read tools の physical column ベース時間フィルタ) + 既存 5 SKILL.md MCP 直接呼び化 + `propose.generate` の `mode` 引数追加) で merge 済 (2026-05-31)。複合 tag (例: `[P5+8]` / `[P6+8]` / `[P1+2+3+9]` / `[P6+10]` / `[P7+11]` / `[P9+11]` / `[P10+12]`) は当該 Phase で初出 + 後続 Phase で拡張が入った module を示す。`[P6.x]` は Phase 6 完了後の継続作業、`[P7.x]` は Phase 7 完了後、`[P8.x]` は Phase 8 完了後、`[P9.x]` は Phase 9 完了後、`[future]` は Phase 13 (multi-machine sync / 能動性段階 1-4 / 画像 OCR / 追加コネクタ / `ozzy-labs/skills` 配布完成) 以降。
 
 ```text
 src/opshub/
@@ -282,12 +291,12 @@ src/opshub/
 │   ├── openai_client.py            # OpenAILLMClient (gpt-4o-mini default、Phase 6 で tools= structured output 拡張) [P5+6]
 │   ├── ollama_client.py            # OllamaLLMClient (local daemon、OpenAI 互換 endpoint、ADR-0016 §決定 (h)) [P6]
 │   └── factory.py                  # build_llm_client + NoOpLLMClient (Phase 6 で `ollama` branch + NoOp.complete_structured 追加) [P5+6]
-├── mcp/                            # MCP server surface (Phase 10 sub C、ADR-0022) — stdio one transport [P10]
+├── mcp/                            # MCP server surface (Phase 10 sub C + Step 1 widening PR #231 + Phase 12 H1 ADR-0022 改訂、ADR-0022) — stdio one transport [P10+12]
 │   ├── __init__.py                 # [P10]
-│   ├── server.py                   # serve_stdio() + dispatch_tool_call() + build_tool_specs_for_engine() [P10]
-│   ├── _registry.py                # policy-as-data registry (ToolSpec / ToolPolicy / ReadCategory / WriteCategory、ADR-0022 §(c)) [P10]
-│   ├── _tools.py                   # read tool handlers (recall.search / task.list / inbox.list / decision.list) [P10]
-│   ├── _writes.py                  # write tool handlers (task.create / inbox.add / connector.sync、HITL) [P10]
+│   ├── server.py                   # serve_stdio() + dispatch_tool_call() + build_tool_specs_for_engine() (Phase 12 H1 で `search` / `propose.apply` を spec list に追加) [P10+12]
+│   ├── _registry.py                # policy-as-data registry (ToolSpec / ToolPolicy / ReadCategory / WriteCategory、ADR-0022 §(c)。Phase 12 H1 で `ReadCategory.SEARCH` + `WriteCategory.PROPOSE_APPLY` 追加、`_NON_DESTRUCTIVE_WRITES = {"propose.apply"}` carve-out) [P10+12]
+│   ├── _tools.py                   # read tool handlers (recall.search / task.list / inbox.list / decision.list / brief / graph.related / graph.trace / graph.expand / source.list / source.get / embeddings.find_duplicates / Phase 12 H1 で `build_search_handler` (FTS5、phrase-quoted default、`raw_query` flag は schema 除外) 追加 + 既存 4 read tools の physical column ベース時間フィルタ追加) [P10+12]
+│   ├── _writes.py                  # write tool handlers (task.create / inbox.add / connector.sync / propose.generate (Step 1 widening + Phase 12 H4 で `mode` 引数追加 = `inbox_triage` / `source_extract` / `meeting_followup`、`_PROPOSE_GENERATE_MODES` frozenset、ADR-0016 §決定 (l)(b)) / Phase 12 H1 で `build_propose_apply_handler` (HITL idempotent 正規化、`OpsHubError("already applied")` catch → `{ok:true, already_applied:true}` 正規化、`_lookup_applied_entity` で event log 走査) 追加、HITL) [P10+12]
 │   ├── _redact.py                  # redact_secrets() (ADR-0022 §(b) — sk-... / ghp_... / Bearer ... をマスク) [P10]
 │   └── _logging.py                 # OTel GenAI semconv (execute_tool / tool.name / tool.call.id) for structlog (ADR-0022 §(e)) [P10]
 # graph/ サブパッケージは新設せず、Phase 8 では `projections/links.py` + `services/links/`
