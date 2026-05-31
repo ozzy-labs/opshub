@@ -47,7 +47,7 @@ opshub/
 │   ├── adr/                        # Architecture Decision Records
 │   ├── secretary-agent.md          # Phase 10: 秘書エージェント層 (形A) の使い方
 │   ├── mcp-setup.md                # Phase 10: エージェント host から MCP 経由で叩く手順
-│   ├── skills/                     # Phase 10: 秘書 5 Skill SSOT → Phase 12 で 14 Skill 体制に拡張 (rename 2: daily-brief → personal-brief / file-lookup → find-document、新規 9: meeting-prep / research / inbox-triage / external-brief / decision-rationale / handoff-draft / announcement-draft / meeting-followup / source-extract、`ozzy-labs/skills` 配布機構は Phase 14+ defer、ADR-0004 §決定 (c) backout) [P10, P12]
+│   ├── skills/                     # Phase 10: 秘書 5 Skill SSOT → Phase 12 で 14 Skill 体制に拡張 (rename 2: daily-brief → personal-brief / file-lookup → find-document、新規 9: meeting-prep / research / inbox-triage / external-brief / decision-rationale / handoff-draft / announcement-draft / meeting-followup / source-extract、`ozzy-labs/skills` 配布機構は Phase 15+ defer、ADR-0004 §決定 (c) backout) [P10, P12]
 │   │   ├── personal-brief/SKILL.md         # rename from daily-brief (P12 H1)
 │   │   ├── next-actions/SKILL.md
 │   │   ├── reply-draft/SKILL.md
