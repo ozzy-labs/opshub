@@ -36,7 +36,7 @@ input:
   limit: 20
 ```
 
-`observed_after` / `observed_before` は Phase 12 H1 で追加された physical column ベースの時間フィルタ（`sources.observed_at` 半開区間）。ユーザーが「昨日の」「先週の」と言ったら window を調整する。`source_type = "google_calendar"` は Phase 14 で追加された Google Calendar connector 由来 (`src/opshub/connectors/google_calendar/mapper.py` の `CALENDAR_SOURCE_TYPE = "google_calendar"`、SSOT、ADR-0010 §改訂)。
+`observed_after` / `observed_before` は Phase 12 H1 で追加された physical column ベースの時間フィルタ（`sources.observed_at` 半開区間）。ユーザーが「昨日の」「先週の」と言ったら window を調整する。`source_type = "google_calendar"` は Phase 14 で追加された Google Calendar connector 由来 (`src/opshub/connectors/google_calendar/mapper.py` の `GOOGLE_CALENDAR_SOURCE_TYPE = "google_calendar"`、SSOT、ADR-0010 §改訂)。
 
 ### Step 2: 会議の本文を取得
 

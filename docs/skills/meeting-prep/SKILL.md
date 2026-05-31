@@ -47,7 +47,7 @@ input:
   limit: 20
 ```
 
-戻り値の `items[]` 各行は `{entity_id, connector_name, source_type, title, url, summary, observed_at, ...}`。`source_type = "ms365_calendar"` は ms365 connector の Calendar event 由来 (`src/opshub/connectors/ms365/mapper.py` の `CALENDAR_SOURCE_TYPE = "ms365_calendar"`、SSOT)。`source_type = "google_calendar"` は Phase 14 で追加された Google Calendar connector 由来 (`src/opshub/connectors/google_calendar/mapper.py` の `CALENDAR_SOURCE_TYPE = "google_calendar"`、SSOT、ADR-0010 §改訂)。Phase 11 で ms365_calendar に本文 deep retention が追加されており、Phase 14 の google_calendar も `summary` + `description` を本文として持つため、両者とも会議の招集メッセージ / アジェンダ本文を context に入れられる。
+戻り値の `items[]` 各行は `{entity_id, connector_name, source_type, title, url, summary, observed_at, ...}`。`source_type = "ms365_calendar"` は ms365 connector の Calendar event 由来 (`src/opshub/connectors/ms365/mapper.py` の `CALENDAR_SOURCE_TYPE = "ms365_calendar"`、SSOT)。`source_type = "google_calendar"` は Phase 14 で追加された Google Calendar connector 由来 (`src/opshub/connectors/google_calendar/mapper.py` の `GOOGLE_CALENDAR_SOURCE_TYPE = "google_calendar"`、SSOT、ADR-0010 §改訂)。Phase 11 で ms365_calendar に本文 deep retention が追加されており、Phase 14 の google_calendar も `summary` + `description` を本文として持つため、両者とも会議の招集メッセージ / アジェンダ本文を context に入れられる。
 
 「次の会議 1 件」を解釈する場合、戻り値を `observed_at` 昇順で 1 件目に絞り Step 2 に進む。
 
