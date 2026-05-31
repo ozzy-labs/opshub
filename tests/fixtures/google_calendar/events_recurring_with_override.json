@@ -1,0 +1,79 @@
+{
+  "kind": "calendar#events",
+  "etag": "\"p33gd2jhjbat\"",
+  "summary": "alice@example.com",
+  "updated": "2026-05-31T10:00:00.000Z",
+  "timeZone": "UTC",
+  "accessRole": "owner",
+  "nextSyncToken": "CPDh4P3clfgCEPDh4P3clfgCGAUg__________8B",
+  "items": [
+    {
+      "kind": "calendar#event",
+      "etag": "\"3501232401892001\"",
+      "id": "evt-master-001",
+      "status": "confirmed",
+      "htmlLink": "https://www.google.com/calendar/event?eid=ZXZ0LW1hc3Rlci0wMDE",
+      "created": "2026-05-01T09:00:00.000Z",
+      "updated": "2026-05-15T09:30:00.000Z",
+      "summary": "Weekly standup",
+      "description": "Engineering team weekly standup.",
+      "location": "Conference Room A",
+      "organizer": {
+        "email": "alice@example.com",
+        "displayName": "Alice",
+        "self": true
+      },
+      "start": {
+        "dateTime": "2026-05-04T10:00:00+09:00",
+        "timeZone": "Asia/Tokyo"
+      },
+      "end": {
+        "dateTime": "2026-05-04T10:30:00+09:00",
+        "timeZone": "Asia/Tokyo"
+      },
+      "recurrence": [
+        "RRULE:FREQ=WEEKLY;BYDAY=MO"
+      ],
+      "attendees": [
+        {"email": "alice@example.com", "responseStatus": "accepted"},
+        {"email": "bob@example.com", "responseStatus": "accepted"},
+        {"email": "carol@example.com", "responseStatus": "accepted"}
+      ]
+    },
+    {
+      "kind": "calendar#event",
+      "etag": "\"3501232401892002\"",
+      "id": "evt-master-001_20260518T010000Z",
+      "status": "confirmed",
+      "htmlLink": "https://www.google.com/calendar/event?eid=ZXZ0LW1hc3Rlci0wMDFfb3Y",
+      "created": "2026-05-01T09:00:00.000Z",
+      "updated": "2026-05-17T15:00:00.000Z",
+      "summary": "Weekly standup (rescheduled)",
+      "description": "Moved 30 minutes later this week.",
+      "location": "Conference Room B",
+      "organizer": {
+        "email": "alice@example.com",
+        "displayName": "Alice",
+        "self": true
+      },
+      "start": {
+        "dateTime": "2026-05-18T10:30:00+09:00",
+        "timeZone": "Asia/Tokyo"
+      },
+      "end": {
+        "dateTime": "2026-05-18T11:00:00+09:00",
+        "timeZone": "Asia/Tokyo"
+      },
+      "recurringEventId": "evt-master-001",
+      "originalStartTime": {
+        "dateTime": "2026-05-18T10:00:00+09:00",
+        "timeZone": "Asia/Tokyo"
+      },
+      "attendees": [
+        {"email": "alice@example.com", "responseStatus": "accepted"},
+        {"email": "bob@example.com", "responseStatus": "accepted"},
+        {"email": "carol@example.com", "responseStatus": "tentative"}
+      ]
+    }
+  ]
+}

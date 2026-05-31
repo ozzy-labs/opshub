@@ -109,6 +109,17 @@ class SourceObserved(DomainEvent):
       lookup table on purpose: the connector short-circuits these rows
       to metadata-only (``body=None``) without spending an export
       round-trip (`connector.py::_maybe_extract_body`).
+    * Phase 14 Google Calendar (G4 #296, ADR-0010 §Phase 14 改訂 (l)):
+      ``"google_calendar"`` — stamped by the Calendar API v3 mapper on
+      every event (master + override alike; instance expansion of
+      RRULE-driven occurrences is deferred to a Phase 15+ projection
+      layer per Phase 14 plan §Alternatives 4). The literal is
+      published as
+      :data:`opshub.connectors.google_calendar.mapper.GOOGLE_CALENDAR_SOURCE_TYPE`
+      and is the Google-side symmetric counterpart to ``ms365_calendar``
+      (mapper symmetry pinned by
+      ``tests/unit/connectors/test_mapper_symmetry.py`` so the host
+      LLM / skill side treats both calendars uniformly).
 
     ``title`` is the human-readable label. ``url`` and ``summary`` are
     optional, both bounded; ``summary`` is intentionally short — full
