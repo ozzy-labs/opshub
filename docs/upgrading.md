@@ -401,9 +401,7 @@ If you skip re-consent, `opshub connector sync google_mail` and `opshub connecto
 #   [connectors.google_mail]
 #   enabled = true
 #   fallback_window_days = 30              # users.history.list 7-day TTL invalidation fallback window
-#   # body 上限 / poll 設定は default で運用、override 必要時のみ:
-#   # max_body_chars = 500000              # Outlook と揃える default
-#   # max_messages_per_pass = 500          # full-pass の上限
+#   # initial_window_days = 7              # first-sync backfill window (cursor=None pass の遡及範囲)
 
 # 3. Sync (re-consent 済み前提、Phase 13 google_workspace と同 principal).
 opshub connector sync google_mail
@@ -422,9 +420,8 @@ Bodies are extracted **symmetrically with the Phase 11 Outlook mapper**: `text/p
 # In ~/.config/opshub/config.toml:
 #   [connectors.google_calendar]
 #   enabled = true
-#   fallback_window_days = 30              # syncToken 410 GONE fallback window
 #   # window default は MVP では「過去 90 日 + 未来 365 日」、override 可能:
-#   # time_min_days = 90                   # 過去 N 日
+#   # time_min_days = 90                   # 過去 N 日 (syncToken 410 GONE fallback の遡及範囲も兼用)
 #   # time_max_days = 365                  # 未来 N 日
 
 # 3. Sync.

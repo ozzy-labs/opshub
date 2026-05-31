@@ -310,8 +310,7 @@ google_workspace` 時に `ConfigError: markitdown not installed` の skip_reason
 enabled = true
 fallback_window_days = 30          # users.history.list 7-day TTL invalidation fallback window
 # 任意 override:
-# max_body_chars = 500000           # Outlook と揃える default (省略時は同 default)
-# max_messages_per_pass = 500       # full-pass の上限
+# initial_window_days = 7           # first-sync backfill window (cursor=None pass の遡及範囲)
 ```
 
 ```bash
@@ -329,8 +328,7 @@ opshub connector sync google_mail
 # ~/.config/opshub/config.toml
 [connectors.google_calendar]
 enabled = true
-fallback_window_days = 30          # syncToken 410 GONE fallback window
-# 任意 override (MVP default = 過去 90 日 + 未来 365 日):
+# 任意 override (MVP default = 過去 90 日 + 未来 365 日、syncToken 410 GONE fallback の window walk にも兼用):
 # time_min_days = 90
 # time_max_days = 365
 ```
