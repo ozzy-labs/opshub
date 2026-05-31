@@ -637,6 +637,37 @@ def test_workspace_export_does_not_leave_tempfile_behind(tmp_path: Path) -> None
                 os.environ[key] = value
 
 
+def test_workspace_export_tempfile_io_failure_is_fail_safed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ``OSError`` from tempfile creation / write is fail-safed.
+
+    ADR-0025 §決定 (c) "never raise" contract: a disk-full /
+    tempdir-missing / permission-denied error on the host must not
+    bubble out of :func:`extract_workspace_export` — the Drive sync
+    loop needs a single happy-path return type so one bad export
+    cannot stop the wider scan. We monkey-patch
+    ``tempfile.NamedTemporaryFile`` to raise ``OSError`` and assert
+    the helper collapses to ``body=None`` + a stable ``skip_reason``.
+    """
+    import tempfile as _tempfile
+
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise OSError("simulated disk full")
+
+    monkeypatch.setattr(_tempfile, "NamedTemporaryFile", _boom)
+
+    result = extract_workspace_export(_DOCX.read_bytes(), GOOGLE_DOC_SOURCE_TYPE)
+
+    assert result.body is None
+    assert result.truncated is False
+    assert result.skip_reason is not None
+    assert result.skip_reason.startswith("tempfile io failed:")
+    # The source_type is still stamped — the Drive mapper needs the
+    # discriminator on the SourceObserved row even on the skip path.
+    assert result.source_type == GOOGLE_DOC_SOURCE_TYPE
+
+
 def test_workspace_export_uses_correct_tempfile_suffix_per_source_type() -> None:
     """The tempfile suffix matches the export mediatype.
 

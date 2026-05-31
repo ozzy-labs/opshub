@@ -678,16 +678,48 @@ def extract_workspace_export(
     # cleanup on Windows would also race with markitdown's reader).
     import tempfile
 
-    tmp = tempfile.NamedTemporaryFile(
-        mode="wb",
-        suffix=suffix,
-        prefix="opshub_workspace_export_",
-        delete=False,
-    )
+    # Create the tempfile and write the bytes in one fail-safe envelope.
+    # ``NamedTemporaryFile`` itself can raise ``OSError`` (tempdir
+    # missing / permission denied / disk full), as can ``.write`` /
+    # ``.flush`` (disk full mid-write). The Phase 11 §決定 (c)
+    # contract is "never raise"; collapsing the I/O failure modes
+    # into the same ``body=None`` + ``skip_reason`` channel keeps the
+    # Drive sync loop's single happy path intact.
+    tmp_name: str | None = None
     try:
-        tmp.write(export_bytes)
-        tmp.flush()
-        tmp.close()
+        tmp = tempfile.NamedTemporaryFile(
+            mode="wb",
+            suffix=suffix,
+            prefix="opshub_workspace_export_",
+            delete=False,
+        )
+        tmp_name = tmp.name
+        try:
+            tmp.write(export_bytes)
+            tmp.flush()
+        finally:
+            tmp.close()
+    except OSError as exc:
+        # Clean up a half-created tempfile if we managed to learn its
+        # name before the write failed.
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        logger.warning(
+            "document_extract.workspace_export_io_failed",
+            source_type=source_type,
+            reason=sanitise_error_message(f"{type(exc).__name__}: {exc}"),
+        )
+        return ExtractResult(
+            body=None,
+            truncated=False,
+            skip_reason=f"tempfile io failed: {type(exc).__name__}",
+            source_type=source_type,
+        )
+
+    try:
         # Delegate to the existing extractor so caps / fail-safe /
         # truncation marker stay one code path. We pass
         # ``max_file_bytes=0`` to skip the inner pre-flight (we
@@ -697,7 +729,7 @@ def extract_workspace_export(
         # avoids a TOCTOU race where the tempdir could be cleared
         # between our write and the extractor's ``os.stat``.
         result = extract_document(
-            Path(tmp.name),
+            Path(tmp_name),
             max_file_bytes=0,
             max_chars=max_chars,
             max_cells_per_sheet=max_cells_per_sheet,
@@ -705,7 +737,7 @@ def extract_workspace_export(
         )
     finally:
         try:
-            os.unlink(tmp.name)
+            os.unlink(tmp_name)
         except OSError:
             # Tempfile cleanup is best-effort — a stale tempfile is
             # not worth blocking the sync. The OS reaps ``TMPDIR``
