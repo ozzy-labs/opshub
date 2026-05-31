@@ -114,15 +114,24 @@ If `[storage] encryption = true` is set but no key is reachable (no keyring slot
 A new `~/.config/opshub/excludes.yaml` (ADR-0020 §(b), parsed by `src/opshub/core/excludes.py`) lets you keep specific channels / senders / repos / paths out of the body store. Excluded rows are dropped at connector-fetch time so they never enter `sources.body` in the first place. Format:
 
 ```yaml
-slack:
-  channels: ["C0LEAKS", "C09SECRET"]
-  senders: ["security-bot"]
-github:
-  repos: ["org/private-incident-log"]
-ms365:
-  senders: ["legal@example.com"]
-box:
-  paths: ["/Confidential/**"]
+# Top-level flat keys — the four connector identity dimensions
+# (ADR-0020 §(b)). Each connector consults only the dimensions
+# meaningful for it (Slack → channels + senders, GitHub → repos +
+# senders, box_drive / OneDrive → paths, Teams → channels + senders).
+# Nested per-connector forms (``slack: { channels: [...] }`` etc.)
+# are **rejected** with ``ConfigError`` so a typo / stale doc never
+# silently disables exclusion.
+channels:
+  - C0LEAKS
+  - C09SECRET
+  - "19:secret-teams-channel-id"
+senders:
+  - security-bot
+  - legal@example.com
+repos:
+  - org/private-incident-log
+paths:
+  - "/Confidential/**"
 ```
 
 The file is optional. With no `excludes.yaml`, every connector keeps its default fetch behaviour.
@@ -227,7 +236,7 @@ opshub embeddings rebuild
 ### Phase 11 specifics
 
 - DB head = `0019_create_sources_fts` (Phase 10) — Phase 11 ships **no** new migrations; bodies flow through the existing `sources.body` column + FTS5 index.
-- New optional extras: `office` (markitdown) / `connectors-teams` (msal + httpx).
+- New optional extras: `office` (`markitdown[docx,xlsx,pptx]` — i.e. markitdown plus the `mammoth` / `openpyxl` / `python-pptx` sub-extras for the three Office sub-formats opshub extracts) / `connectors-teams` (msal + httpx).
 - New connectors: `teams` (Microsoft Graph chat delta) / `onedrive_drive` (OneDrive Desktop FS scan).
 - New `source_type` discriminators: `teams_message` / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`.
 - No CLI breaking changes. `opshub connector sync teams` / `... onedrive_drive` are the new sync targets.

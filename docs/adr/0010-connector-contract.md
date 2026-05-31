@@ -233,9 +233,9 @@ Phase 11 Sub-issue F5 (#238) Teams connector の認証 principal を **User Toke
 Teams User Token の運用:
 
 1. **取得経路** — Azure Portal で App Registration を作成し `Chat.Read` / `ChannelMessage.Read.All` 等の delegated permissions を operator が consent → MSAL device code flow / interactive flow で User Token を取得
-2. **保管経路** — ADR-0014 (SaaS Token Storage) の keyring 経路を再利用、key 規約 `connector:teams:access_token` + `connector:teams:refresh_token`。env override は `OPSHUB_CONNECTOR_TEAMS_TOKEN` (CI / 緊急用)
+2. **保管経路** — ADR-0014 (SaaS Token Storage) の keyring 経路を再利用、key 規約は **単一 slot** `connector:teams:token` (`src/opshub/connectors/teams/auth.py` の `TEAMS_TOKEN_SECRET_KEY`)。User Token / 将来の Bot Token alternative は principal-neutral にこの 1 slot を共有する (Slack ADR-0018 と同パターン: user token と bot token を slot 分割せず operator が実際に保管している token を 1 slot で受ける)。env override は `OPSHUB_CONNECTOR_TEAMS_TOKEN` (CI / 緊急用)。refresh token を別 slot に保管しないため refresh はアプリ層では行わず、token 失効時は operator が `opshub connector auth set connector:teams` で再投入する経路に揃える
 3. **scope** — minimum-required scope を `docs/teams-setup.md` (F6 で新設) に列挙、operator が consent screen で広 scope を許諾しないよう案内
-4. **refresh** — MSAL の refresh token + acquire_token_silent で透過的に refresh、refresh 失敗時は `ConnectorSyncFailed` event + setup docs を指す actionable error
+4. **refresh** — Phase 11 F5 時点では single-slot 保管 (上記 2 と整合) のため、refresh token を keyring に別 slot で保管せず、token 失効時は `ConfigError` / Graph `401 InvalidAuthenticationToken` を契機に operator が `opshub connector auth set connector:teams` で新 token を再投入する経路に揃える。将来 MSAL の `acquire_token_silent` を取り込む場合は本 ADR を改訂し refresh token 用 slot を追加する
 5. **Bot Token は alternative** — 一部企業環境で User Token consent が拒否される / app registration が許可されない場合、Bot Token (Application permissions) で代替する経路を `docs/teams-setup.md` に記載。ただし default は User Token
 
 採用理由 (Slack ADR-0018 と同根拠):

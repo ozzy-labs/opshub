@@ -236,7 +236,7 @@ opshub mcp serve                                       # stdio MCP server — �
 | `llm-ollama` | Ollama daemon クライアント | 小 |
 | `connectors-github` / `connectors-slack` / `connectors-ms365` / `connectors-box` | SaaS connector | 小 |
 | `connectors-teams` | Microsoft Teams connector (Phase 11、msal + httpx) | 小 |
-| `office` | Office 文書本文抽出 (Phase 11、markitdown で `.docx`/`.xlsx`/`.pptx`、ADR-0025) | 小 |
+| `office` | Office 文書本文抽出 (Phase 11、ADR-0025)。`markitdown` を `[docx,xlsx,pptx]` sub-extras 付きで導入する (内訳は `mammoth` / `openpyxl` / `python-pptx`) ため、opshub が対応する 3 つの sub-format のみが取り込まれる | 小 |
 | `secrets` | OS keyring backend | 小 |
 | `encryption` | SQLCipher backed の保存時暗号化 (Phase 10、ADR-0021) | 小 |
 | `mcp` | `opshub mcp serve` 用 MCP server SDK (Phase 10、ADR-0022) | 小 |

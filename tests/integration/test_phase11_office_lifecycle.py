@@ -347,6 +347,21 @@ def test_phase11_office_lifecycle(
     5. Assert the metadata-only FS-scan row round-trips with
        ``body = NULL`` so the ADR-0019 §不変条件 (b) default path
        stays observable alongside the opt-in extraction path.
+    6. Drive ``graph.related`` over a Phase 11 Teams → Outlook link
+       (manual ``link_type="manual"`` via :class:`LinkService`) so the
+       Phase 11 plan §7.3 step 3 graph traversal stays covered after
+       new ``source_type`` discriminators land.
+    7. Stub :func:`opshub.core.excludes.load_excludes` to mark a Teams
+       ``chat_id`` excluded and assert the loaded rules report the
+       channel as filtered — pins the ADR-0020 §(b) shared excludes
+       reaching Teams (security regression guard).
+
+    Phase 11 audit Cluster C note: the MCP ``connector.sync`` path for
+    the new ``teams`` / ``onedrive_drive`` connectors is **not**
+    exercised here — :mod:`opshub.mcp._writes` does not yet import the
+    two new connector packages (Cluster B issue). Once Cluster B lands
+    the import additions, a follow-up should add an MCP
+    ``connector.sync`` smoke test for each new connector name here.
     """
     # ---- 0. monkeypatch the embedder ----------------------------------
     monkeypatch.setenv("OPSHUB_EMBEDDING__BACKEND", "local")
@@ -488,5 +503,71 @@ def test_phase11_office_lifecycle(
             "ADR-0019 §不変条件 (b) — FS-scan rows without content_extraction must keep body=NULL"
         )
         assert row.source_type == "box_drive_file"
+
+        # ---- 6. graph.related cross-connector traversal --------------
+        # Phase 11 plan §7.3 step 3: link a Phase 11 Teams row to a
+        # Phase 11 Outlook row (mirrors a typical operator workflow —
+        # the Teams chat references the Outlook agenda for the same
+        # meeting) and assert ``graph.related`` returns the link from
+        # the Teams side. Walks the full LinkService → projection →
+        # MCP handler stack so a future refactor that drops Phase 11
+        # source types from the graph surface is caught here.
+        from opshub.cli._wiring import build_link_service
+
+        teams_source_id = source_ids[0]
+        outlook_source_id = source_ids[1]
+        link_service = build_link_service(actor="test:phase11_lifecycle")
+        link_service.create_link(
+            from_entity_type="source",
+            from_entity_id=teams_source_id,
+            to_entity_type="source",
+            to_entity_id=outlook_source_id,
+            link_type="manual",
+        )
+        related_payload = _call_mcp_tool_json(
+            specs_by_name,
+            "graph.related",
+            {
+                "entity_id": teams_source_id,
+                "entity_type": "source",
+                "direction": "outgoing",
+                "limit": 10,
+            },
+        )
+        related_items = cast("list[dict[str, Any]]", related_payload["items"])
+        assert any(item.get("to_entity_id") == outlook_source_id for item in related_items), (
+            "graph.related must surface the Phase 11 Teams → Outlook link from"
+            f" the Teams side; got: {related_payload}"
+        )
+
+        # ---- 7. excludes.yaml suppresses Teams ingest ----------------
+        # ADR-0020 §(b) — the shared excludes file must filter Teams
+        # rows just like Slack. We don't re-run a Graph fetch (the
+        # connector path is mocked in unit tests); instead we assert
+        # the loaded ``ExcludeRules`` reports the Teams chat as
+        # excluded so the connector's "skip if excluded" branch
+        # (see ``opshub.connectors.teams.connector``) would fire. This
+        # is the same shape the Phase 10 e2e exercises for Slack.
+        from opshub.core import excludes as excludes_module
+        from opshub.core.excludes import ExcludeRules
+
+        teams_chat_id = "19:secret-teams-channel-id"
+
+        def _stub_load_excludes(config_dir: Path | None = None) -> ExcludeRules:
+            del config_dir
+            return ExcludeRules(channels=frozenset({teams_chat_id}))
+
+        monkeypatch.setattr(excludes_module, "load_excludes", _stub_load_excludes)
+        loaded_rules = excludes_module.load_excludes()
+        assert loaded_rules.excludes_channel(teams_chat_id), (
+            "excludes.yaml ``channels`` selector must mark the Teams chat_id"
+            " excluded so the Teams connector skips it at fetch time"
+            " (ADR-0020 §(b)); cf. opshub.connectors.teams.connector"
+        )
+        # The opposite case must remain false so we know we're not
+        # accidentally over-matching (cross-checks the frozenset path).
+        assert not loaded_rules.excludes_channel("19:public-teams-channel"), (
+            "excludes.yaml must not over-match unrelated channels"
+        )
     finally:
         engine.dispose()

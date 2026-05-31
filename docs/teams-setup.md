@@ -82,8 +82,11 @@ opshub connector auth set connector:teams
 # プロンプトに従って token を貼り付け
 ```
 
-OS keychain (`db:connector:teams:access_token` 相当の slot) に保存される
-([ADR-0014](adr/0014-saas-token-storage.md))。
+OS keychain の **単一 slot** `connector:teams:token` に保存される
+([ADR-0014](adr/0014-saas-token-storage.md))。User Token / 将来の Bot Token
+alternative は principal-neutral にこの 1 slot を共有する
+(ADR-0010 §Phase 11 改訂 (d)、`src/opshub/connectors/teams/auth.py` の
+`TEAMS_TOKEN_SECRET_KEY`)。
 
 ### (b) env var 経由 (CI / 一時利用)
 
@@ -104,12 +107,15 @@ fallback_window_days = 30             # default: 30、delta link 失効時の fu
 # excludes.yaml の channels / senders selector を再利用 (Slack 同パターン)
 ```
 
-`excludes.yaml` 側の設定例:
+`excludes.yaml` 側の設定例 (top-level flat key — ADR-0020 §(b)、
+`src/opshub/core/excludes.py` が parse する shape。`teams: { ... }` 等の
+nested 形式は `ConfigError` で fail-fast):
 
 ```yaml
-teams:
-  channels: ["T-PRIVATE-LEAK"]        # chat_id / chat_topic に match
-  senders: ["security-bot@example.com"]
+channels:
+  - "19:secret-teams-channel-id"     # chat_id / chat_topic に match
+senders:
+  - security-bot@example.com         # sender_id / from に match
 ```
 
 ## 5. sync 実行

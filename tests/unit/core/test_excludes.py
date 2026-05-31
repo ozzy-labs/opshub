@@ -95,3 +95,35 @@ def test_invalid_yaml_raises(tmp_path: Path) -> None:
     (tmp_path / "excludes.yaml").write_text("channels: [unclosed\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="not valid YAML"):
         load_excludes(config_dir=tmp_path)
+
+
+def test_nested_form_raises(tmp_path: Path) -> None:
+    """The historical nested per-connector shape (`slack: {channels: [...]}`)
+    must fail-fast — silently dropping it would let an operator believe a
+    sensitive channel had been excluded when in fact `slack` was never a
+    recognised selector. Pinned per Phase 11 audit Cluster C (ADR-0020 §(b))
+    so the docs cannot drift back to nested examples without breaking this.
+    """
+    (tmp_path / "excludes.yaml").write_text(
+        "slack:\n"
+        "  channels:\n"
+        "    - C0SECRET01\n"
+        "teams:\n"
+        "  channels:\n"
+        "    - '19:secret-teams-channel-id'\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="unknown top-level key"):
+        load_excludes(config_dir=tmp_path)
+
+
+def test_single_unknown_key_also_raises(tmp_path: Path) -> None:
+    """A single typo (e.g. ``channel`` instead of ``channels``) must also
+    fail-fast — same rationale as the nested-form rejection above.
+    """
+    (tmp_path / "excludes.yaml").write_text(
+        "channel:\n  - C0SECRET01\n",  # missing trailing 's'
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="unknown top-level key"):
+        load_excludes(config_dir=tmp_path)
