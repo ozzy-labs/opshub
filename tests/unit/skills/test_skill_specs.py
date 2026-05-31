@@ -34,16 +34,25 @@ from pathlib import Path
 import pytest
 from tools.skill_scan import parse_frontmatter, scan_skill_file
 
-# The five existing secretary skills as of Phase 12 H1 (post-rename).
-# Phase 12 H1 renames the original brief / lookup pair to
+# The secretary skill catalog as of Phase 12 H2.
+#
+# Phase 12 H1 renamed the original brief / lookup pair to
 # ``personal-brief`` and ``find-document``; ``next-actions`` /
 # ``reply-draft`` / ``pr-review`` keep their names.
+#
+# Phase 12 H2 (``docs/phase-12-plan.md`` §3 H2) adds the info-gathering
+# pair ``meeting-prep`` (calendar-event-rooted, read-only) and
+# ``research`` (cross-cutting topical research, read-only). Both are
+# read-only and do not persist proposals — they are pure read paths
+# (Step 4 of the H2 plan).
 _REQUIRED_SKILLS: tuple[str, ...] = (
     "personal-brief",
     "next-actions",
     "reply-draft",
     "pr-review",
     "find-document",
+    "meeting-prep",
+    "research",
 )
 
 # Repo-root-relative path to the catalog of spec files. We climb up
@@ -364,7 +373,171 @@ def test_reply_draft_uses_mcp_propose_generate_as_primary_path() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. Phase 12 H5 — draft skills (handoff-draft + announcement-draft)
+# 8. Phase 12 H2 semantic pins (info gathering skills)
+# ---------------------------------------------------------------------------
+#
+# Phase 12 H2 (``docs/phase-12-plan.md`` §3 H2) introduces two new
+# read-only info-gathering skills: ``meeting-prep`` (calendar-event
+# rooted, builds context for an upcoming meeting) and ``research``
+# (cross-cutting topical research over the opshub memory layer).
+#
+# These pins lock the MCP-direct-call contract for each new skill so
+# host routers can dispatch them through MCP without falling back to
+# the CLI shell. The contract is:
+#
+# * ``meeting-prep`` walks calendar events via ``source.list`` with
+#   ``source_type=ms365_calendar`` and the H1 ``observed_after`` /
+#   ``observed_before`` time filter, then enriches with
+#   ``recall.search`` and ``graph.related``.
+# * ``research`` combines ``recall.search`` (semantic) + ``search``
+#   (FTS5, H1) + ``graph.related`` / ``graph.expand`` (entity
+#   neighbourhood) + ``brief`` (LLM-backed summary).
+# * Both skills are read-only — they MUST NOT reference
+#   ``propose.generate`` / ``propose.apply`` (HITL write boundary).
+
+
+_MEETING_PREP_REQUIRED_TOOLS: tuple[str, ...] = (
+    "source.list",
+    "recall.search",
+    "graph.related",
+)
+
+
+@pytest.mark.parametrize("tool_name", _MEETING_PREP_REQUIRED_TOOLS)
+def test_meeting_prep_dispatches_required_mcp_tools(tool_name: str) -> None:
+    """``meeting-prep`` SKILL.md must dispatch through the H2 tool chain.
+
+    The Phase 12 plan §3 H2 pins the call sequence as
+    ``source.list (source_type=ms365_calendar, observed_after/before)``
+    → ``recall.search`` (participants / topic) →
+    ``graph.related`` (related decisions / docs). The host router
+    needs every literal tool name in the body so it can dispatch
+    without guessing.
+    """
+    path = _SKILLS_DIR / "meeting-prep" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert tool_name in text, (
+        f"{path} must reference MCP tool {tool_name!r} verbatim (Phase 12 H2 §3 H2 dispatch chain)"
+    )
+
+
+def test_meeting_prep_uses_calendar_source_type() -> None:
+    """``meeting-prep`` must filter ``source.list`` by ``ms365_calendar``.
+
+    The Phase 11 ms365 connector maps Calendar events to
+    ``source_type = "ms365_calendar"`` (SSOT:
+    ``src/opshub/connectors/ms365/mapper.py``
+    ``CALENDAR_SOURCE_TYPE``). The skill body MUST reference that
+    literal so the host filters the right rows.
+    """
+    path = _SKILLS_DIR / "meeting-prep" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert "ms365_calendar" in text, (
+        f"{path} must reference the ``ms365_calendar`` source_type "
+        f"(SSOT: src/opshub/connectors/ms365/mapper.py)"
+    )
+
+
+def test_meeting_prep_uses_h1_observed_time_filter() -> None:
+    """``meeting-prep`` must use the H1 ``observed_after`` / ``observed_before`` filter.
+
+    Phase 12 H1 (ADR-0022 改訂) added physical-column time filters on
+    ``source.list`` — ``observed_after`` / ``observed_before`` against
+    ``sources.observed_at``. ``meeting-prep`` is the canonical user
+    of that filter (calendar events for an upcoming window).
+    """
+    path = _SKILLS_DIR / "meeting-prep" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert "observed_after" in text and "observed_before" in text, (
+        f"{path} must reference the H1 ``observed_after`` / "
+        f"``observed_before`` time filter on ``source.list``"
+    )
+
+
+def test_meeting_prep_is_read_only() -> None:
+    """``meeting-prep`` must not invoke any write MCP tools.
+
+    Phase 12 plan §3 H2 explicitly classifies ``meeting-prep`` as
+    read-only (no persist). The HITL write counterpart is
+    ``meeting-followup`` (Phase 12 H4). If a future edit slips a
+    ``propose.generate`` / ``propose.apply`` / ``task.create`` /
+    ``inbox.add`` / ``connector.sync`` into the body, the boundary
+    has drifted.
+    """
+    path = _SKILLS_DIR / "meeting-prep" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    # Allow disallowed tool names to appear only inside a fenced
+    # "do not call" passage — but pin the simpler invariant: the
+    # body's call-order section uses ``tool: <name>`` for prescribed
+    # tools, so disallowed tools must not appear with that exact
+    # prefix anywhere in the file.
+    for forbidden in (
+        "tool: propose.generate",
+        "tool: propose.apply",
+        "tool: task.create",
+        "tool: inbox.add",
+        "tool: connector.sync",
+    ):
+        assert forbidden not in text, (
+            f"{path} must not invoke {forbidden!r} — meeting-prep is "
+            f"read-only (Phase 12 plan §3 H2). HITL write belongs to "
+            f"meeting-followup (Phase 12 H4)."
+        )
+
+
+_RESEARCH_REQUIRED_TOOLS: tuple[str, ...] = (
+    "recall.search",
+    "search",
+    "graph.related",
+    "graph.expand",
+    "brief",
+)
+
+
+@pytest.mark.parametrize("tool_name", _RESEARCH_REQUIRED_TOOLS)
+def test_research_dispatches_required_mcp_tools(tool_name: str) -> None:
+    """``research`` SKILL.md must dispatch through the H2 tool chain.
+
+    The Phase 12 plan §3 H2 pins the call sequence as
+    ``recall.search`` (semantic) + ``search`` (FTS5, H1) +
+    ``graph.related`` / ``graph.expand`` (entity neighbourhood) +
+    ``brief`` (LLM-backed summary). Each literal must appear so the
+    host can dispatch each step without guessing.
+    """
+    path = _SKILLS_DIR / "research" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    # ``search`` is a substring of ``recall.search``, so use a
+    # word-boundary regex to make the search-tool pin meaningful.
+    pattern = re.compile(rf"(?<!\.)\b{re.escape(tool_name)}\b")
+    assert pattern.search(text), (
+        f"{path} must reference MCP tool {tool_name!r} verbatim (Phase 12 H2 §3 H2 dispatch chain)"
+    )
+
+
+def test_research_is_read_only() -> None:
+    """``research`` must not invoke any write MCP tools.
+
+    Phase 12 plan §3 H2 classifies ``research`` as read-only — the
+    cross-cutting investigation does not persist proposals. Write
+    paths belong to other skills (reply-draft / inbox-triage /
+    source-extract / meeting-followup).
+    """
+    path = _SKILLS_DIR / "research" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    for forbidden in (
+        "tool: propose.generate",
+        "tool: propose.apply",
+        "tool: task.create",
+        "tool: inbox.add",
+        "tool: connector.sync",
+    ):
+        assert forbidden not in text, (
+            f"{path} must not invoke {forbidden!r} — research is read-only (Phase 12 plan §3 H2)."
+        )
+
+
+# ---------------------------------------------------------------------------
+# 9. Phase 12 H5 — draft skills (handoff-draft + announcement-draft)
 # ---------------------------------------------------------------------------
 #
 # Phase 12 H5 (docs/phase-12-plan.md §3 H5) adds two text-only draft skills.
