@@ -241,3 +241,49 @@ opshub embeddings rebuild
 - New `source_type` discriminators: `teams_message` / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`.
 - No CLI breaking changes. `opshub connector sync teams` / `... onedrive_drive` are the new sync targets.
 - External write-back is **still forbidden** (ADR-0010 §禁止事項 7). The secretary drafts only; the operator sends.
+
+## Phase 12: Secretary skills expansion
+
+Phase 12 ([ADR-0004](adr/0004-agent-runtime-boundary.md) revision §決定 (c-2) + [ADR-0022](adr/0022-mcp-server-surface.md) revision §決定 (f) + [ADR-0016](adr/0016-action-loop-and-structured-output.md) revision §決定 (l)) grows the secretary skill repertoire from **5 to 14** and widens the MCP surface with 4 new tools. **No DB schema changes**, **no breaking CLI changes**, and the **external write-back ban remains in force** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7).
+
+### New MCP tools (4)
+
+- **`search`** — FTS5 cross-connector full-text search ([ADR-0022](adr/0022-mcp-server-surface.md) §決定 (f), `ReadCategory.SEARCH`). Phrase-quoted by default; the CLI-only `--raw-query` flag is intentionally absent from the MCP schema so host LLMs cannot smuggle raw MATCH syntax through.
+- **`propose.apply`** — HITL idempotent apply path (`WriteCategory.PROPOSE_APPLY`, `destructive=false` + `idempotent=true`). The handler catches `OpsHubError("already applied" / "already rejected")` from the underlying service and normalises it to `{ok: true, already_applied: true, applied_entity_id}` so retries never throw. The `destructive=false` carve-out is documented in [SECURITY.md](../SECURITY.md#phase-12-secretary-skills-expansion--what-changed) (every other write tool stays `destructive=true`).
+- **Physical-column time filters on the existing 4 read tools** — `task.list.updated_after/before` (`tasks.updated_at`) / `inbox.list.created_after/before` (`inbox_items.created_at`) / `decision.list.recorded_after/before` (`decisions.recorded_at`) / `source.list.observed_after/before` (`sources.observed_at`). ISO 8601, half-open interval (`>= after` / `< before`). Tool-specific names (not a shared `since/until`) keep business-time vs physical-column semantics from drifting.
+
+### New `propose generate --mode` flag
+
+`opshub propose generate` (and the equivalent `propose.generate` MCP write tool) gain a `--mode` argument with three new values: `inbox_triage` / `source_extract` / `meeting_followup`. These dispatch to the corresponding new HITL-write skills (`inbox-triage` / `source-extract` / `meeting-followup`) and reuse the existing `propose generate → apply / reject` lifecycle. The pre-existing `reply_draft` mode (Phase 10) is unchanged; `--mode` is omitted for the default proposal path.
+
+### Skill catalog — 5 → 14
+
+The secretary skill catalog grows to **14 skills** = **10 read (host-LLM-autonomous)** + **4 HITL write** ([`docs/secretary-agent.md`](secretary-agent.md) is the SSOT for the responsibility map, pair structure, HITL boundary, and MCP-tool dependency matrix):
+
+- **read (10)**: `personal-brief` (renamed from `daily-brief`) / `next-actions` / `pr-review` / `find-document` (renamed from `file-lookup`) / `meeting-prep` / `research` / `external-brief` / `decision-rationale` / `handoff-draft` / `announcement-draft` (the last two are **text-only** — no persist path, no `propose apply` route)
+- **HITL write (4)**: `reply-draft` / `inbox-triage` / `source-extract` / `meeting-followup`
+
+Two existing skills were renamed (`daily-brief` → `personal-brief`, `file-lookup` → `find-document`). The old names are not aliased — host configs that referenced them must be updated.
+
+### Skill install on the host
+
+The `ozzy-labs/skills` distribution channel ([ADR-0004](adr/0004-agent-runtime-boundary.md) §決定 (c) backout) is deferred to Phase 13+; for Phase 12 the **opshub repo (`docs/skills/<name>/SKILL.md`) is the SSOT** and the host installs them manually:
+
+```bash
+# Claude Code (project-level)
+cp -r docs/skills/* .claude/skills/
+
+# Claude Code (user-level) — or .agents/skills/ when Claude Code is sandboxed
+cp -r docs/skills/* ~/.claude/skills/
+```
+
+Re-run after every opshub upgrade until the distribution mechanism lands. The pre-existing 5 skills' SKILL.md were rewritten to call MCP directly (the previous CLI fallback was dropped); the MCP server (`opshub mcp serve`, Phase 10) is now a hard dependency for the secretary skills.
+
+### Phase 12 specifics
+
+- **DB head unchanged** = `0019_create_sources_fts` (Phase 10). Phase 12 ships **no migrations**.
+- **No new extras**. The MCP server still lives under the existing `mcp` extras.
+- **No CLI breaking changes**. `--mode` is additive on `propose generate`; the previous default behaviour (no `--mode`) is preserved.
+- New MCP tool surface: total **17 tools** = 12 read + 5 write (was 13 = 11 read + 2 write before Phase 12 H1; Phase 10 + Step 1 widening PR #231 baseline).
+- **No DB schema changes / no event-schema changes.** Existing rows continue to round-trip cleanly through every query path.
+- External write-back is **still forbidden** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7). All 4 HITL-write skills draft locally; the operator sends.
