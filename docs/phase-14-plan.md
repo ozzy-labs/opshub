@@ -244,9 +244,14 @@ drive 例: `/drive --merge #293 -> #294 -> #295,#296 -> #297`（Wave 3 で G3/G4
 
 ### 7.2 結合テスト (integration)
 
-- **`tests/integration/test_phase14_google_mail_sync.py`**: Gmail connector round-trip (cursor + 7 日 TTL fallback) + rate limit retry
-- **`tests/integration/test_phase14_google_calendar_sync.py`**: Calendar connector round-trip (sync token + 410 GONE fallback) + rate limit retry
-- **`tests/integration/test_phase14_shared_auth_scope_extension.py`**: scope 拡張後の既存 google_workspace round-trip 維持 + rotation 後の 3 connector 並行 sync
+> **G5 で lifecycle 1 本に統合 (Phase 14 audit cluster D1 #308 採用判断)**: 当初は connector ごとに 3 file 分割する計画だったが、G5 closeout で `tests/integration/test_phase14_google_mail_calendar_lifecycle.py` 1 本に統合した (lifecycle 内に projection / MCP read surface / mapper symmetry / write-back absence guard を集約). Phase 14 audit cluster D1 (#308) で G-1 (round-trip) / G-2 (rotation) / G-10 (scope 拡張下 Phase 13 round-trip) も同 lifecycle file 内の test 関数として追加し、Option A (1 file 集約) を継続採用した。Option B (3 file 分割) は契約レイヤ (auth / cursor / projection / MCP read surface) が Phase 13 shape 再利用で per-connector round-trip pin が projection / write-back guard と隣接して読める利点を覆すコストとなったため不採用。
+
+- **`tests/integration/test_phase14_google_mail_calendar_lifecycle.py`** (lifecycle 統合):
+  - Gmail connector round-trip (`test_phase14_sync_round_trip_via_mock_httpx_gmail`): cursor + 1 message 取り込み round-trip を `httpx.MockTransport` hermetic で
+  - Calendar connector round-trip (`test_phase14_sync_round_trip_via_mock_httpx_calendar`): sync token + 1 event 取り込み round-trip を `httpx.MockTransport` hermetic で
+  - 3 connector rotation continuation (`test_phase14_rotation_propagates_to_all_three_connectors`): Drive / Gmail / Calendar 並行 sync1 → rotation → sync2 で cursor 継続を pin
+  - Phase 13 round-trip 維持 (`test_phase14_phase13_google_workspace_unaffected_by_scope_extension`): `DEFAULT_SCOPES` 3-scope 拡張下で google_workspace round-trip 維持を pin
+  - 7 日 TTL fallback (Gmail) / 410 GONE fallback (Calendar) / rate limit retry は単体 (`tests/unit/connectors/google_mail/test_connector.py` / `tests/unit/connectors/google_calendar/test_connector.py`) で pin 済み
 - **extras 確認**: `[connectors-google-workspace]` extras 1 つで 3 connector (Drive / Gmail / Calendar) すべて使える (Phase 14 で新 extras 追加なし)
 
 ### 7.3 e2e lifecycle テスト
