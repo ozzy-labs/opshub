@@ -1,11 +1,11 @@
 ---
 name: file-lookup
-description: 「Box にあったあの資料」「先週共有された PDF」「<キーワード>含むファイル」と頼まれたら、opshub MCP の recall.search で本文ベース横断検索を実行し、Box / Slack / GitHub / MS365 / Box Drive を横断して該当 source を返す。本文取得は読み取り経路のみで、外部 SaaS を直接叩かない。
+description: 「Box にあったあの資料」「先週共有された PDF」「<キーワード>含むファイル」と頼まれたら、opshub MCP の recall.search で本文ベース横断検索を実行し、Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Office 文書 (Word / Excel / PowerPoint) を横断して該当 source を返す。本文取得は読み取り経路のみで、外部 SaaS を直接叩かない。
 ---
 
 # file-lookup — opshub の本文ベース横断検索で資料を引く
 
-opshub MCP server (`opshub mcp serve`、ADR-0022) の `recall.search` で、Phase 10 Sub-issue B (#214 merged) の本文ベース embedding + SQLite FTS5 横断検索を使い、Box / Slack / GitHub / MS365 / Box Drive を横断して該当ファイル / メッセージを引く。
+opshub MCP server (`opshub mcp serve`、ADR-0022) の `recall.search` で、Phase 10 Sub-issue B (#214 merged) の本文ベース embedding + SQLite FTS5 横断検索を使い、Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Office 文書 (Word / Excel / PowerPoint) を横断して該当ファイル / メッセージを引く。Phase 11 で Teams chat (`teams_message`)、Outlook 本文 deep retention (`ms365_outlook`)、Office 文書抽出 (`word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`、markitdown 経由) が追加され、`onedrive_drive` ローカル FS connector も recall 対象に入った (ADR-0025、Phase 11 plan §3 F1-F6)。
 
 ADR-0020 (本文ローカル保持) + ADR-0012 改訂 (本文 embedding) で、要約 (summary) ではなく本文に対する hit が返るため、固有名詞や細部のキーワードでも引ける (Phase 10 plan §3-B)。
 
@@ -34,16 +34,21 @@ input:
 
 ユーザーが「Box の」「Slack の」と source 種別を絞っている場合、ホスト側で `hits[]` を `source_type` でフィルタする (`recall.search` の input に source_type filter が無い現実装では post-filter で対応)。
 
-| ユーザー語彙 | source_type |
-|---|---|
-| Box にあるあの〜 | `box_event` / `box_drive_file` |
-| Slack の〜 | `slack_message` |
-| GitHub の〜 | `issue` / `pull_request` / `notification` |
-| Outlook / メール | `ms365_outlook` |
-| カレンダー予定 | `ms365_calendar` |
-| OneDrive のファイル | `ms365_onedrive` |
+| ユーザー語彙 | source_type | connector |
+|---|---|---|
+| Box にあるあの〜 | `box_event` / `box_drive_file` | `box` / `box_drive` |
+| Slack の〜 | `slack_message` | `slack` |
+| GitHub の〜 | `issue` / `pull_request` / `notification` | `github` |
+| Outlook / メール | `ms365_outlook` | `ms365` |
+| カレンダー予定 | `ms365_calendar` | `ms365` |
+| OneDrive のファイル (Graph 経由) | `ms365_onedrive` | `ms365` |
+| Teams のチャット | `teams_message` | `teams` |
+| Word 文書 | `word_document` | `box_drive` / `onedrive_drive` |
+| Excel スプレッドシート | `excel_spreadsheet` | `box_drive` / `onedrive_drive` |
+| PowerPoint スライド | `powerpoint_slide_deck` | `box_drive` / `onedrive_drive` |
+| OneDrive Desktop (ローカル FS) | `onedrive_drive_file` | `onedrive_drive` |
 
-source_type 値は connector 実装の SSOT (`src/opshub/connectors/<name>/{api,mapper}.py` の `source_type=...` リテラル) に対応する。GitHub connector は `github_` prefix を持たず素の `issue` / `pull_request` / `notification` を発行する点に注意 (Phase 10 監査で SKILL.md ↔ 実装間の drift として固定済)。
+source_type 値は connector 実装の SSOT (`src/opshub/connectors/<name>/{api,mapper}.py` の `source_type=...` リテラル) に対応する。GitHub connector は `github_` prefix を持たず素の `issue` / `pull_request` / `notification` を発行する点に注意 (Phase 10 監査で SKILL.md ↔ 実装間の drift として固定済)。Phase 11 で追加された `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` は `box_drive` / `onedrive_drive` の `content_extraction = true` opt-in が必要 (markitdown 経由、ADR-0025)。
 
 ### Step 3 (任意): 詳細を recall.search で展開
 
@@ -65,10 +70,21 @@ source_type 値は connector 実装の SSOT (`src/opshub/connectors/<name>/{api,
 - ...
 
 ## MS365 (n 件)
-- ...
+- Outlook (`ms365_outlook`、body deep retention 含む): ...
+- Calendar (`ms365_calendar`): ...
+- OneDrive (`ms365_onedrive`、Graph 経由 metadata): ...
+
+## Teams (n 件)
+- [<channel/chat title>] (<date>) — <snippet 抜粋>  ← `teams_message`
 
 ## Box Drive (ローカル sync、n 件)
 - <rel_path> (<mtime>) — <snippet 抜粋>
+
+## OneDrive Drive (ローカル sync、n 件)
+- <rel_path> (<mtime>) — <snippet 抜粋>  ← `onedrive_drive_file`
+
+## Office 文書 (markitdown 抽出、n 件)
+- <rel_path> (<mtime>) — <snippet 抜粋>  ← `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`
 ```
 
 ## 自律範囲
@@ -87,7 +103,10 @@ source_type 値は connector 実装の SSOT (`src/opshub/connectors/<name>/{api,
 ## 参考
 
 - ADR-0012 改訂 (本文 embedding、Phase 10 §18)
-- ADR-0020 (本文ローカル保持)
+- ADR-0020 改訂 (本文ローカル保持、Phase 11 で Outlook body deep retention 追加)
 - ADR-0022 §(d) (context 効率)
+- ADR-0025 (Office 文書本文抽出、markitdown 経由)
+- ADR-0010 §改訂 (connector contract、Phase 11 で Teams 追加)
 - Phase 10 Sub-issue B (#214 merged、本文 FTS5 / search command)
+- Phase 11 plan (`docs/phase-11-plan.md`)
 - docs/secretary-agent.md

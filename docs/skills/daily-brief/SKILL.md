@@ -111,5 +111,9 @@ input:
 
 - ADR-0004 (Agent Runtime Boundary、形A)
 - ADR-0022 (MCP Server Surface)
+- ADR-0025 (Office 文書本文抽出)
+- ADR-0010 §改訂 (connector contract、Phase 11 で Teams 追加)
+- ADR-0020 §改訂 (Outlook body deep retention、Phase 11)
 - Phase 10 plan §3-D (skill ↔ MCP tool マッピング)
+- Phase 11 plan (`docs/phase-11-plan.md`)
 - docs/secretary-agent.md (利用例の catalog)

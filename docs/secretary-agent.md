@@ -29,7 +29,7 @@ opshub 本体が **持たない** もの:
 | 「次に何やる?」「やること教えて」「優先度高いのは?」 | [next-actions](skills/next-actions/SKILL.md) | 優先度順の next-actions リスト。新規 task 追加は人確認付き |
 | 「これに返信案考えて」「下書き作って」 | [reply-draft](skills/reply-draft/SKILL.md) | 返信下書き候補。送信は行わずユーザーが手で貼り付け |
 | 「PR #N レビューして」「この差分どう?」 | [pr-review](skills/pr-review/SKILL.md) | 関連 decision / task / 過去議論を引いてレビュー観点を提示 |
-| 「Box にあったあの資料」「<キーワード>含むファイル」 | [file-lookup](skills/file-lookup/SKILL.md) | 本文ベース横断検索で Box / Slack / GitHub / MS365 / Box Drive から該当 source |
+| 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」 | [file-lookup](skills/file-lookup/SKILL.md) | 本文ベース横断検索で Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Office 文書 (Word / Excel / PowerPoint、Phase 11 ADR-0025) から該当 source |
 
 ## Skills 一覧
 
