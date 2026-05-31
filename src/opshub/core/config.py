@@ -469,10 +469,14 @@ class OfficeSettings(BaseModel):
     ``OPSHUB_OFFICE__EXCEL__MAX_CELLS_PER_SHEET=20000``.
 
     The ``[connectors.box_drive] content_extraction`` /
-    ``[connectors.onedrive_drive] content_extraction`` opt-in still
+    ``[connectors.onedrive_drive] content_extraction`` /
+    ``[connectors.google_workspace] content_extraction`` opt-in still
     gates whether the extractor is invoked at all; this section only
     tunes the per-call caps once an operator opts in (ADR-0019 §(b')
-    + ADR-0025 §決定 (g) two-key composition).
+    + ADR-0025 §決定 (g) two-key composition). Phase 13 G4 (#278)
+    extended the propagation surface to the Google Workspace
+    connector so all three opt-in paths share the same operator
+    knob.
     """
 
     max_file_size_mb: int = 50
@@ -519,12 +523,24 @@ class GoogleWorkspaceConnectorSettings(BaseModel):
     Google Cloud Console.
 
     ``content_extraction`` defaults to ``False`` (Phase 13 G3 ships
-    metadata-only). Sub-issue G4 (#278) is responsible for wiring
-    this flag to the mapper so that
-    :func:`opshub.core.document_extract.extract_document` is called
-    on ``files.export``-fetched bytes; until G4 merges this flag is
-    inert but pinned so the operator surface does not move when G4
-    lands.
+    metadata-only). Phase 13 G4 (#278) wires this flag to the
+    connector so that
+    :func:`opshub.core.document_extract.extract_workspace_export`
+    is called on the bytes returned by Drive's
+    ``files.export(fileId, mimeType=<MS Office mediatype>)`` for the
+    three Google Workspace native source_types (``google_doc`` /
+    ``google_slides`` / ``google_sheets``); non-native files (the
+    catch-all ``google_workspace_file``) stay metadata-only because
+    Drive returns 403 ``fileNotExportable`` for them. When ``True``,
+    the connector also propagates the
+    :class:`OfficeSettings` overrides (``[office] max_file_size_mb``
+    / ``[office] max_chars`` / ``[office.excel] max_cells_*``) so a
+    single operator override governs Box Drive / OneDrive / Google
+    Workspace bodies in lockstep (ADR-0025 §決定 (g) two-key
+    composition). Default ``False`` keeps the G3 metadata-only
+    behaviour bit-for-bit (no ``files.export`` call, no markitdown
+    cost) so upgrading from G3 → G4 is a no-op until the operator
+    opts in.
 
     The Refresh Token lives in the OS keyring under
     ``connector:google_workspace:refresh_token`` per ADR-0014

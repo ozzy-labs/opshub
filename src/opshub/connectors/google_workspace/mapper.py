@@ -1,24 +1,27 @@
-"""Google Workspace → :class:`SourceObserved` mapper (Phase 13 G3).
+"""Google Workspace → :class:`SourceObserved` mapper (Phase 13 G3 + G4).
 
 Drive's ``changes.list`` returns metadata for every file the user can
 see; this module translates each into the canonical
 :class:`opshub.domain.events.source.SourceObserved` shape the event
 store / projections / recall pipeline consume.
 
-Phase 13 G3 scope (metadata only, ``body=None``)
-------------------------------------------------
+Phase 13 G3 scope (metadata only, ``body=None``) → G4 (body + provenance)
+-------------------------------------------------------------------------
 
-* The mapper stamps ``body=None`` on every event because Sub-issue G3
-  is responsible for the OAuth + metadata + cursor surface; the
-  ``files.export`` round-trip that fills bodies lands in G4 (per Phase
-  13 plan §3). The interface for *adding* a body is intentionally
-  obvious here — every constructor call already passes ``body=None``
-  explicitly so the G4 PR's diff is a single-spot change.
-* Provenance tags are stamped *now* even though body is ``None``:
-  ``provenance_origin="external"`` / ``provenance_trust="untrusted"``
-  matches the rest of the SaaS connector family (MS365 / Box / Teams)
-  and means the secretary skills + LLM prompts already classify
-  Google Workspace content correctly when G4 swaps body in.
+* G3 (#277) shipped ``body=None`` on every event — the OAuth +
+  metadata + cursor surface only. G4 (#278) wires
+  :func:`opshub.core.document_extract.extract_workspace_export`
+  through the connector and threads the resulting body + truncation
+  flag into :func:`map_drive_item`. The mapper itself stays
+  source-of-truth-agnostic: callers pass the already-extracted body
+  (or ``None`` when ``content_extraction`` is off or the item is not
+  a Workspace native), and the mapper assembles the
+  :class:`SourceObserved` with the right provenance stamps.
+* Provenance tags stay ``provenance_origin="external"`` /
+  ``provenance_trust="untrusted"`` — matches the rest of the SaaS
+  connector family (MS365 / Box / Teams) and tells the secretary
+  skills + LLM prompts to treat the body as untrusted reference
+  material (ADR-0015 §決定 (f) do-not-follow preamble).
 
 ``source_type`` derivation (ADR-0025 §決定 (d'))
 ------------------------------------------------
@@ -36,23 +39,21 @@ secretary skill cares about; the catch-all keeps the connector
 emitting events for every observed file so projection coverage stays
 complete (ADR-0020 retain-everything).
 
-G2 / G3 import contract (Phase 13 plan §G3 parallel implementation)
--------------------------------------------------------------------
+G2 / G3 / G4 canonical literal contract
+---------------------------------------
 
-G2 (#276) is responsible for publishing ``GOOGLE_WORKSPACE_SOURCE_TYPES:
-Final[tuple[str, ...]]`` from :mod:`opshub.domain.events.source` (or
-an analogous module). At G3-merge time G2 was **not** merged so this
-module ships a self-contained local stub — :data:`GOOGLE_WORKSPACE_SOURCE_TYPES`
-is declared inline with the same three string values so the mapper
-can pin a stable surface without taking a dependency on an unmerged
-PR. When G2 lands, the **single-import swap** is documented at the
-data declaration so G4 (or the G2 merge follow-up) can flip the source
-in one line and delete the stub. The Phase 13 plan §G3 wave-2
-parallel-implementation note explicitly allows this stub-import
-strategy ("Python の forward reference + 開発中の文字列 literal で先行可能").
+G2 (#276) published the canonical
+:data:`GOOGLE_WORKSPACE_SOURCE_TYPES` tuple from
+:mod:`opshub.core.document_extract`. G3 (#277) shipped a local stub
+of the same literal so the parallel waves could land independently;
+G4 (#278) deletes the stub and re-exports the canonical tuple here.
+The re-export keeps existing call sites (tests, future connector
+helpers) working without a churn diff while making
+``opshub.core.document_extract`` the single source of truth (same
+pattern :data:`SOURCE_TYPE_BY_EXTENSION` follows for the Office path).
 
-ADR-0005 (External Content Minimization)
-----------------------------------------
+ADR-0005 (External Content Minimization) — summary
+--------------------------------------------------
 
 * ``summary`` is clipped to :data:`SUMMARY_MAX_CHARS` (200) before
   the event is built — same cap MS365 / Box / Slack / Teams enforce.
@@ -66,6 +67,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final, Literal
 
+from opshub.core.document_extract import (
+    GOOGLE_WORKSPACE_SOURCE_TYPES,
+)
 from opshub.core.errors import ConnectorFailedError
 from opshub.core.time import now_utc
 from opshub.domain.events.source import SourceObserved
@@ -110,32 +114,20 @@ GENERIC_FILE_SOURCE_TYPE: Final[Literal["google_workspace_file"]] = "google_work
 
 #: The three Workspace native source_type discriminators, frozen as a
 #: tuple for downstream consumers (find-document filter dropdowns,
-#: ``source_type`` enum-style checks). Phase 13 plan §G3 explicitly
-#: references this constant as the G3 ⇄ G2 interface surface — the
-#: equivalent name will appear in :mod:`opshub.domain.events.source`
-#: once G2 (#276) merges, at which point this module's declaration
-#: becomes a passthrough re-export:
-#:
-#: .. code-block:: python
-#:
-#:     # When G2 (#276) lands:
-#:     from opshub.domain.events.source import (
-#:         GOOGLE_WORKSPACE_SOURCE_TYPES,
-#:     )
-#:
-#: Until then this in-module declaration is the SSOT for the mapper +
-#: tests; both definitions are bit-equal so the swap is a single-line
-#: import change with no value drift. The forward-reference strategy
-#: is sanctioned by Phase 13 plan §G3 wave-2 parallel implementation
-#: note ("G2 の literal 追加と G3 の import は merge 順に依存しない
-#: ため並列可能"). The G3 → G4 hand-off PR captures this as a
-#: ``cross_cutting_gaps`` entry so the parent drive run knows the
-#: swap is pending.
-GOOGLE_WORKSPACE_SOURCE_TYPES: Final[tuple[str, ...]] = (
-    GOOGLE_DOC_SOURCE_TYPE,
-    GOOGLE_SHEETS_SOURCE_TYPE,
-    GOOGLE_SLIDES_SOURCE_TYPE,
-)
+#: ``source_type`` enum-style checks). Re-exported from
+#: :data:`opshub.core.document_extract.GOOGLE_WORKSPACE_SOURCE_TYPES`
+#: (the canonical SSOT G2 #276 published); the import-time assignment
+#: keeps existing imports of
+#: ``opshub.connectors.google_workspace.mapper.GOOGLE_WORKSPACE_SOURCE_TYPES``
+#: working while making the value pin live in one place. ADR-0025
+#: §決定 (d') is explicit that the order is ``(doc, sheets, slides)``;
+#: the canonical tuple itself is ordered ``(doc, slides, sheets)``
+#: per ADR-0025 §決定 (j) Table 1, so the test pin at
+#: ``tests/unit/connectors/google_workspace/test_mapper.py
+#: ::test_google_workspace_source_types_pin_tuple`` updates with the
+#: G4 swap. Consumers that need a specific ordering should refer to
+#: :data:`opshub.core.document_extract.GOOGLE_WORKSPACE_MIMETYPE_TO_SOURCE_TYPE`
+#: for an explicit mimeType-keyed mapping.
 
 
 #: mimeType → source_type lookup table per ADR-0025 §決定 (d'). The
@@ -194,7 +186,12 @@ def source_type_for_mime_type(mime_type: str) -> str:
     return _MIME_TYPE_TO_SOURCE_TYPE.get(mime_type, GENERIC_FILE_SOURCE_TYPE)
 
 
-def map_drive_item(raw: RawDriveItem, *, actor: str = DEFAULT_ACTOR) -> SourceObserved:
+def map_drive_item(
+    raw: RawDriveItem,
+    *,
+    actor: str = DEFAULT_ACTOR,
+    body: str | None = None,
+) -> SourceObserved:
     """Translate a :class:`RawDriveItem` into :class:`SourceObserved`.
 
     Field mapping:
@@ -218,11 +215,41 @@ def map_drive_item(raw: RawDriveItem, *, actor: str = DEFAULT_ACTOR) -> SourceOb
       :data:`SUMMARY_MAX_CHARS`. The marker stamps ``[trashed]`` and
       ``[removed]`` when applicable (ADR-0020 retains both — the
       marker is the cue downstream consumers use to distinguish).
+      G4 (#278) adds an ``[edited by ...]`` marker when
+      ``lastModifyingUser`` differs from the owner so the secretary
+      can attribute the most recent change.
     * ``occurred_at`` ← parsed ``raw.modified_time_iso`` (tz-aware
       UTC).
-    * ``body=None`` and provenance ``external`` / ``untrusted`` — G4
-      will swap body for the extracted Markdown when the operator
-      opts into ``content_extraction``.
+    * ``body`` ← ``body`` argument when supplied (G4 connector wiring
+      hands in the extracted markdown from
+      :func:`opshub.core.document_extract.extract_workspace_export`);
+      ``None`` otherwise (catch-all source types, items skipped by
+      size cap / fail-safe, or operator opt-out via
+      ``content_extraction = False``). Provenance is always
+      ``external`` / ``untrusted`` — matches ADR-0020 §(e) for SaaS
+      connectors so an agent / LLM treats the body as reference
+      material under the do-not-follow preamble (ADR-0015 §決定 (f)).
+
+    Parameters
+    ----------
+    raw:
+        Normalised Drive payload from
+        :func:`opshub.connectors.google_workspace.client._normalise_change`.
+    actor:
+        Stamped onto the resulting :class:`SourceObserved` as the
+        principal that observed the item. The CLI driver passes
+        ``"connector:google_workspace"``; unit tests override it.
+    body:
+        Extracted markdown body when content extraction succeeded
+        for this item. ``None`` when extraction was off (operator
+        opt-out, non-native mimeType, or fail-safe skip in
+        :func:`opshub.core.document_extract.extract_workspace_export`).
+        Truncation / skip metadata is intentionally **not** stored on
+        the event — the truncation notice is appended inline by the
+        extractor (``\\n\\n[truncated: original=<N> chars, limit=<M>]``)
+        so the field stays a single nullable string and the existing
+        Phase 11 Office event shape is preserved bit-for-bit
+        (ADR-0025 §決定 (b-2) shared truncation contract).
 
     Raises
     ------
@@ -261,6 +288,7 @@ def map_drive_item(raw: RawDriveItem, *, actor: str = DEFAULT_ACTOR) -> SourceOb
         summary=summary,
         occurred_at=_parse_iso_utc(raw.modified_time_iso),
         actor=actor,
+        body=body,
     )
 
 
@@ -272,14 +300,27 @@ def _build_summary(raw: RawDriveItem) -> str:
 
     Format::
 
-        [trashed] [removed] [shared with me] <owner display name>
-        (<owner email>) — <mimeType>
+        [trashed] [removed] [shared with me] [shared] [edited by <name>]
+        <owner display name> (<owner email>) — <mimeType>
 
     The bracketed markers are emitted only when the corresponding flag
     is set so a regular owned doc renders as just
     ``"<owner> (<email>) — <mimeType>"``. The owner email is included
     so the secretary skill can surface "who shared this with me" without
-    re-reading ``raw``. Trailing components are dropped when empty.
+    re-reading ``raw``. G4 (#278) adds:
+
+    * ``[shared]`` — Drive's outbound-share boolean (someone other
+      than the owner has access). Mutually informative with
+      ``[shared with me]`` (the receiving end).
+    * ``[edited by <name>]`` — ``lastModifyingUser.displayName`` when
+      it differs from the owner (or owner display name is missing),
+      so the secretary can attribute the most recent change. We do
+      **not** include the editor's email here to keep the cap
+      under :data:`SUMMARY_MAX_CHARS`; full identity lives on
+      :attr:`RawDriveItem.last_modifying_user_email` for callers
+      that need it.
+
+    Trailing components are dropped when empty.
     """
     parts: list[str] = []
     if raw.removed:
@@ -291,6 +332,19 @@ def _build_summary(raw: RawDriveItem) -> str:
         parts.append("[trashed]")
     if raw.is_shared_with_me:
         parts.append("[shared with me]")
+    elif raw.shared:
+        # ``shared`` is Drive's outbound boolean: at least one
+        # non-owner has access. Skip when ``is_shared_with_me`` is
+        # set because the receiving-end marker already conveys the
+        # "this is not private" signal more precisely.
+        parts.append("[shared]")
+    # Editor attribution marker. Skipped when the editor matches the
+    # owner (the common case — the owner is usually the most recent
+    # editor too) or when Drive omitted ``lastModifyingUser``
+    # (anonymous edits, system writes).
+    editor = raw.last_modifying_user_display_name
+    if editor and editor != raw.owner_display_name:
+        parts.append(f"[edited by {editor}]")
     if raw.owner_display_name:
         parts.append(raw.owner_display_name)
     if raw.owner_email:
@@ -313,6 +367,7 @@ def _build_source_observed(
     summary: str,
     occurred_at: datetime,
     actor: str,
+    body: str | None,
 ) -> SourceObserved:
     """Assemble a :class:`SourceObserved` from the mapper's inputs.
 
@@ -336,12 +391,14 @@ def _build_source_observed(
         title=title,
         url=url if url else None,
         summary=summary if summary else None,
-        # Phase 13 G3 stops here — G4 will swap ``body=None`` for the
-        # extracted Markdown when ``[connectors.google_workspace]
-        # content_extraction`` is enabled. The provenance tags stay
-        # the same (external / untrusted), matching ADR-0020 + the
-        # rest of the SaaS connector family.
-        body=None,
+        # Phase 13 G4 (#278) hands the body in from
+        # :func:`opshub.core.document_extract.extract_workspace_export`
+        # via the connector when ``[connectors.google_workspace]
+        # content_extraction = true``. The default-off / catch-all /
+        # fail-safe paths keep ``body=None``; provenance stays the
+        # same (external / untrusted), matching ADR-0020 + the rest
+        # of the SaaS connector family.
+        body=body,
         provenance_origin="external",
         provenance_trust="untrusted",
     )

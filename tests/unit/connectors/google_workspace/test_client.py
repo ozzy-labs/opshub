@@ -456,3 +456,247 @@ def test_request_exhausts_budget_and_raises() -> None:
 def test_drive_api_base_pinned() -> None:
     """The Drive v3 base URL is a regression-prone constant."""
     assert DRIVE_API_BASE == "https://www.googleapis.com/drive/v3"
+
+
+# ----- G4 RawDriveItem extra fields --------------------------------------
+
+
+def test_normalise_change_extracts_shared_and_last_modifying_user() -> None:
+    """G4 (#278) lifts ``shared`` + ``lastModifyingUser`` off the Drive payload.
+
+    The connector mapper uses these to attribute "edited by" and to
+    distinguish private-from-shared in the summary; pinning the field
+    surface here means a Drive API rename surfaces in tests rather
+    than silently drifting the projection metadata.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "changes": [
+                    {
+                        "fileId": "F-shared",
+                        "removed": False,
+                        "time": "2026-05-31T12:00:00Z",
+                        "file": {
+                            "id": "F-shared",
+                            "name": "Shared Doc",
+                            "mimeType": "application/vnd.google-apps.document",
+                            "modifiedTime": "2026-05-31T12:00:00Z",
+                            "webViewLink": "https://example",
+                            "trashed": False,
+                            "owners": [
+                                {
+                                    "emailAddress": "alice@example.com",
+                                    "displayName": "Alice",
+                                },
+                            ],
+                            "shared": True,
+                            "lastModifyingUser": {
+                                "emailAddress": "bob@example.com",
+                                "displayName": "Bob",
+                            },
+                        },
+                    }
+                ],
+                "newStartPageToken": "next",
+            },
+        )
+
+    client = _client_with_handler(handler)
+    try:
+        items = list(client.fetch_changes(page_token="p1"))
+    finally:
+        client.close()
+
+    assert len(items) == 1
+    item, _ = items[0]
+    assert item.shared is True
+    assert item.last_modifying_user_email == "bob@example.com"
+    assert item.last_modifying_user_display_name == "Bob"
+
+
+def test_normalise_change_defaults_when_optional_fields_missing() -> None:
+    """Drive omits ``shared`` / ``lastModifyingUser`` on some change types.
+
+    Anonymous edits + drive-level events do not carry these fields;
+    the mapper still needs a well-typed value so we default to
+    ``False`` / ``""``. Same defensive shape the rest of the
+    normalisation uses.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "changes": [
+                    {
+                        "fileId": "F-min",
+                        "removed": False,
+                        "time": "2026-05-31T12:00:00Z",
+                        "file": {
+                            "id": "F-min",
+                            "name": "Plain",
+                            "mimeType": "application/vnd.google-apps.document",
+                            "modifiedTime": "2026-05-31T12:00:00Z",
+                            "owners": [
+                                {
+                                    "emailAddress": "alice@example.com",
+                                    "displayName": "Alice",
+                                },
+                            ],
+                        },
+                    }
+                ],
+                "newStartPageToken": "next",
+            },
+        )
+
+    client = _client_with_handler(handler)
+    try:
+        items = list(client.fetch_changes(page_token="p1"))
+    finally:
+        client.close()
+
+    item, _ = items[0]
+    assert item.shared is False
+    assert item.last_modifying_user_email == ""
+    assert item.last_modifying_user_display_name == ""
+
+
+# ----- G4 export_file ----------------------------------------------------
+
+
+def test_export_file_happy_path() -> None:
+    """``files.export`` returns the raw bytes and pins the URL + mime parameter."""
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url).split("?", 1)[0]
+        captured["params"] = dict(request.url.params)
+        captured["auth"] = request.headers.get("Authorization")
+        return httpx.Response(200, content=b"fake-docx-bytes")
+
+    client = _client_with_handler(handler)
+    try:
+        content = client.export_file(
+            file_id="F1",
+            mime_type=("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        )
+    finally:
+        client.close()
+
+    assert content == b"fake-docx-bytes"
+    assert captured["url"] == f"{DRIVE_API_BASE}/files/F1/export"
+    assert captured["params"]["mimeType"] == (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    # Bearer auth still required on the export endpoint.
+    assert captured["auth"] == "Bearer fake-access-token"
+
+
+def test_export_file_rejects_empty_file_id() -> None:
+    """An empty file_id is a programmer error — fail fast rather than ask Drive."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(500)
+
+    client = _client_with_handler(handler)
+    try:
+        with pytest.raises(ConnectorFailedError, match="empty file_id"):
+            client.export_file(file_id="", mime_type="any")
+    finally:
+        client.close()
+
+
+def test_export_file_raises_on_403_file_not_exportable() -> None:
+    """403 fileNotExportable surfaces as :class:`ConnectorFailedError` (not retried).
+
+    A non-Workspace native (PDF upload, folder, binary) routed
+    through ``files.export`` returns 403 with reason
+    ``fileNotExportable``. Retrying would not help so we fail fast.
+    The 403 carries no rate-limit reason code so it does NOT trigger
+    the rate-limit backoff path.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "error": {
+                    "code": 403,
+                    "errors": [{"reason": "fileNotExportable"}],
+                }
+            },
+        )
+
+    client = _client_with_handler(handler)
+    try:
+        with pytest.raises(ConnectorFailedError, match="returned 403"):
+            client.export_file(file_id="F1", mime_type="any")
+    finally:
+        client.close()
+
+
+def test_export_file_retries_on_429() -> None:
+    """``files.export`` shares the 429 + Retry-After backoff with ``changes.list``."""
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "1"})
+        return httpx.Response(200, content=b"ok-after-retry")
+
+    client = _client_with_handler(handler)
+    try:
+        with patch.object(time, "sleep", _noop_sleep):
+            content = client.export_file(file_id="F1", mime_type="any")
+    finally:
+        client.close()
+
+    assert content == b"ok-after-retry"
+    assert call_count["n"] == 2
+
+
+def test_export_file_retries_on_5xx() -> None:
+    """``files.export`` shares 5xx backoff with ``changes.list`` (transient)."""
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return httpx.Response(503)
+        return httpx.Response(200, content=b"ok-after-5xx")
+
+    client = _client_with_handler(handler)
+    try:
+        with patch.object(time, "sleep", _noop_sleep):
+            content = client.export_file(file_id="F1", mime_type="any")
+    finally:
+        client.close()
+
+    assert content == b"ok-after-5xx"
+    assert call_count["n"] == 2
+
+
+def test_export_file_returns_empty_bytes_for_empty_doc() -> None:
+    """An empty Doc legitimately exports to zero bytes — pass it through verbatim.
+
+    :func:`opshub.core.document_extract.extract_workspace_export`
+    short-circuits ``b""`` to ``body=""`` so the connector still
+    emits a :class:`SourceObserved` (ADR-0020 retain-everything).
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"")
+
+    client = _client_with_handler(handler)
+    try:
+        content = client.export_file(file_id="F-empty", mime_type="any")
+    finally:
+        client.close()
+
+    assert content == b""
