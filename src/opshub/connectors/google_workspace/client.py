@@ -157,6 +157,35 @@ _CHANGES_LIST_PARAMS: dict[str, str] = {
     "pageSize": str(_PAGE_SIZE),
 }
 
+#: ``$fields`` selector for ``files.list`` (TTL fallback full-pass).
+#: Mirrors the ``file(...)`` projection inside
+#: :data:`_CHANGES_LIST_FIELDS` so the same :class:`RawDriveItem`
+#: shape can be lifted by :func:`_normalise_file` without re-wiring the
+#: mapper. ``files.list`` returns the file objects directly (not nested
+#: under ``changes(...)``) so the top-level shape is ``files(...)``.
+_FILES_LIST_FIELDS = (
+    "nextPageToken,"
+    "files(id,name,mimeType,modifiedTime,createdTime,webViewLink,"
+    "iconLink,trashed,explicitlyTrashed,owners(emailAddress,displayName),"
+    "lastModifyingUser(emailAddress,displayName),"
+    "shared,sharedWithMeTime,size,parents,driveId)"
+)
+
+#: Pinned parameters for every ``files.list`` call used by the TTL
+#: fallback full-pass. Same Shared Drives flags as
+#: :data:`_CHANGES_LIST_PARAMS` so the recovery path covers the same
+#: corpus as the steady-state delta path (ADR-0010 §Phase 13 改訂 (g)
+#: full-pass = `files.list?modifiedTime>='...'&supportsAllDrives=true&
+#: includeItemsFromAllDrives=true&spaces=drive` per Teams 同型).
+_FILES_LIST_PARAMS_BASE: dict[str, str] = {
+    "supportsAllDrives": "true",
+    "includeItemsFromAllDrives": "true",
+    "corpora": "allDrives",
+    "spaces": "drive",
+    "fields": _FILES_LIST_FIELDS,
+    "pageSize": str(_PAGE_SIZE),
+}
+
 
 @dataclass(frozen=True, slots=True)
 class RawDriveItem:
@@ -396,6 +425,88 @@ class DriveClient:
             if isinstance(next_page_token, str) and next_page_token:
                 params["pageToken"] = next_page_token
                 cursor_in_flight = page_cursor
+            else:
+                return
+
+    def list_files_modified_since(
+        self,
+        *,
+        since: str,
+        page_size: int = _PAGE_SIZE,
+    ) -> Iterator[RawDriveItem]:
+        """Yield :class:`RawDriveItem` for every file modified at or after ``since``.
+
+        Used by the connector's ADR-0010 §Phase 13 改訂 (g) TTL
+        fallback path: when the stored ``startPageToken`` is rejected
+        as expired, the connector walks ``files.list?q=modifiedTime
+        >= '<since>'`` over the configured ``fallback_window_days``
+        window so changes that happened during the TTL gap surface as
+        :class:`SourceObserved` events. The projection's natural-key
+        dedup on ``(connector_name, external_id)`` absorbs the
+        steady-state overlap.
+
+        Parameters
+        ----------
+        since:
+            ISO 8601 / RFC 3339 UTC timestamp (e.g.
+            ``"2026-04-30T00:00:00Z"``) used verbatim inside Drive's
+            ``q=modifiedTime >= '...'`` selector. The caller computes
+            this from ``now - fallback_window_days``.
+        page_size:
+            ``pageSize`` for the underlying ``files.list`` call.
+            Defaults to :data:`_PAGE_SIZE` (100) — Drive's documented
+            sweet spot, identical to the steady-state delta path.
+
+        Yields
+        ------
+        RawDriveItem
+            One per matched file. No cursor is yielded alongside the
+            item because the caller is in fallback mode and does not
+            persist an intermediate cursor (the in-flight
+            ``startPageToken`` was already replaced by the freshly-
+            bootstrapped one before the full-pass begins per
+            ADR-0010 §Phase 13 改訂 (g) step 3 ordering).
+
+        Raises
+        ------
+        ConnectorFailedError
+            On any non-recoverable transport / API failure or when the
+            retry budget is exhausted. The exception bubbles up to the
+            connector's :class:`PageTokenExpiredError` handler which
+            re-raises it as a hard sync failure (the CLI driver then
+            appends ``ConnectorSyncFailed`` per ADR-0010 §責務 4).
+            Drive's 429 / 5xx / rate-limit backoff is shared with the
+            steady-state ``changes.list`` path through
+            :meth:`_request`.
+        """
+        url = f"{DRIVE_API_BASE}/files"
+        params: dict[str, str] = dict(_FILES_LIST_PARAMS_BASE)
+        # Drive's ``q`` selector requires single-quoted RFC 3339
+        # timestamps. ``modifiedTime`` is the documented field for
+        # "last metadata or content modification" which is the same
+        # semantics the steady-state ``changes.list`` delta surfaces.
+        params["q"] = f"modifiedTime >= '{since}'"
+        params["pageSize"] = str(page_size)
+
+        while True:
+            body = self._request("GET", url, params=params)
+            files_obj = body.get("files")
+            if not isinstance(files_obj, list):
+                raise ConnectorFailedError(
+                    "Google Workspace files.list response is missing the "
+                    "'files' list (unexpected response shape)"
+                )
+            files = cast(list[dict[str, Any]], files_obj)
+
+            for raw_file in files:
+                item = _normalise_file(raw_file)
+                if item is None:
+                    continue
+                yield item
+
+            next_page_token = body.get("nextPageToken")
+            if isinstance(next_page_token, str) and next_page_token:
+                params["pageToken"] = next_page_token
             else:
                 return
 
@@ -750,5 +861,74 @@ def _normalise_change(raw: dict[str, Any]) -> RawDriveItem | None:
         last_modifying_user_email=last_user_email,
         last_modifying_user_display_name=last_user_display_name,
         drive_id=drive_id or str(file_dict.get("driveId") or ""),
+        raw=raw,
+    )
+
+
+def _normalise_file(raw: dict[str, Any]) -> RawDriveItem | None:
+    """Lift a Drive ``files.list`` file payload into :class:`RawDriveItem`.
+
+    Used by the TTL fallback full-pass (ADR-0010 §Phase 13 改訂 (g))
+    which walks ``files.list?q=modifiedTime>='...'`` directly. The
+    ``files.list`` response wraps each file at the top level rather
+    than inside a ``change`` envelope, so this helper extracts file
+    metadata without the surrounding ``fileId`` / ``removed`` / ``time``
+    fields that :func:`_normalise_change` reads from the change record.
+
+    Returns ``None`` only when the file lacks an ``id`` — Drive
+    documents this as an impossible case for ``files.list`` results
+    but we defend against it to keep parity with :func:`_normalise_change`.
+
+    ``removed`` is always ``False`` in the lift result: ``files.list``
+    cannot return permanently-deleted files (they are gone from the
+    user's drive), so the TTL fallback only re-surfaces present files.
+    Permanent-delete events that occurred during the TTL gap are lost
+    by design — there is no Drive API endpoint that returns them
+    retroactively. The steady-state ``changes.list`` delta walk resumes
+    immediately after the fallback (step 3 of the 3-step recovery), so
+    going-forward permanent-deletes resume their normal flow.
+    """
+    file_id_obj = raw.get("id")
+    if not isinstance(file_id_obj, str) or not file_id_obj:
+        return None
+
+    owners_obj = raw.get("owners")
+    owner_email = ""
+    owner_display_name = ""
+    if isinstance(owners_obj, list) and owners_obj:
+        owners_list = cast(list[Any], owners_obj)  # type: ignore[redundant-cast]
+        first = owners_list[0]
+        if isinstance(first, dict):
+            first_dict = cast(dict[str, Any], first)
+            owner_email = str(first_dict.get("emailAddress") or "")
+            owner_display_name = str(first_dict.get("displayName") or "")
+
+    last_user_obj = raw.get("lastModifyingUser")
+    last_user_email = ""
+    last_user_display_name = ""
+    if isinstance(last_user_obj, dict):
+        last_user_dict = cast(dict[str, Any], last_user_obj)
+        last_user_email = str(last_user_dict.get("emailAddress") or "")
+        last_user_display_name = str(last_user_dict.get("displayName") or "")
+
+    return RawDriveItem(
+        file_id=file_id_obj,
+        # ``files.list`` cannot return permanently-deleted files; the
+        # fallback re-emits present files only. ADR-0010 §Phase 13
+        # 改訂 (g) acknowledges the permanent-delete gap as the cost
+        # of the recovery path.
+        removed=False,
+        trashed=bool(raw.get("trashed", False)),
+        name=str(raw.get("name") or ""),
+        mime_type=str(raw.get("mimeType") or ""),
+        modified_time_iso=str(raw.get("modifiedTime") or ""),
+        web_view_link=str(raw.get("webViewLink") or ""),
+        owner_email=owner_email,
+        owner_display_name=owner_display_name,
+        is_shared_with_me=bool(raw.get("sharedWithMeTime")),
+        shared=bool(raw.get("shared", False)),
+        last_modifying_user_email=last_user_email,
+        last_modifying_user_display_name=last_user_display_name,
+        drive_id=str(raw.get("driveId") or ""),
         raw=raw,
     )

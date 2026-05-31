@@ -112,6 +112,7 @@ def _patch_settings(
     client_secret: str = "fake-secret",
     redirect_uri: str = "http://localhost",
     content_extraction: bool = False,
+    fallback_window_days: int = 30,
     max_file_size_mb: int = 50,
     max_chars: int = 500_000,
     max_cells_per_sheet: int = 10_000,
@@ -130,6 +131,7 @@ def _patch_settings(
     fake_settings.connectors.google_workspace.client_secret = client_secret
     fake_settings.connectors.google_workspace.redirect_uri = redirect_uri
     fake_settings.connectors.google_workspace.content_extraction = content_extraction
+    fake_settings.connectors.google_workspace.fallback_window_days = fallback_window_days
     fake_settings.office.max_file_size_mb = max_file_size_mb
     fake_settings.office.max_chars = max_chars
     fake_settings.office.excel.max_cells_per_sheet = max_cells_per_sheet
@@ -177,6 +179,7 @@ def _patch_auth_and_client(
     start_page_token: str = "T0",
     pages: list[list[tuple[RawDriveItem, str]]] | None = None,
     raise_expired_first: bool = False,
+    fallback_files: list[RawDriveItem] | None = None,
 ) -> MagicMock:
     """Stub :class:`GoogleWorkspaceAuth` + :class:`DriveClient`.
 
@@ -184,6 +187,11 @@ def _patch_auth_and_client(
     tuples per call to ``fetch_changes``". When ``raise_expired_first``
     is set the first ``fetch_changes`` call raises
     :class:`PageTokenExpiredError` to exercise the TTL fallback.
+
+    ``fallback_files`` is the list of items the TTL fallback's
+    :meth:`DriveClient.list_files_modified_since` yields. Defaults to
+    an empty list so existing tests do not need to opt in to the
+    fallback shape.
 
     Returns the patched ``DriveClient`` instance so tests can assert
     against its method calls.
@@ -207,6 +215,14 @@ def _patch_auth_and_client(
         return iter(iter_queue.pop(0))
 
     fake_client.fetch_changes.side_effect = fetch_changes
+
+    fallback_queue: list[RawDriveItem] = list(fallback_files or [])
+
+    def list_files_modified_since(*, since: str) -> Iterator[RawDriveItem]:
+        del since
+        return iter(fallback_queue)
+
+    fake_client.list_files_modified_since.side_effect = list_files_modified_since
     monkeypatch.setattr(
         "opshub.connectors.google_workspace.client.DriveClient",
         MagicMock(return_value=fake_client),
@@ -314,34 +330,146 @@ def test_sync_resume_replays_stored_cursor(monkeypatch: pytest.MonkeyPatch, tmp_
 # ----- TTL fallback ------------------------------------------------------
 
 
-def test_sync_falls_back_on_page_token_expired(
+def test_sync_falls_back_full_pass_on_page_token_expired(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Expired cursor → fresh ``getStartPageToken`` → resume.
+    """Expired cursor → WARNING log → full-pass emit → cursor update.
 
-    ADR-0010 §Phase 13 改訂 (g) TTL fallback pin. The fallback
-    re-emits items the projection has already seen; the projection
-    dedup absorbs that safely.
+    ADR-0010 §Phase 13 改訂 (g) 3-step TTL fallback pin (Phase 13
+    audit cluster A, issue #286). Pre-#286 implementation only
+    bootstrapped a fresh root token without backfilling the TTL gap,
+    silently losing every change between the last successful sync and
+    the recovery. This test pins the corrected 3-step round-trip:
+
+    1. ``list_files_modified_since`` is invoked over the configured
+       window and each surviving file is re-emitted as
+       :class:`SourceObserved`.
+    2. ``get_start_page_token`` bootstraps a fresh root for the next
+       sync.
+    3. The next sync resumes on the delta path from the fresh token.
+
+    The projection's natural-key dedup on
+    ``(connector_name, external_id)`` absorbs the steady-state
+    overlap, so emitting the fallback set is safe.
     """
-    _patch_settings(monkeypatch)
+    _patch_settings(monkeypatch, fallback_window_days=30)
     _patch_excludes(monkeypatch, tmp_path)
     fake_client = _patch_auth_and_client(
         monkeypatch,
         start_page_token="fresh-T",
-        pages=[[(_raw("F-after-fallback"), "post-fallback-T")]],
+        # After the fallback bootstraps the fresh token the connector
+        # immediately resumes a delta walk; the second ``fetch_changes``
+        # call returns no further changes (the steady-state corpus is
+        # caught up).
+        pages=[[]],
         raise_expired_first=True,
+        fallback_files=[_raw("F-from-fallback")],
     )
     service = _RecordingSourceService()
 
     result = GoogleWorkspaceConnector().sync(_context(service, cursor="expired-T"))
 
-    # First fetch raised; second fetch ran on the fresh token.
-    assert fake_client.get_start_page_token.called
-    assert fake_client.fetch_changes.call_count == 2
-    second_call = fake_client.fetch_changes.call_args_list[1]
-    assert second_call.kwargs["page_token"] == "fresh-T"
+    # Step 1: ``fetch_changes`` was attempted with the expired cursor.
+    assert fake_client.fetch_changes.call_args_list[0].kwargs["page_token"] == "expired-T"
+
+    # Step 2: ``list_files_modified_since`` ran for the TTL window.
+    assert fake_client.list_files_modified_since.call_count == 1
+    fallback_kwargs = fake_client.list_files_modified_since.call_args.kwargs
+    assert "since" in fallback_kwargs
+    assert fallback_kwargs["since"].endswith("Z")  # ISO 8601 UTC
+
+    # Step 3: bootstrap a fresh root token AFTER the full-pass.
+    assert fake_client.get_start_page_token.call_count == 1
+
+    # Fallback file emitted as SourceObserved.
+    assert [c["external_id"] for c in service.calls] == ["F-from-fallback"]
     assert result.observed_count == 1
-    assert result.new_cursor == "post-fallback-T"
+
+    # Cursor advanced to the freshly-bootstrapped root token (no
+    # post-fallback delta pages in this fixture).
+    assert result.new_cursor == "fresh-T"
+
+
+def test_sync_fallback_emits_warning_log_event(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The TTL fallback emits ``connector.changes_list.expired`` WARNING.
+
+    Teams ``connector.delta.expired`` 同型 (Phase 11 ADR-0010 §改訂 (c)
+    observability pin); Phase 13 cluster A audit (#286) brought the
+    Google Workspace shape into structural symmetry so dashboards can
+    fan out on either connector with one rule.
+    """
+    from unittest.mock import patch as _patch_obj
+
+    _patch_settings(monkeypatch, fallback_window_days=30)
+    _patch_excludes(monkeypatch, tmp_path)
+    _patch_auth_and_client(
+        monkeypatch,
+        start_page_token="fresh-T",
+        pages=[[]],
+        raise_expired_first=True,
+        fallback_files=[],
+    )
+    service = _RecordingSourceService()
+
+    captured_logger = MagicMock()
+    captured_logger.warning = MagicMock()
+    with _patch_obj(
+        "opshub.core.logging.get_logger",
+        return_value=captured_logger,
+    ):
+        GoogleWorkspaceConnector().sync(_context(service, cursor="expired-T"))
+
+    # WARNING log fired exactly once on the TTL-fallback path with the
+    # Teams 同型 keys (event=connector.changes_list.expired, connector,
+    # since, window_days).
+    matching_calls = [
+        call
+        for call in captured_logger.warning.call_args_list
+        if call.args and call.args[0] == "connector.changes_list.expired"
+    ]
+    assert len(matching_calls) == 1, captured_logger.warning.call_args_list
+    kwargs = matching_calls[0].kwargs
+    assert kwargs["connector"] == "google_workspace"
+    assert kwargs["window_days"] == 30
+    assert "since" in kwargs
+
+
+def test_sync_fallback_list_files_failure_bubbles_to_caller(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``list_files_modified_since`` failure aborts the sync.
+
+    ADR-0010 §責務 4 fail-fast: if the recovery path itself fails the
+    connector surfaces :class:`ConnectorFailedError` so the CLI driver
+    appends a :class:`ConnectorSyncFailed` event. Squashing the failure
+    silently would leave the connector stuck on the expired token.
+    """
+    from opshub.core.errors import ConnectorFailedError
+
+    _patch_settings(monkeypatch, fallback_window_days=30)
+    _patch_excludes(monkeypatch, tmp_path)
+    fake_client = _patch_auth_and_client(
+        monkeypatch,
+        start_page_token="fresh-T",
+        pages=[],
+        raise_expired_first=True,
+    )
+
+    def _explode(*, since: str) -> Iterator[RawDriveItem]:
+        del since
+        raise ConnectorFailedError("fallback files.list failed")
+
+    fake_client.list_files_modified_since.side_effect = _explode
+    service = _RecordingSourceService()
+
+    with pytest.raises(ConnectorFailedError, match=r"fallback files\.list failed"):
+        GoogleWorkspaceConnector().sync(_context(service, cursor="expired-T"))
+
+    # The fresh root token was NOT acquired — the recovery failed
+    # before it could.
+    fake_client.get_start_page_token.assert_not_called()
 
 
 # ----- excludes ----------------------------------------------------------

@@ -613,62 +613,214 @@ def test_phase13_google_workspace_lifecycle(
         # ``startPageToken`` (= page token persistence is cursor-side,
         # decoupled from refresh-token rotation).
         #
-        # The connector_cursors projection is event-driven (apply
-        # method consumes ``ConnectorSyncStarted`` /
-        # ``ConnectorSyncCompleted`` events). We assert the
-        # cross-cutting invariant directly: a row written for the
-        # ``google_workspace`` connector before a rotation event
-        # survives the rotation (rotation is OAuth-side, cursor is
-        # projection-side, and the two must remain orthogonal).
-        from datetime import UTC, datetime
-
-        from opshub.projections.connector_cursors import connector_cursors_table
+        # Phase 13 audit cluster A (#286) tightened this pin: pre-#286
+        # the test only stamped DB rows directly, which would have
+        # green-lit a regression that broke the connector's sync path
+        # while leaving the projection's UPDATE shape intact. The
+        # corrected shape goes through :meth:`GoogleWorkspaceConnector.sync`
+        # twice (before-rotation + after-rotation) so the cursor
+        # continuation is observed end-to-end via the same code path the
+        # operator would hit, not via projection back-doors.
+        from opshub.cli._wiring import build_source_service
+        from opshub.connectors.context import ConnectorContext
+        from opshub.connectors.google_workspace.connector import (
+            GoogleWorkspaceConnector,
+        )
 
         token_before = "STARTPAGE_TOKEN_BEFORE_ROTATION"
-        t0 = datetime(2026, 5, 31, 0, 0, 0, tzinfo=UTC)
-        with engine.begin() as conn:
-            conn.execute(
-                connector_cursors_table.insert().values(
-                    connector_name="google_workspace",
-                    cursor_value=token_before,
-                    updated_at=t0,
-                    last_synced_at=t0,
-                )
-            )
-        with engine.connect() as conn:
-            cursor_after = conn.execute(
-                text(
-                    "SELECT cursor_value FROM connector_cursors"
-                    " WHERE connector_name = 'google_workspace'"
-                )
-            ).scalar_one()
-        assert cursor_after == token_before, (
-            "Phase 13 plan §7.3 step 5 — refresh token rotation must NOT"
-            " perturb the changes.list page token cursor (rotation is on"
-            " the OAuth-side, cursor is on the projection-side, and the"
-            f" two must remain orthogonal); got: {cursor_after!r}"
-        )
-        # The next sync would advance the page token — stamp the new
-        # value to prove the cursor row remains writable after a
-        # rotation event (the projection accepts an UPDATE keyed by
-        # ``connector_name`` exactly like the ConnectorSyncCompleted
-        # apply path does).
         token_after = "STARTPAGE_TOKEN_AFTER_NEXT_SYNC"
-        t1 = datetime(2026, 5, 31, 1, 0, 0, tzinfo=UTC)
-        with engine.begin() as conn:
-            conn.execute(
-                connector_cursors_table.update()
-                .where(connector_cursors_table.c.connector_name == "google_workspace")
-                .values(cursor_value=token_after, updated_at=t1)
-            )
+
+        # Build a real source-service against the live engine so the
+        # ``cursor_set`` calls inside :meth:`sync` actually persist a
+        # row to ``connector_cursors``. Same wiring the CLI driver uses.
+        rotation_service = build_source_service(actor="test:phase13_rotation")
+
+        # Stub the connector's lazy ``OpsHubSettings`` + auth + Drive
+        # client so the sync runs without hitting Google. The first
+        # sync drains a single change page and persists
+        # ``token_before``; the second sync resumes from
+        # ``token_before`` and advances to ``token_after``.
+        from unittest.mock import MagicMock
+
+        fake_drive_settings = MagicMock()
+        fake_drive_settings.connectors.google_workspace.client_id = "fake-cid"
+        fake_drive_settings.connectors.google_workspace.client_secret = "fake-secret"
+        fake_drive_settings.connectors.google_workspace.redirect_uri = "http://localhost"
+        fake_drive_settings.connectors.google_workspace.content_extraction = False
+        fake_drive_settings.connectors.google_workspace.fallback_window_days = 30
+        fake_drive_settings.office.max_file_size_mb = 50
+        fake_drive_settings.office.max_chars = 500_000
+        fake_drive_settings.office.excel.max_cells_per_sheet = 10_000
+        fake_drive_settings.office.excel.max_cells_per_workbook = 50_000
+        monkeypatch.setattr(
+            "opshub.core.config.OpsHubSettings",
+            lambda: fake_drive_settings,
+        )
+
+        fake_drive_client_class = MagicMock()
+        fake_drive_client_instance = MagicMock()
+        fake_drive_client_class.return_value = fake_drive_client_instance
+        monkeypatch.setattr(
+            "opshub.connectors.google_workspace.client.DriveClient",
+            fake_drive_client_class,
+        )
+        monkeypatch.setattr(
+            "opshub.connectors.google_workspace.auth.GoogleWorkspaceAuth",
+            MagicMock(),
+        )
+
+        # Sync 1 — fresh bootstrap, draining a single change page that
+        # advances cursor to ``token_before``.
+        fake_drive_client_instance.get_start_page_token.return_value = "BOOT_TOKEN"
+
+        from opshub.connectors.google_workspace.client import RawDriveItem
+
+        sync1_item = RawDriveItem(
+            file_id="ROTATION_FILE_1",
+            removed=False,
+            trashed=False,
+            name="pre-rotation.gdoc",
+            mime_type="application/vnd.google-apps.document",
+            modified_time_iso="2026-05-31T00:00:00Z",
+            web_view_link="https://drive.google.com/file/d/ROTATION_FILE_1/view",
+            owner_email="alice@example.com",
+            owner_display_name="Alice",
+            is_shared_with_me=False,
+            shared=False,
+            last_modifying_user_email="",
+            last_modifying_user_display_name="",
+            drive_id="",
+            raw={},
+        )
+
+        fetch_queue: list[list[tuple[RawDriveItem, str]]] = [
+            [(sync1_item, token_before)],
+        ]
+
+        def _fetch_changes_1(*, page_token: str) -> Any:
+            del page_token
+            return iter(fetch_queue.pop(0))
+
+        fake_drive_client_instance.fetch_changes.side_effect = _fetch_changes_1
+
+        connector = GoogleWorkspaceConnector()
+        # Open the sync-run bracket the same way the CLI driver does
+        # (`ConnectorSyncStarted` → `connector.sync(...)` →
+        # `ConnectorSyncCompleted`). The started event is what creates
+        # the row in ``connector_cursors``; the completed event UPDATEs
+        # it. Without this wrapping the projection's UPDATE-only branch
+        # would silently no-op.
+        cursor1_initial = rotation_service.cursor_get(connector.name)
+        rotation_service.cursor_set(connector.name, cursor1_initial, sync_started=True)
+        ctx1 = ConnectorContext(
+            source_service=rotation_service,
+            cursor_value=cursor1_initial,
+            secrets=None,
+            logger=MagicMock(),
+        )
+        result1 = connector.sync(ctx1)
+        rotation_service.cursor_set(connector.name, result1.new_cursor, sync_started=False)
+        assert result1.new_cursor == token_before
+
         with engine.connect() as conn:
-            cursor_advanced = conn.execute(
+            cursor_after_sync1 = conn.execute(
                 text(
                     "SELECT cursor_value FROM connector_cursors"
                     " WHERE connector_name = 'google_workspace'"
                 )
             ).scalar_one()
-        assert cursor_advanced == token_after
+        assert cursor_after_sync1 == token_before, (
+            f"Sync 1 must persist the advanced cursor; got: {cursor_after_sync1!r}"
+        )
+
+        # Simulate Google rotating the refresh token between syncs:
+        # the rotation happens on the OAuth-side (auth.refresh_access_token
+        # persists the new value to keyring). The cursor row in
+        # ``connector_cursors`` must remain untouched by that rotation
+        # — they are orthogonal projection rows.
+        # (We elide the keyring write here; the unit test
+        # ``test_get_access_token_persists_rotated_refresh_token`` pins
+        # the OAuth-side mechanic. This e2e pins the cursor-side
+        # invariant only.)
+
+        # Sync 2 — resume from ``token_before`` (the same cursor row
+        # the rotation did not perturb) and advance to ``token_after``.
+        # If the rotation had wiped the cursor row, the connector's
+        # :meth:`sync` body would re-bootstrap via
+        # ``get_start_page_token`` (visible as a second call below).
+        sync2_item = RawDriveItem(
+            file_id="ROTATION_FILE_2",
+            removed=False,
+            trashed=False,
+            name="post-rotation.gdoc",
+            mime_type="application/vnd.google-apps.document",
+            modified_time_iso="2026-05-31T01:00:00Z",
+            web_view_link="https://drive.google.com/file/d/ROTATION_FILE_2/view",
+            owner_email="alice@example.com",
+            owner_display_name="Alice",
+            is_shared_with_me=False,
+            shared=False,
+            last_modifying_user_email="",
+            last_modifying_user_display_name="",
+            drive_id="",
+            raw={},
+        )
+
+        fetch_queue.append([(sync2_item, token_after)])
+
+        def _fetch_changes_2(*, page_token: str) -> Any:
+            # Pin that the second sync resumed from the cursor the
+            # first sync persisted, NOT from a re-bootstrapped root
+            # token.
+            assert page_token == token_before, (
+                "Sync 2 must resume from the persisted cursor (Phase 13"
+                " plan §7.3 step 5 rotation シナリオ — rotation must NOT"
+                " perturb the changes.list page token cursor); got:"
+                f" {page_token!r}"
+            )
+            return iter(fetch_queue.pop(0))
+
+        fake_drive_client_instance.fetch_changes.side_effect = _fetch_changes_2
+
+        # Read the persisted cursor from connector_cursors and feed it
+        # into the next sync's ConnectorContext (same shape as the CLI
+        # driver does between sync runs).
+        with engine.connect() as conn:
+            persisted_cursor = conn.execute(
+                text(
+                    "SELECT cursor_value FROM connector_cursors"
+                    " WHERE connector_name = 'google_workspace'"
+                )
+            ).scalar_one()
+        # Sync 2 bracket — same shape as Sync 1.
+        rotation_service.cursor_set(connector.name, persisted_cursor, sync_started=True)
+        ctx2 = ConnectorContext(
+            source_service=rotation_service,
+            cursor_value=persisted_cursor,
+            secrets=None,
+            logger=MagicMock(),
+        )
+        result2 = connector.sync(ctx2)
+        rotation_service.cursor_set(connector.name, result2.new_cursor, sync_started=False)
+        assert result2.new_cursor == token_after
+
+        # Final pin: the cursor row advanced exactly once per sync,
+        # and the rotation did not cause a re-bootstrap (the
+        # ``get_start_page_token`` call counter stays at the original
+        # first-sync bootstrap count).
+        assert fake_drive_client_instance.get_start_page_token.call_count == 1, (
+            "Phase 13 plan §7.3 step 5 — rotation must NOT trigger a"
+            " re-bootstrap (the cursor row survives the rotation)"
+        )
+
+        with engine.connect() as conn:
+            cursor_after_sync2 = conn.execute(
+                text(
+                    "SELECT cursor_value FROM connector_cursors"
+                    " WHERE connector_name = 'google_workspace'"
+                )
+            ).scalar_one()
+        assert cursor_after_sync2 == token_after
 
         # ---- 8. excludes.yaml suppresses Google Workspace ingest -----
         # ADR-0020 §(b) — the shared excludes file must filter
