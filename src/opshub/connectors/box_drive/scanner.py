@@ -573,9 +573,20 @@ class BoxDriveScanner:
                 max_cells_per_sheet=cfg.excel.max_cells_per_sheet,
                 max_cells_per_workbook=cfg.excel.max_cells_per_workbook,
             )
+        # ``result.source_type`` is widened to
+        # ``OfficeSourceType | GoogleWorkspaceSourceType | None`` after
+        # Phase 13 G2 (#276) extended the value object for the
+        # Workspace export path. The scanner only routes through
+        # :func:`extract_document` (never the Workspace path), and the
+        # local ``office_source_type`` has already been narrowed to a
+        # non-``None`` :data:`OfficeSourceType` by the ``if ... is
+        # None`` guard above, so we return that variable directly
+        # rather than re-derive it from the wider union — keeps the
+        # scanner's tuple type signature at ``OfficeSourceType | None``
+        # and avoids a stray ``cast()`` reaching the box_drive layer.
         return (
             result.body,
-            result.source_type,
+            office_source_type,
             result.truncated,
             result.skip_reason,
         )
