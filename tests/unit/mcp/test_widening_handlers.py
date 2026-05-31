@@ -436,6 +436,53 @@ def test_propose_generate_is_destructive_open_world(specs: list[Any]) -> None:
     assert spec.policy.open_world is True
 
 
+def test_propose_generate_accepts_h4_mode(specs: list[Any]) -> None:
+    """Phase 12 H4 (ADR-0016 §決定 (l)(b)): ``mode`` dispatch keys validate.
+
+    Each of the three H4 modes must validate against the schema when
+    paired with ``topic``. ``reply_to_source_id`` stays mutually
+    exclusive (handler-level guard, not schema-level — same approach
+    as ``test_propose_generate_no_required_fields_validates_empty``).
+    """
+    spec = next(s for s in specs if s.name == "propose.generate")
+    for mode in ("inbox_triage", "source_extract", "meeting_followup"):
+        jsonschema.validate(
+            instance={"topic": "weekly inbox", "mode": mode},
+            schema=dict(spec.input_schema),
+        )
+
+
+def test_propose_generate_rejects_unknown_mode(specs: list[Any]) -> None:
+    """Unknown ``mode`` values must be rejected by the schema enum."""
+    spec = next(s for s in specs if s.name == "propose.generate")
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            instance={"topic": "x", "mode": "handoff_draft"},
+            schema=dict(spec.input_schema),
+        )
+
+
+def test_propose_generate_rejects_text_only_modes_in_enum(specs: list[Any]) -> None:
+    """ADR-0016 §決定 (l)(b) Negative arm: text-only modes are NOT in the enum.
+
+    ``handoff_draft`` / ``announcement_draft`` skills return text only
+    and never persist a proposal (§決定 (l)(a)). They must not appear
+    in the ``mode`` enum so a misconfigured host LLM cannot accidentally
+    route through ``propose.generate``.
+    """
+    spec = next(s for s in specs if s.name == "propose.generate")
+    mode_schema = spec.input_schema["properties"]["mode"]
+    enum_values = set(mode_schema.get("enum", ()))
+    assert "handoff_draft" not in enum_values, (
+        "handoff_draft must NOT be in ``mode`` enum (text-only, no persist path)"
+    )
+    assert "announcement_draft" not in enum_values, (
+        "announcement_draft must NOT be in ``mode`` enum (text-only, no persist path)"
+    )
+    # Sanity check the positive arm — the enum must equal the H4 triple.
+    assert enum_values == {"inbox_triage", "source_extract", "meeting_followup"}
+
+
 def test_brief_is_read_only(specs: list[Any]) -> None:
     spec = next(s for s in specs if s.name == "brief")
     assert spec.policy.read_only is True

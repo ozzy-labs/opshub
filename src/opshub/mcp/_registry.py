@@ -862,6 +862,9 @@ def build_tool_specs(
                 " a ProposalGenerated event; the apply step (task / decision creation)"
                 " still requires an operator-driven ``opshub propose apply`` call —"
                 " no auto-apply path exists (ADR-0016 §(c) HITL contract)."
+                " Phase 12 H4 dispatch modes (``mode`` = ``inbox_triage`` /"
+                " ``source_extract`` / ``meeting_followup``) stamp the originating"
+                " skill onto ``proposals.scope`` (ADR-0016 §決定 (l)(b))."
             ),
             input_schema={
                 "type": "object",
@@ -892,6 +895,19 @@ def build_tool_specs(
                             " seeds the LLM prompt as extra context."
                         ),
                         "maxLength": 200,
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["inbox_triage", "source_extract", "meeting_followup"],
+                        "description": (
+                            "Phase 12 H4 (ADR-0016 改訂 §決定 (l)(b)) dispatch key for the"
+                            " host skill that triggered the call. Required by inbox-triage /"
+                            " source-extract / meeting-followup skills so the persisted"
+                            " ``proposals.scope`` records the originating skill — mutually"
+                            " exclusive with ``reply_to_source_id`` (reply-draft mode is"
+                            " signalled by that field, not by ``mode``). When unset the"
+                            ' service falls back to ``scope="all"`` (Phase 6 default).'
+                        ),
                     },
                     "expand_graph": {
                         "type": "boolean",

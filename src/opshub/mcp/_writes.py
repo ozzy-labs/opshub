@@ -228,6 +228,20 @@ def build_connector_sync_handler(engine: Engine) -> ToolHandler:
 # ----------------------------------------------------------- propose.generate
 
 
+_PROPOSE_GENERATE_MODES: frozenset[str] = frozenset(
+    {"inbox_triage", "source_extract", "meeting_followup"}
+)
+"""Phase 12 H4 ``mode`` literals for ``propose.generate``.
+
+ADR-0016 改訂 §決定 (l)(b) limits the ``mode`` argument to persist-bearing
+structured-output dispatch keys. The four members (this triple plus the
+implicit ``reply_draft`` mode signalled via ``reply_to_source_id``) all
+route through :class:`ProposalService` and produce a durable
+``ProposalGenerated`` event; ``handoff_draft`` / ``announcement_draft``
+are excluded because they return text only (§決定 (l)(b) Negative arm).
+"""
+
+
 def build_propose_generate_handler(engine: Engine) -> ToolHandler:
     """Return the handler bound to ``engine`` for ``propose.generate``.
 
@@ -237,6 +251,13 @@ def build_propose_generate_handler(engine: Engine) -> ToolHandler:
     * topic-based mode (default): ``ProposalService.generate``
     * reply-draft mode (``reply_to_source_id`` set):
       ``ProposalService.generate_reply_draft``
+    * Phase 12 H4 dispatch modes (``mode`` set to one of
+      :data:`_PROPOSE_GENERATE_MODES`): ``ProposalService.generate``
+      with ``scope=<mode>`` so the persisted proposal records the
+      dispatch key (ADR-0016 改訂 §決定 (l)(b)). The host LLM still
+      supplies ``topic`` to phrase the inbox / source / meeting context;
+      ``mode`` is the schema-level intent marker so a downstream audit
+      can join proposals by dispatch.
 
     The schema treats absent text fields as empty strings (``default: ""``)
     so the MCP boundary stays ``additionalProperties: false`` while
@@ -274,9 +295,18 @@ def build_propose_generate_handler(engine: Engine) -> ToolHandler:
         topic_raw = _nz(arguments.get("topic", ""))
         reply_to_source_id = _nz(arguments.get("reply_to_source_id", ""))
         from_briefing_id = _nz(arguments.get("from_briefing_id", ""))
+        mode_raw = _nz(arguments.get("mode", ""))
         expand_graph = bool(arguments.get("expand_graph", False))
         max_candidates = int(arguments.get("max_candidates", 5))
         max_tokens = int(arguments.get("max_tokens", 2000))
+
+        if mode_raw is not None and mode_raw not in _PROPOSE_GENERATE_MODES:
+            # Schema enum catches this already; defence in depth in case
+            # an out-of-band caller bypasses schema validation.
+            allowed = ", ".join(sorted(_PROPOSE_GENERATE_MODES))
+            raise OpsHubError(
+                f"propose.generate ``mode`` must be one of {{{allowed}}}; got {mode_raw!r}"
+            )
 
         service = build_proposal_service("mcp:propose.generate")
 
@@ -291,6 +321,12 @@ def build_propose_generate_handler(engine: Engine) -> ToolHandler:
                     "reply_to_source_id is mutually exclusive with topic /"
                     " from_briefing_id; supply only one mode per call"
                 )
+            if mode_raw is not None:
+                raise OpsHubError(
+                    "reply_to_source_id is mutually exclusive with ``mode``;"
+                    " reply-draft mode is signalled by reply_to_source_id alone"
+                    " (ADR-0016 §決定 (l)(b))"
+                )
             proposal = service.generate_reply_draft(
                 reply_to_source_id,
                 max_candidates=max_candidates,
@@ -302,8 +338,15 @@ def build_propose_generate_handler(engine: Engine) -> ToolHandler:
                 raise OpsHubError(
                     "propose.generate requires either ``topic`` or ``reply_to_source_id``"
                 )
+            # Phase 12 H4: ``mode`` stamps the dispatch key onto the
+            # persisted proposal's ``scope`` so an audit / projection
+            # query can recover the originating skill. When unset, the
+            # service default (``scope="all"``) preserves the Phase 6
+            # contract.
+            scope = mode_raw if mode_raw is not None else "all"
             proposal = service.generate(
                 topic_raw,
+                scope=scope,
                 from_briefing_id=from_briefing_id,
                 max_candidates=max_candidates,
                 max_tokens=max_tokens,

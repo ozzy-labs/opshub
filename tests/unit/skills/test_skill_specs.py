@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 from tools.skill_scan import parse_frontmatter, scan_skill_file
 
-# The secretary skill catalog as of Phase 12 H2.
+# The secretary skill catalog as of Phase 12 H4.
 #
 # Phase 12 H1 renamed the original brief / lookup pair to
 # ``personal-brief`` and ``find-document``; ``next-actions`` /
@@ -45,6 +45,11 @@ from tools.skill_scan import parse_frontmatter, scan_skill_file
 # ``research`` (cross-cutting topical research, read-only). Both are
 # read-only and do not persist proposals — they are pure read paths
 # (Step 4 of the H2 plan).
+#
+# Phase 12 H4 (``docs/phase-12-plan.md`` §3 H4) adds three HITL write
+# skills (``inbox-triage`` / ``source-extract`` /
+# ``meeting-followup``) that all route through ``propose.generate``
+# (with mode dispatch) + ``propose.apply`` (ADR-0016 改訂 §決定 (l)(b)).
 _REQUIRED_SKILLS: tuple[str, ...] = (
     "personal-brief",
     "next-actions",
@@ -53,6 +58,18 @@ _REQUIRED_SKILLS: tuple[str, ...] = (
     "find-document",
     "meeting-prep",
     "research",
+    "inbox-triage",
+    "source-extract",
+    "meeting-followup",
+)
+
+# Phase 12 H4 HITL write skills — the three new skills introduced in
+# `docs/phase-12-plan.md` §3 H4 that share the ``propose.generate`` +
+# ``propose.apply`` HITL boundary.
+_PHASE_12_H4_HITL_WRITE_SKILLS: tuple[str, ...] = (
+    "inbox-triage",
+    "source-extract",
+    "meeting-followup",
 )
 
 # Repo-root-relative path to the catalog of spec files. We climb up
@@ -373,7 +390,215 @@ def test_reply_draft_uses_mcp_propose_generate_as_primary_path() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. Phase 12 H2 semantic pins (info gathering skills)
+# 8. Phase 12 H4 semantic pins — HITL write skills (inbox-triage /
+#    source-extract / meeting-followup)
+# ---------------------------------------------------------------------------
+#
+# Phase 12 H4 (`docs/phase-12-plan.md` §3 H4) adds three HITL write
+# skills that all route through ``propose.generate`` (with a Phase 12
+# H4 ``mode`` dispatch key) and ``propose.apply``. The pins below
+# capture the contract that:
+#
+# 1. each H4 skill mentions BOTH ``propose.generate`` AND
+#    ``propose.apply`` literally so the host LLM can dispatch end-to-end
+#    via MCP (no CLI fallback);
+# 2. each skill names its ``mode=<dispatch>`` value verbatim so the
+#    schema-level ``mode`` enum and the SKILL.md cannot drift apart;
+# 3. each skill explicitly describes the HITL boundary — auto-apply
+#    禁止 + 人確認必須 — at the body level so a host loader that scans
+#    bodies for confirmation cues finds them.
+# 4. ``propose.apply``'s MCP-level annotation is ``read_only=false``
+#    (HITL boundary pin), which the skill body advertises.
+
+
+_H4_MODE_PER_SKILL: dict[str, str] = {
+    "inbox-triage": "inbox_triage",
+    "source-extract": "source_extract",
+    "meeting-followup": "meeting_followup",
+}
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H4_HITL_WRITE_SKILLS)
+def test_h4_skill_references_propose_generate_and_apply(name: str) -> None:
+    """Phase 12 H4 skills must reference both ``propose.generate`` and ``propose.apply``.
+
+    The H4 contract (`docs/phase-12-plan.md` §3 H4) is the two-stage
+    HITL gate: ``propose.generate`` emits ``ProposalGenerated`` (write,
+    but HITL-bounded), then ``propose.apply`` materialises the
+    operator-approved candidate. A skill body that mentions only one
+    half violates the contract.
+    """
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert "propose.generate" in text, (
+        f"{path} must reference ``propose.generate`` (Phase 12 H4 HITL boundary)"
+    )
+    assert "propose.apply" in text, (
+        f"{path} must reference ``propose.apply`` (Phase 12 H4 HITL boundary)"
+    )
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H4_HITL_WRITE_SKILLS)
+def test_h4_skill_names_mode_dispatch_key(name: str) -> None:
+    """Each H4 skill must name its ``mode=<value>`` dispatch literal.
+
+    Phase 12 H4 adds a ``mode`` enum to ``propose.generate``
+    (ADR-0016 改訂 §決定 (l)(b)). The SKILL.md must name its dispatch
+    value so the schema enum and the skill body cannot drift.
+    """
+    expected_mode = _H4_MODE_PER_SKILL[name]
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert expected_mode in text, (
+        f"{path} must name its ``mode={expected_mode}`` dispatch literal"
+        " (Phase 12 H4, ADR-0016 §決定 (l)(b))"
+    )
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H4_HITL_WRITE_SKILLS)
+def test_h4_skill_advertises_hitl_boundary(name: str) -> None:
+    """Each H4 skill body must explicitly forbid auto-apply.
+
+    ADR-0016 §決定 (c) pins the HITL contract: ``propose.apply`` must
+    require operator confirmation. The Phase 12 plan §3 H4 DoD calls
+    out a "HITL boundary test pin" — the body must explicitly say
+    "auto-apply 禁止" (or equivalent) so a host loader / reviewer can
+    not silently skip the confirmation.
+    """
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    # Accept several Japanese phrasings — the body is required to say
+    # auto-apply is forbidden / user confirmation is required, in any
+    # of the canonical wordings used across the existing 5 skills.
+    hitl_phrases = (
+        "auto-apply",  # mentioned in the prohibition context
+        "人確認",
+        "HITL",
+    )
+    hits = [phrase for phrase in hitl_phrases if phrase in text]
+    assert len(hits) >= 2, (
+        f"{path} must advertise the HITL boundary explicitly (Phase 12 H4 DoD)."
+        f" Found phrases: {hits!r}"
+    )
+
+
+def test_h4_propose_apply_annotation_is_not_read_only() -> None:
+    """Phase 12 H4 HITL boundary test pin — ``propose.apply`` annotation.
+
+    The plan §3 H4 DoD: "propose.apply の annotation = read_only=false
+    確認". The MCP tool annotation must surface this so HITL-aware
+    hosts (e.g. Claude Code, Codex CLI) prompt before invocation.
+    This pin imports the registry directly and asserts the policy
+    flags on the ``propose.apply`` tool spec.
+    """
+    from opshub.mcp._registry import build_tool_specs
+
+    # Pass minimal stub handlers — build_tool_specs takes a mapping of
+    # tool name to handler callable and stamps them onto the specs. We
+    # only inspect ``policy``, not the handler itself.
+    async def _noop(_arguments: object) -> str:  # pragma: no cover - never called
+        return "{}"
+
+    # ``build_tool_specs`` requires handlers for every tool. Build a
+    # mapping that returns ``_noop`` for every known tool name so the
+    # spec list materialises without engine wiring.
+    handler_names = (
+        "task.list",
+        "inbox.list",
+        "decision.list",
+        "recall.search",
+        "task.create",
+        "inbox.add",
+        "connector.sync",
+        "brief",
+        "graph.related",
+        "graph.trace",
+        "graph.expand",
+        "source.list",
+        "source.get",
+        "embeddings.find_duplicates",
+        "propose.generate",
+        "propose.apply",
+        "search",
+    )
+    handlers: dict[str, object] = dict.fromkeys(handler_names, _noop)
+
+    specs = build_tool_specs(handlers=handlers)  # type: ignore[arg-type]
+    apply_spec = next((s for s in specs if s.name == "propose.apply"), None)
+    assert apply_spec is not None, "propose.apply must be registered (Phase 12 H1)"
+
+    # The DoD literal: ``read_only=false``. The HITL boundary lives
+    # here — hosts that honour ``readOnlyHint=false`` will prompt
+    # before invoking, satisfying the §決定 (c) contract.
+    assert apply_spec.policy.read_only is False, (
+        "propose.apply policy must have read_only=False (Phase 12 H4 HITL boundary"
+        " test pin, docs/phase-12-plan.md §3 H4 DoD)"
+    )
+    # Sanity: also pin destructive=False + idempotent=True so the
+    # boundary contract pinned by ADR-0022 改訂 stays observable.
+    assert apply_spec.policy.destructive is False, (
+        "propose.apply policy must have destructive=False (ADR-0022 改訂)"
+    )
+    assert apply_spec.policy.idempotent is True, (
+        "propose.apply policy must have idempotent=True (ADR-0022 改訂)"
+    )
+
+
+def test_h4_propose_generate_schema_includes_mode_enum() -> None:
+    """Phase 12 H4 (ADR-0016 §決定 (l)(b)) — ``mode`` enum dispatch key.
+
+    The Phase 12 plan §3 H4 calls out that ``propose.generate`` must
+    expose a ``mode`` argument whose values dispatch to ``inbox_triage``
+    / ``source_extract`` / ``meeting_followup`` (plus the implicit
+    reply-draft mode signalled via ``reply_to_source_id``). This pin
+    verifies the schema enum so the SKILL.md side and the registry
+    side cannot drift.
+    """
+    from opshub.mcp._registry import build_tool_specs
+
+    async def _noop(_arguments: object) -> str:  # pragma: no cover - never called
+        return "{}"
+
+    handler_names = (
+        "task.list",
+        "inbox.list",
+        "decision.list",
+        "recall.search",
+        "task.create",
+        "inbox.add",
+        "connector.sync",
+        "brief",
+        "graph.related",
+        "graph.trace",
+        "graph.expand",
+        "source.list",
+        "source.get",
+        "embeddings.find_duplicates",
+        "propose.generate",
+        "propose.apply",
+        "search",
+    )
+    handlers: dict[str, object] = dict.fromkeys(handler_names, _noop)
+
+    specs = build_tool_specs(handlers=handlers)  # type: ignore[arg-type]
+    generate_spec = next((s for s in specs if s.name == "propose.generate"), None)
+    assert generate_spec is not None
+    schema = dict(generate_spec.input_schema)
+    properties = dict(schema["properties"])  # type: ignore[index]
+    assert "mode" in properties, (
+        "propose.generate input schema must declare a ``mode`` property"
+        " (Phase 12 H4, ADR-0016 §決定 (l)(b))"
+    )
+    mode_schema = dict(properties["mode"])  # type: ignore[arg-type]
+    enum = tuple(mode_schema.get("enum", ()))
+    assert set(enum) == {"inbox_triage", "source_extract", "meeting_followup"}, (
+        f"propose.generate ``mode`` enum must equal the H4 dispatch triple;"
+        f" got {enum!r}. handoff_draft / announcement_draft are excluded"
+        f" (text-only, ADR-0016 §決定 (l)(b) Negative arm)."
+    )
+
+# ---------------------------------------------------------------------------
+# 9. Phase 12 H2 semantic pins (info gathering skills)
 # ---------------------------------------------------------------------------
 #
 # Phase 12 H2 (``docs/phase-12-plan.md`` §3 H2) introduces two new
