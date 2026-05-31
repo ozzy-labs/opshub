@@ -344,9 +344,19 @@ class GoogleWorkspaceAuth:
         # Persist the refresh token via the secrets module (keyring +
         # env-var override). Lazy import inside the function keeps the
         # cold-start CLI guard green (same rationale as MS365 / Box).
-        from opshub.core.secrets import set_secret
+        from opshub.core.secrets import get_secret, set_secret
 
-        set_secret(self.REFRESH_TOKEN_KEY, refresh_token)
+        # Skip-write optimisation: when an operator re-runs the paste-code
+        # flow (e.g. to refresh consent) Google sometimes returns the
+        # *same* refresh token they already have stored. Writing it back
+        # would be a wasted keyring round-trip that can prompt the OS for
+        # permission on some platforms (macOS keychain) — symmetric with
+        # the rotation skip-write inside :meth:`get_access_token` and the
+        # MS365 / Box equivalents. Behaviour-preserving: the operator's
+        # stored refresh token is identical either way.
+        existing_refresh_token = get_secret(self.REFRESH_TOKEN_KEY)
+        if existing_refresh_token != refresh_token:
+            set_secret(self.REFRESH_TOKEN_KEY, refresh_token)
 
         access_token = str(result.get("access_token") or "")
         expires_in = _coerce_expires_in(result.get("expires_in"))

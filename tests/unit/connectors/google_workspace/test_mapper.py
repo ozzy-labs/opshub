@@ -343,3 +343,160 @@ def test_map_drive_item_preserves_web_view_link_in_url() -> None:
         _raw(web_url="https://docs.google.com/document/d/F1/edit"),
     )
     assert event.url == "https://docs.google.com/document/d/F1/edit"
+
+
+# ----- Phase 13 audit Cluster C — A#4 retain-with-marker pins ------------
+#
+# ADR-0020 retain-everything: trashed / removed / shared-with-me items
+# still emit :class:`SourceObserved` (so the projection row carries the
+# "this happened" signal); the marker in the summary is the cue
+# downstream consumers use to distinguish the lifecycle state. The
+# Phase 11 audit Cluster B established the "retain-with-marker" pin
+# pattern (cf. ``test_phase11_office_lifecycle``); these tests extend
+# the same shape to Phase 13's Drive-side lifecycle markers. Issue
+# #288 Cluster C table A#4.
+
+
+def test_mapped_trashed_item_carries_trashed_marker() -> None:
+    """A trashed file round-trips to a :class:`SourceObserved` with the ``[trashed]`` marker.
+
+    Drive surfaces ``trashed=true`` for files the operator (or someone
+    with edit access) moved to the trash. ADR-0020 retains them as
+    ``trashed``-equivalent rather than deleting the projection row;
+    the secretary uses the marker to scope find-document / recall
+    answers (a "trashed but recoverable" file is still useful context
+    for "did I work on that?" queries). Pinning the full
+    :class:`SourceObserved` shape here means the connector tests above
+    can rely on the summary marker as a stable contract.
+    """
+    event = map_drive_item(_raw(file_id="F-trash", trashed=True))
+
+    # The event is emitted at all (no ConnectorFailedError) — ADR-0020
+    # retain-everything: trashed files still flow into the projection.
+    assert event.external_id == "F-trash"
+    # Lifecycle marker present in the summary so downstream consumers
+    # can filter trashed-vs-live without re-reading raw.
+    assert event.summary is not None
+    assert "[trashed]" in event.summary
+    # The title is preserved verbatim (the file still has a name
+    # while it's in the trash, unlike permanent-delete which clears it).
+    assert event.title == "Hello"
+
+
+def test_mapped_removed_item_retains_with_removed_marker() -> None:
+    """A permanently-deleted file round-trips with a placeholder title + ``[removed]`` marker.
+
+    Drive's ``changes.list`` reports permanent deletes as
+    ``removed=true`` with the ``file`` object absent (the API stripped
+    the metadata because the file no longer exists). The mapper
+    synthesises a ``[removed: <fileId>]`` placeholder title so the
+    projection row stays well-formed (SourceObserved.title requires
+    ``min_length=1``) and stamps the ``[removed]`` summary marker so
+    operators can answer "did this file ever exist?" without keeping a
+    deleted-files audit log. Sibling pin to the trashed marker — same
+    ADR-0020 retain-everything reasoning.
+    """
+    event = map_drive_item(_raw(file_id="F-gone", name="", removed=True))
+
+    assert event.external_id == "F-gone"
+    assert event.title == "[removed: F-gone]"
+    assert event.summary is not None
+    assert "[removed]" in event.summary
+    # ``removed`` is more specific than ``trashed`` so the trashed
+    # marker must NOT also appear (operator-facing noise reduction;
+    # cf. mapper._build_summary's ``elif`` chain).
+    assert "[trashed]" not in event.summary
+
+
+def test_mapped_shared_with_me_item_carries_marker() -> None:
+    """A Shared-with-me file round-trips with the ``[shared with me]`` marker.
+
+    Drive's ``sharedWithMeTime`` (lifted to ``RawDriveItem.is_shared_with_me``)
+    distinguishes files the operator received from files they own.
+    The secretary's find-document story benefits from the distinction
+    — "the spec Alice shared with me last week" vs "the spec I drafted
+    myself" route to different mental buckets. Pinning the marker here
+    means a future mapper refactor cannot silently drop it without
+    surfacing the regression in CI.
+    """
+    event = map_drive_item(_raw(file_id="F-shared", is_shared_with_me=True))
+
+    assert event.external_id == "F-shared"
+    assert event.summary is not None
+    assert "[shared with me]" in event.summary
+    # ADR-0020 retain-everything: shared items flow through the same
+    # projection path as owned items — only the marker differs.
+    assert event.body is None  # G3 metadata-only invariant preserved
+
+
+# ----- Phase 13 audit Cluster C — C#23 defensive code pins ---------------
+#
+# ``client._normalise_change`` carries defensive branches for two
+# Drive payload-shape edge cases that surface in real-world syncs but
+# are easy to miss in fixture-based tests:
+#
+# * ``owners=[]`` — Drive omits the owners list on some Shared Drive
+#   items (the shared drive itself owns the file; no individual user
+#   owner) and on some drive-level events (rename / permission grant).
+#   ``client.py`` defaults ``owner_email`` / ``owner_display_name`` to
+#   ``""`` so the mapper's downstream code never hits an IndexError.
+# * ``webViewLink`` missing — Drive omits it on permanent-delete
+#   change records (the file no longer has a public URL) and on some
+#   folder-shaped change events. ``client.py`` defaults
+#   ``web_view_link`` to ``""``; the mapper normalises that to
+#   ``url=None`` on the :class:`SourceObserved`.
+#
+# Pinning the mapper-side behaviour for those defensive-defaulted
+# shapes guarantees the client.py defensive code is not dead code —
+# a future change that re-shapes ``RawDriveItem`` (e.g. switching to
+# Optional fields) would surface here as a test break. Issue #288
+# Cluster C table C#23.
+
+
+def test_handles_owners_empty() -> None:
+    """A :class:`RawDriveItem` with ``owners=[]`` defaults round-trips cleanly.
+
+    Drive omits the owners list on Shared Drive items (where the
+    drive owns the file, not an individual user) and on some
+    drive-level change events. ``client._normalise_change`` defaults
+    ``owner_email`` and ``owner_display_name`` to ``""``; this test
+    pins the mapper-side behaviour so the defensive code path stays
+    exercised end-to-end. Without this pin a future refactor that
+    drops the ``isinstance(owners_obj, list) and owners_obj`` guard
+    would silently break Shared Drive ingest.
+    """
+    event = map_drive_item(_raw(owner_email="", owner_display_name=""))
+
+    # Event still emitted — no ConnectorFailedError, no Pydantic
+    # validation crash. The summary degrades to just the mimeType (no
+    # owner parts to render) but is still non-empty so the projection
+    # row carries a useful hint.
+    assert event.external_id == "F1"
+    assert event.summary is not None
+    assert event.summary == "application/vnd.google-apps.document"
+    # Provenance stamps unchanged — the SaaS family invariant
+    # (external / untrusted) does not depend on owner identity.
+    assert event.provenance_origin == "external"
+    assert event.provenance_trust == "untrusted"
+
+
+def test_handles_web_view_link_missing() -> None:
+    """A :class:`RawDriveItem` with ``web_view_link=""`` becomes ``event.url=None``.
+
+    Drive omits ``webViewLink`` on permanent-delete change records and
+    on some folder-shaped change events. ``client._normalise_change``
+    defaults ``web_view_link`` to ``""``; the mapper normalises that
+    to ``None`` on the :class:`SourceObserved` so the projection's
+    nullable ``url`` column is the canonical "no link available"
+    signal (not an empty string, which would be harder to filter on
+    downstream). Sibling pin to :func:`test_map_drive_item_empty_url_becomes_none`
+    framed at the C#23 defensive-code-stays-live angle.
+    """
+    event = map_drive_item(_raw(file_id="F-no-url", web_url=""))
+
+    assert event.external_id == "F-no-url"
+    assert event.url is None
+    # Other fields still populated — the URL is the only thing that
+    # degrades on a missing webViewLink.
+    assert event.title == "Hello"
+    assert event.summary is not None
