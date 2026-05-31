@@ -175,7 +175,17 @@ def build_connector_sync_handler(engine: Engine) -> ToolHandler:
         except ImportError:
             pass
         try:
-            import opshub.connectors.onedrive_drive  # noqa: F401  # pyright: ignore[reportUnusedImport]
+            import opshub.connectors.onedrive_drive  # pyright: ignore[reportUnusedImport]
+        except ImportError:
+            pass
+        try:
+            # Phase 13 G3 (ADR-0010 §Phase 13 改訂): Google Workspace
+            # ships in Phase 13 so the MCP write handler must register
+            # it here too — same Cluster B audit precedent that pulled
+            # Teams + OneDrive Drive in (otherwise ``connector.sync``
+            # via MCP would raise "unknown connector" for the bare
+            # ``google_workspace`` name). Side-effect import.
+            import opshub.connectors.google_workspace  # noqa: F401  # pyright: ignore[reportUnusedImport]
         except ImportError:
             pass
 

@@ -480,6 +480,66 @@ class OfficeSettings(BaseModel):
     excel: ExcelOfficeSettings = Field(default_factory=ExcelOfficeSettings)
 
 
+class GoogleWorkspaceConnectorSettings(BaseModel):
+    """Google Workspace connector configuration (Phase 13 Sub-issue G3, ADR-0010 §Phase 13 改訂).
+
+    The Google Workspace connector reads Google Drive API v3
+    ``changes.list`` with a single ``startPageToken`` cursor and a TTL
+    expiry fallback (Drive returns 404 / 410 once a stored token
+    crosses the ~30-day vendor window; the connector bootstraps a
+    fresh token via ``changes.getStartPageToken`` and walks forward).
+    Phase 13 plan §1 OQ5 + ADR-0010 §Phase 13 改訂 (g) pin the
+    contract.
+
+    ``enabled = False`` is the default per Phase 7 plan §1 #2 — every
+    SaaS connector is opt-in so a fresh ``uv tool install`` never
+    tries to reach an external API. Operators flip the flag and
+    populate ``client_id`` + ``client_secret`` after registering an
+    OAuth client in Google Cloud Console (Installed Application type;
+    see ``docs/google-workspace-setup.md`` which lands in G5).
+
+    ``client_id`` has no useful default — Google's OAuth endpoint
+    rejects requests without a registered client — so we leave it as
+    an empty string and let :class:`GoogleWorkspaceAuth` raise a
+    :class:`~opshub.core.errors.ConfigError` at construction time.
+    Same shape for ``client_secret``: although Google documents the
+    installed-app client secret as "not actually secret" (it can be
+    extracted from any distributed binary), Google's OAuth endpoint
+    requires it on every code-exchange / refresh round-trip on the
+    wire. The empty default keeps the typing tight (``str`` rather
+    than ``str | None``) and matches the
+    :class:`MS365ConnectorSettings` / :class:`BoxConnectorSettings`
+    style.
+
+    ``redirect_uri`` defaults to ``http://localhost`` per Google's
+    documented installed-app convention. opshub's paste-code flow
+    does not actually listen on this URI — the operator copies the
+    ``?code=...`` parameter out of the URL Google redirects to. The
+    URI only needs to match the value the operator registered with
+    Google Cloud Console.
+
+    ``content_extraction`` defaults to ``False`` (Phase 13 G3 ships
+    metadata-only). Sub-issue G4 (#278) is responsible for wiring
+    this flag to the mapper so that
+    :func:`opshub.core.document_extract.extract_document` is called
+    on ``files.export``-fetched bytes; until G4 merges this flag is
+    inert but pinned so the operator surface does not move when G4
+    lands.
+
+    The Refresh Token lives in the OS keyring under
+    ``connector:google_workspace:refresh_token`` per ADR-0014
+    §Phase 7 Validation (Phase 13 改訂 で 3 件目の rotation pin として
+    追加) — it never appears in ``opshub.toml`` or this settings
+    model.
+    """
+
+    enabled: bool = False
+    client_id: str = ""
+    client_secret: str = ""
+    redirect_uri: str = "http://localhost"
+    content_extraction: bool = False
+
+
 class TeamsConnectorSettings(BaseModel):
     """Microsoft Teams connector configuration (Phase 11 F5).
 
@@ -528,7 +588,10 @@ class ConnectorSettings(BaseModel):
     F4-b (ADR-0019 §(j)) adds :class:`OneDriveDriveConnectorSettings`
     for the OneDrive local-FS connector — the second entry in the
     ``local_drive`` family, structurally identical to
-    :class:`BoxDriveConnectorSettings`.
+    :class:`BoxDriveConnectorSettings`. Phase 13 G3 (ADR-0010 §Phase 13
+    改訂) adds :class:`GoogleWorkspaceConnectorSettings` for the Google
+    Drive API v3 connector — OAuth Refresh Token + ``changes.list``
+    cursor + (G4 で対応予定の) ``files.export``-based body extraction.
 
     The section is intentionally separate from :class:`LLMSettings` /
     :class:`EmbeddingSettings` so per-connector overrides like
@@ -546,6 +609,9 @@ class ConnectorSettings(BaseModel):
         default_factory=OneDriveDriveConnectorSettings
     )
     teams: TeamsConnectorSettings = Field(default_factory=TeamsConnectorSettings)
+    google_workspace: GoogleWorkspaceConnectorSettings = Field(
+        default_factory=GoogleWorkspaceConnectorSettings
+    )
 
 
 class LLMSettings(BaseModel):
