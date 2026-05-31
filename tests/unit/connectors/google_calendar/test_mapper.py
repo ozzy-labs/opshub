@@ -342,3 +342,166 @@ def test_summary_regex_pin_matches() -> None:
     cancelled = map_calendar_event(_raw(status="cancelled"))
     assert confirmed.summary is not None and _SUMMARY_REGEX.match(confirmed.summary)
     assert cancelled.summary is not None and _SUMMARY_REGEX.match(cancelled.summary)
+
+
+# ----- recurrence edge cases (Phase 14 audit cluster D2, G-4) -----------
+
+
+def test_master_event_body_includes_rdate_and_exdate() -> None:
+    """RDATE / EXDATE components in ``recurrence`` are preserved in body.
+
+    Phase 14 audit cluster D2 (G-4): the existing
+    ``test_master_event_body_contains_rrule`` test only exercised the
+    single-RRULE shape. Google's ``recurrence: list[str]`` actually
+    carries any combination of RRULE / RDATE / EXDATE / EXRULE
+    components per the iCalendar spec (RFC 5545). This test pins that
+    every component shows up on its own line so downstream consumers
+    (Phase 15+ instance expansion projection) can parse the rule set
+    without re-fetching the event.
+    """
+    event = map_calendar_event(
+        _raw(
+            subject="Weekly standup with extras",
+            recurrence=(
+                "RRULE:FREQ=WEEKLY;BYDAY=MO",
+                "RDATE;TZID=Asia/Tokyo:20260601T100000",
+                "EXDATE;TZID=Asia/Tokyo:20260615T100000",
+            ),
+        )
+    )
+    assert event.body is not None
+    assert "Recurrence:" in event.body
+    # Every component appears verbatim (newline-separated) so a
+    # downstream RFC 5545 parser can read them all without losing any.
+    assert "RRULE:FREQ=WEEKLY;BYDAY=MO" in event.body
+    assert "RDATE;TZID=Asia/Tokyo:20260601T100000" in event.body
+    assert "EXDATE;TZID=Asia/Tokyo:20260615T100000" in event.body
+
+
+def test_master_event_body_preserves_complex_rrule_byday() -> None:
+    """A complex RRULE (BYDAY multi-day + UNTIL + COUNT) is preserved verbatim.
+
+    Phase 14 audit cluster D2 (G-4): the mapper must forward the
+    RRULE string opaquely — no parsing, no normalisation, no
+    re-rendering — because the projection-layer expansion (Phase
+    15+) is the right place to interpret RFC 5545 semantics. A
+    regression that, e.g., normalises ``BYDAY=MO,WE,FR`` into
+    sorted order or collapses ``COUNT`` would silently change the
+    series semantics. Pinning the verbatim contract here means
+    any such regression trips this test.
+    """
+    complex_rule = "RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR;UNTIL=20271231T235959Z;COUNT=52"
+    event = map_calendar_event(
+        _raw(
+            subject="Tri-weekly retrospective",
+            recurrence=(complex_rule,),
+        )
+    )
+    assert event.body is not None
+    # The exact string round-trips into the body (no parsing /
+    # normalisation / re-rendering).
+    assert complex_rule in event.body
+
+
+# ----- single-attendee body shape (Phase 14 audit cluster D2, G-5) -------
+
+
+def test_body_handles_single_attendee() -> None:
+    """A 1-attendee event renders ``Attendees:\\n<email>`` (single-line list).
+
+    Phase 14 audit cluster D2 (G-5): the existing tests pinned 0
+    attendees (no ``Attendees:`` line) and multi-attendee (newline-
+    separated). The 1-attendee boundary was previously unpinned —
+    a regression that special-cased the singular form (e.g.
+    ``Attendee: alice@example.com`` without the colon-newline
+    structure) would silently break the projection's body diff
+    parser. The mapper composes the section as ``"Attendees:\\n" +
+    "\\n".join(attendees)`` so a single attendee yields a 2-line
+    body section.
+    """
+    event = map_calendar_event(_raw(attendees=("alice@example.com",), attendees_count=1))
+    assert event.body is not None
+    # The section appears (no special-case suppression) AND uses the
+    # same colon-newline shape as the multi-attendee form.
+    assert "Attendees:\nalice@example.com" in event.body
+    # The summary still matches the symmetric format with the count
+    # rendered as 1 (no pluralisation collapse).
+    assert event.summary is not None
+    assert "(1 attendees)" in event.summary
+
+
+# ----- unicode / control char body (Phase 14 audit cluster D2, G-7) -----
+
+
+def test_body_preserves_japanese_kanji_in_description() -> None:
+    """Description with Japanese kanji round-trips through the body verbatim.
+
+    Phase 14 audit cluster D2 (G-7): the mapper does no encoding
+    work on the description string — it arrives from the Calendar
+    client as a Python ``str`` (Calendar API returns JSON-encoded
+    UTF-8, which Python's JSON parser decodes natively) and is
+    appended into the body as-is. This test pins that the kanji
+    code points are preserved end-to-end so the secretary skills
+    can search / match on the original characters.
+
+    Calendar-side symmetric coverage of the Gmail-side
+    ``test_gmail_body_with_japanese_kanji_preserved`` (also Phase
+    14 audit cluster D2 G-7).
+    """
+    kanji = "Q3 計画ミーティング — 議題: 来期予算と人員配置"
+    event = map_calendar_event(_raw(description=kanji))
+    assert event.body is not None
+    assert kanji in event.body
+
+
+def test_body_preserves_emoji_in_description() -> None:
+    """Description with emoji (supplementary-plane code points) round-trips verbatim.
+
+    Phase 14 audit cluster D2 (G-7): emoji land outside the BMP
+    (Basic Multilingual Plane) and require surrogate pairs in UTF-16
+    but a single code point in Python's internal ``str`` (PEP 393).
+    Pinning preservation here guards against any future code path
+    that accidentally re-encodes through UTF-16 (e.g. via a
+    ``str.encode('utf-16').decode(...)`` round-trip) and corrupts
+    supplementary-plane code points.
+    """
+    emoji_text = "Pizza party! 🍕🎉 RSVP by Friday 📅"
+    event = map_calendar_event(_raw(description=emoji_text))
+    assert event.body is not None
+    assert emoji_text in event.body
+
+
+def test_body_preserves_control_chars_in_description() -> None:
+    """Description with ASCII control chars (NUL / DEL / etc.) is retained as-is.
+
+    Phase 14 audit cluster D2 (G-7): the mapper does **not** strip
+    or replace control characters — the body is forwarded verbatim
+    per ADR-0010 §Phase 14 改訂 (k) text-only family. Pinning this
+    behaviour means a future regression that adds an over-eager
+    sanitiser (e.g. matching the Gmail-side base64 decode's
+    ``errors="replace"`` posture and applying it to Calendar
+    descriptions too) trips this test instead of silently re-shaping
+    operator-facing content.
+
+    The Pydantic validator on ``SourceObserved.body`` rejects NUL
+    bytes (``\\x00``) so we test with ``\\x01`` / ``\\x07`` / ``\\x7f``
+    instead — those are real characters operators occasionally
+    paste from terminal copy/paste or signed-document workflows.
+    """
+    raw_text = "Build notes\x01with bell\x07and del\x7f markers"
+    event = map_calendar_event(_raw(description=raw_text))
+    assert event.body is not None
+    assert raw_text in event.body
+
+
+def test_body_preserves_japanese_kanji_in_location() -> None:
+    """Location with Japanese kanji round-trips verbatim (Phase 14 G-7).
+
+    Mirror of the description-side test for the location field —
+    Calendar's free-text location often carries Japanese addresses
+    (``東京都港区六本木...``) for Japan-based operators.
+    """
+    location_jp = "東京都港区六本木 6-10-1 六本木ヒルズ森タワー 32F"
+    event = map_calendar_event(_raw(location=location_jp))
+    assert event.body is not None
+    assert location_jp in event.body
