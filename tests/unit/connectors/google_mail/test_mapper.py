@@ -318,3 +318,121 @@ def test_thread_id_preserved_on_raw() -> None:
     """
     raw = _load("message_text_plain_only.json")
     assert raw.thread_id == "thread-plain-001"
+
+
+# ----- unicode body preservation (Phase 14 audit cluster D2, G-7) -------
+
+
+def test_gmail_body_with_japanese_kanji_preserved() -> None:
+    """A Gmail body containing Japanese kanji round-trips through the mapper.
+
+    Phase 14 audit cluster D2 (G-7): Gmail returns body bytes as
+    base64url-encoded UTF-8; the client's ``_decode_gmail_body``
+    decodes them with ``errors="replace"`` so a corrupted byte
+    sequence degrades gracefully instead of aborting the sync. The
+    mapper appends the decoded string verbatim to the body —
+    pinning that valid UTF-8 kanji round-trips end-to-end (no
+    accidental re-encoding) guards against any future code path
+    that adds a transient ``str.encode(...).decode(...)`` step and
+    mangles supplementary-plane characters.
+
+    The Calendar-side symmetric coverage lives at
+    ``test_body_preserves_japanese_kanji_in_description``.
+    """
+    kanji = "Q3 計画ミーティング — 議題: 来期予算と人員配置"
+    raw = RawGmailMessage(
+        message_id="m-kanji",
+        thread_id="t",
+        label_ids=(),
+        history_id="h",
+        internal_date_ms="0",
+        from_header="alice@example.com",
+        subject_header="計画",
+        snippet="",
+        body_text=kanji,
+        body_html="",
+        raw={},
+    )
+    event = map_gmail_message(raw)
+    assert event.body is not None
+    assert kanji in event.body
+
+
+def test_gmail_body_with_emoji_preserved() -> None:
+    """Emoji (supplementary-plane code points) survive the mapper round-trip.
+
+    Phase 14 audit cluster D2 (G-7): emoji live outside the BMP and
+    require surrogate pairs in UTF-16. Python's PEP 393 ``str``
+    handles them natively but any code path that detours through
+    UTF-16 (e.g. ``str.encode('utf-16').decode(...)``) would
+    silently corrupt the code points. This test pins that no such
+    detour exists in the mapper hot path.
+    """
+    emoji_text = "Pizza party! 🍕🎉 RSVP by Friday 📅"
+    raw = RawGmailMessage(
+        message_id="m-emoji",
+        thread_id="t",
+        label_ids=(),
+        history_id="h",
+        internal_date_ms="0",
+        from_header="party@example.com",
+        subject_header="Party",
+        snippet="",
+        body_text=emoji_text,
+        body_html="",
+        raw={},
+    )
+    event = map_gmail_message(raw)
+    assert event.body is not None
+    assert emoji_text in event.body
+
+
+def test_gmail_body_with_control_chars_replaced_or_kept() -> None:
+    """Control chars in the body are passed through verbatim (no sanitisation).
+
+    Phase 14 audit cluster D2 (G-7): the client's
+    ``_decode_gmail_body`` uses ``errors="replace"`` on the **UTF-8
+    decode boundary only** — that handles malformed byte sequences
+    (replaces with U+FFFD ``REPLACEMENT CHARACTER``). It does NOT
+    strip or replace decoded control characters; those are
+    forwarded as-is per the text-only-family contract (ADR-0010
+    §Phase 14 改訂 (k)).
+
+    This test pins both halves of the design:
+
+    * ASCII control chars (``\\x01`` / ``\\x07`` / ``\\x7f``) are
+      retained verbatim — operators paste them from terminal copy /
+      signed-document workflows and the recall pipeline needs to
+      surface them. The Pydantic ``SourceObserved.body`` validator
+      rejects NUL bytes (``\\x00``) so we avoid that one byte and
+      pin the other typical control characters.
+    * The U+FFFD replacement character round-trips intact when it
+      arrives in the decoded payload (the client puts it there for
+      genuinely-malformed input; the mapper must not double-replace
+      or strip it).
+    """
+    control_text = "Line 1\x01bell\x07del\x7f end\nLine 2"
+    replacement_marker = "Line A�Line B"
+    body_with_both = f"{control_text}\n{replacement_marker}"
+    raw = RawGmailMessage(
+        message_id="m-ctrl",
+        thread_id="t",
+        label_ids=(),
+        history_id="h",
+        internal_date_ms="0",
+        from_header="ops@example.com",
+        subject_header="Ops paste",
+        snippet="",
+        body_text=body_with_both,
+        body_html="",
+        raw={},
+    )
+    event = map_gmail_message(raw)
+    assert event.body is not None
+    # Every control char survives — no stripping, no replacement.
+    assert "\x01" in event.body
+    assert "\x07" in event.body
+    assert "\x7f" in event.body
+    # U+FFFD survives intact (client's ``errors="replace"`` produces
+    # it on malformed UTF-8; the mapper must not double-process).
+    assert "�" in event.body

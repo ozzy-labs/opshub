@@ -45,7 +45,7 @@ pytest.importorskip(
 
 import httpx
 
-from opshub.connectors.google_auth.auth import GoogleWorkspaceAuth
+from opshub.connectors.google_auth.auth import GoogleAuthError, GoogleWorkspaceAuth
 from opshub.connectors.google_mail.client import (
     GMAIL_API_BASE,
     GmailClient,
@@ -482,7 +482,14 @@ def test_persistent_failure_exhausts_retry_budget() -> None:
 
 
 def test_non_rate_limit_4xx_fails_fast() -> None:
-    """A 400 / 401 / 403-without-rate-reason is **not** retried."""
+    """A 400 / 401 / 403-without-rate-reason is **not** retried.
+
+    A plain 401 (no ``insufficient_scope`` signal in the body or
+    ``WWW-Authenticate`` header) is treated as a generic auth
+    failure and raises :class:`ConnectorFailedError`. The
+    :func:`test_gmail_401_insufficient_scope_actionable_message`
+    test below pins the insufficient_scope special-case.
+    """
     calls = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -497,6 +504,94 @@ def test_non_rate_limit_4xx_fails_fast() -> None:
     finally:
         client.close()
     assert calls["n"] == 1
+
+
+# ----- 401 insufficient_scope (Phase 14 audit cluster D2, G-9) ----------
+
+
+def test_gmail_401_insufficient_scope_actionable_message() -> None:
+    """A 401 with ``insufficient_scope`` raises :class:`GoogleAuthError` (actionable).
+
+    Phase 14 audit cluster D2 (G-9): the Phase 14 G2 OQ6 scenario
+    is an operator carrying a Phase 13 (drive-only) refresh token
+    forward into Phase 14 G3 without re-running the paste-code
+    flow. Google surfaces this as a 401 with either:
+
+    * ``WWW-Authenticate: Bearer error="insufficient_scope"`` header,
+      or
+    * ``{"error": "invalid_token", "error_subtype": "insufficient_scope"}``
+      JSON body.
+
+    Either form must produce an actionable :class:`GoogleAuthError`
+    (subclass of :class:`ConfigError`) that names the recovery
+    command, NOT a generic :class:`ConnectorFailedError` (which
+    would push the operator into a retry loop while the underlying
+    problem is a missing consent, not a transient API failure).
+
+    The existing ``test_non_rate_limit_4xx_fails_fast`` test pins
+    generic 401 behaviour (other 401s still raise
+    :class:`ConnectorFailedError`); this test pins the
+    401-with-insufficient_scope special case.
+    """
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(
+            401,
+            json={"error": "invalid_token", "error_subtype": "insufficient_scope"},
+        )
+
+    client = _client_with_handler(handler)
+    try:
+        with patch("time.sleep", _noop_sleep):
+            with pytest.raises(GoogleAuthError) as exc_info:
+                client.get_profile_history_id()
+    finally:
+        client.close()
+    message = str(exc_info.value)
+    # Actionable message names the recovery command and the
+    # missing scope so the operator can act without grepping docs.
+    assert "gmail.readonly" in message
+    assert "opshub connector auth set google_workspace" in message
+    # No retry on the re-consent path — the recovery is operator
+    # action, not exponential backoff.
+    assert calls["n"] == 1
+
+
+def test_gmail_401_insufficient_scope_via_www_authenticate_header() -> None:
+    """The header-form ``insufficient_scope`` signal is also detected.
+
+    Google's OAuth 2.0 protected-resource spec defines two surfaces
+    for the same signal — header vs JSON body. We accept both forms
+    so an upstream gateway change (Google has historically shifted
+    between the two) does not silently degrade the actionable
+    re-auth hint into a generic connector failure. Mirrors the
+    Calendar-side
+    ``test_calendar_401_insufficient_scope_via_www_authenticate_header``.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            401,
+            headers={
+                "WWW-Authenticate": (
+                    'Bearer realm="cloud", error="insufficient_scope", '
+                    'scope="https://www.googleapis.com/auth/gmail.readonly"'
+                )
+            },
+            json={"error": {"code": 401, "message": "unauthenticated"}},
+        )
+
+    client = _client_with_handler(handler)
+    try:
+        with patch("time.sleep", _noop_sleep):
+            with pytest.raises(GoogleAuthError) as exc_info:
+                client.get_profile_history_id()
+    finally:
+        client.close()
+    assert "gmail.readonly" in str(exc_info.value)
 
 
 # ----- delegated mailbox guard (Phase 14 OQ12) ---------------------------

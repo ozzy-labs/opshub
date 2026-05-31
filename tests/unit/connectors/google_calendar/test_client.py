@@ -30,7 +30,9 @@ Coverage map:
 
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -43,7 +45,7 @@ pytest.importorskip(
 
 import httpx
 
-from opshub.connectors.google_auth.auth import GoogleWorkspaceAuth
+from opshub.connectors.google_auth.auth import GoogleAuthError, GoogleWorkspaceAuth
 from opshub.connectors.google_calendar.client import (
     CALENDAR_API_BASE,
     CalendarClient,
@@ -51,6 +53,21 @@ from opshub.connectors.google_calendar.client import (
     SyncTokenExpiredError,
 )
 from opshub.core.errors import ConnectorFailedError
+
+# Fixture directory + loader (Phase 14 audit cluster D2, F-1): the
+# Gmail-side ``_fixture(name)`` pattern is mirrored here so the three
+# previously-unreferenced calendar fixtures (``events_single.json`` /
+# ``events_recurring_with_override.json`` / ``sync_token_gone.json``)
+# become the source of truth for representative response shapes. Tests
+# that pin response-independent behaviour (multi-page cursor handoff,
+# retry budget, sentinel emission) keep their inline JSON because the
+# fixture file shape would couple the pin to fixture content drift.
+FIXTURES = Path(__file__).resolve().parents[3] / "fixtures" / "google_calendar"
+
+
+def _fixture(name: str) -> dict[str, Any]:
+    """Load and return a calendar fixture (Gmail-symmetric helper)."""
+    return cast(dict[str, Any], json.loads((FIXTURES / name).read_text(encoding="utf-8")))
 
 
 def _noop_sleep(seconds: float) -> None:
@@ -231,26 +248,18 @@ def test_fetch_events_delta_multi_page_cursor_holds_then_advances() -> None:
 
 
 def test_fetch_events_delta_410_raises_sync_token_expired() -> None:
-    """Calendar 410 ``fullSyncRequired`` raises :class:`SyncTokenExpiredError`."""
+    """Calendar 410 ``fullSyncRequired`` raises :class:`SyncTokenExpiredError`.
+
+    Phase 14 audit cluster D2 (F-1): the 410 body shape is loaded from
+    the ``sync_token_gone.json`` fixture so the file becomes the SSOT
+    for "what does Calendar return when the stored sync token has
+    aged out?". The fixture mirrors Google's documented error envelope
+    (``error.code=410`` + ``errors[].reason="fullSyncRequired"``).
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
         del request
-        return httpx.Response(
-            410,
-            json={
-                "error": {
-                    "code": 410,
-                    "message": "Sync token is no longer valid",
-                    "errors": [
-                        {
-                            "domain": "calendar",
-                            "reason": "fullSyncRequired",
-                            "message": "Sync token is no longer valid",
-                        }
-                    ],
-                }
-            },
-        )
+        return httpx.Response(410, json=_fixture("sync_token_gone.json"))
 
     client = _client_with_handler(handler)
     with pytest.raises(SyncTokenExpiredError):
@@ -606,3 +615,217 @@ def test_other_4xx_fails_fast() -> None:
             list(client.fetch_events_delta(sync_token="ST_OLD"))
     # No retry on a non-rate-limit 4xx.
     assert call_count["n"] == 1
+
+
+# ----- 401 insufficient_scope (Phase 14 audit cluster D2, G-9) ----------
+
+
+def test_calendar_401_insufficient_scope_actionable_message() -> None:
+    """A 401 with ``insufficient_scope`` raises :class:`GoogleAuthError` (actionable).
+
+    Phase 14 audit cluster D2 (G-9): the Phase 14 G2 OQ6 scenario is
+    an operator carrying a Phase 13 (drive-only) refresh token forward
+    into Phase 14 G4 without re-running the paste-code flow. Google
+    surfaces this as a 401 with either:
+
+    * ``WWW-Authenticate: Bearer error="insufficient_scope"`` header,
+      or
+    * ``{"error": "invalid_token", "error_subtype": "insufficient_scope"}``
+      JSON body.
+
+    Either form must produce an actionable :class:`GoogleAuthError`
+    (subclass of :class:`ConfigError`) that names the recovery
+    command, NOT a generic :class:`ConnectorFailedError` (which would
+    push the operator into a retry loop while the underlying problem
+    is a missing consent, not a transient API failure).
+
+    The existing ``test_other_4xx_fails_fast`` test pins generic 4xx
+    behaviour (any other 4xx still raises :class:`ConnectorFailedError`);
+    this test pins the 401-with-insufficient_scope special case.
+    """
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        call_count["n"] += 1
+        return httpx.Response(
+            401,
+            json={"error": "invalid_token", "error_subtype": "insufficient_scope"},
+        )
+
+    client = _client_with_handler(handler)
+    with patch.object(time, "sleep", _noop_sleep):
+        with pytest.raises(GoogleAuthError) as exc_info:
+            list(client.fetch_events_delta(sync_token="ST_OLD"))
+    # Actionable message names the recovery command and the missing
+    # scope so the operator can act without grepping docs.
+    message = str(exc_info.value)
+    assert "calendar.readonly" in message
+    assert "opshub connector auth set google_workspace" in message
+    # No retry on the re-consent path — the recovery is operator
+    # action, not exponential backoff.
+    assert call_count["n"] == 1
+
+
+def test_calendar_401_insufficient_scope_via_www_authenticate_header() -> None:
+    """The header-form ``insufficient_scope`` signal is also detected.
+
+    Google's OAuth 2.0 protected-resource spec defines two surfaces
+    for the same signal — header vs JSON body. We accept both forms
+    so an upstream gateway change (Google has historically shifted
+    between the two) does not silently degrade the actionable
+    re-auth hint into a generic connector failure.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            401,
+            headers={
+                "WWW-Authenticate": (
+                    'Bearer realm="cloud", error="insufficient_scope", '
+                    'scope="https://www.googleapis.com/auth/calendar.readonly"'
+                )
+            },
+            json={"error": {"code": 401, "message": "unauthenticated"}},
+        )
+
+    client = _client_with_handler(handler)
+    with patch.object(time, "sleep", _noop_sleep):
+        with pytest.raises(GoogleAuthError) as exc_info:
+            list(client.fetch_events_delta(sync_token="ST_OLD"))
+    assert "calendar.readonly" in str(exc_info.value)
+
+
+# ----- fixture-driven response shape pins (Phase 14 audit cluster D2, F-1)
+
+
+def test_events_single_fixture_normalises_into_raw_calendar_event() -> None:
+    """``events_single.json`` decodes into a populated :class:`RawCalendarEvent`.
+
+    Phase 14 audit cluster D2 (F-1): the fixture documents the
+    response shape Calendar returns for a typical single timed event
+    (with ``timeZone`` / ``location`` / ``description`` / multiple
+    ``attendees``). Activating it here keeps the fixture file as the
+    SSOT for "this is what a real Calendar event payload looks like"
+    so future schema drift (Google adds a new field, or changes the
+    shape of an existing one) surfaces as a fixture diff rather than
+    silent test-helper rot.
+
+    The Gmail-side ``_fixture(name)`` helper pattern is mirrored here
+    (Gmail test_client.py uses fixtures throughout; Calendar tests
+    were previously inline JSON — the asymmetry was the F-1 finding).
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, json=_fixture("events_single.json"))
+
+    client = _client_with_handler(handler)
+    results = list(client.fetch_events_delta(sync_token="ST_OLD"))
+    # One event + final sentinel (matches the existing delta walk
+    # contract: every final page emits the sentinel).
+    assert len(results) == 2
+    event = results[0][0]
+    assert event is not None
+    assert event.id == "evt-single-001"
+    assert event.subject == "Coffee with Bob"
+    assert event.start_iso == "2026-06-01T15:00:00+09:00"
+    assert event.end_iso == "2026-06-01T16:00:00+09:00"
+    assert event.attendees_count == 2
+    assert event.organizer_email == "alice@example.com"
+    assert event.description == "Catch up on Q3 planning over coffee."
+    assert event.location == "Cafe Bluebird, 123 Main St"
+    # Master event (no override pointer).
+    assert event.recurring_event_id == ""
+    assert event.original_start_iso == ""
+    # Final sentinel carries the freshly-minted sync token.
+    sentinel_event, sentinel_cursor = results[1]
+    assert sentinel_event is None
+    assert sentinel_cursor == "CPDh4P3clfgCEPDh4P3clfgCGAUg__________8B"
+
+
+def test_events_recurring_with_override_fixture_yields_master_plus_override() -> None:
+    """``events_recurring_with_override.json`` surfaces both records distinctly.
+
+    Phase 14 audit cluster D2 (F-1): the fixture pins the documented
+    "master + override returned as separate items with
+    ``singleEvents=false``" shape (Phase 14 plan OQ3 / ADR-0010
+    §Phase 14 改訂 (l) §不変条件 3). The mapper symmetry tests rely on
+    the master keeping ``recurrence`` populated and the override
+    keeping ``recurring_event_id`` + ``original_start_iso`` populated;
+    this test pins the client-side normalisation that feeds those
+    properties.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, json=_fixture("events_recurring_with_override.json"))
+
+    client = _client_with_handler(handler)
+    results = list(client.fetch_events_delta(sync_token="ST_OLD"))
+    # Two events + final sentinel.
+    assert len(results) == 3
+    real_events = [r[0] for r in results if r[0] is not None]
+    assert len(real_events) == 2
+    master, override = real_events
+    # Master: recurrence populated, no override pointer.
+    assert master.id == "evt-master-001"
+    assert master.recurrence == ("RRULE:FREQ=WEEKLY;BYDAY=MO",)
+    assert master.recurring_event_id == ""
+    assert master.original_start_iso == ""
+    assert master.attendees_count == 3
+    # Override: recurring_event_id + original_start_iso populated,
+    # no recurrence RRULE (the override does not re-state the rule).
+    assert override.id == "evt-master-001_20260518T010000Z"
+    assert override.recurring_event_id == "evt-master-001"
+    assert override.original_start_iso == "2026-05-18T10:00:00+09:00"
+    assert override.recurrence == ()
+
+
+# ----- timeZone field (Phase 14 audit cluster D2, G-6) -------------------
+
+
+def test_normaliser_preserves_time_zone_field_on_raw_payload() -> None:
+    """``start.timeZone`` is retained inside ``RawCalendarEvent.raw`` verbatim.
+
+    Phase 14 audit cluster D2 (G-6): Calendar returns
+    ``start.timeZone`` / ``end.timeZone`` (e.g. ``"Asia/Tokyo"``) for
+    timed events so downstream consumers can render the event in the
+    operator's preferred zone. The Phase 14 G4 normaliser does **not**
+    lift the timezone into a dedicated dataclass field — the mapper
+    consumes ``start.dateTime`` verbatim (which already carries the
+    ``+09:00`` offset) and forwards it into the summary, so the named
+    zone string is forensic context only.
+
+    This test pins that the raw payload retains the ``timeZone`` field
+    so future projection-layer work (Phase 15+ ``localised_at`` column
+    or all-day clarification) can recover it without re-fetching the
+    event. Documenting the design here means a future regression that
+    drops ``raw`` (or filters it) trips this test before silently
+    losing the zone information.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, json=_fixture("events_single.json"))
+
+    client = _client_with_handler(handler)
+    results = list(client.fetch_events_delta(sync_token="ST_OLD"))
+    event = results[0][0]
+    assert event is not None
+    # ``start.dateTime`` carries the offset directly — that's what
+    # mapper summary renders.
+    assert event.start_iso == "2026-06-01T15:00:00+09:00"
+    assert event.end_iso == "2026-06-01T16:00:00+09:00"
+    # Named zone string lives only on the verbatim ``raw`` payload
+    # (no dedicated dataclass field is the deliberate Phase 14 G4
+    # design — see G-6 audit note).
+    raw_start_obj = event.raw.get("start")
+    assert isinstance(raw_start_obj, dict)
+    raw_start = cast(dict[str, Any], raw_start_obj)
+    assert raw_start.get("timeZone") == "Asia/Tokyo"
+    raw_end_obj = event.raw.get("end")
+    assert isinstance(raw_end_obj, dict)
+    raw_end = cast(dict[str, Any], raw_end_obj)
+    assert raw_end.get("timeZone") == "Asia/Tokyo"

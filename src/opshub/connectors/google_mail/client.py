@@ -92,6 +92,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
+from opshub.connectors.google_auth.auth import GoogleAuthError
 from opshub.core.errors import ConfigError, ConnectorFailedError
 
 if TYPE_CHECKING:
@@ -541,6 +542,21 @@ class GmailClient:
                 # 5xx: Gmail documents these as transient; back off.
                 time.sleep(2**attempt)
                 continue
+            if response.status_code == 401 and _is_insufficient_scope(response):
+                # Re-consent signal: the stored refresh token was minted
+                # against an older scope set that no longer covers
+                # ``gmail.readonly``. Phase 14 G2 OQ6 scenario: operator
+                # carrying forward a Phase 13 (drive-only) refresh token
+                # into Phase 14 G3 without re-running the paste-code
+                # flow. Raised as :class:`GoogleAuthError` (subclass of
+                # :class:`ConfigError`) so the CLI surfaces an
+                # actionable re-auth hint rather than a generic
+                # connector failure.
+                raise GoogleAuthError(
+                    "Gmail request returned 401 insufficient_scope. "
+                    "The stored refresh token does not grant gmail.readonly. "
+                    "Re-run: opshub connector auth set google_workspace"
+                )
             if response.status_code >= 400:
                 raise ConnectorFailedError(
                     f"Gmail request returned {response.status_code}: {method} {url}"
@@ -585,6 +601,65 @@ def _is_history_id_expired(url: str, response: Any) -> bool:
     # backend hiccup; either way the recovery path is the same.
     del response  # parameter retained for future body-aware inspection
     return "/history" in url
+
+
+def _is_insufficient_scope(response: Any) -> bool:
+    """True iff a 401 carries Google's ``insufficient_scope`` signal.
+
+    Google's OAuth 2.0 protected-resource errors surface as either:
+
+    * A ``WWW-Authenticate: Bearer error="insufficient_scope" ...``
+      header (the documented OAuth 2.0 shape), or
+    * A JSON body with ``error="invalid_token"`` plus
+      ``error_subtype="insufficient_scope"`` on the API-gateway path.
+
+    Either form indicates the stored access / refresh token was minted
+    against an older scope set that no longer covers the requested
+    endpoint (Phase 14 G2 OQ6 scenario: operator carrying forward a
+    Phase 13 drive-only refresh token into Phase 14 G3). The recovery
+    is a re-consent, not a retry — so we surface it as
+    :class:`GoogleAuthError` (subclass of :class:`ConfigError`) with an
+    actionable hint pointing at the paste-code flow command.
+
+    Defensive on both axes: header parsing tolerates absence /
+    case-insensitivity; body parsing tolerates missing / malformed
+    JSON. A 401 without either signal falls through to the generic
+    ``ConnectorFailedError`` path so unrelated auth failures stay
+    distinguishable. Mirrors
+    :func:`opshub.connectors.google_calendar.client._is_insufficient_scope`
+    one-for-one (the two connectors share the recovery contract).
+    """
+    www_auth = ""
+    headers_obj = getattr(response, "headers", None)
+    if headers_obj is not None:
+        try:
+            www_auth = headers_obj.get("WWW-Authenticate", "") or ""
+        except (AttributeError, TypeError):
+            www_auth = ""
+    if "insufficient_scope" in www_auth.lower():
+        return True
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    if not isinstance(body, dict):
+        return False
+    body_dict = cast(dict[str, Any], body)
+    error_obj = body_dict.get("error")
+    error_subtype = body_dict.get("error_subtype")
+    if isinstance(error_subtype, str) and error_subtype == "insufficient_scope":
+        return True
+    # Google's API-gateway sometimes nests the OAuth error under
+    # ``error.status`` / ``error.message`` instead of the top-level
+    # OAuth shape. We accept both forms.
+    if isinstance(error_obj, dict):
+        error_dict = cast(dict[str, Any], error_obj)
+        status = error_dict.get("status")
+        if isinstance(status, str) and status == "PERMISSION_DENIED":
+            message_obj = error_dict.get("message")
+            if isinstance(message_obj, str) and "insufficient" in message_obj.lower():
+                return True
+    return False
 
 
 def _is_rate_limit_error(response: Any) -> bool:
