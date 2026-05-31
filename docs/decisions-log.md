@@ -362,3 +362,49 @@ Phase 12 H1 (2026-05-31) で ADR-0016 (Action Loop and Structured Output) に §
 | Triage 3 分類を draft 系全体に共通の signal として位置づけ | reply_draft 専用 signal、他 draft type は独自体系 | `handoff-draft` (引き継ぎ書) / `announcement-draft` (告知文) で respond/notify/ignore 3 分類は意味をなさない、§決定 (j) の文面が "draft" を主語にしているため将来 misread されるリスクを本条文で明確化 |
 | `propose.generate` の `mode` を全 draft type で使えるよう拡張 | persist 経路を持つ 4 mode に限定 | `mode=handoff_draft` を許すと structured output dispatch key と persist 経路の境界が曖昧化、host LLM 側で「mode を指定したのに persist されない」混乱が起きる |
 | 新 candidate kind 追加に備えて Candidate union を open (Generic[CandidatePayloadProtocol] 等) | 3 kind で freeze、将来追加は §決定 (f) versioning パターンで対応 | open union は新 candidate kind 追加時に dispatch 分岐 / projection 拡張 / service 層分岐 / test fixture 全てを更新する metabolic load を hide、freeze + versioning パターンの方が「追加コストを払う Phase」を明示できる |
+
+## 27. ADR-0010 改訂 (Phase 13 G1 — Google Workspace 追加 + Drive `changes.list` cursor + TTL fallback + Refresh Token principal = MS365 / Box pattern 明文化)
+
+Phase 13 Sub-issue G1 (2026-05-31) で ADR-0010 (Connector Contract) を改訂し、Phase 10 改訂 (write-back ban、§禁止事項 7) と Phase 11 改訂 (a)-(d) を **保持** したまま以下 4 点を加算追加。Phase 12 plan §9 で forecast していた独立 ADR-0026 (Google Workspace connector) は **立てない** (Phase 11 流の単一改訂路線を踏襲)。
+
+- **改訂 (e) Google Workspace 新コネクタ追加**: Phase 13 G3 (#277) の `connectors/google_workspace/` connector を本 ADR の Connector Protocol + 責務 1-6 + 禁止事項 1-7 の契約対象に追加。Drive API v3 `changes.list` 経由で Docs / Slides / Sheets の metadata + delta を fetch、`source_type="google_doc"` / `"google_slides"` / `"google_sheets"` で persist。**Drive push notification (`files.watch`) 禁止** を §禁止事項拡張として明文化 (能動性混入防止、形 A scope 抵触)、`changes.list` poll のみに制限
+- **改訂 (f) Workspace export 経路の本文抽出契約**: Drive API `files.export` で Google native fmt → MS Office mediatype (docx / pptx / xlsx) → markitdown 経路を契約として pin。Phase 11 改訂 (b) の local-FS-backed connector 経路に対する Web API 経路の対応物。markitdown 1 本経路 (ADR-0025 §決定 (a)) を保持、Google ネイティブ markdown export は使わない (Sheets / Slides の markdown 直接 export 非対応で API 表面分岐リスク)
+- **改訂 (g) Drive `changes.list` cursor + TTL fallback 義務**: Phase 11 改訂 (c) の Microsoft Graph delta-link + 失効時 full-pass fallback と完全同型を Drive API `changes.list` page token にも適用。TTL 失効時 (`400 invalidToken` / `404 startPageToken expired` / `410 Gone`) → WARNING log → 直近 N 日 (`fallback_window_days`、default 30) full-pass + 新 start page token 取得 → 次回 sync 差分 mode 復帰。fallback 自体失敗時は `ConnectorSyncFailed`
+- **改訂 (h) Google Workspace User Token principal = MS365 / Box pattern**: Refresh Token + offline access + 自前 refresh + rotation 書き戻し pattern を確定。**Teams pattern (verbatim user token + アプリ層 refresh なし) とは別系統である旨を明文化** し、両 pattern が ADR-0010 内に並立することを表で対比 (rotation 書き戻し / アプリ層 refresh / env override suffix の 5 列対比)。keyring slot `connector:google_workspace:refresh_token` + env override `OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN`、rotation pin test (`test_get_access_token_persists_rotated_refresh_token`) を MS365 / Box と同型で配置 (G3 DoD)
+
+| 却下案 | 採用案 | 理由 |
+|---|---|---|
+| Google Workspace を独立 ADR (ADR-0026 等) として起票 | ADR-0010 §Phase 13 改訂 (e) として吸収 | Phase 11 流の単一改訂路線を踏襲 (Phase 11 = 1 新規 + 2 改訂、Phase 12 = 0 新規 + 3 改訂、Phase 13 = 0 新規 + 3 改訂、と縮退継続)、Connector Protocol + 責務 1-6 + 禁止事項 1-7 を Google Workspace にも適用する確認のみで独立 ADR は概念的二重化、Phase 13 plan §1 OQ4 で「ADR-0010 + ADR-0014 + ADR-0025 の 3 改訂」を確定 |
+| Teams pattern (verbatim user token + アプリ層 refresh なし) を Google Workspace にも採用 | MS365 / Box pattern (Refresh Token + 自前 refresh + rotation 書き戻し) を採用、Teams pattern とは別系統で並立 | Google Drive API access token は documented 1 hour TTL で短命、refresh token を offline access 取得で受けてアプリ層 refresh するのが Google OAuth 2.0 の標準運用、verbatim token のみ pattern では token 失効時に毎回 paste-code flow が必要で operator UX が極端に劣化、両 pattern を ADR-0010 内に並立明文化することで Phase 11 既存資産 (Teams) と Phase 13 新資産 (Google Workspace) の principal 選択根拠を将来も読める形で凍結 |
+| Drive `files.watch` (push notification) で能動的に変更検知 | `changes.list` poll のみに制限、`files.watch` を connector に実装しない | 能動性混入は形 A (Phase 10 ADR-0004 改訂で確定) と直接抵触、構造的に経路を不在にすることで「flag 1 つで緩める」リスクを排除、Phase 14+ 能動性段階で再評価 |
+| `changes.list` TTL 失効時に `ConnectorSyncFailed` で fail-fast (fallback なし) | 自動 fallback で直近 N 日 full-pass + 新 start page token 取得 | fail-fast だと operator が手動再実行するまで Google Workspace 文書の取り込みが完全停止、long-tail TTL 失効が標準運用に組み込まれており fail-fast は運用継続性を破壊、Phase 11 改訂 (c) の Teams fallback パターンを再利用することで operator メンタルモデルを 1 つに保つ |
+| Drive write API (`files.update` / `comments.create` 等) を connector に実装し将来書き戻しに備える | Drive write API を connector に実装しない、ADR-0010 §禁止事項 7 (write-back ban) を Google Workspace に自然延長 | 「将来のために code path を作る」は ADR-0010 §禁止事項 7 (構造的に経路を不在にする原則) と直接抵触、書き戻しが必要になった時点で新 ADR で改訂 (Phase 11 §以降の再評価条件と同パターン) |
+
+## 28. ADR-0014 改訂 (Phase 13 G1 — §Phase 7 Validation rotation pin リストに google_workspace 追加)
+
+Phase 13 Sub-issue G1 (2026-05-31) で ADR-0014 (SaaS Token Storage) を改訂し、§Phase 7 Validation 節の **OAuth refresh token rotation の永続化** pin test リストに **`tests/unit/connectors/google_workspace/test_auth.py::test_get_access_token_persists_rotated_refresh_token`** を MS365 / Box に続く 3 件目として追加。keyring slot `connector:google_workspace:refresh_token` + env override `OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN` を pin。Phase 7 keyring keys 一覧にも Phase 11 Teams (5 件目) + Phase 13 Google Workspace (6 件目) を追記し、両 phase の追加経緯を本 ADR 内で凍結。
+
+- **rotation pin test 追加の必要性**: Google OAuth 2.0 Refresh Token は documented rotation を行う (毎 access token 取得 / refresh で新 refresh token が返り得る)、書き戻し忘れは次回 refresh での失効を意味する → MS365 / Box で確立した「rotation 書き戻し forget regression 防止」test pattern を Google Workspace にも適用すべき
+- **ADR-0010 §Phase 13 改訂 (h) との対応**: ADR-0010 で「Google Workspace = MS365 / Box pattern」を確定したため、token storage 経路の test pin も MS365 / Box と同型で配置するのが自然な帰結
+- **本 ADR §Decision (薄ラッパー + 規約ベースの key 命名 + env var override + `secrets` extras 隔離) は無変更**: signature 変更ゼロ、Phase 13 改訂は Validation 節への pin test 追加のみ
+
+| 却下案 | 採用案 | 理由 |
+|---|---|---|
+| Google Workspace 用に新 ADR (ADR-0028 等) で token storage 経路を起票 | ADR-0014 §Phase 7 Validation 節への rotation pin リスト追加で吸収 | ADR-0014 の Decision (keyring + 規約 key + env override + extras 隔離) は MS365 / Box / Slack / GitHub で 6 件目の追加でも崩れない (Phase 7 validation で確認済)、新 ADR は概念的二重化 |
+| Google Refresh Token を verbatim 保管 (rotation なし pattern、Teams 同様) | MS365 / Box 同様 rotation 書き戻し pattern + pin test 追加 | Google OAuth 2.0 仕様で rotation が前提、verbatim では Phase 13 plan §Alternatives #6 と同じく operator UX 劣化 |
+| pin test を G5 closeout でまとめて追加 | G3 (#277) DoD で本 pin test を必須にする | G3 で auth.py 実装と同時に pin test を配置することで「実装と同期して test が育つ」原則を維持、G5 まで先送りすると implement 段階の TDD サイクルが切れる |
+
+## 29. ADR-0025 改訂 (Phase 13 G1 — 新 source_type 3 種 + Workspace export 経路)
+
+Phase 13 Sub-issue G1 (2026-05-31) で ADR-0025 (Office Document Content Extraction) を改訂し、§決定 (d) (形式別 3 種 `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`) を **保持** したまま、§決定 (d') (Google Workspace 由来 3 種 `google_doc` / `google_slides` / `google_sheets`) + §決定 (j) (Workspace export 経路) を加算追加。
+
+- **(d') 形式別 3 種を加算追加**: Drive API が返す Google mimeType (`application/vnd.google-apps.document` / `.presentation` / `.spreadsheet`) を connector mapper で `google_doc` / `google_slides` / `google_sheets` source_type に正規化。MS Office 系 3 種 (§決定 (d)) と分離することで operator が「Workspace 由来か Office 由来か」を query レベルで区別可能 (find-document 自然文 query との整合)
+- **(j) Workspace export 経路**: Drive API `files.export(fileId, mimeType=<Office mediatype>)` でバイナリ取得 → markitdown 経由抽出。**3 形式とも MS Office mediatype 経由で統一** (Docs だけ markdown 直接 export を採ると `core/document_extract.py` の経路が `google_doc` のみ別分岐になり API 表面整合性が崩れる)。`core/document_extract.extract` の API 表面を `path_or_bytes` 形式に拡張 (Phase 11 は path-only)、source_hint 引数を追加
+- **既存 §決定 (a)-(i) は保持**: markitdown 1 本経路 / 50MB + 500K chars cap / fail-safe / Excel cells 上限 / PPT notes / ADR-0019 §不変条件 (b) 共存 / provenance / 抽出キャッシュなし、すべて Phase 11 から無変更で継承
+
+| 却下案 | 採用案 | 理由 |
+|---|---|---|
+| Google Workspace 3 種と Office 3 種を 1 タイプ (`office_document`) に統合 | 形式別 6 種に分離 | 「Workspace 由来か Office 由来か」を operator が query レベルで区別可能、find-document 自然文 query との整合、本 ADR §Alternatives #3 (Phase 11 で却下) と同根拠 |
+| Docs だけ `text/markdown` 直接 export、Sheets / Slides は Office mediatype 経由 | 3 形式とも MS Office mediatype 経由で統一 | `core/document_extract.py` の経路が `google_doc` のみ別分岐 (markdown export → そのまま body) になり、Sheets / Slides との API 表面整合性が崩れる、3 形式統一の方が design coherence が高い |
+| Workspace export 経路用の新 ADR (ADR-0027 等) を起票 | ADR-0025 §決定 (j) として吸収 | 抽出層は markitdown 1 本経路 (§決定 (a)) で完結、Workspace export は input 経路の延伸 (Web API → MS Office mediatype → markitdown) のみで独立 ADR の論点を持たない、Phase 11 流の単一改訂路線を踏襲 |
+| Workspace export 由来文書の size cap を MS Office 由来と同じ (50MB / 500K chars) で固定 | cap は §決定 (b) を継承、適合性は Phase 13 plan OQ9 で実測後に必要なら `[office.google_workspace] max_file_size_mb` separate override 導入 | Workspace export は元 file size 概念が Google native fmt → export 後 size で異なり、実測なしに固定すると skip 発生率が読めない、Phase 11 MVP の「operator override 可能」設計 (§決定 (b)) を継承することで適合性問題を運用調整 escape hatch で吸収 |

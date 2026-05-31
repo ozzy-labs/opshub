@@ -1,7 +1,7 @@
 # 0010. Connector Contract
 
-- Status: Accepted (revised 2026-05-31 for Phase 11 Sub-issue F1)
-- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外); 2026-05-31 (Phase 11 改訂: Teams 追加 + 本文抽出契約 + delta-link cursor + User Token principal)
+- Status: Accepted (revised 2026-05-31 for Phase 13 Sub-issue G1)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外); 2026-05-31 (Phase 11 改訂: Teams 追加 + 本文抽出契約 + delta-link cursor + User Token principal); 2026-05-31 (Phase 13 改訂: Google Workspace 追加 + Drive `changes.list` cursor + TTL fallback + Workspace export 本文抽出契約 + Google Refresh Token principal = MS365 / Box pattern 明文化)
 - Deciders: ozzy
 
 ## Context
@@ -247,6 +247,108 @@ Teams User Token の運用:
 
 採用理由が成立する根拠は ADR-0018 §Decision と全く同じため詳細は ADR-0018 を参照。本 ADR §Phase 11 改訂 (d) は ADR-0018 の Slack User Token 確定を **Teams にも適用する確認** にとどまる。
 
+## Phase 13 改訂 (Sub-issue G1、2026-05-31)
+
+Phase 13 (epic #274) で Google Workspace 新コネクタ (Docs / Slides / Sheets) を導入するにあたり、本 ADR を改訂し以下 4 点を追加する (Phase 10 改訂節 §禁止事項 7 / Phase 11 改訂節 (a)-(d) は **保持**、本節は **加算改訂**)。
+
+### Phase 13 改訂 (e) — Google Workspace 新コネクタを契約対象に追加
+
+Phase 13 Sub-issue G3 (#277) で **`connectors/google_workspace/` connector** を新設し、本 ADR の `Connector` Protocol + 責務 1-6 + 禁止事項 1-7 をそのまま適用する。Google Drive API v3 `changes.list` 経由で Docs / Slides / Sheets の metadata + delta を fetch し、`source_type="google_doc"` / `"google_slides"` / `"google_sheets"` で `sources` projection に persist する。
+
+- **Protocol signature 変更なし** — Phase 3 で確定し Phase 7-12 で適合済の Connector Protocol を再利用 (本 ADR §Phase 11 改訂 (a) と同じ追加パターン)
+- **本 ADR の禁止事項 1-7 すべて適用** — Task / Decision / Link 直接生成禁止 / projection 直接更新禁止 / Application Service 経由必須 / vendor 固有 event 名禁止 / write-back ban (§禁止事項 7) を Google Workspace にも継承。**Drive write API (`files.update` / `files.create` / `files.copy` / `comments.create` / `permissions.*`) を connector に実装しない** ことで構造的に書き戻し経路を不在にする (§禁止事項 7 の Google Workspace への自然延長)
+- **能動性禁止の延長: Drive push notification (`files.watch`) 禁止** — Google Drive API は `changes.watch` / `files.watch` で push channel を張る経路を持つが、本 ADR では **`changes.list` poll のみに制限**。push 経路は能動性混入 (Phase 14+ 段階 3 通知層の領域) であり、形 A (能動性なし) の本 phase scope に抵触する。`files.watch` を呼ぶ code path を connector に実装しないことで構造的に不在を保証
+- **MS365 / Box / Slack ADR-0018 と principal パターンを揃える** — 後述 Phase 13 改訂 (h) を参照
+
+### Phase 13 改訂 (f) — Workspace export 経路の本文抽出契約
+
+Phase 13 Sub-issue G2 / G4 (#276 / #278) で Google Workspace 由来文書 (Docs / Slides / Sheets) の本文を取り込むにあたり、本 ADR §責務 1-2 (external API fetch + source normalization) と §責務 6 (body の minimization) を **Workspace export 経路に延伸** する形で本文抽出契約を pin する (Phase 11 改訂 (b) の local-FS-backed connector 経路に対する Web API 経路の対応物)。
+
+本文抽出契約の流れ (Workspace export 経路):
+
+```text
+external metadata fetch (Drive API v3: files.get + changes.list)
+  → diff detection (delta page token との比較)
+  → 拡張子相当の Google mimeType マッチ + content_extraction = true の場合のみ
+    → Drive API files.export(fileId, mimeType=<Office mediatype>) で binary export
+      ├─ application/vnd.google-apps.document   → MS Word (.docx) として export
+      ├─ application/vnd.google-apps.presentation → MS PowerPoint (.pptx) として export
+      └─ application/vnd.google-apps.spreadsheet  → MS Excel (.xlsx) として export
+    → 抽出 (core/document_extract.extract(path or bytes) 経由、markitdown 単独経路、ADR-0025 §決定 (a))
+    → fail-safe (例外時は body=None、ADR-0025 §決定 (c))
+  → SourceObserved with (body + provenance_origin + provenance_trust) を Application Service 経由で append
+```
+
+抽出層の不変条件:
+
+1. **抽出経路は ADR-0025 §決定 (a) の markitdown 1 本** — connector が直接 `python-docx` / `openpyxl` / `python-pptx` を import / 呼び出すことを禁止 (`core/document_extract.py` 1 module に集中化)。Phase 11 改訂 (b) の不変条件をそのまま継承
+2. **Google ネイティブ markdown export は使わない** — Docs は `text/markdown` 直接 export を持つが、Sheets / Slides は markdown 直接 export 非対応で、3 source_type の export 経路が分岐する。`core/document_extract.py` の API 表面 1 経路 (markitdown 経由) を保つために **3 形式とも MS Office mediatype 経由で統一**
+3. **size 上限 / text 上限 / cells 上限は ADR-0025 §決定 (b)(e) で pin** — connector ごとに独自上限を上書きしない。ただし Workspace export 由来文書は元 file size 概念が異なる (Google 側 native fmt → export 後 size) ため、cap 適合性は Phase 13 plan OQ9 で実測後に必要なら `[office.google_workspace] max_file_size_mb` separate override 導入 (本 ADR では separate override の存在可能性のみ pin、defaults は ADR-0025 を継承)
+4. **抽出失敗は fail-safe で SourceObserved 発行継続** — ADR-0025 §決定 (c) の `body=None` + warning log + summary 注記契約を Google Workspace connector でも共通 (Phase 11 改訂 (b) §不変条件 3 をそのまま継承)
+5. **source_type は形式別 3 種** — `google_doc` / `google_slides` / `google_sheets` (ADR-0025 改訂 §決定 (d') で pin)。Drive API が返す Google mimeType (`application/vnd.google-apps.*`) → source_type のマッピングは connector の責務 (本 ADR §責務 2 source normalization)、`core/document_extract.py` 側は形式を意識しない (markitdown 1 経路)
+
+text-only 本文取り込み (Slack / Outlook / Teams chat) との関係は Phase 11 改訂 (b) と同じ。Google Workspace の Docs / Slides / Sheets はバイナリ export 経由なので `core/document_extract.py` を介する側 (Phase 11 改訂 (b) §バイナリ文書経路と同型)。
+
+### Phase 13 改訂 (g) — Drive `changes.list` cursor + TTL 失効時 full-pass fallback 義務
+
+Phase 13 Sub-issue G3 (#277) Google Workspace connector で Drive API v3 `changes.list` page token を cursor として使うにあたり、Phase 11 改訂 (c) の **delta-link cursor + 失効時 full-pass fallback** と同パターンを Google Workspace にも適用する (Microsoft Graph delta query と Drive API changes は別 API だが cursor 戦略は構造的に同型)。
+
+`changes.list` cursor の運用:
+
+1. **正常時** — `files.list` (initial sync) で start page token を取得 → `changes.list?pageToken=<token>` で差分のみ取得、`nextPageToken` / `newStartPageToken` を `connector_cursors.cursor` に opaque string で永続化
+2. **TTL 失効時** — Drive API が `400 invalidToken` / `404 startPageToken expired` / `410 Gone` 系エラーを返した場合、**自動 fallback**:
+   1. `WARNING` log: `event="connector.changes_list.expired"`, `connector=google_workspace`, `since=<original_page_token>` (page token 本体は opaque で credential を含まないが安全側で sanitised)
+   2. **full-pass** モードで直近 N 日 (`fallback_window_days`、default `30`、`opshub.toml` 上書き可) を `files.list` + `modifiedTime >= <since>` filter で fetch、各 file を SourceObserved として append (重複は SourceObserved の dedup key で吸収、append-only の自然な挙動)
+   3. fallback 完了時に **新しい start page token を取得** し `connector_cursors.cursor` を更新 (次回 sync から差分 mode に復帰)
+3. **fallback 自体が失敗** — Drive API への接続失敗 / 認証エラー / 全件取得中の throttling 等で fallback も完遂しない場合、`ConnectorSyncFailed` event を append して fail-fast (本 ADR §責務 4 と整合)
+
+`fallback_window_days` の設定例:
+
+```toml
+[connectors.google_workspace]
+fallback_window_days = 30  # default 30; 0 = disable fallback (非推奨)
+```
+
+採用理由:
+
+- **Drive API `changes.list` の token 失効を構造的に吸収** — Drive API の start page token は documented TTL (公式は 30 日前後、実値は変動) を持ち、long-tail で失効する。失効を手当てしないと operator が sync を再起動するまで「Google Workspace 文書が取り込まれない」状態が継続する
+- **Phase 11 改訂 (c) と完全同型** — Microsoft Graph delta query と Drive `changes.list` は別 API だが cursor 戦略 (opaque token + TTL + full-pass fallback) は構造的に同型。Phase 11 改訂 (c) の cursor 運用を Google Workspace にもそのまま適用することで operator のメンタルモデルを 1 つに保つ
+- **重複は append-only で吸収** — SourceObserved の dedup は projection 側で `external_id` (Drive file id) によって行われるため、fallback で同 file が再 append されても projection 側で 1 row に収束する (本 ADR §責務 4 と整合)
+- **fallback_window_days 上書きで運用調整** — 1 年以上の長期 outage 後の re-onboarding 等で `fallback_window_days = 365` 等の一時設定が可能
+
+本契約 §(g) は Drive API `changes.list` を持つ全 connector (Phase 13 google_workspace、将来追加され得る Google Drive 系 connector) に適用される。
+
+### Phase 13 改訂 (h) — Google Workspace User Token principal = MS365 / Box pattern (Teams pattern とは別系統)
+
+Phase 13 Sub-issue G3 (#277) Google Workspace connector の認証 principal を **User Token (OAuth 2.0 Refresh Token + offline access + 自前 refresh + rotation 書き戻し)** に確定する。これは **MS365 / Box pattern** であり、Phase 11 改訂 (d) で Teams に採用した **verbatim user token + アプリ層 refresh なし** pattern とは **別系統** である。本節は両 pattern が ADR-0010 内に並立することを明文化する。
+
+Google Workspace User Token の運用:
+
+1. **取得経路** — GCP Console で OAuth Client (Desktop App credential) を作成し `https://www.googleapis.com/auth/drive.readonly` (Phase 13 plan OQ6 確定) delegated scope を operator が consent → OAuth 2.0 paste-code flow (MS365 / Box と同型、`opshub connector auth set google_workspace` 経由) で Authorization Code → Refresh Token + initial Access Token を取得。`access_type=offline` + `prompt=consent` パラメータで Refresh Token 取得を保証
+2. **保管経路** — ADR-0014 (SaaS Token Storage) の keyring 経路を再利用、key 規約は **単一 slot** `connector:google_workspace:refresh_token` (`src/opshub/connectors/google_workspace/auth.py` の `GOOGLE_WORKSPACE_REFRESH_TOKEN_SECRET_KEY`)。env override は `OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN` (CI / 緊急用)。ADR-0014 §Phase 7 Validation 節の rotation pin リストに `connector:google_workspace:refresh_token` を追加 (MS365 / Box に続く 3 件目、Phase 13 plan で本 ADR と同時に ADR-0014 改訂)
+3. **scope** — `drive.readonly` 単独 (Phase 13 plan OQ6 確定)。`drive.metadata.readonly` は `drive.readonly` の subset なので併記しない (operator IT consent UX の改善 + 過剰 scope フラグ回避)。`drive.activity.readonly` も `changes.list` poll のみなら不要。`docs/google-workspace-setup.md` (G5 で新設) に consent screen 設定手順を記載
+4. **refresh = MS365 / Box pattern** — Google OAuth 2.0 Refresh Token は **rotation** される (毎 access token 取得 / refresh で新 refresh token が返り得る)。`src/opshub/connectors/google_workspace/auth.py` で `requests.post(token_endpoint, ...)` 相当の token refresh callback を実装し、新 refresh token が返るたびに **即 keyring (または env var override 経路) に書き戻す**。MS365 (`acquire_token_by_refresh_token` + `store_tokens` コールバック) / Box (Box SDK の `store_tokens` コールバック) と同パターン
+5. **rotation pin test 必須** — Phase 13 Sub-issue G3 / G5 DoD として `tests/unit/connectors/google_workspace/test_auth.py::test_get_access_token_persists_rotated_refresh_token` を **MS365 / Box の同型 test と完全に対応** する形で配置 (forget regression 防止)。ADR-0014 §Phase 7 Validation の MS365 / Box test と並列で言及
+
+**Teams pattern (Phase 11 改訂 (d)) との対比** — 両 pattern が ADR-0010 内に並立することを明示する:
+
+| 項目 | MS365 / Box / Google Workspace pattern (Phase 13 改訂 (h)) | Teams pattern (Phase 11 改訂 (d)) |
+|---|---|---|
+| token slot | refresh_token を keyring に保管、access token は memory cache | user token を keyring に保管、refresh token は別 slot なし |
+| アプリ層 refresh | あり (`acquire_token_by_refresh_token` 相当 + rotation 書き戻し) | **なし** (verbatim token を Graph API に投げる) |
+| rotation 書き戻し | あり (毎 refresh ごとに `set_secret(REFRESH_TOKEN_KEY, new_rt)`) | なし (token 失効時は operator が再投入) |
+| rotation pin test | 必須 (`test_get_access_token_persists_rotated_refresh_token`) | なし (該当 code path 不在) |
+| env override | `*_REFRESH_TOKEN` (MS365 / Box / Google Workspace) | `*_TOKEN` (Teams) |
+
+採用理由 (Google Workspace = MS365 / Box pattern 選択):
+
+- **Google Drive API の前提が refresh token + access token 分離** — Drive API access token は documented 1 hour TTL で短命、refresh token を offline access 取得で受けてアプリ層 refresh するのが Google OAuth 2.0 の標準運用。MS365 / Box と完全同型
+- **MSAL / Box SDK 同様の rotation 書き戻し義務** — Google も refresh token rotation を行うため、書き戻しを忘れると次回 refresh で失効する。MS365 / Box で確立した `store_tokens` コールバックパターンをそのまま適用
+- **Teams pattern を採用しない理由** — Teams は MSAL device code / interactive flow で user token を verbatim 取得する経路を採り、refresh token は別 slot に保管しない (Phase 11 改訂 (d) §運用 4)。Google Workspace ではこの単純化が成立しない (refresh token を保管しないと毎回 paste-code flow が必要になり operator UX が極端に劣化)
+- **operator メンタルモデルの一貫性** — Phase 7-13 の SaaS connector で principal pattern が 2 系統 (MS365 / Box / Google Workspace と Teams) に整理され、それぞれ「refresh token あり / verbatim token のみ」で明確に区別できる。Slack / Outlook / OneDrive / Google Workspace の 4 connector は同経路 (consent → keyring 保管 → refresh)、Teams のみ別経路 (consent → keyring 保管 → 失効時再投入)
+
+採用理由の根拠は ADR-0014 §Phase 7 Validation MS365 / Box validation と全く同じため詳細は ADR-0014 を参照。本 ADR §Phase 13 改訂 (h) は ADR-0014 の MS365 / Box pattern を **Google Workspace にも適用する確認** + **Teams pattern との並立を明文化** にとどまる。
+
 ## 関連
 
 - [Principles 7 (Connector Contract)](../principles.md)
@@ -260,3 +362,4 @@ Teams User Token の運用:
 - [ADR-0020: Full Local Content Retention](0020-full-local-content-retention.md) — 本文取り込みの根拠 (Phase 11 改訂 (b) で Office 文書経路に延伸)
 - [ADR-0025: Office Document Content Extraction](0025-office-document-content-extraction.md) — Phase 11 Sub-issue F1 で新規起票、本 ADR §Phase 11 改訂 (b) 本文抽出契約の実装層を pin
 - [Phase 11 Plan §2 ADR 構成 + §3 Sub-issue F](../phase-11-plan.md)
+- [Phase 13 Plan §2 改訂 ADR + §3 Sub-issue G](../phase-13-plan.md) — Google Workspace コネクタ (本 ADR §Phase 13 改訂 (e)-(h))
