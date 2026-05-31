@@ -597,6 +597,7 @@ def test_h4_propose_generate_schema_includes_mode_enum() -> None:
         f" (text-only, ADR-0016 §決定 (l)(b) Negative arm)."
     )
 
+
 # ---------------------------------------------------------------------------
 # 9. Phase 12 H2 semantic pins (info gathering skills)
 # ---------------------------------------------------------------------------
