@@ -64,7 +64,7 @@ class SourceObserved(DomainEvent):
     than ``Literal`` so each connector can extend the vocabulary without
     a schema bump.
 
-    Known discriminators as of Phase 11:
+    Known discriminators as of Phase 13:
 
     * Phase 3 GitHub: ``"issue"`` / ``"pull_request"`` / ``"notification"``
     * Phase 7 Slack: ``"slack_message"``
@@ -80,6 +80,24 @@ class SourceObserved(DomainEvent):
       authoritative extension → discriminator table lives at
       :data:`opshub.core.document_extract.SOURCE_TYPE_BY_EXTENSION`
       so mappers MUST import it rather than re-deriving the string.
+    * Phase 13 Google Workspace (G2 #276, ADR-0025 §決定 (d')):
+      ``"google_doc"`` / ``"google_slides"`` / ``"google_sheets"`` —
+      produced by the Phase 13 G4 (#278) Drive API mapper when it
+      routes Workspace native Docs / Slides / Sheets through
+      :func:`opshub.core.document_extract.extract_workspace_export`.
+      The three literals are published as
+      :data:`opshub.core.document_extract.GOOGLE_DOC_SOURCE_TYPE` /
+      :data:`opshub.core.document_extract.GOOGLE_SLIDES_SOURCE_TYPE` /
+      :data:`opshub.core.document_extract.GOOGLE_SHEETS_SOURCE_TYPE`
+      (``Final[Literal[...]]``) with the runtime tuple
+      :data:`opshub.core.document_extract.GOOGLE_WORKSPACE_SOURCE_TYPES`,
+      and the authoritative ``mimeType`` → ``source_type`` lookup table
+      lives at
+      :data:`opshub.core.document_extract.GOOGLE_WORKSPACE_MIMETYPE_TO_SOURCE_TYPE`
+      so the Phase 13 G3 (#277) Drive API mapper MUST import them
+      rather than re-deriving the strings (same pattern as
+      :data:`opshub.core.document_extract.SOURCE_TYPE_BY_EXTENSION` for
+      the Phase 11 Office path).
 
     ``title`` is the human-readable label. ``url`` and ``summary`` are
     optional, both bounded; ``summary`` is intentionally short — full
