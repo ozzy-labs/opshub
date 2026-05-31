@@ -972,6 +972,121 @@ def test_phase_12_h5_draft_skill_is_text_only_no_persist_path(name: str) -> None
     )
 
 
+@pytest.mark.parametrize("name", _PHASE_12_H5_TEXT_ONLY_DRAFT_SKILLS)
+def test_phase_12_h5_draft_skill_documents_propose_generate_absence(name: str) -> None:
+    """Phase 12 H5 text-only static lint — ``propose.generate`` non-call (M11).
+
+    Cluster B M11 audit pin: the existing top-level text-only test
+    (``test_phase_12_h5_draft_skill_is_text_only_no_persist_path``)
+    catches the case where the SKILL.md actively invokes ``propose.generate``
+    (via the ``tool: propose.generate`` block). But there is a subtler
+    drift: a future contributor could simply *mention* ``propose.generate``
+    in prose ("we could also use propose.generate here") without an
+    explicit "we don't call it" disclaimer, and the read-only boundary
+    would silently erode even though the actionable ``tool:`` block is
+    absent. ADR-0016 §決定 (l)(a) requires handoff-draft / announcement-
+    draft to stay text-only — this pin enforces that ``propose.generate``
+    is either:
+
+    * **absent entirely** (the simplest case — skill does not mention it), or
+    * **mentioned only inside an explicit non-call statement**
+      (``呼ばない`` / ``経由せず`` / ``使わない`` / ``persist しない`` /
+      ``does not invoke`` / similar disclaimer phrasing).
+
+    Any other appearance of ``propose.generate`` in the body (including
+    a stray code snippet or "future work" note) is a regression that
+    silently invites a host to wire the persist path back in.
+    """
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+
+    if "propose.generate" not in text:
+        return  # No mention at all — the strongest text-only guarantee.
+
+    # Disclaimer markers that explicitly call out the absence of the
+    # persist path. Mirrors the markers used in the H3 read-only test
+    # above plus the canonical phrasings the existing handoff-draft /
+    # announcement-draft SKILL.md files use (verified at audit time:
+    # handoff-draft uses "propose.generate を経由せず" / "呼ばない").
+    non_call_markers = (
+        "呼ばない",
+        "呼び出さない",
+        "経由せず",
+        "使わない",
+        "persist しない",
+        "持たない",
+        "存在しない",  # e.g. "announcement_draft mode は存在しない"
+        "ない (",  # e.g. "candidate 保存経路はない (propose.generate を呼ばない)"
+        "scope 外",
+        "本 skill では",
+        "本 skill scope 外",
+        "別 skill",
+        "does not invoke",
+        "does not call",
+    )
+
+    # Inspect every line that mentions ``propose.generate``; each MUST
+    # also carry at least one non-call disclaimer marker. We allow the
+    # disclaimer to live on the same line *or* the previous line (so
+    # markdown bullet structures like "- propose.generate を呼ばない"
+    # work as well as paragraph-style "...である。propose.generate を
+    # 呼ばないため..." constructions).
+    lines = text.splitlines()
+    offending: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        if "propose.generate" not in line:
+            continue
+        window = "\n".join(lines[max(0, index - 1) : index + 2])
+        if any(marker in window for marker in non_call_markers):
+            continue
+        offending.append((index + 1, line.strip()))
+
+    assert not offending, (
+        f"{path} mentions ``propose.generate`` outside an explicit non-call"
+        f" disclaimer (Phase 12 H5 M11 audit pin, ADR-0016 §決定 (l)(a)):\n"
+        + "\n".join(f"  L{lineno}: {snippet!r}" for lineno, snippet in offending)
+    )
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H5_TEXT_ONLY_DRAFT_SKILLS)
+def test_phase_12_h5_draft_skill_reference_directory_is_text_only(name: str) -> None:
+    """Phase 12 H5 text-only boundary — recursive sweep over reference/ (L8a).
+
+    Cluster B L8a audit pin: the existing
+    ``test_phase_12_h5_draft_skill_is_text_only_no_persist_path`` scans
+    only the top-level ``SKILL.md``. The Anthropic Skills progressive-
+    disclosure pattern (L3) puts deeper docs under
+    ``docs/skills/<name>/reference/`` — a future contributor could land
+    a ``tool: propose.apply`` invocation inside ``reference/persist.md``
+    and the existing top-level scan would silently miss it.
+
+    This pin widens the scan: every ``*.md`` file under the skill's
+    directory (top-level SKILL.md + all of ``reference/``) MUST NOT
+    contain any of the forbidden ``tool: <write>`` invocation blocks.
+    """
+    skill_dir = _SKILLS_DIR / name
+    assert skill_dir.is_dir(), f"missing skill directory: {skill_dir}"
+
+    invocation_pattern = re.compile(
+        r"^\s*tool:\s*(?P<tool>[a-z_.]+)\s*$",
+        re.MULTILINE,
+    )
+
+    offending: list[tuple[Path, str]] = []
+    for md_path in sorted(skill_dir.rglob("*.md")):
+        text = md_path.read_text(encoding="utf-8")
+        invoked_tools = {match.group("tool") for match in invocation_pattern.finditer(text)}
+        forbidden = invoked_tools.intersection(_PHASE_12_H5_FORBIDDEN_WRITE_TOOLS)
+        for tool in sorted(forbidden):
+            offending.append((md_path, tool))
+
+    assert not offending, (
+        f"Phase 12 H5 skill {name!r}: forbidden write-tool invocation(s)"
+        f" found under {skill_dir} (L8a audit pin):\n"
+        + "\n".join(f"  {p}: tool: {t}" for p, t in offending)
+    )
+
+
 def test_phase_12_h5_handoff_draft_references_adr_0016_decision_l() -> None:
     """``handoff-draft`` SKILL.md must cite ADR-0016 §決定 (l) (text-only rationale).
 
