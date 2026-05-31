@@ -70,11 +70,11 @@ opshub propose apply <proposal-id> 0                  # オペレーター承認
 
 | こう頼むと | 発火する Skill | 何をするか |
 |---|---|---|
-| 「今日のまとめ」「次に何やる?」 | `daily-brief` / `next-actions` | 直近 24h の主要シグナル + active task + 未処理 inbox |
+| 「今日のまとめ」「次に何やる?」「今週どうなってる」 | `personal-brief` / `next-actions` | 指定期間（今日 / 今週 / 今月 / 先週 / 先月）の主要シグナル + active task + 未処理 inbox |
 | 「あの Slack スレッドに返信案考えて」 | `reply-draft` | LLM が過去の自分の送信文体を踏まえて下書きを生成（送信は手動・OpsHub は外送信しない） |
 | 「PR #123 をレビューして」 | `pr-review` | 関連 decision / task / 過去議論を引いてレビュー観点を提示 |
-| 「Box にあった X の資料」「Word / Excel / PPT 探して」 | `file-lookup` | Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive を本文ベースで横断検索（Phase 11 で Office 文書本文も対象） |
-| 「Teams スレッド要約して」 | `daily-brief` / `file-lookup` | Phase 11 で取り込んだ Teams chat 本文に対する横断 recall |
+| 「Box にあった X の資料」「Word / Excel / PPT 探して」 | `find-document` | Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive を本文ベースで横断検索（Phase 11 で Office 文書本文も対象） |
+| 「Teams スレッド要約して」 | `personal-brief` / `find-document` | Phase 11 で取り込んだ Teams chat 本文に対する横断 recall |
 
 5 つの秘書 Skill は [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) リポから `@ozzylabs/skills` Renovate preset 経由で各ホストに配布されます (handbook ADR-0016)。Skills カタログと「できること / できないこと」（外部書き戻し / 常駐 / auto-apply はしない）の詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。
 

@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 __all__ = [
     "build_connector_sync_handler",
     "build_inbox_add_handler",
+    "build_propose_apply_handler",
     "build_propose_generate_handler",
     "build_task_create_handler",
 ]
@@ -336,6 +337,155 @@ def build_propose_generate_handler(engine: Engine) -> ToolHandler:
                 # surface an "approve candidate #N" prompt and then call
                 # ``opshub propose apply`` via the operator's shell.
                 "hitl_apply_required": True,
+            }
+        )
+
+    return handler
+
+
+# ------------------------------------------------------------- propose.apply
+
+
+def _lookup_applied_entity(
+    engine: Engine, *, proposal_id: str, candidate_index: int
+) -> tuple[str, str] | None:
+    """Find the ``(applied_entity_type, applied_entity_id)`` from history.
+
+    Phase 12 H1 idempotency normalisation: when ``ProposalService.apply``
+    raises ``OpsHubError("candidate N already applied")``, the handler
+    layer needs the original ``(type, id)`` so the response carries the
+    same payload as the first call. The ``proposals`` projection only
+    stores per-candidate state (``"applied"`` / ``"rejected"`` /
+    ``"pending"``) so we walk the event log instead — there is exactly
+    one ``ProposalApplied`` event per ``(proposal_id, candidate_index)``
+    pair (the service-layer guard prevents duplicates), keeping the
+    scan O(1) in the common case.
+
+    Returns ``None`` when no historical apply is found (defensive — the
+    caller falls back to surfacing the original error).
+    """
+    import json as _json
+
+    from sqlalchemy import select
+
+    from opshub.db.schema import events_table
+
+    stmt = (
+        select(events_table.c.payload)
+        .where(
+            events_table.c.aggregate_id == proposal_id,
+            events_table.c.event_type == "ProposalApplied",
+        )
+        .order_by(events_table.c.recorded_at.asc(), events_table.c.id.asc())
+    )
+    with engine.connect() as conn:
+        rows = conn.execute(stmt).all()
+    for row in rows:
+        try:
+            payload = _json.loads(str(row.payload))
+        except (TypeError, ValueError):
+            continue
+        if int(payload.get("candidate_index", -1)) != int(candidate_index):
+            continue
+        entity_type = payload.get("applied_entity_type")
+        entity_id = payload.get("applied_entity_id")
+        if isinstance(entity_type, str) and isinstance(entity_id, str):
+            return entity_type, entity_id
+    return None
+
+
+def build_propose_apply_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``propose.apply`` (Phase 12 H1).
+
+    HITL-boundary write tool (ADR-0022 改訂 §決定 + ADR-0016 改訂 §決定 (l)).
+    Wraps :meth:`opshub.services.proposals.ProposalService.apply` and
+    normalises the idempotency case at the MCP boundary:
+
+    * **First call** with ``(proposal_id, candidate_index)``:
+      returns ``{"ok": true, "already_applied": false,
+      "applied_entity_type": ..., "applied_entity_id": ...,
+      "proposal_id": ..., "candidate_index": ...}``.
+    * **Second call** with the same arguments: ``ProposalService.apply``
+      raises ``OpsHubError("candidate N already applied")``; the
+      handler catches that specific error, walks the event log to
+      recover the historical ``(applied_entity_type, applied_entity_id)``
+      via :func:`_lookup_applied_entity`, and returns
+      ``{"ok": true, "already_applied": true, ...}``. This is what
+      makes ``annotations.idempotentHint=true`` (set by
+      :func:`_policy_for_propose_apply`) honest at the MCP surface.
+    * Other ``OpsHubError`` paths (unknown proposal, out-of-range
+      index, already rejected) propagate to the server wrapper as
+      MCP ``isError`` responses, exactly like the existing write
+      tools.
+
+    ``engine`` is accepted both for symmetry with the other write
+    handlers AND because ``_lookup_applied_entity`` needs it to scan
+    the event log. ``build_proposal_service`` continues to resolve
+    its own engine via :func:`opshub.cli._wiring.build_engine` so a
+    config / encryption switch takes effect on the next call.
+    """
+
+    # The ``OpsHubError`` text emitted by ``_read_candidate_and_states``
+    # for the two idempotent paths. Match the literals exactly so an
+    # unrelated future ``OpsHubError`` from the service (e.g. proposal
+    # not found, index out of range) does not get accidentally
+    # normalised. The substring match keeps any future suffix wording
+    # (logging hints etc.) compatible.
+    already_applied_prefix = "already applied"
+    already_rejected_prefix = "already rejected"
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from opshub.cli._wiring import build_proposal_service
+        from opshub.core.errors import OpsHubError
+
+        proposal_id: str = arguments["proposal_id"]
+        candidate_index: int = int(arguments["candidate_index"])
+
+        service = build_proposal_service("mcp:propose.apply")
+        try:
+            applied_entity_type, applied_entity_id = service.apply(proposal_id, candidate_index)
+        except OpsHubError as exc:
+            message = str(exc)
+            if already_applied_prefix in message:
+                # Idempotent path: recover the historical entity tuple
+                # from the event log so the second call carries the
+                # same payload as the first.
+                hit = _lookup_applied_entity(
+                    engine,
+                    proposal_id=proposal_id,
+                    candidate_index=candidate_index,
+                )
+                if hit is None:
+                    # Defensive: the projection says "applied" but no
+                    # matching event was found. Re-raise so the host
+                    # sees the original failure rather than a partial
+                    # ``{"ok": true}`` envelope.
+                    raise
+                applied_entity_type, applied_entity_id = hit
+                return _json_dump(
+                    {
+                        "ok": True,
+                        "already_applied": True,
+                        "applied_entity_type": applied_entity_type,
+                        "applied_entity_id": applied_entity_id,
+                        "proposal_id": proposal_id,
+                        "candidate_index": candidate_index,
+                    }
+                )
+            # ``already rejected`` and every other ``OpsHubError`` (not
+            # found / index out of range) propagate as MCP ``isError``.
+            if already_rejected_prefix in message:
+                raise
+            raise
+
+        return _json_dump(
+            {
+                "ok": True,
+                "already_applied": False,
+                "applied_entity_type": applied_entity_type,
+                "applied_entity_id": applied_entity_id,
+                "proposal_id": proposal_id,
+                "candidate_index": candidate_index,
             }
         )
 

@@ -25,21 +25,21 @@ opshub 本体が **持たない** もの:
 
 | ユーザー入力 | 発火する skill | 結果 |
 |---|---|---|
-| 「今日のまとめ」「最近どうなってる」「状況教えて」 | [daily-brief](skills/daily-brief/SKILL.md) | 当日 / 直近 24h の主要シグナル + active task + 未処理 inbox + 直近 decision |
-| 「次に何やる?」「やること教えて」「優先度高いのは?」 | [next-actions](skills/next-actions/SKILL.md) | 優先度順の next-actions リスト。新規 task 追加は人確認付き |
+| 「今日のまとめ」「今週どうなってる」「先月の振り返り」「最近どうなってる」「状況教えて」 | [personal-brief](skills/personal-brief/SKILL.md) | 指定期間（今日 / 今週 / 今月 / 先週 / 先月）の主要シグナル + active task + 未処理 inbox + 直近 decision |
+| 「次に何やる?」「やること教えて」「今週やること」「優先度高いのは?」 | [next-actions](skills/next-actions/SKILL.md) | 優先度順の next-actions リスト。新規 task 追加は人確認付き |
 | 「これに返信案考えて」「下書き作って」 | [reply-draft](skills/reply-draft/SKILL.md) | 返信下書き候補。送信は行わずユーザーが手で貼り付け |
 | 「PR #N レビューして」「この差分どう?」 | [pr-review](skills/pr-review/SKILL.md) | 関連 decision / task / 過去議論を引いてレビュー観点を提示 |
-| 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」 | [file-lookup](skills/file-lookup/SKILL.md) | 本文ベース横断検索で Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Office 文書 (Word / Excel / PowerPoint、Phase 11 ADR-0025) から該当 source |
+| 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」 | [find-document](skills/find-document/SKILL.md) | 本文ベース横断検索で Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Office 文書 (Word / Excel / PowerPoint、Phase 11 ADR-0025) から該当 source |
 
 ## Skills 一覧
 
 | skill | 主な MCP tool | 自律範囲 | 書き込み tool (write) |
 |---|---|---|---|
-| daily-brief | `brief` (LLM 要約一発) または `recall.search`, `task.list`, `inbox.list`, `decision.list` | 自律 OK | なし |
-| next-actions | `task.list`, `recall.search` (+ 人確認付き `task.create` / `propose.generate`) | read 自律 / write 人確認 | `task.create` / `propose.generate` (HITL) |
-| reply-draft | `recall.search` + MCP `propose.generate` (mode: `reply_to_source_id`) + CLI `propose apply` | generate / apply とも人確認 | `propose.generate` (HITL) / CLI `propose apply` (HITL) |
-| pr-review | `recall.search`, `decision.list`, `task.list`, `graph.related` / `graph.trace` | 自律 OK | なし (PR comment 投稿は skill 外) |
-| file-lookup | `recall.search`, `source.list`, `source.get` | 自律 OK | なし |
+| personal-brief | `brief` (LLM 要約一発) または `recall.search`, `task.list` (`updated_after/before`), `inbox.list` (`created_after/before`), `decision.list` (`recorded_after/before`) | 自律 OK | なし |
+| next-actions | `task.list` (`updated_after/before`), `recall.search` (+ 人確認付き `task.create` / `propose.generate`) | read 自律 / write 人確認 | `task.create` / `propose.generate` (HITL) |
+| reply-draft | `recall.search` + MCP `propose.generate` (mode: `reply_to_source_id`) + MCP `propose.apply` (Phase 12 H1、idempotent) | generate / apply とも人確認 | `propose.generate` (HITL) / `propose.apply` (HITL、idempotent) |
+| pr-review | `recall.search`, `decision.list` (`recorded_after/before`), `task.list`, `graph.related` / `graph.trace` | 自律 OK | なし (PR comment 投稿は skill 外) |
+| find-document | `search` (FTS5、Phase 12 H1)、補助的に `recall.search` / `source.list` (`observed_after/before`) / `source.get` | 自律 OK | なし |
 
 skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。実際の配布は [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) リポから `@ozzylabs/skills` Renovate preset 経由で各ホストの `.claude/skills/` に届く (handbook ADR-0016)。
 
@@ -55,7 +55,7 @@ skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference �
   - **Teams chat 本文** (`teams_message`、Microsoft Graph delta query 経由、[Teams setup](teams-setup.md))
   - **Outlook 本文 deep retention** (Phase 10 で取り込み始めた summary に加え、Phase 11 で本文も `sources.body` に persist)
   - **Office 文書本文** (`.docx`/`.xlsx`/`.pptx`、markitdown 経由、`box_drive` / `onedrive_drive` の `content_extraction = true` opt-in、[ADR-0025](adr/0025-office-document-content-extraction.md))
-  - file-lookup / daily-brief / pr-review / reply-draft の全 skill が新 `source_type` を recall / FTS5 で自動的に対象に含める (mapper が `sources.body` に persist する限り skill 側に追加の変更は不要)
+  - find-document / personal-brief / pr-review / reply-draft の全 skill が新 `source_type` を recall / FTS5 で自動的に対象に含める (mapper が `sources.body` に persist する限り skill 側に追加の変更は不要)
 
 ### できないこと (構造的な禁止)
 

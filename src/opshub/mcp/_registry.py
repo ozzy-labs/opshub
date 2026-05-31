@@ -49,9 +49,10 @@ class ReadCategory(StrEnum):
 
     Step 1 tool-surface widening (post Phase 10) extends the read
     surface with briefing / graph traversal / source / duplicate
-    categories so the Tier 1 skill set (``daily-brief`` /
-    ``next-actions`` / ``pr-review`` / ``file-lookup``) can call MCP
-    tools directly instead of falling back to the CLI shell.
+    categories so the Tier 1 skill set (``personal-brief`` /
+    ``next-actions`` / ``pr-review`` / ``find-document`` — the
+    Phase 12 H1 rename targets, see ``docs/phase-12-plan.md`` §3 H1-c)
+    can call MCP tools directly instead of falling back to the CLI shell.
     """
 
     RECALL = "recall"
@@ -65,6 +66,13 @@ class ReadCategory(StrEnum):
     SOURCE_LIST = "source.list"
     SOURCE_GET = "source.get"
     EMBEDDINGS_FIND_DUPLICATES = "embeddings.find_duplicates"
+    # Phase 12 H1 (ADR-0022 改訂): FTS5 search MCP surface so the Tier
+    # 1 ``find-document`` skill can ask for body-level hits without
+    # falling back to the ``opshub search`` CLI. The ``raw_query``
+    # CLI flag is intentionally NOT exposed at the MCP boundary
+    # (phrase quoting stays default — hosts may supply free-form
+    # token streams without tripping FTS5 syntax).
+    SEARCH = "search"
 
 
 class WriteCategory(StrEnum):
@@ -96,6 +104,19 @@ class WriteCategory(StrEnum):
     INBOX_ADD = "inbox.add"
     CONNECTOR_SYNC = "connector.sync"
     PROPOSE_GENERATE = "propose.generate"
+    # Phase 12 H1 (ADR-0022 改訂): HITL apply path closes the
+    # ``propose.generate`` → ``propose.apply`` round-trip at the MCP
+    # boundary. Unlike the other write categories this one advertises
+    # ``destructive=false`` + ``idempotent=true`` — the handler-layer
+    # idempotency normalisation (see ``_writes.build_propose_apply_handler``)
+    # catches ``OpsHubError("already applied/rejected")`` and returns
+    # ``{ok:true, already_applied:true, applied_entity_type,
+    # applied_entity_id}`` so a second call with the same
+    # ``(proposal_id, candidate_index)`` is observably a no-op. The
+    # underlying state change (TaskCreated / DecisionRecorded /
+    # ReplyDraftApplied + ProposalApplied) only happens on the first
+    # call, so the strict "destroys data" semantics do not apply.
+    PROPOSE_APPLY = "propose.apply"
 
 
 # Either a read or a write category.
@@ -174,6 +195,33 @@ def _policy_for_write(*, open_world: bool, destructive: bool = True) -> ToolPoli
     )
 
 
+def _policy_for_propose_apply() -> ToolPolicy:
+    """Policy for the Phase 12 H1 ``propose.apply`` tool (ADR-0022 改訂).
+
+    ``propose.apply`` is the only write-class tool with
+    ``destructive=false`` + ``idempotent=true``: the handler layer
+    catches ``OpsHubError("already applied/rejected")`` from
+    :class:`ProposalService` and returns a normalised
+    ``{ok:true, already_applied:true, ...}`` envelope so the second
+    call is observably a no-op. The first call still writes
+    durable events (TaskCreated / DecisionRecorded / ReplyDraftApplied
+    + ProposalApplied) which is why ``read_only`` stays ``False``;
+    hosts honouring ``readOnlyHint=false`` should still surface a
+    confirmation prompt on first invocation even though the
+    annotation makes auto-retry safe.
+
+    ``open_world`` is ``False`` — apply is an in-process projection
+    update; the LLM round-trip already happened during
+    ``propose.generate``.
+    """
+    return ToolPolicy(
+        read_only=False,
+        destructive=False,
+        idempotent=True,
+        open_world=False,
+    )
+
+
 def build_tool_specs(
     *,
     handlers: Mapping[str, ToolHandler],
@@ -232,7 +280,8 @@ def build_tool_specs(
             name="task.list",
             title="List tasks",
             description=(
-                "List rows from the ``tasks`` projection, optionally filtered by state. Read-only."
+                "List rows from the ``tasks`` projection, optionally filtered by state"
+                " and updated_at. Read-only."
             ),
             input_schema={
                 "type": "object",
@@ -241,6 +290,28 @@ def build_tool_specs(
                         "type": "string",
                         "enum": ["draft", "active", "completed"],
                         "description": "Optional state filter.",
+                    },
+                    # Phase 12 H1 (ADR-0022 改訂): physical-column time
+                    # filter on ``tasks.updated_at`` (the projection
+                    # has no ``completed_at`` column — operators that
+                    # want "completed this week" combine ``state=completed``
+                    # with ``updated_after``). Half-open interval:
+                    # ``>= updated_after`` and ``< updated_before``.
+                    "updated_after": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": (
+                            "Restrict to rows with tasks.updated_at >= this ISO 8601"
+                            " timestamp (half-open lower bound)."
+                        ),
+                    },
+                    "updated_before": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": (
+                            "Restrict to rows with tasks.updated_at < this ISO 8601"
+                            " timestamp (half-open upper bound)."
+                        ),
                     },
                     "limit": {
                         "type": "integer",
@@ -259,8 +330,8 @@ def build_tool_specs(
             name="inbox.list",
             title="List inbox items",
             description=(
-                "List rows from the ``inbox_items`` projection, optionally filtered by "
-                "state. Read-only."
+                "List rows from the ``inbox_items`` projection, optionally filtered by"
+                " state and created_at. Read-only."
             ),
             input_schema={
                 "type": "object",
@@ -274,6 +345,25 @@ def build_tool_specs(
                             "discarded",
                         ],
                         "description": "Optional state filter.",
+                    },
+                    # Phase 12 H1 (ADR-0022 改訂): physical-column time
+                    # filter on ``inbox_items.created_at``. Half-open
+                    # interval; see ``task.list`` for the rationale.
+                    "created_after": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": (
+                            "Restrict to rows with inbox_items.created_at >= this ISO"
+                            " 8601 timestamp (half-open lower bound)."
+                        ),
+                    },
+                    "created_before": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": (
+                            "Restrict to rows with inbox_items.created_at < this ISO"
+                            " 8601 timestamp (half-open upper bound)."
+                        ),
                     },
                     "limit": {
                         "type": "integer",
@@ -291,10 +381,33 @@ def build_tool_specs(
         ToolSpec(
             name="decision.list",
             title="List decisions",
-            description=("List rows from the ``decisions`` projection. Read-only."),
+            description=(
+                "List rows from the ``decisions`` projection, optionally filtered by"
+                " recorded_at. Read-only."
+            ),
             input_schema={
                 "type": "object",
                 "properties": {
+                    # Phase 12 H1 (ADR-0022 改訂): physical-column time
+                    # filter on ``decisions.recorded_at``. Decisions
+                    # are immutable (ADR-0002) so ``recorded_at`` is
+                    # the only natural time anchor.
+                    "recorded_after": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": (
+                            "Restrict to rows with decisions.recorded_at >= this ISO"
+                            " 8601 timestamp (half-open lower bound)."
+                        ),
+                    },
+                    "recorded_before": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": (
+                            "Restrict to rows with decisions.recorded_at < this ISO"
+                            " 8601 timestamp (half-open upper bound)."
+                        ),
+                    },
                     "limit": {
                         "type": "integer",
                         "minimum": 1,
@@ -577,7 +690,7 @@ def build_tool_specs(
             title="List source rows",
             description=(
                 "List rows from the ``sources`` projection, optionally filtered by"
-                " connector_name or source_type. Read-only."
+                " connector_name, source_type, or observed_at. Read-only."
             ),
             input_schema={
                 "type": "object",
@@ -593,6 +706,26 @@ def build_tool_specs(
                         "description": "Restrict to one source_type label.",
                         "minLength": 1,
                         "maxLength": 100,
+                    },
+                    # Phase 12 H1 (ADR-0022 改訂): physical-column time
+                    # filter on ``sources.observed_at``. The skill set
+                    # ``meeting-followup`` walks "calendar events from
+                    # the last 24h" via this pair.
+                    "observed_after": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": (
+                            "Restrict to rows with sources.observed_at >= this ISO"
+                            " 8601 timestamp (half-open lower bound)."
+                        ),
+                    },
+                    "observed_before": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": (
+                            "Restrict to rows with sources.observed_at < this ISO"
+                            " 8601 timestamp (half-open upper bound)."
+                        ),
                     },
                     "limit": {
                         "type": "integer",
@@ -664,6 +797,55 @@ def build_tool_specs(
             policy=_policy_for_read(),
             category=ReadCategory.EMBEDDINGS_FIND_DUPLICATES,
             handler=handlers["embeddings.find_duplicates"],
+        ),
+        # ------------------------------------------------------------------
+        # Phase 12 H1 (ADR-0022 改訂) — FTS5 ``search`` MCP surface so the
+        # Tier 1 ``find-document`` skill can request body-level hits
+        # directly. The CLI ``opshub search --raw-query`` flag is
+        # intentionally NOT mirrored at the MCP boundary: phrase
+        # quoting stays the default so hosts can pass free-form
+        # token streams without tripping FTS5 syntax characters.
+        # ------------------------------------------------------------------
+        ToolSpec(
+            name="search",
+            title="Body-level FTS5 search",
+            description=(
+                "Run an SQLite FTS5 MATCH against ``sources_fts`` and join hits back"
+                " to ``sources``. Phrase-quoted by default (free-form token streams"
+                " are safe to pass); the CLI ``--raw-query`` flag is NOT exposed at"
+                " the MCP boundary. Read-only."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Free-form query text. Phrase-quoted before reaching"
+                            " FTS5 so syntax characters do not need to be escaped."
+                        ),
+                        "minLength": 1,
+                        "maxLength": 500,
+                    },
+                    "connector_name": {
+                        "type": "string",
+                        "description": "Restrict to one connector (e.g. 'box_drive').",
+                        "minLength": 1,
+                        "maxLength": 100,
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "default": 10,
+                    },
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+            policy=_policy_for_read(),
+            category=ReadCategory.SEARCH,
+            handler=handlers["search"],
         ),
         # ------------------------------------------------------------------
         # Step 1 widening — HITL-boundary write tool (proposal generation).
@@ -740,6 +922,55 @@ def build_tool_specs(
             policy=_policy_for_write(open_world=True),
             category=WriteCategory.PROPOSE_GENERATE,
             handler=handlers["propose.generate"],
+        ),
+        # ------------------------------------------------------------------
+        # Phase 12 H1 (ADR-0022 改訂) — HITL ``propose.apply`` closes the
+        # ``propose.generate`` → ``propose.apply`` round-trip at the MCP
+        # boundary. Annotated ``destructive=false`` + ``idempotent=true``
+        # via ``_policy_for_propose_apply``: the handler catches
+        # ``OpsHubError("already applied/rejected")`` and returns a
+        # normalised ``{ok:true, already_applied:true, ...}`` envelope
+        # so the second call is observably a no-op. ``read_only`` stays
+        # ``False`` because the first call still emits durable events
+        # (TaskCreated / DecisionRecorded / ReplyDraftApplied +
+        # ProposalApplied).
+        # ------------------------------------------------------------------
+        ToolSpec(
+            name="propose.apply",
+            title="Apply proposal candidate (HITL)",
+            description=(
+                "Apply candidate ``candidate_index`` of proposal ``proposal_id``."
+                " Dispatches through ``TaskService`` / ``DecisionService`` for"
+                " task / decision candidates and emits ``ProposalApplied``."
+                " Idempotent: a second call for the same"
+                " ``(proposal_id, candidate_index)`` returns"
+                " ``{ok:true, already_applied:true, applied_entity_type,"
+                " applied_entity_id}`` instead of raising. Host should still"
+                " confirm the first invocation with the operator (HITL)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "proposal_id": {
+                        "type": "string",
+                        "description": "ULID of the proposal aggregate.",
+                        "minLength": 1,
+                        "maxLength": 200,
+                    },
+                    "candidate_index": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": (
+                            "Zero-based index into the proposal's ``candidates`` list."
+                        ),
+                    },
+                },
+                "required": ["proposal_id", "candidate_index"],
+                "additionalProperties": False,
+            },
+            policy=_policy_for_propose_apply(),
+            category=WriteCategory.PROPOSE_APPLY,
+            handler=handlers["propose.apply"],
         ),
     ]
     return specs

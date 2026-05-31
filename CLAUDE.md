@@ -25,11 +25,11 @@
 
 opshub は形A (ADR-0004) に基づき秘書 5 Skill を提供する。SKILL.md の SSOT は `docs/skills/<name>/SKILL.md` に置き、配布は `ozzy-labs/skills` リポを経由する。発火条件は自然文 (skill description) で表現されており、自分で叩く必要はない。
 
-- `daily-brief` — 「今日のまとめ」「最近どうなってる」「状況教えて」
-- `next-actions` — 「次に何やる?」「やること教えて」「優先度高いのは?」
+- `personal-brief` — 「今日のまとめ」「今週どうなってる」「先月の振り返り」「最近どうなってる」「状況教えて」
+- `next-actions` — 「次に何やる?」「やること教えて」「今週やること」「優先度高いのは?」
 - `reply-draft` — 「これに返信案考えて」「下書き作って」 (外送信なし、apply は HITL)
 - `pr-review` — 「PR #N レビューして」「この差分どう?」
-- `file-lookup` — 「Box にあったあの資料」「<キーワード>含むファイル」
+- `find-document` — 「Box にあったあの資料」「<キーワード>含むファイル」
 
 詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。MCP セットアップは [`docs/mcp-setup.md`](docs/mcp-setup.md)。
 

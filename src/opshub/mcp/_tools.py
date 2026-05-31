@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -47,10 +48,34 @@ __all__ = [
     "build_graph_trace_handler",
     "build_inbox_list_handler",
     "build_recall_search_handler",
+    "build_search_handler",
     "build_source_get_handler",
     "build_source_list_handler",
     "build_task_list_handler",
 ]
+
+
+def _parse_iso(value: object) -> datetime | None:
+    """Parse an ISO 8601 ``date-time`` string to a ``datetime``.
+
+    Returns ``None`` for absent / empty values so handlers can skip
+    the where-clause cleanly. Phase 12 H1 (ADR-0022 改訂) callers pass
+    these through the physical-column time filters; the schema-level
+    ``format: date-time`` keyword is advisory only — actual parsing
+    happens here so a malformed string surfaces as a clean handler
+    error rather than a SQL exception.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    # ``datetime.fromisoformat`` accepts the full ISO 8601 surface from
+    # Python 3.11 onwards (including ``Z`` suffix), so callers can pass
+    # either ``2026-05-31T00:00:00Z`` or ``2026-05-31T00:00:00+00:00``.
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    return datetime.fromisoformat(text)
 
 
 # Hard cap on rendered snippet length. Mirrors ADR-0022 §(d) — we
@@ -172,6 +197,11 @@ def build_task_list_handler(engine: Engine) -> ToolHandler:
 
         state: str | None = arguments.get("state")
         limit: int = int(arguments.get("limit", 20))
+        # Phase 12 H1 (ADR-0022 改訂): physical-column time filter on
+        # ``tasks.updated_at``. Half-open interval per ``_registry``
+        # schema (``>= updated_after`` / ``< updated_before``).
+        updated_after = _parse_iso(arguments.get("updated_after"))
+        updated_before = _parse_iso(arguments.get("updated_before"))
 
         stmt = select(
             tasks_table.c.id,
@@ -181,6 +211,10 @@ def build_task_list_handler(engine: Engine) -> ToolHandler:
         )
         if state is not None:
             stmt = stmt.where(tasks_table.c.state == state)
+        if updated_after is not None:
+            stmt = stmt.where(tasks_table.c.updated_at >= updated_after)
+        if updated_before is not None:
+            stmt = stmt.where(tasks_table.c.updated_at < updated_before)
         stmt = stmt.order_by(
             tasks_table.c.updated_at.desc(),
             tasks_table.c.id.asc(),
@@ -227,6 +261,10 @@ def build_inbox_list_handler(engine: Engine) -> ToolHandler:
 
         state: str | None = arguments.get("state")
         limit: int = int(arguments.get("limit", 20))
+        # Phase 12 H1 (ADR-0022 改訂): physical-column time filter on
+        # ``inbox_items.created_at``. Half-open interval.
+        created_after = _parse_iso(arguments.get("created_after"))
+        created_before = _parse_iso(arguments.get("created_before"))
 
         stmt = select(
             inbox_items_table.c.id,
@@ -236,6 +274,10 @@ def build_inbox_list_handler(engine: Engine) -> ToolHandler:
         )
         if state is not None:
             stmt = stmt.where(inbox_items_table.c.state == state)
+        if created_after is not None:
+            stmt = stmt.where(inbox_items_table.c.created_at >= created_after)
+        if created_before is not None:
+            stmt = stmt.where(inbox_items_table.c.created_at < created_before)
         stmt = stmt.order_by(
             inbox_items_table.c.created_at.desc(),
             inbox_items_table.c.id.asc(),
@@ -280,23 +322,29 @@ def build_decision_list_handler(engine: Engine) -> ToolHandler:
         from opshub.projections.decisions import decisions_table
 
         limit: int = int(arguments.get("limit", 20))
+        # Phase 12 H1 (ADR-0022 改訂): physical-column time filter on
+        # ``decisions.recorded_at`` (decisions are immutable, so
+        # ``recorded_at`` is the only natural anchor).
+        recorded_after = _parse_iso(arguments.get("recorded_after"))
+        recorded_before = _parse_iso(arguments.get("recorded_before"))
 
         # ``decisions`` has no ``created_at`` column — the projection
         # records ``recorded_at`` (see ADR-0002 immutability + the
         # ``decisions_table`` definition). Use that column so the
         # handler does not raise ``AttributeError`` at first call.
-        stmt = (
-            select(
-                decisions_table.c.id,
-                decisions_table.c.text,
-                decisions_table.c.recorded_at,
-            )
-            .order_by(
-                decisions_table.c.recorded_at.desc(),
-                decisions_table.c.id.asc(),
-            )
-            .limit(limit)
+        stmt = select(
+            decisions_table.c.id,
+            decisions_table.c.text,
+            decisions_table.c.recorded_at,
         )
+        if recorded_after is not None:
+            stmt = stmt.where(decisions_table.c.recorded_at >= recorded_after)
+        if recorded_before is not None:
+            stmt = stmt.where(decisions_table.c.recorded_at < recorded_before)
+        stmt = stmt.order_by(
+            decisions_table.c.recorded_at.desc(),
+            decisions_table.c.id.asc(),
+        ).limit(limit)
 
         with engine.connect() as conn:
             rows = conn.execute(stmt).all()
@@ -551,6 +599,10 @@ def build_source_list_handler(engine: Engine) -> ToolHandler:
         connector_name: str | None = arguments.get("connector_name")
         source_type: str | None = arguments.get("source_type")
         limit: int = int(arguments.get("limit", 50))
+        # Phase 12 H1 (ADR-0022 改訂): physical-column time filter on
+        # ``sources.observed_at``.
+        observed_after = _parse_iso(arguments.get("observed_after"))
+        observed_before = _parse_iso(arguments.get("observed_before"))
 
         stmt = select(
             sources_table.c.id,
@@ -565,6 +617,10 @@ def build_source_list_handler(engine: Engine) -> ToolHandler:
             stmt = stmt.where(sources_table.c.connector_name == connector_name)
         if source_type is not None:
             stmt = stmt.where(sources_table.c.source_type == source_type)
+        if observed_after is not None:
+            stmt = stmt.where(sources_table.c.observed_at >= observed_after)
+        if observed_before is not None:
+            stmt = stmt.where(sources_table.c.observed_at < observed_before)
         stmt = stmt.order_by(
             sources_table.c.observed_at.desc(),
             sources_table.c.id.asc(),
@@ -642,6 +698,65 @@ def build_source_get_handler(engine: Engine) -> ToolHandler:
                 "summary": _truncate(row.summary),
                 "observed_at": row.observed_at.isoformat() if row.observed_at else None,
                 "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+            }
+        )
+
+    return handler
+
+
+# ---------------------------------------------------------------- search
+
+
+def build_search_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``search`` (Phase 12 H1).
+
+    Thin wrapper over :class:`opshub.services.search_service.SearchService`
+    that exposes the body-level FTS5 surface to agent hosts without
+    requiring them to shell into ``opshub search``. The CLI's
+    ``--raw-query`` flag is intentionally NOT mirrored: ``raw_query``
+    is hard-coded to ``False`` so phrase quoting stays default, which
+    keeps the surface safe for free-form host token streams (no FTS5
+    syntax characters need escaping). The ADR-0022 改訂 §決定 entry
+    pins this contract — host LLMs may pass free text and the MCP
+    boundary handles the quoting.
+    """
+    _ = engine  # build_search_service owns its own engine resolution
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from opshub.cli._wiring import build_search_service
+
+        query: str = arguments["query"]
+        connector_name: str | None = arguments.get("connector_name")
+        limit: int = int(arguments.get("limit", 10))
+
+        service = build_search_service()
+        # Phase 12 H1: ``raw_query`` is hard-coded False at the MCP
+        # boundary. The CLI keeps its ``--raw-query`` flag for power
+        # users; the MCP schema does not expose it.
+        hits = service.search(
+            query,
+            limit=limit,
+            connector_name=connector_name,
+            raw_query=False,
+        )
+        items = [
+            {
+                "entity_id": hit.entity_id,
+                "connector_name": hit.connector_name,
+                "source_type": hit.source_type,
+                "title": _truncate(hit.title),
+                "url": hit.url,
+                "snippet": _truncate(hit.snippet),
+                "score": round(float(hit.score), 6),
+            }
+            for hit in hits
+        ]
+        return _json_dump(
+            {
+                "query": query,
+                "connector_filter": connector_name,
+                "items": items,
+                **_pagination_hint(item_count=len(items), limit=limit),
             }
         )
 

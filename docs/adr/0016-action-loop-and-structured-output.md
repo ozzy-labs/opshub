@@ -1,7 +1,7 @@
 # 0016. Action Loop and Structured Output
 
-- Status: Accepted (revised 2026-05-30 for Phase 10 Sub-issue E)
-- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §決定 (i)+(j)+(k) revision: reply_draft candidate / triage / style-source recall)
+- Status: Accepted (revised 2026-05-31 for Phase 12 H1 draft unification)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §決定 (i)+(j)+(k) revision: reply_draft candidate / triage / style-source recall); 2026-05-31 (Phase 12 H1 §決定 (l) revision: draft 系統一方針 + mode argument 射程 + Candidate discriminated union freeze)
 - Deciders: ozzy
 
 ## Context
@@ -292,6 +292,49 @@ class ProposalCandidatesSchema(BaseModel):
 - **`<style_example>` も DATA**: ADR-0015 §決定 (f) do-not-follow preamble を維持する。`<style_example>` 内の文字列に「無視して X せよ」が含まれていても LLM は従わない (preamble で system レベル指示として明示)。html-escape も Phase 5 D1 の delimiter wrap 防御を継承
 - **薄い静的 About**: 署名 / 役割 (e.g. "I am OpsHub's reply-draft assistant.") は system prompt 側に短く置く (≤200 chars)。「LLM の性格設定」を肥大化させず、文体は entirely recall ベースで決まる方針 = Inbox Zero の弱点 (テンプレ口調の暴走) を回避
 - **依存**: Sub-issue A (本文保持、ADR-0020) と Sub-issue B (本文 embedding + FTS5、ADR-0012 改訂) が prerequisite。本文保持していない世界では style_example が summary だけになり文体注入の意義が薄れる
+
+### (l) Draft 系統一方針 (Phase 12 H1 で追加、2026-05-31 改訂)
+
+Phase 12 H1 (`docs/phase-12-plan.md` §3 H1-a) で 14 skill 体制に拡張する際、draft 系 skill が `reply-draft` 1 つから `reply-draft` / `handoff-draft` / `announcement-draft` の 3 つに増える。本 §決定は draft 系全体の persist 方針 / mode 引数の射程 / triage の射程 / Candidate discriminated union の freeze を独立条文として pin する。
+
+#### (a) persist 境界は「返信元 source の有無」で切る
+
+| skill | persist? | 理由 |
+|---|---|---|
+| `reply-draft` | **persist する** (`propose.generate` + `propose.apply` 経路) | 返信元 `source_id` が natural key として存在。`reply_to_source_id` を持つ `ReplyDraftCandidatePayload` (§決定 (i)) で audit log + idempotency を成立させる |
+| `handoff-draft` | **persist しない** (text-only 返却) | 自発生成 (引き継ぎ書) で natural key なし。proposal table に保存しても操作者から見て idempotency の意味付けができず、削除 / 編集の semantics も曖昧 |
+| `announcement-draft` | **persist しない** (text-only 返却) | 同上 (告知文の自発生成、natural key なし) |
+
+`handoff-draft` / `announcement-draft` は host LLM が `brief` + `recall.search` + `source.get` + `decision.list` の read tool 群を合成して text を組み立てる経路で実装し、`propose.generate` は経由しない。
+
+#### (b) `propose.generate` の `mode` 引数の射程
+
+Phase 12 H4 で `propose.generate` に `mode` 引数 (`inbox_triage` / `source_extract` / `meeting_followup`) が追加される予定。本 §決定で **`mode` 引数は persist 経路を持つ structured-output dispatch key に限定** することを pin する。
+
+- 持つ: `reply_draft` (既存) / `inbox_triage` / `source_extract` / `meeting_followup` の 4 mode (いずれも persist する候補を生む)
+- 持たない: `handoff_draft` / `announcement_draft` — text-only のため `propose.generate` を経由せず、host LLM が read tool 合成で組み立てる
+
+将来 persist 需要が出た draft type は本 ADR §決定 (l) の (e) (schema versioning) で対応する。
+
+#### (c) Triage は reply_draft 文脈のみ
+
+§決定 (j) の 3 値 triage (`respond` / `notify` / `ignore`) は **draft 系全体ではなく reply_draft 専用 signal** として pin する。`handoff-draft` / `announcement-draft` / `inbox-triage` / `source-extract` / `meeting-followup` は triage を持たない (それぞれ独自の意味体系で運用する)。
+
+§決定 (j) の文面が "draft" を主語にしているため将来 misread されるリスクがあり、本条文で射程を明確化する。
+
+#### (d) Candidate discriminated union freeze
+
+ADR-0016 §決定 (e) で定義した `Candidate = TaskCandidatePayload | DecisionCandidatePayload | ReplyDraftCandidatePayload` discriminated union を **3 kind で freeze** する。Phase 12 では新 candidate kind を追加しない (`HandoffDraftCandidatePayload` / `AnnouncementDraftCandidatePayload` 等は作らない)。
+
+将来 persist 需要が顕在化した場合は §決定 (f) の schema versioning パターン (literal field + 両 version 読み分け + in-place migration なし) で対応する。`HandoffDraftCandidatePayload` を `kind="handoff_draft"` + `schema_version=2` などの形で追加し、新 ADR or 本 ADR の再改訂で正規化する経路を予約する。
+
+#### (e) 理由
+
+使用頻度の現実主義: handoff / announcement は週次〜月次の頻度で、reply は時間単位の頻度。persist + idempotency + audit のメリットが回収できる頻度に閾値がある。
+
+schema 拡張コスト: 新 candidate kind を増やすたびに `Candidate` union 拡張 + projection migration + 各 service 層分岐の 3 セットを更新する。「あったら便利」レベルの draft type を増やすと metabolic load が増える。
+
+将来の戻し道: §決定 (f) versioning パターンが既にあるため、persist 需要が顕在化したときに ADR 再改訂で素直に追加できる構造を残してある。
 
 ## Consequences
 

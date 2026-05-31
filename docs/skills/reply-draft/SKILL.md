@@ -1,11 +1,11 @@
 ---
 name: reply-draft
-description: 「返信案を考えて」「下書き作って」「これに返信したい」と頼まれたら、opshub の propose generate --reply-to を CLI 経由で叩いて返信下書きを生成する。外部 SaaS への送信は行わず、ユーザーが下書きを確認して手で送る。Sub-issue E で実装済みの ReplyDraftCandidatePayload を利用。
+description: 「返信案を考えて」「下書き作って」「これに返信したい」と頼まれたら、opshub MCP の propose.generate (reply_to_source_id 指定) で返信下書きを生成し、ユーザー確認後に propose.apply で保存する。外部 SaaS への送信は行わず、ユーザーが下書きを確認して手で送る。Sub-issue E で実装済みの ReplyDraftCandidatePayload を利用。
 ---
 
 # reply-draft — 返信下書きを opshub に生成させる
 
-opshub の MCP write tool `propose.generate`（mode: `reply_to_source_id`、PR #231 で実装、`src/opshub/mcp/_registry.py` の `WriteCategory.PROPOSE_GENERATE`）を第一経路として返信下書きを作る。CLI 経路 `opshub propose generate --reply-to <source_id>` は同じ engine path を叩く fallback。Phase 10 Sub-issue D で書き、Sub-issue E (#217 merged) で `ReplyDraftCandidatePayload` が実装済み。ADR-0016 §決定 (i)+(j)+(k) で吸収された。Phase 11 で Outlook body deep retention (#244 / ADR-0020 改訂) が入り、`ms365_outlook` への reply-draft が本格機能化した（差出人の本文を full payload で context 注入できるようになった）。
+opshub の MCP write tool `propose.generate`（mode: `reply_to_source_id`、PR #231 で実装、`src/opshub/mcp/_registry.py` の `WriteCategory.PROPOSE_GENERATE`）と `propose.apply`（Phase 12 H1 で MCP に露出、`WriteCategory.PROPOSE_APPLY`、idempotent）を第一経路として返信下書きを作る。Phase 10 Sub-issue D で書き、Sub-issue E (#217 merged) で `ReplyDraftCandidatePayload` が実装済み。ADR-0016 §決定 (i)+(j)+(k) で吸収された。Phase 11 で Outlook body deep retention (#244 / ADR-0020 改訂) が入り、`ms365_outlook` への reply-draft が本格機能化した（差出人の本文を full payload で context 注入できるようになった）。
 
 ## 何が起きるか
 
@@ -13,7 +13,7 @@ opshub の MCP write tool `propose.generate`（mode: `reply_to_source_id`、PR #
 2. ホストが本 skill を発火
 3. ホストが対象の `source_id` を特定 (recall.search で source を引く or ユーザー入力)
 4. MCP `propose.generate` (`reply_to_source_id` 指定) を呼んで `ProposalGenerated` event を発行 (HITL write tool)
-5. 候補を CLI `opshub propose list` で確認、`opshub propose apply <proposal_id> <candidate_index>` で下書き保存 (人確認)
+5. 候補をホストがユーザーに提示、ユーザー確認後に MCP `propose.apply` で下書き保存（HITL、idempotent）
 6. ユーザーが下書きを見て手で送信先 SaaS に貼り付ける
 
 opshub 側で外部 SaaS に直接投稿する経路は **存在しない** (ADR-0010 §禁止事項 7 + Sub-issue E test pin)。
@@ -51,39 +51,40 @@ input:
 
 文体は `author = self` の過去送信 event を recall で引き `<style_example>` として注入される (ADR-0016 §決定 (k))。ホストが追加で style を渡す必要はない。
 
-#### Step 2 fallback: CLI 経路
+### Step 3: 候補を提示
 
-MCP server が起動していない場合や、CLI で手動確認したい場合は同等の経路:
+ホストが `propose.generate` 戻り値の `candidates[]` をユーザーに整形して提示する。候補 1 件ずつ `body` (下書き本文) と `index` を併記。複数候補がある場合はユーザーに選ばせる。
 
-```bash
-opshub propose generate "" \
-  --reply-to <source_id> \
-  --expand-graph
+戻り値スキーマ（抜粋）：
+
+```json
+{
+  "ok": true,
+  "proposal_id": "01H...",
+  "candidates": [
+    {"index": 0, "kind": "reply_draft", "body": "...", ...},
+    {"index": 1, "kind": "reply_draft", "body": "...", ...}
+  ],
+  "hitl_apply_required": true
+}
 ```
 
-位置引数 `topic` は `--reply-to` 指定時は無視されるため空文字 `""` で OK (CLI 実装の docstring 参照)。`--expand-graph` (ADR-0017) は知識グラフから文脈 source を拾うフラグ。ADR-0016 §決定 (k) の `<context_source>` 注入経路。MCP と CLI は同じ `build_proposal_service` engine path を叩くため挙動は同じ。
+### Step 4 (人確認必須): MCP `propose.apply` で下書き保存
 
-### Step 3: 候補を確認 (CLI 経路のみ)
+Phase 12 H1 (ADR-0022 改訂) で MCP に `propose.apply` write tool が露出した（`WriteCategory.PROPOSE_APPLY`、`idempotent=true`）。`destructive=false` + handler 層で `OpsHubError("already applied/rejected")` を catch → `{ok:true, already_applied:true, applied_entity_type, applied_entity_id}` に正規化する semantics を持つ：
 
-`propose list` は今も CLI 経路のみ (MCP `propose.list` write tool は未実装。read 系で候補を引きたい場合は本 CLI を使う):
-
-```bash
-opshub propose list --state pending
-```
-
-`propose list` には `--kind` フィルタは無いため、reply_draft 候補も task / decision 候補と同じ pending bucket に並ぶ。`generated_at DESC` ソートで最新が先頭に来るので、直前に生成した reply_draft は通常 1 行目に出る。
-
-最新 candidate の本文を表示。複数候補がある場合はユーザーに選ばせる。
-
-### Step 4 (人確認必須、CLI 経路のみ): apply で下書き保存
-
-`propose apply` も CLI 経路のみ (MCP `propose.apply` write tool は未実装。auto-apply 経路を意図的に作らないため、tool poisoning 攻撃面を縮減する設計):
-
-```bash
-opshub propose apply <proposal_id> <candidate_index>
+```text
+tool: propose.apply
+input:
+  proposal_id: "<proposal ULID>"
+  candidate_index: <integer (Step 3 で選んだ index)>
 ```
 
 apply は durable state を変える (`ProposalApplied` event を発行)。ホストは必ずユーザーに「この下書きを保存しますか?」と確認する (ADR-0016 §決定 (c) HITL 必須)。
+
+戻り値：
+- 1 回目：`{"ok": true, "already_applied": false, "applied_entity_type": "reply_draft", "applied_entity_id": "<ULID>"}`
+- 2 回目（同じ `(proposal_id, candidate_index)` で再呼び出し）：`{"ok": true, "already_applied": true, "applied_entity_type": "reply_draft", "applied_entity_id": "<同じ ULID>"}` — `OpsHubError` を投げず idempotent semantics 成立
 
 ## 出力フォーマット (ホスト側)
 
@@ -101,7 +102,7 @@ apply は durable state を変える (`ProposalApplied` event を発行)。ホ�
 > ...
 
 ## 次のアクション
-- 良ければ `apply` で保存
+- 良ければ `propose.apply` で保存
 - 修正したければユーザーが手で編集して送る
 - 送信は opshub から行わない (ユーザーが手で外部 SaaS に貼り付け)
 ```
@@ -122,5 +123,7 @@ apply は durable state を変える (`ProposalApplied` event を発行)。ホ�
 - ADR-0025 (Office 抽出、reply-draft が `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` を context として引ける)
 - Sub-issue E PR #217 (`ReplyDraftCandidatePayload`、triage 3 分類、write-back 非存在 test pin)
 - PR #231 (MCP `propose.generate` write tool)
+- Phase 12 H1 (MCP `propose.apply` write tool、idempotent semantics)
 - Phase 11 plan (`docs/phase-11-plan.md`)
+- Phase 12 plan (`docs/phase-12-plan.md` §3 H1)
 - docs/secretary-agent.md
