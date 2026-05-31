@@ -98,6 +98,17 @@ class SourceObserved(DomainEvent):
       rather than re-deriving the strings (same pattern as
       :data:`opshub.core.document_extract.SOURCE_TYPE_BY_EXTENSION` for
       the Phase 11 Office path).
+    * Phase 13 Google Workspace catch-all (G4 #278, ADR-0025 §決定 (d')):
+      ``"google_workspace_file"`` — stamped by the Drive API mapper on
+      any non-native Drive item (uploaded PDFs, binary blobs, shortcuts,
+      ...) where :func:`files.export` would return 403
+      ``fileNotExportable``. The catch-all is published as
+      :data:`opshub.connectors.google_workspace.mapper.GENERIC_FILE_SOURCE_TYPE`
+      and lives **outside** the three-element
+      :data:`opshub.core.document_extract.GOOGLE_WORKSPACE_MIMETYPE_TO_SOURCE_TYPE`
+      lookup table on purpose: the connector short-circuits these rows
+      to metadata-only (``body=None``) without spending an export
+      round-trip (`connector.py::_maybe_extract_body`).
 
     ``title`` is the human-readable label. ``url`` and ``summary`` are
     optional, both bounded; ``summary`` is intentionally short — full

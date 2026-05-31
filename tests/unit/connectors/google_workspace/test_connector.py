@@ -877,6 +877,79 @@ def test_sync_content_extraction_propagates_office_settings(
     assert kwargs["max_cells_per_workbook"] == 80_000
 
 
+# ----- Phase 13 audit Cluster C — C#21 lifecycle edge pin ----------------
+
+
+def test_sync_handles_removed_and_trashed_simultaneously(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An item with both ``removed=True`` and ``trashed=True`` round-trips cleanly.
+
+    Drive surfaces this shape when a file the operator had trashed
+    (``trashed=true``) is then permanently deleted (``removed=true``).
+    Both flags travel on the same change record because Drive's
+    ``changes.list`` collapses the trash → permanent-delete transition
+    into a single delta. ``client._normalise_change`` honours both
+    booleans verbatim, and the mapper's marker chain picks
+    ``[removed]`` (the more specific lifecycle state) per
+    :func:`mapper._build_summary` — pinning the connector-level
+    behaviour here guarantees the projection row stays valid
+    end-to-end (no Pydantic crash, the summary marker is the
+    operator-facing cue, and the cursor advances normally so the
+    next sync resumes past this change). Issue #288 Cluster C C#21.
+    """
+    _patch_settings(monkeypatch, content_extraction=False)
+    _patch_excludes(monkeypatch, tmp_path)
+
+    # Construct the dual-flag shape directly — both ``removed`` and
+    # ``trashed`` set, ``name`` empty (Drive strips the metadata on
+    # permanent-delete). The mapper's removed-placeholder branch
+    # synthesises the title.
+    dual = RawDriveItem(
+        file_id="F-dual",
+        removed=True,
+        trashed=True,
+        name="",
+        mime_type="application/vnd.google-apps.document",
+        modified_time_iso="2026-05-31T12:00:00Z",
+        web_view_link="",
+        owner_email="",
+        owner_display_name="",
+        is_shared_with_me=False,
+        shared=False,
+        last_modifying_user_email="",
+        last_modifying_user_display_name="",
+        drive_id="",
+        raw={},
+    )
+    _patch_auth_and_client(
+        monkeypatch,
+        pages=[[(dual, "next-T")]],
+    )
+    service = _RecordingSourceService()
+
+    result = GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
+
+    # Projection row emitted (ADR-0020 retain-everything: even
+    # permanently-deleted items keep the row so downstream consumers
+    # can answer "did this file ever exist?").
+    assert result.observed_count == 1
+    assert len(service.calls) == 1
+    call = service.calls[0]
+    assert call["external_id"] == "F-dual"
+    # ``removed`` is more specific than ``trashed`` so the title
+    # carries the removed-placeholder and the summary stamps
+    # ``[removed]`` (not ``[trashed]``) — same precedence rule the
+    # mapper's marker chain enforces in unit tests.
+    assert call["title"] == "[removed: F-dual]"
+    assert call["summary"] is not None
+    assert "[removed]" in call["summary"]
+    assert "[trashed]" not in call["summary"]
+    # Cursor still advanced past the dual-flag change so the next
+    # sync resumes correctly (no replay).
+    assert result.new_cursor == "next-T"
+
+
 def test_sync_existing_metadata_unchanged_when_content_extraction_off(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

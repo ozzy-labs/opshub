@@ -127,7 +127,7 @@ input:
 ## できないこと / やらない
 
 - 外部 SaaS への投稿 / 通知送信 / 会議招待の返信 (ADR-0010 §禁止事項 7、Phase 10 plan §1 #6)
-- 会議リマインダの能動 push (ADR-0004 §(a)、能動機能は当面持たない、Phase 13+ で再検討)
+- 会議リマインダの能動 push (ADR-0004 §(a)、能動機能は当面持たない、Phase 14+ で再検討)
 - 推論結果を opshub の durable state に書き戻す (`propose.generate` / `propose.apply` は別 skill / 操作の責務)
 - 会議後の議事録 / アクション抽出 → `meeting-followup` skill の責務
 - 本文を agent context に full payload で渡す (ADR-0022 §(d))

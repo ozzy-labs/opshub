@@ -48,6 +48,21 @@ deleted files, so permanent-deletes that occurred during the TTL
 window are lost on every fallback (ADR-0010 §Phase 13 改訂 (g)
 acknowledges this as the cost of the recovery path).
 
+The two ``cursor_set`` calls inside :meth:`sync` (first-sync bootstrap
++ TTL-fallback bootstrap) go through ``SourceService.cursor_set`` — the
+**public Application Service API** the Phase 3 connector framework
+exposes via :class:`ConnectorContext`. Calling ``cursor_set`` directly
+from the connector rather than waiting for the CLI driver's
+``cursor_set`` bookend does **not** bypass the Application Service
+contract (ADR-0010 §責務 2): the same ``SourceService`` method is the
+authorised write path for advancing the cursor watermark, and the
+eager commit is required so a crash mid-bootstrap does not silently
+fast-forward the watermark on the next run (which would lose any
+changes that landed between the two bootstrap calls). The MS365 /
+Box connectors already follow the same "service-method via context"
+pattern for their per-endpoint cursors; this connector reuses that
+pattern with a single cursor.
+
 ``content_extraction`` opt-in (Phase 13 G4 #278, ADR-0019 §(b') + ADR-0025)
 --------------------------------------------------------------------------
 

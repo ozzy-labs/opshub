@@ -83,8 +83,8 @@ def _client_with_handler(
     # The DriveClient builds the httpx.Client in __init__; we swap it
     # out here rather than patching httpx.Client globally so each test
     # carries its own scoped transport.
-    client._client.close()  # type: ignore[reportPrivateUsage]
-    client._client = httpx.Client(transport=transport, timeout=5.0)  # type: ignore[reportPrivateUsage]
+    client._client.close()  # pyright: ignore[reportPrivateUsage]
+    client._client = httpx.Client(transport=transport, timeout=5.0)  # pyright: ignore[reportPrivateUsage]
     return client
 
 
@@ -413,6 +413,70 @@ def test_request_does_not_retry_on_plain_403() -> None:
             client.get_start_page_token()
     finally:
         client.close()
+
+
+def test_request_handles_shared_drive_permission_denied() -> None:
+    """Shared-Drive-specific 403 reasons fail fast and never get rate-limit retried.
+
+    Drive returns distinct 403 reason codes for Shared Drive policy
+    failures (``domainPolicy``, ``cannotShareTeamDriveTopFolder``,
+    ``teamDrivesFolderSharingNotSupported``, ...). These are
+    configuration / policy denials, not quota — retrying would burn
+    the retry budget for no gain (the operator must adjust the Shared
+    Drive policy out-of-band). The distinction matters because the
+    rate-limit detector (:func:`_is_rate_limit_error`) only matches
+    the three documented quota reasons; this test pins that any other
+    403 reason — including the Shared-Drive-policy family — falls
+    into the fail-fast branch without spending a single retry. Issue
+    #288 Cluster C C#19.
+
+    Without this pin, a future refactor that loosened the rate-limit
+    reason match (e.g. switched to ``"reason" in body``) could
+    silently start retrying Shared-Drive policy denials. The first
+    operator hit would see 3x retries + 3x backoff before the
+    inevitable failure.
+    """
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        # Drive's documented Shared-Drive policy denial shape: 403
+        # with a structured ``errors[].reason`` that is NOT one of the
+        # three rate-limit reasons.
+        return httpx.Response(
+            403,
+            json={
+                "error": {
+                    "code": 403,
+                    "errors": [
+                        {
+                            "domain": "global",
+                            "reason": "domainPolicy",
+                            "message": ("Shared Drive policy prevents the requested operation."),
+                        }
+                    ],
+                }
+            },
+        )
+
+    client = _client_with_handler(handler)
+    sleep_calls: list[float] = []
+
+    def record_sleep(seconds: float) -> None:
+        sleep_calls.append(float(seconds))
+
+    try:
+        with patch.object(time, "sleep", record_sleep):
+            with pytest.raises(ConnectorFailedError, match="returned 403"):
+                client.get_start_page_token()
+    finally:
+        client.close()
+    # Fail-fast: exactly one HTTP round-trip, no backoff sleep,
+    # never re-tried. Distinguishes Shared-Drive policy denials from
+    # the rate-limit-retried 403 path
+    # (``test_request_retries_on_403_rate_limit_exceeded``).
+    assert call_count["n"] == 1
+    assert sleep_calls == []
 
 
 def test_request_retries_on_5xx() -> None:

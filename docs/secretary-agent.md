@@ -2,7 +2,7 @@
 
 opshub は Phase 10 (秘書エージェント・プラットフォーム化) で「人間 → 秘書エージェント → opshub コマンド」の三層モデルへ拡張され、Phase 12 (Secretary Skills 拡張) で秘書 Skill レパートリーを **5 → 14** に拡張した。本 doc は秘書エージェントの使い方を、Skill catalog SSOT として 10 § 構成で集約する。
 
-本 doc は [ADR-0004 §決定 (c-2)](adr/0004-agent-runtime-boundary.md) で **Skill catalog SSOT** として明示された (Phase 12 H1)。14 skills 体制の責務マップ / HITL boundary / MCP tool 依存マップ / pair structure をここで一元管理する。ADR-0004 改訂のうち Skill 配信機構 (`ozzy-labs/skills` CI + Renovate preset) は Phase 13+ に defer され、Skill 本体 (SKILL.md) は opshub `docs/skills/<name>/SKILL.md` を SSOT として保持する。
+本 doc は [ADR-0004 §決定 (c-2)](adr/0004-agent-runtime-boundary.md) で **Skill catalog SSOT** として明示された (Phase 12 H1)。14 skills 体制の責務マップ / HITL boundary / MCP tool 依存マップ / pair structure をここで一元管理する。ADR-0004 改訂のうち Skill 配信機構 (`ozzy-labs/skills` CI + Renovate preset) は Phase 14+ に defer され (Phase 13 では Google Workspace コネクタが優先された)、Skill 本体 (SKILL.md) は opshub `docs/skills/<name>/SKILL.md` を SSOT として保持する。
 
 設計の根拠は [ADR-0004 Agent Runtime Boundary](adr/0004-agent-runtime-boundary.md) (形A: opshub は MCP + Agent Skills のみ提供、runtime は外部ホスト) と [ADR-0022 MCP Server Surface](adr/0022-mcp-server-surface.md) (MCP tool 面) と [ADR-0016 §決定 (l)](adr/0016-action-loop-and-structured-output.md) (Phase 12 H1 で追加された draft 系統一方針: persist 境界 / `mode` 引数射程 / triage 射程 / Candidate union freeze)。
 
@@ -12,7 +12,7 @@ opshub 本体が提供するもの:
 
 1. **operational memory (①コア)** — events / projections / connectors / recall / propose / brief / graph
 2. **MCP サーバ (口)** — `opshub mcp serve` (stdio)。エージェント host が ①コアを叩く経路。Phase 12 H1 で `search` (FTS5) と `propose.apply` (HITL idempotent) と既存 4 read tools の physical column ベース時間フィルタを追加し、計 17 tools (read 12 + write 5) を公開
-3. **Agent Skills (手順書)** — SKILL.md 標準。本 doc が catalog する **14 Skill** (Phase 12 H2-H5 で 9 新規 + Phase 12 H1 で rename 2 を含む)。`docs/skills/<name>/SKILL.md` を opshub SSOT、配信機構 (`ozzy-labs/skills` CI + Renovate preset) は Phase 13+ に defer
+3. **Agent Skills (手順書)** — SKILL.md 標準。本 doc が catalog する **14 Skill** (Phase 12 H2-H5 で 9 新規 + Phase 12 H1 で rename 2 を含む)。`docs/skills/<name>/SKILL.md` を opshub SSOT、配信機構 (`ozzy-labs/skills` CI + Renovate preset) は Phase 14+ に defer (Phase 13 では Google Workspace コネクタを優先)
 4. **skill security scan** — `tools/skill_scan.py` (4 カテゴリ + frontmatter 隠し命令検出)、`tests/unit/skills/test_skill_specs.py` が 14 skills 全てに対して per-skill MCP dispatch pin + scan を実行
 
 opshub 本体が **持たない** もの:
@@ -75,7 +75,7 @@ host LLM が user 確認必須 (`propose.generate` で候補生成 → user 確�
 | [source-extract](skills/source-extract/SKILL.md) | ↔ inbox-triage | 「この資料から task 抽出」「これに含まれる decisions 教えて」「<source_id> から候補を」 | `source.get` + `propose.generate` (`mode=source_extract`) + `propose.apply` (HITL) | 1 source から抽出された task / decision / reply_draft 候補、user 個別承認分のみ保存 |
 | [meeting-followup](skills/meeting-followup/SKILL.md) | ↔ meeting-prep | 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」 | `source.list` (`source_type=ms365_calendar` + `observed_after/before`) + `source.get` + `recall.search` + `propose.generate` (`mode=meeting_followup`) + `propose.apply` (HITL) | 会議からの task / decision 候補、user 個別承認分のみ保存 |
 
-skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。実際の配布は Phase 12 では opshub からの **手動 install** ([§8 セットアップ](#8-セットアップ) 参照)。`@ozzylabs/skills` Renovate preset 経由の配布は Phase 13+ に defer (ADR-0004 §決定 (c) backout)。
+skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。実際の配布は opshub からの **手動 install** ([§8 セットアップ](#8-セットアップ) 参照)。`@ozzylabs/skills` Renovate preset 経由の配布は Phase 14+ に defer (Phase 13 では Google Workspace コネクタを優先、ADR-0004 §決定 (c) backout)。
 
 ## 4. Pair structure
 
@@ -201,7 +201,7 @@ find-document が利用できる本文系 source_type は計 6 種 (Phase 11 off
 - **能動的な push / 通知** — 「3 時に reminder 送る」「inbox を 1 時間ごとにチェック」のような常駐 runtime は持たない (ADR-0004 §(a) 形A、Phase 12 でも継続)
 - **LLM 推論の opshub 内蔵** — opshub は推論ループを実行しない。LLM 呼び出し (Anthropic / OpenAI / Ollama) は `opshub propose` / `opshub brief` のようなコマンド経路でユーザーが明示的に起動したときのみ発生 (ADR-0015)
 - **auto-apply** — `opshub propose apply` も `propose.apply` MCP tool も必ず人が叩く (ADR-0016 §決定 (c))。`propose.apply` は idempotent (2 回目は `{ok:true, already_applied:true}`) だが、最初の apply は user 確認必須
-- **handoff-draft / announcement-draft の persist** — ADR-0016 §決定 (l)(a) で「返信元 source の有無」で persist 境界を切る方針。自発生成で natural key を持たない handoff/announcement は text-only で persist しない。将来 persist 需要が顕在化したら ADR-0016 §決定 (f) versioning パターンで対応 (Phase 13+)
+- **handoff-draft / announcement-draft の persist** — ADR-0016 §決定 (l)(a) で「返信元 source の有無」で persist 境界を切る方針。自発生成で natural key を持たない handoff/announcement は text-only で persist しない。将来 persist 需要が顕在化したら ADR-0016 §決定 (f) versioning パターンで対応 (Phase 14+)
 
 ## 8. セットアップ
 
@@ -235,7 +235,7 @@ Codex CLI / GitHub Copilot CLI (`.agents/skills/`):
 cp -r opshub/docs/skills/* ~/.agents/skills/
 ```
 
-プロジェクト単位で導入する場合は project root の `.claude/skills/` / `.agents/skills/` に同じパターンで copy する。`@ozzylabs/skills` Renovate preset 経由の自動配布は Phase 13+ に defer (ADR-0004 §決定 (c) backout)。
+プロジェクト単位で導入する場合は project root の `.claude/skills/` / `.agents/skills/` に同じパターンで copy する。`@ozzylabs/skills` Renovate preset 経由の自動配布は Phase 14+ に defer (ADR-0004 §決定 (c) backout)。
 
 opshub 本体リポでは `docs/skills/<name>/SKILL.md` が **SSOT** として置かれている (Phase 12 H1 で確定、ADR-0004 §決定 (c))。
 
@@ -251,7 +251,7 @@ opshub 本体リポでは `docs/skills/<name>/SKILL.md` が **SSOT** として�
 - 14 skills 全てに per-skill MCP dispatch pin (skill 内 MCP tool 名・引数 schema が opshub MCP surface と整合するか grep + JSON schema validation)
 - HITL boundary test pin (HITL write skill の `propose.apply` annotation = `read_only=false, destructive=false, idempotent=true`)
 - text-only boundary test pin (handoff/announcement-draft が persist 経路を持たない)
-- `ozzy-labs/skills` 側 CI への組み込みは Phase 13+ で配布機構整備時に対応 (ADR-0004 §決定 (c) backout)
+- `ozzy-labs/skills` 側 CI への組み込みは Phase 14+ で配布機構整備時に対応 (ADR-0004 §決定 (c) backout)
 - 検出ルールは scope 縮小設計 (高 precision / 中 recall)。誤検出は `# skill-scan: allow <category>` コメントで局所的に suppress 可能
 
 ## 10. 関連
@@ -264,4 +264,4 @@ opshub 本体リポでは `docs/skills/<name>/SKILL.md` が **SSOT** として�
 - [docs/mcp-setup.md](mcp-setup.md)
 - [Phase 10 Implementation Plan](phase-10-plan.md)
 - [Phase 12 Implementation Plan](phase-12-plan.md)
-- handbook ADR-0016 (skills repo `ozzy-labs/skills` 配布機構、Phase 13+ で配布完成予定)
+- handbook ADR-0016 (skills repo `ozzy-labs/skills` 配布機構、Phase 14+ で配布完成予定)
