@@ -1,6 +1,8 @@
 # Phase 12 Implementation Plan
 
-> Status: planning. Last reviewed: 2026-05-31. Scope: **Secretary Skills 拡張** = 14 skills 体制（既存 5 + 新規 9）+ 既存 5 のうち 2 件 rename（daily-brief → personal-brief / file-lookup → find-document）+ 4 新 MCP tools 露出（search FTS5 / propose.apply / 既存 4 read tools の時間フィルタ）+ 既存 5 SKILL.md の MCP 直接呼び化（CLI fallback 廃止）。Phase 10 で築いた MCP + Skills の枠の上に、Phase 11 で取り込んだ Office + Teams + Outlook データを「秘書らしい体感価値」に変換する。形A（runtime なし）・能動性なし・外部書き戻しなしを Phase 10/11 から継承。
+> Status: planning (pre-implementation audit corrections applied 2026-05-31). Last reviewed: 2026-05-31. Scope: **Secretary Skills 拡張** = 14 skills 体制（既存 5 + 新規 9）+ 既存 5 のうち 2 件 rename（daily-brief → personal-brief / file-lookup → find-document）+ 4 新 MCP tools 露出（search FTS5 / propose.apply / 既存 4 read tools の **physical column ベース時間フィルタ**）+ 既存 5 SKILL.md の MCP 直接呼び化（CLI fallback 廃止）。Phase 10 で築いた MCP + Skills の枠の上に、Phase 11 で取り込んだ Office + Teams + Outlook データを「秘書らしい体感価値」に変換する。形A（runtime なし）・能動性なし・外部書き戻しなしを Phase 10/11 から継承。
+>
+> **Audit corrections (2026-05-31)**：pre-implementation audit で 5 件の補正を反映：(1) 時間フィルタ field 名を tool 別 physical column ベース化（task=`updated_after/before` 等）/ (2) `propose.apply` 冪等性 semantics 明示（handler 層で OpsHubError catch → `{ok, already_applied}` 正規化）/ (3) `search` MCP の `raw_query` flag を CLI 専用扱いで schema 除外 / (4) ADR-0016 §決定 (l) Draft 系統一方針として独立条文化（mode 引数射程 + triage 射程 + Candidate union 凍結明示）/ (5) rename 戦略具体化（git mv + sed + 歴史記録 ADR/decisions-log/phase-10-plan は注釈方式で除外）+ secretary-agent.md 10 § 構成案。
 >
 > Sub-issue は **H1〜H6 の6つ**（親 epic #253、子 #254〜#259）。新規 ADR ゼロ、改訂 3本（ADR-0004 / ADR-0022 / ADR-0016）に縮退（Phase 10 の 3 新規 + 4 改訂 → Phase 11 の 1 新規 + 2 改訂 → Phase 12 の 0 新規 + 3 改訂、と縮退継続）。本 plan が SSOT であり、各 sub-issue body は要点抜粋。
 >
@@ -21,7 +23,7 @@ Phase 11 で取り込んだ Teams / Outlook / Word / Excel / PowerPoint 由来�
 | OQ1 | 追加 Skills の選定 | **9 新規 skills**：meeting-prep / research / inbox-triage / external-brief / decision-rationale / handoff-draft / announcement-draft / meeting-followup / source-extract。**+ 既存 5 を 2 件 rename**（daily-brief → personal-brief / file-lookup → find-document）= **計 14 skills** |
 | OQ2 | HITL 境界・draft 系永続化 | **B**: reply-draft は既存通り `propose.generate` + `propose.apply`、handoff-draft / announcement-draft は **text-only**（persist しない）。新 candidate kind 追加なし、schema 拡張なし |
 | OQ3 | 既存 5 Skills MCP 整合化 | **A**: 全面 MCP 直接呼び化（CLI fallback 廃止）+ `search`(FTS5) MCP tool 追加 + personal-brief / next-actions の description 拡張で期間指定対応 |
-| OQ4 | MCP tool 追加範囲 | **A 包括的（4 項目）**：`search`(FTS5) + `propose.apply` + 既存 4 read tools（task / decision / source / inbox.list）に時間フィルタ追加（`occurred_after` / `occurred_before` / `recorded_after` / `recorded_before`） |
+| OQ4 | MCP tool 追加範囲 | **A 包括的（4 項目）**：`search`(FTS5) + `propose.apply` + 既存 4 read tools に **physical column ベースの時間フィルタ** 追加（task.list=`updated_after/before` / inbox.list=`created_after/before` / decision.list=`recorded_after/before` / source.list=`observed_after/before`、ISO 8601 optional）。tool 別の独立命名は audit findings (2026-05-31) を反映、業務時刻と物理列の混線回避 |
 | OQ5 | ozzy-labs/skills 配布 | **C**: 配布せず、opshub `docs/skills/` を SSOT、host install は README 手動手順、配信機構（ozzy-labs/skills CI + Renovate preset）は Phase 13+ で別途検討 |
 | OQ6 | 新 Skills e2e 品質確認 | **A**: 統合 1 本（`test_phase12_secretary_lifecycle.py`）+ per-skill MCP dispatch pin（`tests/unit/skills/test_skill_specs.py` 拡張で skill 内 MCP tool 名・引数 schema を pin） |
 | OQ7 | ADR 構成 | **B**: 新規 ADR ゼロ、**改訂 3 本**（ADR-0004 / ADR-0022 / ADR-0016）。Skill catalog（14 skills 責務マップ）は ADR ではなく `docs/secretary-agent.md` を SSOT |
@@ -67,8 +69,8 @@ HITL write（propose.generate + apply・4 件）:
 | ADR | 種別 | タイトル | 主な改訂内容 |
 |---|---|---|---|
 | **ADR-0004** | 改訂 | Agent Runtime Boundary | §決定 (c) の「Agent Skills は `ozzy-labs/skills` preset 配布」を「**Skills は opshub `docs/skills/` を SSOT、配信機構（ozzy-labs/skills CI + Renovate preset）は Phase 13+ で別途検討**」に修正（OQ5=C 反映）。新規 §決定：Skill catalog は `docs/secretary-agent.md` を SSOT として 14 skills 責務マップ・HITL boundary・MCP tool 依存マップ・pair structure を維持。Phase 10 改訂時の前提（ozzy-labs/skills 配布完成）を意図的に backout する形で文書化 |
-| **ADR-0022** | 改訂 | MCP Server Surface | 既存 7（Phase 10 Sub C）+ Step 1 widening 8（PR #231）に **Phase 12 で 4 追加** を明記：(a) `search`(FTS5、`ReadCategory.SEARCH` 新設) / (b) `propose.apply`(`WriteCategory.PROPOSE_APPLY`、`read_only=false, destructive=false, idempotent=true`) / (c)(d)(e)(f) 既存 4 read tools (task / decision / source / inbox.list) 入力 schema 拡張で時間フィルタ追加（`occurred_after` / `occurred_before` / `recorded_after` / `recorded_before`、ISO 8601 optional）。annotation policy 維持（read 自律 / write 確認） |
-| **ADR-0016** | 改訂 | Action Loop and Structured Output | §決定 (i)/(j)/(k) の reply_draft（Phase 10 改訂）に加え、**draft 系統一方針** を追記：(a) reply-draft は `propose.generate` + `propose.apply` で persist / (b) handoff-draft / announcement-draft は **text 返却のみ persist しない**（OQ2=B 反映）/ (c) 理由：使用頻度の現実主義 + schema 拡張コスト回避、将来 persist 需要顕在化時に `DraftCandidatePayload` 拡張で対応可能と forecast。新 candidate kind 追加なし |
+| **ADR-0022** | 改訂 | MCP Server Surface | 既存 7（Phase 10 Sub C）+ Step 1 widening 8（PR #231）に **Phase 12 で 4 追加** を明記：(a) `search`(FTS5、`ReadCategory.SEARCH` 新設、phrase quote default、`raw_query` flag は CLI 専用で MCP schema からは除外) / (b) `propose.apply`(`WriteCategory.PROPOSE_APPLY`、`read_only=false, destructive=false, idempotent=true`、handler 層で `ProposalService.apply` の `OpsHubError("already applied/rejected")` を catch → `{ok:true, already_applied:true, applied_entity_id:...}` に正規化して idempotent semantics を成立させる) / (c)(d)(e)(f) 既存 4 read tools 入力 schema 拡張で **physical column ベースの時間フィルタ** 追加（task.list=`updated_after/before`、inbox.list=`created_after/before`、decision.list=`recorded_after/before`、source.list=`observed_after/before`、ISO 8601 optional）。annotation policy 維持（read 自律 / write 確認）。MCP 引数名 → 各 projection 物理列の写像表を ADR-0022 §決定 に追加 |
+| **ADR-0016** | 改訂 | Action Loop and Structured Output | §決定 (i)/(j)/(k) の reply_draft（Phase 10 改訂）に加え、**新規 §決定 (l) Draft 系統一方針** を独立条文として追記。要点：(a) **persist 境界は「返信元 source の有無」で切る**：reply-draft は `propose.generate` + `propose.apply` で persist (`reply_to_source_id` が natural key)、handoff-draft / announcement-draft は **text 返却のみ persist しない**（自発生成で natural key なし、OQ2=B 反映） / (b) **mode 引数の射程**：Phase 12 で導入される `propose.generate` の `mode` 引数（`inbox_triage` / `source_extract` / `meeting_followup`）は **persist 経路を持つ structured-output dispatch key** に限定。handoff/announcement は `propose.generate` を経由せず host LLM が `brief` / `recall.search` / `source.get` / `decision.list` の read tool を合成して text を組み立てる / (c) **triage は reply_draft 文脈のみ**：§決定 (j) の 3 値 triage は draft 系全体ではなく reply_draft 専用 signal、handoff/announcement は射程外 / (d) **Candidate discriminated union 凍結**：`task | decision | reply_draft` の 3 kind で凍結、新 candidate kind 追加なし / (e) 理由：使用頻度の現実主義 + schema 拡張コスト回避、将来 persist 需要顕在化時に §決定 (f) schema versioning パターンで `HandoffDraftCandidatePayload` を v3 として追加可能（in-place migration なし、新 ADR or 本 ADR 改訂で対応） |
 
 ---
 
@@ -89,18 +91,45 @@ ADR 改訂 3 本 + 既存 5 rename + MCP 整合化 + 4 新 MCP tools 露出 + sk
 
 **PR H1-b** `feat(mcp): search(fts5) + propose.apply + time filter on list tools`
 
-- `src/opshub/mcp/server.py`：`ReadCategory.SEARCH` 新規 + `build_search_handler` 追加 / `WriteCategory.PROPOSE_APPLY` 新規 + `build_propose_apply_handler` 追加（既存 `opshub propose apply` ロジック再利用）/ 既存 4 read tools の入力 schema に時間フィルタ追加
-- `src/opshub/mcp/registry.py`：新 tool 登録
-- 既存テスト更新 + 新 tools tests（dispatch + schema reject unknown fields + annotation 確認 + 時間フィルタ動作）
+- `src/opshub/mcp/_registry.py`：`ReadCategory.SEARCH` 新規追加、`WriteCategory.PROPOSE_APPLY` 新規追加。既存 `tests/unit/mcp/test_registry_policy` 系で category 件数 / `WriteCategory` 全件 `destructive=True` を直接 assert している場合は、policy guard 表を category 別分岐に更新（`propose.apply` は `destructive=False`）
+- `src/opshub/mcp/_tools.py` / `_writes.py`：`build_search_handler(engine)` / `build_propose_apply_handler(engine)` を既存 read/write handler factory と同型シグネチャで追加
+- `search` 実装：既存 `SearchService.search` を呼ぶが `raw_query` flag は schema から除外（phrase quote default）。ホスト LLM が生 token を投げても安全
+- `propose.apply` 実装：既存 `ProposalService.apply` を呼び出すが、`OpsHubError("already applied/rejected")` を handler 層で catch → `{ok:true, already_applied:true, applied_entity_type, applied_entity_id}` に正規化（annotation `idempotent=true` を成立させる）。入力 schema は `{proposal_id, candidate_index}`、出力 payload は `build_task_create_handler` の `{ok, task_id, title}` パターンと揃える
+- 既存 4 read tools の入力 schema 拡張：**physical column ベース**で tool 別に独立命名
+  - `task.list`: `updated_after` / `updated_before`（projection 列 `tasks.updated_at`）
+  - `inbox.list`: `created_after` / `created_before`（projection 列 `inbox_items.created_at`）
+  - `decision.list`: `recorded_after` / `recorded_before`（projection 列 `decisions.recorded_at`）
+  - `source.list`: `observed_after` / `observed_before`（projection 列 `sources.observed_at`）
+  - ISO 8601 string、optional、いずれも `>= after` / `< before` 半開区間
+- `src/opshub/mcp/server.py`：新 tool 登録、`opshub mcp tools` リストに反映
+- 既存テスト更新 + 新 tools tests（dispatch + schema reject unknown fields + annotation 確認 + 時間フィルタの境界動作 + propose.apply 冪等正規化）
 
 **PR H1-c** `feat(skills): rename existing 5 + mcp direct call + description expansion`
 
-- ファイル rename：`docs/skills/daily-brief/` → `docs/skills/personal-brief/`、`docs/skills/file-lookup/` → `docs/skills/find-document/`
+rename 戦略（audit 2026-05-31 で確定）：
+
+1. **2 ステップで分離**：
+   - (a) `git mv docs/skills/daily-brief docs/skills/personal-brief` + `git mv docs/skills/file-lookup docs/skills/find-document`
+   - (b) `rg -l 'daily-brief|file-lookup' | xargs sed -i 's/daily-brief/personal-brief/g; s/file-lookup/find-document/g'` で本文一括置換
+2. **歴史記録 ADR / decisions-log は手動で注釈方式**：以下のファイルは sed 対象から除外、「daily-brief（後に Phase 12 で personal-brief に rename）」のような注釈で旧名を残す（ADR 同期性を保つため）
+   - `docs/adr/0004-agent-runtime-boundary.md` (L33 / L95)
+   - `docs/adr/0025-office-document-content-extraction.md` (L18 `daily-brief` 用例)
+   - `docs/decisions-log.md` (L261 ADR-0004 entry)
+   - `docs/phase-10-plan.md` (L84 / L88 / L150)
+3. **テストハードコード手動修正**：`tests/unit/skills/test_skill_specs.py` は 13 hits、`_REQUIRED_SKILLS` tuple / `_SKILLS_DIR / "file-lookup"` パス / 関数名 `test_file_lookup_*` / `_FILE_LOOKUP_PHASE_11_SOURCE_TYPES` 等を手動で関数名 rename も含めて修正（sed では関数名 rename リスク）
+4. **phase-12-plan.md の grep ゼロチェック行は marker 化**：H6 closeout で grep gate を回す際、`docs/phase-12-plan.md` 内の rename 計画記述（旧名 `daily-brief` / `file-lookup`）は文字列リテラル化（バックティック囲い）か、`.gitattributes` / 専用 marker で gate 除外
+5. **完了判定**：`rg 'daily-brief|file-lookup' --glob '!docs/adr' --glob '!docs/decisions-log.md' --glob '!docs/phase-10-plan.md' --glob '!docs/phase-12-plan.md'` で hit ゼロ
+
+実装項目：
+
+- ファイル rename（上記 1.a）
+- 本文置換（上記 1.b、除外パスは 2.）
 - 既存 5 SKILL.md を MCP 直接呼びに書き換え（`opshub brief --json` 等 CLI fallback の記述を MCP `brief` tool 呼びに変更）
 - personal-brief / next-actions description 拡張で期間指定対応
 - find-document description 拡張で `search`(FTS5) MCP tool 利用に変更
 - `tools/skill_scan.py` 改修（必要に応じて）
-- `tests/unit/skills/test_skill_specs.py` 拡張：14 skills 全てに per-skill MCP dispatch pin（skill 内 MCP tool 名・引数 schema が opshub の MCP surface と整合するか grep + jsonschema validation）
+- `tests/unit/skills/test_skill_specs.py` 拡張：14 skills 全てに per-skill MCP dispatch pin（skill 内 MCP tool 名・引数 schema が opshub の MCP surface と整合するか grep + jsonschema validation）+ 関数名 rename
+- AGENTS.md / CLAUDE.md / README.md / README.ja.md / docs/mcp-setup.md / docs/secretary-agent.md / docs/architecture.md / docs/repository-structure.md の本文置換
 
 ### Sub-issue H2: info gathering skills (#255)
 
@@ -116,7 +145,7 @@ ADR 改訂 3 本 + 既存 5 rename + MCP 整合化 + 4 新 MCP tools 露出 + sk
 
 **依存: H1**
 
-- `docs/skills/external-brief/SKILL.md`：task.list (state=completed, completed_after=last_week) + decision.list (recorded_after=last_week) + brief（外向き tone）。personal-brief との pair。
+- `docs/skills/external-brief/SKILL.md`：task.list (state=completed, updated_after=last_week_start) + decision.list (recorded_after=last_week_start) + brief（外向き tone）。personal-brief との pair。**注**: task.list の時間フィルタは physical column `tasks.updated_at` ベース（H1 で確定、§3 H1-b 参照）、`completed_at` 列は projection に存在しないため state filter と updated_after の組合せで近似
 - `docs/skills/decision-rationale/SKILL.md`：decision.list (filter by topic) + graph.trace + recall.search で決定経緯
 - skill_scan pass + per-skill MCP dispatch pin tests
 
@@ -128,7 +157,7 @@ ADR 改訂 3 本 + 既存 5 rename + MCP 整合化 + 4 新 MCP tools 露出 + sk
 
 - `docs/skills/inbox-triage/SKILL.md`：inbox.list (state=open) + propose.generate (mode=inbox_triage) + propose.apply (HITL)
 - `docs/skills/source-extract/SKILL.md`：source.get + propose.generate (mode=source_extract) + propose.apply (HITL)
-- `docs/skills/meeting-followup/SKILL.md`：source.list (calendar_event, 過去) + source.get + recall.search + propose.generate (mode=meeting_followup) + propose.apply (HITL)
+- `docs/skills/meeting-followup/SKILL.md`：source.list (source_type=calendar_event, observed_before=now, observed_after=last_24h) + source.get + recall.search + propose.generate (mode=meeting_followup) + propose.apply (HITL)
 - 3 skill とも HITL boundary 厳守：generate は read 自律 OK、apply は host LLM の user 確認必須
 - skill_scan pass + per-skill MCP dispatch pin tests + HITL boundary test pin
 
@@ -180,19 +209,22 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
 ### H1 — foundation
 
 - [ ] PR H1-a / H1-b / H1-c が merged
-- [ ] 改訂 ADR-0004 / ADR-0022 / ADR-0016 Accepted + decisions-log.md entries
-- [ ] 既存 5 rename が docs / tests / 設定 / examples で完全反映（grep `daily-brief` / `file-lookup` で hit ゼロ）
-- [ ] 4 新 MCP tools 露出、`opshub mcp tools` 出力に表示、annotation policy 整合
+- [ ] 改訂 ADR-0004 / ADR-0022 / ADR-0016 Accepted + decisions-log.md entries（3 件）
+- [ ] 既存 5 rename が docs / tests / 設定 / examples で完全反映（`rg 'daily-brief|file-lookup' --glob '!docs/adr' --glob '!docs/decisions-log.md' --glob '!docs/phase-10-plan.md' --glob '!docs/phase-12-plan.md'` で hit ゼロ。歴史記録 ADR / decisions-log / phase-10-plan は注釈方式で旧名を残す）
+- [ ] 4 新 MCP tools 露出（`search` / `propose.apply` / 4 read tools の物理列ベース時間フィルタ）、`opshub mcp tools` 出力に表示
+- [ ] **annotation policy 整合**：`search` = ReadCategory（auto-approve OK） / `propose.apply` = WriteCategory（`read_only=false, destructive=false, idempotent=true`、handler 層で OpsHubError catch → 正規化）/ 既存 read tools の時間フィルタ拡張で annotation 変化なし
 - [ ] 既存 5 SKILL.md が MCP 直接呼びに統一（CLI fallback 削除）
 - [ ] personal-brief / next-actions description 拡張で期間指定対応
-- [ ] find-document description 拡張で search(FTS5) 利用
+- [ ] **find-document description 拡張**で `search`(FTS5) MCP tool 利用に変更（CLI `opshub search` ベースから移行）
 - [ ] skill_scan が 14 skills 全てに対して pass
 - [ ] per-skill MCP dispatch pin tests pass（既存 5 含む）
+- [ ] `propose.apply` の冪等正規化 test（同 `(proposal_id, candidate_index)` 2 回目呼び出しで `OpsHubError` を投げずに `{ok:true, already_applied:true}` を返す）pass
+- [ ] `search` MCP tool の入力 schema に `raw_query` が含まれない（CLI 専用扱い、phrase quote default）
 
 ### H2 — info gathering skills
 
 - [ ] meeting-prep / research の SKILL.md が `docs/skills/` 配下に追加
-- [ ] meeting-prep が source.list (calendar_event, 時間フィルタ) + recall + graph.related を組み立てる
+- [ ] meeting-prep が source.list (source_type=calendar_event, `observed_after` / `observed_before`) + recall + graph.related を組み立てる
 - [ ] research が recall + search(FTS5) + graph.related/expand + brief を組み立てる
 - [ ] skill_scan pass + per-skill MCP dispatch pin tests pass
 - [ ] MCP tool 利用が H1 で追加した surface と整合（time filter / search tool 名）
@@ -256,11 +288,30 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
 - **`docs/mcp-setup.md`**:
   - 新 4 MCP tools（search / propose.apply / 時間フィルタ）追記
   - host への docs/skills/ コピー手順 + 各 host (Claude Code / Codex CLI / Copilot CLI) での Skills 取り込み方法
-- **`docs/secretary-agent.md` 大幅更新（Skill catalog SSOT）**:
-  - 14 skills 責務マップ表（name / 区分 / 発火条件サマリ / 使用 MCP tools / 出力形式）
-  - HITL boundary 一覧
-  - pair structure
-  - MCP tool 依存マップ（どの skill がどの tool を呼ぶか）
+- **`docs/secretary-agent.md` 大幅更新（Skill catalog SSOT）** — audit 2026-05-31 で構成案確定：
+
+  既存構造（§形A 責務分担 / §依頼例 / §Skills 一覧（5 × 2 表）/ §できること・できないこと / §セットアップ / §skill security / §関連）を以下の 10 § 構成に拡張：
+
+  1. **§形A 責務分担**（既存維持、「14 skills」と数値更新のみ）
+  2. **§秘書への依頼例**（14 行表に拡張、自然文トリガ + 発火 skill）
+  3. **§Skill catalog**（新規、read 10 / HITL write 4 の 2 ブロック分割、表の縦長化を回避）
+  4. **§Pair structure**（新規、4 pair の対比、向き・タイミング・粒度の軸）
+  5. **§HITL boundary**（新規、read 自律 OK / write は propose.generate + apply の 2 段ゲート、auto-apply 禁止の集約）
+  6. **§MCP tool 依存マップ**（新規、skill × MCP tool マトリクス、Phase 11 source_type 列挙）
+  7. **§できること・できないこと**（既存維持、Phase 11 文脈を 14 skills 視点で書き直し）
+  8. **§セットアップ**（既存維持、5→14 の数値更新 + host 手動 install 手順）
+  9. **§skill security**（既存維持）
+  10. **§関連**（Phase 12 で改訂された ADR-0004 / 0016 / 0022 を追記）
+
+  責務マップ表フォーマット（§Skill catalog 配下、read 10 と HITL write 4 で 2 表分割）：
+
+  ```
+  | skill | pair | 発火条件 | 使用 MCP tools | 出力形式 |
+  |---|---|---|---|---|
+  | personal-brief | ↔ external-brief | 「今日のまとめ」「自分の状況」 | brief, recall.search, task.list, inbox.list | 散文サマリ + signals |
+  ```
+
+  既存 5 skills 名（daily-brief, file-lookup）はディレクトリ rename + 散文「全 skill が新 source_type を…」の skill 名列挙 + skill リンクパス（`skills/daily-brief/SKILL.md` → `skills/personal-brief/SKILL.md`）すべて書き換え必須。
 
 ---
 
@@ -275,9 +326,9 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
 
 ### 7.2 結合テスト（integration）
 
-- **`tests/integration/test_phase12_mcp_search.py`**: 新 search(FTS5) MCP tool が既存 FTS5 と同等の hit を返す
-- **`tests/integration/test_phase12_propose_apply_mcp.py`**: propose.apply MCP tool が既存 CLI と同等の persist + idempotency を持つ
-- **`tests/integration/test_phase12_time_filter.py`**: 時間フィルタの境界動作（含む / 含まない、ISO 8601 timezone）
+- **`tests/integration/test_phase12_mcp_search.py`**: 新 search(FTS5) MCP tool が既存 FTS5 と同等の hit を返す。`raw_query` flag が schema に存在しないこと（CLI 専用扱い）も pin
+- **`tests/integration/test_phase12_propose_apply_mcp.py`**: propose.apply MCP tool が既存 CLI と同等の persist を持つ + idempotent semantics（同 `(proposal_id, candidate_index)` への 2 回目呼び出しが `OpsHubError` を投げずに `{ok:true, already_applied:true, applied_entity_id}` を返す）
+- **`tests/integration/test_phase12_time_filter.py`**: 4 tools 全てで physical column ベース時間フィルタの境界動作（task.list=`updated_after/before` / inbox.list=`created_after/before` / decision.list=`recorded_after/before` / source.list=`observed_after/before`）。半開区間（`>= after` / `< before`）、ISO 8601 timezone 解釈、空集合返却、UTC vs offset 一致
 
 ### 7.3 e2e lifecycle テスト
 
@@ -308,7 +359,7 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
 
 ### 着手中に追加で詰める実装詳細（forecast）
 
-- 時間フィルタの field 名統一規約（`occurred_after/before` / `recorded_after/before` / `completed_after/before`）。Phase 10 Round 2 で発見した projection 間の `created_at` / `recorded_at` / `occurred_at` 揺らぎを念頭に H1 で決定
+- 時間フィルタの field 名規約：audit (2026-05-31) で physical column ベースに確定済（task=`updated_after/before` / inbox=`created_after/before` / decision=`recorded_after/before` / source=`observed_after/before`）。H1-b 着手時に `tests/unit/mcp/test_registry_policy` 等の policy guard と category 件数 assert の更新範囲を確認
 - `propose.apply` MCP tool の冪等性確保（`idempotency_key` の渡し方、既存 `opshub propose apply` の挙動を MCP annotation `idempotent=true` の規約に揃える）
 - search(FTS5) MCP tool の query syntax（既存 CLI `opshub search` と同じ MATCH 構文を素直に通すか、MCP 層で sanitise するか）
 - per-skill MCP dispatch pin の実装方針（grep ベース vs MCP server を起動して dry-run する vs jsonschema only）
