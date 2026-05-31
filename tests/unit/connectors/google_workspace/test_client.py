@@ -764,3 +764,149 @@ def test_export_file_returns_empty_bytes_for_empty_doc() -> None:
         client.close()
 
     assert content == b""
+
+
+# ----- TTL fallback full-pass (#286, ADR-0010 §Phase 13 改訂 (g)) ------
+
+
+def _file_payload(file_id: str, **overrides: Any) -> dict[str, Any]:
+    """Build a ``files.list`` file payload fixture."""
+    file: dict[str, Any] = {
+        "id": file_id,
+        "name": f"file-{file_id}",
+        "mimeType": "application/vnd.google-apps.document",
+        "modifiedTime": "2026-05-31T12:00:00Z",
+        "webViewLink": f"https://drive.google.com/file/d/{file_id}/view",
+        "owners": [{"emailAddress": "alice@example.com", "displayName": "Alice"}],
+        "trashed": False,
+    }
+    file.update(overrides)
+    return file
+
+
+def test_list_files_modified_since_pins_q_and_shared_drives_params() -> None:
+    """``files.list`` request pins ``q=modifiedTime >= ...`` + Shared Drives flags.
+
+    Phase 13 cluster A audit (#286): the TTL fallback must walk Shared
+    Drives content too, matching the steady-state ``changes.list``
+    corpus. Dropping ``supportsAllDrives`` / ``includeItemsFromAllDrives``
+    would silently shrink the recovery scope to My Drive only.
+    """
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["params"] = dict(request.url.params)
+        captured["url"] = str(request.url).split("?", 1)[0]
+        return httpx.Response(
+            200,
+            json={"files": [_file_payload("F1")]},
+        )
+
+    client = _client_with_handler(handler)
+    try:
+        items = list(
+            client.list_files_modified_since(since="2026-04-30T00:00:00Z"),
+        )
+    finally:
+        client.close()
+
+    assert len(items) == 1
+    assert items[0].file_id == "F1"
+    assert items[0].removed is False  # files.list cannot return deletes
+    assert captured["url"] == f"{DRIVE_API_BASE}/files"
+    assert captured["params"]["q"] == "modifiedTime >= '2026-04-30T00:00:00Z'"
+    assert captured["params"]["supportsAllDrives"] == "true"
+    assert captured["params"]["includeItemsFromAllDrives"] == "true"
+    assert captured["params"]["spaces"] == "drive"
+
+
+def test_list_files_modified_since_chains_page_tokens() -> None:
+    """``nextPageToken`` is followed across pages until exhausted.
+
+    Without page chaining the fallback would silently stop at the
+    first 100 files — a Drive corpus larger than that would lose
+    the tail every TTL gap.
+    """
+    pages = iter(
+        [
+            httpx.Response(
+                200,
+                json={
+                    "files": [_file_payload("F1"), _file_payload("F2")],
+                    "nextPageToken": "p2",
+                },
+            ),
+            httpx.Response(
+                200,
+                json={"files": [_file_payload("F3")]},
+            ),
+        ]
+    )
+    page_params: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page_params.append(dict(request.url.params))
+        return next(pages)
+
+    client = _client_with_handler(handler)
+    try:
+        items = list(
+            client.list_files_modified_since(since="2026-04-30T00:00:00Z"),
+        )
+    finally:
+        client.close()
+
+    assert [item.file_id for item in items] == ["F1", "F2", "F3"]
+    assert len(page_params) == 2
+    assert page_params[1]["pageToken"] == "p2"
+    # Shared Drives flags + ``q`` selector persist on page 2 — Drive
+    # does not echo them forward, so dropping them between pages would
+    # silently shrink the corpus.
+    assert page_params[1]["supportsAllDrives"] == "true"
+    assert page_params[1]["includeItemsFromAllDrives"] == "true"
+    assert page_params[1]["q"] == "modifiedTime >= '2026-04-30T00:00:00Z'"
+
+
+def test_list_files_modified_since_raises_on_malformed_response() -> None:
+    """Missing ``files`` array surfaces as :class:`ConnectorFailedError`."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"nextPageToken": "p2"})
+
+    client = _client_with_handler(handler)
+    try:
+        with pytest.raises(ConnectorFailedError, match="files"):
+            list(
+                client.list_files_modified_since(since="2026-04-30T00:00:00Z"),
+            )
+    finally:
+        client.close()
+
+
+def test_list_files_modified_since_shares_rate_limit_retry_with_changes_list() -> None:
+    """429 / Retry-After backoff is shared with the steady-state path.
+
+    Phase 13 cluster A audit (#286): the fallback path must inherit
+    the same 429 / 5xx envelope as ``changes.list`` because both
+    consume the same Drive quota bucket. A regression that split the
+    retry path would silently make the recovery harder.
+    """
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "1"})
+        return httpx.Response(200, json={"files": [_file_payload("F1")]})
+
+    client = _client_with_handler(handler)
+    try:
+        with patch.object(time, "sleep", _noop_sleep):
+            items = list(
+                client.list_files_modified_since(since="2026-04-30T00:00:00Z"),
+            )
+    finally:
+        client.close()
+
+    assert [item.file_id for item in items] == ["F1"]
+    assert call_count["n"] == 2

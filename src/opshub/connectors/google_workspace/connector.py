@@ -18,14 +18,35 @@ without the per-endpoint cursor-read pattern :class:`MS365Connector`
 uses for its 3-endpoint case.
 
 TTL fallback (when Drive rejects the stored ``startPageToken`` with
-404 / 410):
+404 / 410), Phase 13 cluster A audit (#286) brought this into Teams
+``_fallback_pass`` 同型. The 3-step recovery:
 
 1. :meth:`DriveClient.fetch_changes` raises :class:`PageTokenExpiredError`.
-2. The connector catches it, calls
-   :meth:`DriveClient.get_start_page_token` for a fresh root token,
-   and walks forward from there. The projection's natural-key dedup
-   on ``(connector_name, external_id)`` absorbs any duplicate yields
-   so the fallback is idempotent.
+2. The connector catches it and:
+
+   a. Emits a WARNING structlog event
+      ``connector.changes_list.expired`` so operators see the gap in
+      observability (Teams 同型 — Phase 11 ``connector.delta.expired``
+      pattern).
+   b. Walks :meth:`DriveClient.list_files_modified_since` over
+      ``now - fallback_window_days`` (default 30, configurable via
+      ``[connectors.google_workspace] fallback_window_days``) and
+      re-emits each surviving file as :class:`SourceObserved` so
+      changes that occurred during the TTL gap are not silently
+      dropped. The projection's natural-key dedup on
+      ``(connector_name, external_id)`` absorbs the overlap with the
+      steady-state corpus.
+   c. Calls :meth:`DriveClient.get_start_page_token` to bootstrap a
+      fresh root token and persists it as the new cursor so the next
+      sync resumes on the delta path.
+
+A value of ``fallback_window_days = 0`` opts out of the full-pass
+(documented but discouraged); the connector then jumps straight from
+step (a) to step (c), losing any TTL-gap changes by design. The
+permanent-delete gap is unavoidable: ``files.list`` cannot return
+deleted files, so permanent-deletes that occurred during the TTL
+window are lost on every fallback (ADR-0010 §Phase 13 改訂 (g)
+acknowledges this as the cost of the recovery path).
 
 The two ``cursor_set`` calls inside :meth:`sync` (first-sync bootstrap
 + TTL-fallback bootstrap) go through ``SourceService.cursor_set`` — the
@@ -233,21 +254,31 @@ class GoogleWorkspaceConnector:
                     office_settings=office_settings,
                 )
             except PageTokenExpiredError:
-                # ADR-0010 §Phase 13 改訂 (g): stored token expired.
-                # Bootstrap a fresh root and walk forward. The
-                # projection-side dedup on (connector_name, external_id)
-                # absorbs any duplicate yields the fallback emits.
-                cursor = client.get_start_page_token()
-                # Same eager cursor commit as the first-sync path: a
-                # crash mid-fallback should not re-trigger another
-                # bootstrap on the next run.
-                source_service.cursor_set(CURSOR_CHANGES, cursor, sync_started=False)
-                cursor, observed = self._consume_changes(
+                # ADR-0010 §Phase 13 改訂 (g) TTL fallback (Teams
+                # ``_fallback_pass`` 同型). 3 steps:
+                #
+                # 1. WARNING log → operator-visible signal that the
+                #    stored token expired (Phase 13 audit cluster A,
+                #    issue #286).
+                # 2. ``list_files_modified_since`` full-pass over the
+                #    configured window → re-emit files that changed
+                #    during the TTL gap. Skipped when
+                #    ``fallback_window_days == 0`` (operator opt-out).
+                # 3. ``get_start_page_token`` → bootstrap a fresh
+                #    root token and persist it; the next sync resumes
+                #    on the delta path from there.
+                #
+                # The projection's natural-key dedup on
+                # ``(connector_name, external_id)`` absorbs the
+                # steady-state overlap. Permanent-deletes that
+                # occurred during the TTL gap are unavoidably lost
+                # (``files.list`` cannot return deleted files).
+                cursor, observed = self._fallback_full_pass(
                     client=client,
-                    page_token=cursor,
                     source_service=source_service,
                     excludes=excludes,
                     observed=observed,
+                    fallback_window_days=gws_settings.fallback_window_days,
                     content_extraction=content_extraction,
                     office_settings=office_settings,
                 )
@@ -314,6 +345,97 @@ class GoogleWorkspaceConnector:
                 provenance_trust=event.provenance_trust,
             )
             observed += 1
+        return cursor, observed
+
+    def _fallback_full_pass(
+        self,
+        *,
+        client: DriveClient,
+        source_service: Any,
+        excludes: Any,
+        observed: int,
+        fallback_window_days: int,
+        content_extraction: bool,
+        office_settings: OfficeSettings,
+    ) -> tuple[str, int]:
+        """Run the ADR-0010 §Phase 13 改訂 (g) 3-step TTL recovery.
+
+        Called from :meth:`sync` when :class:`PageTokenExpiredError`
+        is raised. The implementation mirrors Teams
+        :meth:`opshub.connectors.teams.fetcher.TeamsFetcher._fallback_pass`
+        — same structural shape, same WARNING-log + full-pass-emit +
+        cursor-refresh ordering — so future maintenance of the
+        delta-cursor recovery contract has one place to read on each
+        side. The cluster A audit (#286) brought them into structural
+        symmetry; ``rg "connector\\..*_list\\.expired"`` confirms the
+        two events live next to each other in observability.
+
+        ``fallback_window_days = 0`` skips step (b) entirely; the
+        connector logs the expiry and jumps straight to bootstrapping
+        a fresh root token. Operators who opted out accept the loss
+        of TTL-gap changes (documented in
+        :class:`GoogleWorkspaceConnectorSettings`).
+        """
+        # Lazy import to keep the module-level cold-start budget tight
+        # (ADR-0001). ``structlog`` / ``get_logger`` is already imported
+        # lazily in :meth:`_maybe_extract_body`; we re-import here so the
+        # helper is self-contained.
+        from datetime import UTC, datetime, timedelta
+
+        from opshub.connectors.google_workspace.mapper import map_drive_item
+        from opshub.core.logging import get_logger
+
+        local_logger = get_logger(__name__)
+        # ``since`` is sanitised by construction — it is a server-side
+        # ISO timestamp, not user-supplied, so no further sanitisation
+        # is required for log emission.
+        since_dt = datetime.now(tz=UTC) - timedelta(days=max(fallback_window_days, 0))
+        since = since_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Step 1: WARNING log (Teams 同型: ``connector.delta.expired``;
+        # Phase 13 Google Workspace event name follows the same
+        # ``connector.<endpoint>.expired`` shape so observability
+        # dashboards can fan out on either connector with one rule).
+        local_logger.warning(
+            "connector.changes_list.expired",
+            connector=self.name,
+            since=since,
+            window_days=fallback_window_days,
+        )
+
+        # Step 2: full-pass emit over the TTL window. Skipped when the
+        # operator opted out (window = 0) — they accept the loss of
+        # TTL-gap changes in exchange for skipping the recovery cost.
+        if fallback_window_days > 0:
+            for item in client.list_files_modified_since(since=since):
+                if self._is_excluded(item, excludes):
+                    continue
+                body = self._maybe_extract_body(
+                    client=client,
+                    item=item,
+                    content_extraction=content_extraction,
+                    office_settings=office_settings,
+                )
+                event = map_drive_item(item, body=body)
+                source_service.observe(
+                    connector_name=self.name,
+                    external_id=event.external_id,
+                    source_type=event.source_type,
+                    title=event.title,
+                    url=event.url,
+                    summary=event.summary,
+                    body=event.body,
+                    provenance_origin=event.provenance_origin,
+                    provenance_trust=event.provenance_trust,
+                )
+                observed += 1
+
+        # Step 3: bootstrap a fresh root token and persist it eagerly.
+        # The eager commit guards against a crash before the next
+        # ``cursor_set`` call (caller's ``cursor_set`` bracket only
+        # fires on the successful path).
+        cursor = client.get_start_page_token()
+        source_service.cursor_set(CURSOR_CHANGES, cursor, sync_started=False)
         return cursor, observed
 
     def _maybe_extract_body(

@@ -542,6 +542,22 @@ class GoogleWorkspaceConnectorSettings(BaseModel):
     cost) so upgrading from G3 → G4 is a no-op until the operator
     opts in.
 
+    ``fallback_window_days`` controls how far back the connector scans
+    when Drive rejects the stored ``startPageToken`` with 404 / 410
+    (ADR-0010 §Phase 13 改訂 (g) TTL fallback). Defaults to ``30`` —
+    long enough to cover a typical vacation / outage window without
+    slurping years of history. Operators with longer outages set this
+    higher (a temporary ``365`` for re-onboarding is the documented
+    pattern). A value of ``0`` disables the full-pass scan entirely —
+    the connector then bootstraps a fresh token via
+    ``changes.getStartPageToken`` without backfilling the TTL gap,
+    meaning any changes that occurred while the token was expired are
+    lost (discouraged but allowed for operators who explicitly opt out
+    of the recovery cost). Mirrors
+    :class:`TeamsConnectorSettings.fallback_window_days` (Phase 11
+    ADR-0010 §改訂 (c)) so the two delta-cursor connectors expose one
+    operator-facing knob.
+
     The Refresh Token lives in the OS keyring under
     ``connector:google_workspace:refresh_token`` per ADR-0014
     §Phase 7 Validation (Phase 13 改訂 で 3 件目の rotation pin として
@@ -554,6 +570,7 @@ class GoogleWorkspaceConnectorSettings(BaseModel):
     client_secret: str = ""
     redirect_uri: str = "http://localhost"
     content_extraction: bool = False
+    fallback_window_days: int = 30
 
 
 class TeamsConnectorSettings(BaseModel):
