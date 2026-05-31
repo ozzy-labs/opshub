@@ -749,3 +749,241 @@ def test_phase_12_h5_announcement_draft_references_adr_0016_decision_l() -> None
     assert "ADR-0016" in text and "(l)" in text, (
         f"{path} must reference ADR-0016 §決定 (l) (Draft 系統一方針 / text-only rationale)"
     )
+
+
+# ---------------------------------------------------------------------------
+# 9. Phase 12 H3 semantic pins (analysis skills)
+# ---------------------------------------------------------------------------
+#
+# Phase 12 H3 (docs/phase-12-plan.md §3 H3) adds two analysis skills:
+# ``external-brief`` (paired with ``personal-brief``) and
+# ``decision-rationale``. These pins enforce:
+# - presence + frontmatter + body budget + boundary + security scan
+#   (re-using the generic invariants by extending _REQUIRED_SKILLS via
+#   a parametrised set below)
+# - per-skill MCP dispatch pin: each analysis skill mentions the MCP
+#   tool names it depends on verbatim so the host router can dispatch
+# - tone-pair pin: ``external-brief`` mentions ``personal-brief`` pair
+# - HITL boundary pin: neither skill mentions write tools (analysis
+#   skills are read-only by design; the only durable-state write the
+#   plan allows from these skills is none)
+
+_PHASE_12_H3_ANALYSIS_SKILLS: tuple[str, ...] = (
+    "external-brief",
+    "decision-rationale",
+)
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H3_ANALYSIS_SKILLS)
+def test_phase12_h3_skill_spec_exists(name: str) -> None:
+    """Phase 12 H3 analysis skills must exist on disk.
+
+    Mirrors ``test_skill_spec_exists`` but pinned to the H3 set so a
+    regression that drops one of the new SKILL.md files is caught
+    even if ``_REQUIRED_SKILLS`` has not yet been widened to include
+    the H3 additions (the H6 closeout PR will eventually unify them).
+    """
+    path = _SKILLS_DIR / name / "SKILL.md"
+    assert path.is_file(), f"missing Phase 12 H3 analysis skill spec: {path}"
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H3_ANALYSIS_SKILLS)
+def test_phase12_h3_skill_frontmatter_has_name_and_description(name: str) -> None:
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    frontmatter, body = parse_frontmatter(text)
+
+    assert frontmatter.get("name") == name, (
+        f"{path} frontmatter ``name`` must equal directory name; got {frontmatter.get('name')!r}"
+    )
+    assert frontmatter.get("description"), (
+        f"{path} frontmatter must include a non-empty ``description``"
+    )
+    assert body.strip(), f"{path} must have a non-empty body"
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H3_ANALYSIS_SKILLS)
+def test_phase12_h3_skill_body_within_budget(name: str) -> None:
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    _, body = parse_frontmatter(text)
+    words = body.split()
+    assert len(words) <= _BODY_WORD_CEILING, (
+        f"{path} body has {len(words)} words; "
+        f"≤{_BODY_WORD_CEILING} expected (Phase 10 plan §3-D 5k tokens budget)"
+    )
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H3_ANALYSIS_SKILLS)
+def test_phase12_h3_skill_does_not_import_opshub_module(name: str) -> None:
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+
+    for pattern in _FORBIDDEN_IMPORT_PATTERNS:
+        match = pattern.search(text)
+        assert match is None, (
+            f"{path} contains direct opshub import ({match.group(0)!r}); "
+            f"skills must go through MCP tools or CLI (ADR-0004 §(b))"
+        )
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H3_ANALYSIS_SKILLS)
+def test_phase12_h3_skill_passes_security_scan(name: str) -> None:
+    path = _SKILLS_DIR / name / "SKILL.md"
+    result = scan_skill_file(path)
+    assert result.ok, f"{path} failed security scan:\n" + "\n".join(
+        f"  {f.category.value} {f.rule_id} L{f.line_number}: {f.snippet}" for f in result.findings
+    )
+
+
+# Per-skill MCP dispatch pin for H3 analysis skills. Each skill MUST
+# reference its declared MCP tools by literal name so the host router
+# can verify the SKILL.md is in sync with opshub's MCP surface
+# (Phase 12 plan §3 H3 DoD).
+
+_PHASE_12_H3_REQUIRED_MCP_TOOLS: dict[str, tuple[str, ...]] = {
+    # external-brief: task.list (state=completed, updated_after) +
+    # decision.list (recorded_after) + brief (external tone)
+    "external-brief": ("task.list", "decision.list", "brief"),
+    # decision-rationale: decision.list (filter by topic) +
+    # graph.trace (decision → source / proposal / prior decision) +
+    # recall.search (related context)
+    "decision-rationale": ("decision.list", "graph.trace", "recall.search"),
+}
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H3_ANALYSIS_SKILLS)
+def test_phase12_h3_skill_mentions_required_mcp_tools(name: str) -> None:
+    """Phase 12 H3 analysis skills must mention required MCP tools by name.
+
+    The per-skill MCP dispatch pin enforces that each new skill's
+    body references the literal MCP tool names declared in the H3
+    plan (``docs/phase-12-plan.md`` §3 H3). A regression that swaps
+    in a different tool (or drops one) is caught immediately.
+    """
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    required = _PHASE_12_H3_REQUIRED_MCP_TOOLS[name]
+    missing = [tool for tool in required if tool not in text]
+    assert not missing, (
+        f"{path} must reference Phase 12 H3 MCP tools {required!r}; "
+        f"missing {missing!r} (docs/phase-12-plan.md §3 H3)"
+    )
+
+
+def test_phase12_h3_external_brief_uses_time_filter_arguments() -> None:
+    """``external-brief`` must reference the physical-column time filter args.
+
+    The Phase 12 H3 plan pins task.list ``updated_after`` and
+    decision.list ``recorded_after`` as the surface for the
+    ``state=completed`` / "this week" combination (the projection
+    has no ``completed_at`` column, so this is the documented
+    approximation — §3 H3 note). A regression that omits the time
+    filter literals would silently dispatch unfiltered ``task.list``
+    calls and blow the context window.
+    """
+    path = _SKILLS_DIR / "external-brief" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    for arg in ("updated_after", "recorded_after"):
+        assert arg in text, (
+            f"{path} must reference time-filter argument {arg!r} "
+            f"(Phase 12 H1 ADR-0022 改訂、Phase 12 H3 §3 H3 note on "
+            f"completed_at approximation)"
+        )
+
+
+def test_phase12_h3_external_brief_advertises_personal_brief_pair() -> None:
+    """``external-brief`` description must advertise pairing with ``personal-brief``.
+
+    Phase 12 H3 plan (§3 H3) explicitly pins external-brief as the
+    "外向き" pair of "自分向け" ``personal-brief``. The host router
+    relies on the description hint to disambiguate when the user
+    says "まとめて" (which could fire either skill). A regression
+    that drops the pair reference would collapse the two skills'
+    routing into a single ambiguous trigger.
+    """
+    path = _SKILLS_DIR / "external-brief" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    frontmatter, _body = parse_frontmatter(text)
+    description = str(frontmatter.get("description", ""))
+    assert "personal-brief" in description, (
+        f"{path} description must mention pairing with ``personal-brief`` "
+        f"(Phase 12 H3 plan §3 H3 pair structure). Description: {description!r}"
+    )
+
+
+def test_phase12_h3_decision_rationale_uses_graph_trace_depth_hint() -> None:
+    """``decision-rationale`` must reference graph.trace depth semantics.
+
+    Phase 12 H3 plan binds decision-rationale to ``graph.trace`` for
+    backward provenance walks (decision → source / proposal / prior
+    decision). ADR-0017 §(e) caps depth at 10 with default 3. The
+    skill body should reference depth so the host doesn't blindly
+    use default-3 in cases where the chain is deeper.
+    """
+    path = _SKILLS_DIR / "decision-rationale" / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+    assert "depth" in text, (
+        f"{path} must reference graph.trace ``depth`` semantics (ADR-0017 §(e), default 3, max 10)"
+    )
+
+
+@pytest.mark.parametrize("name", _PHASE_12_H3_ANALYSIS_SKILLS)
+def test_phase12_h3_skill_is_read_only(name: str) -> None:
+    """Phase 12 H3 analysis skills must not reference write MCP tools.
+
+    Both ``external-brief`` and ``decision-rationale`` are read-only
+    analysis skills (no persist, no proposal, no task creation).
+    The Phase 12 H3 plan explicitly puts them under the "read 自律
+    OK (10 件)" bucket alongside personal-brief / next-actions etc.
+    A regression that introduces a write-tool reference (task.create
+    / inbox.add / connector.sync / propose.apply / propose.generate)
+    in the body or description would cross the HITL boundary and is
+    explicitly out of scope per ADR-0016 改訂 §決定 (l).
+
+    We allow the tokens to appear inside a "やらない" / "scope 外"
+    disclaimer prefixed by a leading negation (e.g. "は本 skill では
+    呼ばない"). The check is intentionally heuristic: presence of
+    the literal write tool name OUTSIDE such a disclaimer is the
+    regression we care about.
+    """
+    path = _SKILLS_DIR / name / "SKILL.md"
+    text = path.read_text(encoding="utf-8")
+
+    write_tools = (
+        "task.create",
+        "inbox.add",
+        "connector.sync",
+        "propose.apply",
+        "propose.generate",
+    )
+    for tool in write_tools:
+        for raw_line in text.splitlines():
+            if tool not in raw_line:
+                continue
+            # Allow disclaimer lines that explicitly mark the tool
+            # as out-of-scope. The keywords cover the standard
+            # phrasing used across opshub skills.
+            line = raw_line.strip()
+            if any(
+                marker in line
+                for marker in (
+                    "呼ばない",
+                    "は本 skill",
+                    "本 skill では",
+                    "本 skill scope 外",
+                    "scope 外",
+                    "別 skill",
+                    "別経路",
+                    "別操作",
+                    "write 経路",
+                    "write tool",
+                )
+            ):
+                continue
+            raise AssertionError(
+                f"{path} references write MCP tool {tool!r} outside a"
+                " disclaimer line. Phase 12 H3 analysis skills are"
+                " strictly read-only (ADR-0016 改訂 §決定 (l))."
+                f" Offending line: {line!r}"
+            )
