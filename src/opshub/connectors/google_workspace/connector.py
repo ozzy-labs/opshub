@@ -1,4 +1,4 @@
-"""Google Workspace :class:`Connector` implementation (Phase 13 G3).
+"""Google Workspace :class:`Connector` implementation (Phase 13 G3 + G4).
 
 Composes :class:`GoogleWorkspaceAuth` + :class:`DriveClient` +
 :func:`map_drive_item` into the
@@ -27,10 +27,37 @@ TTL fallback (when Drive rejects the stored ``startPageToken`` with
    on ``(connector_name, external_id)`` absorbs any duplicate yields
    so the fallback is idempotent.
 
-Per-endpoint ``content_extraction`` opt-in is **deferred to G4** — G3
-ships ``body=None`` on every event. The settings flag exists in
-:class:`GoogleWorkspaceConnectorSettings` but the connector does not
-read it yet.
+``content_extraction`` opt-in (Phase 13 G4 #278, ADR-0019 §(b') + ADR-0025)
+--------------------------------------------------------------------------
+
+When ``[connectors.google_workspace] content_extraction = true`` the
+connector calls ``files.export(fileId, mimeType=<MS Office mediatype>)``
+on the three Workspace native source_types (``google_doc`` /
+``google_slides`` / ``google_sheets``) and routes the exported bytes
+through :func:`opshub.core.document_extract.extract_workspace_export`.
+The resulting markdown becomes the
+:class:`~opshub.domain.events.source.SourceObserved` body. Non-native
+items (the ``google_workspace_file`` catch-all) keep ``body=None``
+regardless of the flag — ``files.export`` would return 403
+``fileNotExportable`` for them. Default ``False`` keeps the G3 metadata
+-only behaviour bit-for-bit so upgrading is a no-op until the operator
+opts in.
+
+The :class:`OfficeSettings` overrides (``[office] max_file_size_mb`` /
+``[office] max_chars`` / ``[office.excel] max_cells_*``) propagate
+through to :func:`extract_workspace_export` so a single operator
+override governs Box Drive / OneDrive / Google Workspace bodies in
+lockstep (ADR-0025 §決定 (b)/(e) two-key composition). Box Drive's
+:class:`BoxDriveScanner` and OneDrive's local-FS scanner already use
+the same propagation; this connector follows that precedent so
+operators see one knob across all three Office paths.
+
+Failure mode: ``files.export`` rejections (file not exportable, quota,
+transient 5xx) collapse into ``body=None`` + a structlog warning so a
+single broken export never blocks the sync (ADR-0025 §決定 (c)
+fail-safe contract). The mapper still emits the
+:class:`SourceObserved` with the file's metadata so the projection
+retains the row (ADR-0020 retain-everything).
 
 ADR-0005 compliance
 -------------------
@@ -43,7 +70,7 @@ only exception detail surfaced is the exception type name (e.g.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from opshub.connectors.base import SyncResult
 from opshub.connectors.google_workspace.client import PageTokenExpiredError
@@ -52,9 +79,32 @@ from opshub.core.errors import ConfigError, ConnectorFailedError
 
 if TYPE_CHECKING:
     from opshub.connectors.context import ConnectorContext
+    from opshub.connectors.google_workspace.client import DriveClient, RawDriveItem
+    from opshub.core.config import OfficeSettings
 
 
 __all__ = ["GoogleWorkspaceConnector"]
+
+
+#: Export-target MS Office mediatype per Google Workspace source_type.
+#: ADR-0025 §決定 (j) §不変条件 2 fixes the three pairings (Doc →
+#: ``.docx``, Slides → ``.pptx``, Sheets → ``.xlsx``); the choice of
+#: *export target* mediatype is the connector's responsibility per the
+#: G2 / G3 / G4 responsibility split (core/document_extract owns the
+#: intake side, the connector owns the outbound Drive API parameter).
+#:
+#: Keyed by the three string-valued ``source_type`` discriminators
+#: published from :mod:`opshub.core.document_extract`; the strings
+#: live here as literals (not imports) so the module-level lookup
+#: stays import-free and the ADR-0001 cold-start budget pays nothing
+#: for this lookup table on the ``opshub --help`` path. The values
+#: are the standard Open XML media types Drive's ``files.export``
+#: endpoint documents.
+_EXPORT_MEDIATYPE_BY_SOURCE_TYPE: Final[dict[str, str]] = {
+    "google_doc": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "google_slides": ("application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+    "google_sheets": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
 
 
 class GoogleWorkspaceConnector:
@@ -86,7 +136,6 @@ class GoogleWorkspaceConnector:
         # callback, never the ``opshub --help`` cold path.
         from opshub.connectors.google_workspace.auth import GoogleWorkspaceAuth
         from opshub.connectors.google_workspace.client import DriveClient
-        from opshub.connectors.google_workspace.mapper import map_drive_item
         from opshub.core.config import OpsHubSettings
         from opshub.core.excludes import load_excludes
 
@@ -131,6 +180,15 @@ class GoogleWorkspaceConnector:
         cursor: str | None = context.cursor_value
         observed = 0
 
+        # Phase 13 G4 (#278): pre-resolve the content-extraction flag
+        # + ``OfficeSettings`` once per sync so the per-item loop only
+        # does cheap reads. Mirrors the box_drive precedent
+        # (``connector.py:245,252``) where the scanner constructor
+        # receives the values up front; we keep them on locals because
+        # this connector has no scanner middle layer.
+        content_extraction: bool = bool(gws_settings.content_extraction)
+        office_settings = settings.office
+
         try:
             if cursor is None:
                 # First sync: bootstrap. The token Google returns covers
@@ -150,24 +208,15 @@ class GoogleWorkspaceConnector:
                 source_service.cursor_set(CURSOR_CHANGES, cursor, sync_started=False)
 
             try:
-                iterator = client.fetch_changes(page_token=cursor)
-                for item, advanced_cursor in iterator:
-                    cursor = advanced_cursor
-                    if self._is_excluded(item, excludes):
-                        continue
-                    event = map_drive_item(item)
-                    source_service.observe(
-                        connector_name=self.name,
-                        external_id=event.external_id,
-                        source_type=event.source_type,
-                        title=event.title,
-                        url=event.url,
-                        summary=event.summary,
-                        body=event.body,
-                        provenance_origin=event.provenance_origin,
-                        provenance_trust=event.provenance_trust,
-                    )
-                    observed += 1
+                cursor, observed = self._consume_changes(
+                    client=client,
+                    page_token=cursor,
+                    source_service=source_service,
+                    excludes=excludes,
+                    observed=observed,
+                    content_extraction=content_extraction,
+                    office_settings=office_settings,
+                )
             except PageTokenExpiredError:
                 # ADR-0010 §Phase 13 改訂 (g): stored token expired.
                 # Bootstrap a fresh root and walk forward. The
@@ -178,24 +227,15 @@ class GoogleWorkspaceConnector:
                 # crash mid-fallback should not re-trigger another
                 # bootstrap on the next run.
                 source_service.cursor_set(CURSOR_CHANGES, cursor, sync_started=False)
-                iterator = client.fetch_changes(page_token=cursor)
-                for item, advanced_cursor in iterator:
-                    cursor = advanced_cursor
-                    if self._is_excluded(item, excludes):
-                        continue
-                    event = map_drive_item(item)
-                    source_service.observe(
-                        connector_name=self.name,
-                        external_id=event.external_id,
-                        source_type=event.source_type,
-                        title=event.title,
-                        url=event.url,
-                        summary=event.summary,
-                        body=event.body,
-                        provenance_origin=event.provenance_origin,
-                        provenance_trust=event.provenance_trust,
-                    )
-                    observed += 1
+                cursor, observed = self._consume_changes(
+                    client=client,
+                    page_token=cursor,
+                    source_service=source_service,
+                    excludes=excludes,
+                    observed=observed,
+                    content_extraction=content_extraction,
+                    office_settings=office_settings,
+                )
         except ConnectorFailedError:
             # Bubble up so the CLI driver records a sanitised
             # ConnectorSyncFailed event. The cursor stays at whatever
@@ -207,6 +247,170 @@ class GoogleWorkspaceConnector:
             client.close()
 
         return SyncResult(observed_count=observed, new_cursor=cursor)
+
+    def _consume_changes(
+        self,
+        *,
+        client: DriveClient,
+        page_token: str,
+        source_service: Any,
+        excludes: Any,
+        observed: int,
+        content_extraction: bool,
+        office_settings: OfficeSettings,
+    ) -> tuple[str, int]:
+        """Drain one ``fetch_changes`` iterator into ``source_service``.
+
+        Shared by the normal-sync path and the
+        :class:`PageTokenExpiredError` fallback path so both go through
+        the same content-extraction wiring (G4 #278). Returns the
+        ``(latest_cursor, observed_count)`` pair so the caller can
+        thread them into :class:`SyncResult`.
+        """
+        # Lazy import inside the helper keeps the import surface
+        # identical to the pre-G4 ``sync()`` body (the mapper module
+        # was already imported lazily; we re-do it here so the helper
+        # is self-contained for unit tests that only exercise this
+        # method via the public ``sync``).
+        from opshub.connectors.google_workspace.mapper import map_drive_item
+
+        cursor = page_token
+        iterator = client.fetch_changes(page_token=page_token)
+        for item, advanced_cursor in iterator:
+            cursor = advanced_cursor
+            if self._is_excluded(item, excludes):
+                continue
+            body = self._maybe_extract_body(
+                client=client,
+                item=item,
+                content_extraction=content_extraction,
+                office_settings=office_settings,
+            )
+            event = map_drive_item(item, body=body)
+            source_service.observe(
+                connector_name=self.name,
+                external_id=event.external_id,
+                source_type=event.source_type,
+                title=event.title,
+                url=event.url,
+                summary=event.summary,
+                body=event.body,
+                provenance_origin=event.provenance_origin,
+                provenance_trust=event.provenance_trust,
+            )
+            observed += 1
+        return cursor, observed
+
+    def _maybe_extract_body(
+        self,
+        *,
+        client: DriveClient,
+        item: RawDriveItem,
+        content_extraction: bool,
+        office_settings: OfficeSettings,
+    ) -> str | None:
+        """Fetch + extract the Workspace body for ``item`` when opted in.
+
+        Returns ``None`` when:
+
+        * ``content_extraction=False`` (operator did not opt in;
+          Phase 13 G3 metadata-only behaviour preserved bit-for-bit).
+        * ``item.mime_type`` is not one of the three Workspace native
+          mimeTypes (catch-all ``google_workspace_file`` — Drive's
+          ``files.export`` would reject these with 403
+          ``fileNotExportable``).
+        * ``item.removed`` is set (Drive does not export deleted files
+          and the metadata-only ``SourceObserved`` is the right shape
+          for permanent-delete projection rows; ADR-0020
+          retain-everything via the metadata-only path).
+        * ``files.export`` or
+          :func:`opshub.core.document_extract.extract_workspace_export`
+          surfaces any failure — the ADR-0025 §決定 (c) fail-safe
+          contract collapses all of them into ``body=None`` plus a
+          structlog warning so a single broken Google Doc never
+          blocks the rest of the sync.
+
+        The Office cap settings (``[office] max_file_size_mb`` /
+        ``max_chars`` / ``[office.excel] max_cells_*``) propagate
+        through to :func:`extract_workspace_export` so the
+        operator-facing knobs work in lockstep with Box Drive +
+        OneDrive (Phase 11 audit Cluster B two-key composition,
+        ADR-0025 §決定 (g)).
+        """
+        if not content_extraction:
+            return None
+        if item.removed:
+            return None
+
+        # Lazy import inside the helper so the
+        # ``opshub.core.document_extract`` module (with its lazy
+        # markitdown indirection) only enters memory when extraction
+        # is actually requested. Keeps the M6 cold-start budget intact
+        # on the default-off path.
+        from opshub.core.document_extract import (
+            GOOGLE_WORKSPACE_MIMETYPE_TO_SOURCE_TYPE,
+            extract_workspace_export,
+        )
+
+        source_type = GOOGLE_WORKSPACE_MIMETYPE_TO_SOURCE_TYPE.get(item.mime_type)
+        # The catch-all ``google_workspace_file`` source_type lives
+        # *outside* the canonical mimeType table so we short-circuit
+        # here without spending an HTTP round-trip. Same shape as the
+        # box_drive scanner's "non-Office file → skip extract_document"
+        # branch (``scanner.py:550``).
+        if source_type is None:
+            return None
+        export_mediatype = _EXPORT_MEDIATYPE_BY_SOURCE_TYPE[source_type]
+
+        # Sanitised + structured logging is the only escape hatch for
+        # surfacing failures; tokens never appear in the message
+        # (ADR-0005 / ADR-0020 §(e)). Reuse the existing per-module
+        # logger factory.
+        from opshub.core.logging import get_logger
+        from opshub.core.sanitise import sanitise_error_message
+
+        local_logger = get_logger(__name__)
+
+        try:
+            export_bytes = client.export_file(
+                file_id=item.file_id,
+                mime_type=export_mediatype,
+            )
+        except ConnectorFailedError as exc:
+            # ``files.export`` failed (403 fileNotExportable, quota,
+            # transient 5xx that retried-and-still-failed, ...). Fall
+            # back to metadata-only — ADR-0025 §決定 (c) fail-safe.
+            local_logger.warning(
+                "google_workspace.export_failed",
+                file_id=item.file_id,
+                source_type=source_type,
+                reason=sanitise_error_message(f"{type(exc).__name__}: {exc}"),
+            )
+            return None
+
+        result = extract_workspace_export(
+            export_bytes,
+            source_type,
+            max_file_bytes=office_settings.max_file_size_mb * 1024 * 1024,
+            max_chars=office_settings.max_chars,
+            max_cells_per_sheet=office_settings.excel.max_cells_per_sheet,
+            max_cells_per_workbook=office_settings.excel.max_cells_per_workbook,
+        )
+        # ``extract_workspace_export`` never raises (ADR-0025 §決定 (c)
+        # fail-safe contract); ``result.body`` is ``None`` for
+        # size-cap / corrupt-export skips, the empty string for
+        # legitimately empty Docs, or the markdown otherwise. We
+        # forward all three verbatim — the empty string lets the
+        # downstream consumer distinguish "successfully extracted a
+        # zero-byte body" from "extraction was skipped or failed".
+        if result.skip_reason is not None:
+            local_logger.warning(
+                "google_workspace.extract_skipped",
+                file_id=item.file_id,
+                source_type=source_type,
+                skip_reason=result.skip_reason,
+            )
+        return result.body
 
     # ----- helpers -------------------------------------------------------
 

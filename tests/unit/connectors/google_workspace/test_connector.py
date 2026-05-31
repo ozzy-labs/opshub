@@ -112,13 +112,28 @@ def _patch_settings(
     client_secret: str = "fake-secret",
     redirect_uri: str = "http://localhost",
     content_extraction: bool = False,
+    max_file_size_mb: int = 50,
+    max_chars: int = 500_000,
+    max_cells_per_sheet: int = 10_000,
+    max_cells_per_workbook: int = 50_000,
 ) -> None:
-    """Stub :class:`OpsHubSettings` for the connector's lazy import."""
+    """Stub :class:`OpsHubSettings` for the connector's lazy import.
+
+    Sets real numeric values on ``settings.office`` so the connector's
+    ``cfg.max_file_size_mb * 1024 * 1024`` arithmetic produces an
+    ``int`` rather than a ``MagicMock``. Defaults match
+    :class:`OfficeSettings` so tests that do not override them see
+    the production cap surface.
+    """
     fake_settings = MagicMock()
     fake_settings.connectors.google_workspace.client_id = client_id
     fake_settings.connectors.google_workspace.client_secret = client_secret
     fake_settings.connectors.google_workspace.redirect_uri = redirect_uri
     fake_settings.connectors.google_workspace.content_extraction = content_extraction
+    fake_settings.office.max_file_size_mb = max_file_size_mb
+    fake_settings.office.max_chars = max_chars
+    fake_settings.office.excel.max_cells_per_sheet = max_cells_per_sheet
+    fake_settings.office.excel.max_cells_per_workbook = max_cells_per_workbook
     monkeypatch.setattr("opshub.core.config.OpsHubSettings", lambda: fake_settings)
 
 
@@ -130,18 +145,27 @@ def _patch_excludes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, body: st
     monkeypatch.setattr("opshub.core.excludes.default_config_dir", lambda: cfg_dir)
 
 
-def _raw(file_id: str, *, name: str | None = None) -> RawDriveItem:
+def _raw(
+    file_id: str,
+    *,
+    name: str | None = None,
+    mime_type: str = "application/vnd.google-apps.document",
+    owner_email: str = "alice@example.com",
+) -> RawDriveItem:
     return RawDriveItem(
         file_id=file_id,
         removed=False,
         trashed=False,
         name=name or f"Doc-{file_id}",
-        mime_type="application/vnd.google-apps.document",
+        mime_type=mime_type,
         modified_time_iso="2026-05-31T12:00:00Z",
         web_view_link=f"https://drive.google.com/file/d/{file_id}/view",
-        owner_email="alice@example.com",
+        owner_email=owner_email,
         owner_display_name="Alice",
         is_shared_with_me=False,
+        shared=False,
+        last_modifying_user_email="",
+        last_modifying_user_display_name="",
         drive_id="",
         raw={},
     )
@@ -344,6 +368,9 @@ def test_sync_excluded_items_advance_cursor_but_are_not_observed(
         owner_email="bob@example.com",
         owner_display_name="Bob",
         is_shared_with_me=False,
+        shared=False,
+        last_modifying_user_email="",
+        last_modifying_user_display_name="",
         drive_id="",
         raw={},
     )
@@ -360,3 +387,393 @@ def test_sync_excluded_items_advance_cursor_but_are_not_observed(
     # Cursor still advanced past the excluded item.
     assert result.new_cursor == "final-T"
     assert result.observed_count == 1
+
+
+# ----- G4 content_extraction wiring (#278) -------------------------------
+
+
+def test_sync_content_extraction_off_keeps_body_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``content_extraction = false`` (default) → body stays ``None``.
+
+    Phase 13 G3 metadata-only invariant preserved bit-for-bit when
+    the operator does not opt in. The connector MUST NOT call
+    ``files.export`` on the default-off path — that would be a
+    silent change in network surface for upgrading operators.
+    """
+    _patch_settings(monkeypatch, content_extraction=False)
+    _patch_excludes(monkeypatch, tmp_path)
+    fake_client = _patch_auth_and_client(
+        monkeypatch,
+        pages=[[(_raw("F1"), "next-T")]],
+    )
+    service = _RecordingSourceService()
+
+    GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
+
+    assert [c["body"] for c in service.calls] == [None]
+    fake_client.export_file.assert_not_called()
+
+
+def test_sync_content_extraction_on_calls_export_and_threads_body(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``content_extraction = true`` routes Google Docs through ``files.export`` + extract.
+
+    Verifies the full G4 wiring round-trip:
+
+    * ``files.export(fileId, mimeType=<docx mediatype>)`` is invoked.
+    * The exported bytes flow into ``extract_workspace_export``.
+    * The extractor's body lands on the resulting
+      :class:`SourceObserved`.
+    """
+    _patch_settings(monkeypatch, content_extraction=True)
+    _patch_excludes(monkeypatch, tmp_path)
+    fake_client = _patch_auth_and_client(
+        monkeypatch,
+        pages=[[(_raw("F1"), "next-T")]],
+    )
+    fake_client.export_file.return_value = b"fake-docx-bytes"
+
+    from opshub.core.document_extract import ExtractResult
+
+    monkeypatch.setattr(
+        "opshub.core.document_extract.extract_workspace_export",
+        MagicMock(
+            return_value=ExtractResult(
+                body="# extracted body",
+                truncated=False,
+                skip_reason=None,
+                source_type="google_doc",
+            )
+        ),
+    )
+    service = _RecordingSourceService()
+
+    GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
+
+    fake_client.export_file.assert_called_once_with(
+        file_id="F1",
+        mime_type=("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    )
+    assert [c["body"] for c in service.calls] == ["# extracted body"]
+
+
+def test_sync_content_extraction_routes_sheets_through_xlsx_mediatype(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Google Sheets → ``files.export(mimeType=<xlsx>)`` per ADR-0025 §決定 (j) Table 1."""
+    _patch_settings(monkeypatch, content_extraction=True)
+    _patch_excludes(monkeypatch, tmp_path)
+    fake_client = _patch_auth_and_client(
+        monkeypatch,
+        pages=[
+            [
+                (
+                    _raw("S1", mime_type="application/vnd.google-apps.spreadsheet"),
+                    "next-T",
+                )
+            ]
+        ],
+    )
+    fake_client.export_file.return_value = b"fake-xlsx-bytes"
+
+    from opshub.core.document_extract import ExtractResult
+
+    monkeypatch.setattr(
+        "opshub.core.document_extract.extract_workspace_export",
+        MagicMock(
+            return_value=ExtractResult(
+                body="| col |",
+                truncated=False,
+                skip_reason=None,
+                source_type="google_sheets",
+            )
+        ),
+    )
+    service = _RecordingSourceService()
+
+    GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
+
+    fake_client.export_file.assert_called_once_with(
+        file_id="S1",
+        mime_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    )
+
+
+def test_sync_content_extraction_routes_slides_through_pptx_mediatype(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Google Slides → ``files.export(mimeType=<pptx>)`` per ADR-0025 §決定 (j) Table 1."""
+    _patch_settings(monkeypatch, content_extraction=True)
+    _patch_excludes(monkeypatch, tmp_path)
+    fake_client = _patch_auth_and_client(
+        monkeypatch,
+        pages=[
+            [
+                (
+                    _raw("P1", mime_type="application/vnd.google-apps.presentation"),
+                    "next-T",
+                )
+            ]
+        ],
+    )
+    fake_client.export_file.return_value = b"fake-pptx-bytes"
+
+    from opshub.core.document_extract import ExtractResult
+
+    monkeypatch.setattr(
+        "opshub.core.document_extract.extract_workspace_export",
+        MagicMock(
+            return_value=ExtractResult(
+                body="# slide 1",
+                truncated=False,
+                skip_reason=None,
+                source_type="google_slides",
+            )
+        ),
+    )
+    service = _RecordingSourceService()
+
+    GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
+
+    fake_client.export_file.assert_called_once_with(
+        file_id="P1",
+        mime_type=("application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+    )
+
+
+def test_sync_content_extraction_skips_non_workspace_mimetypes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Non-native types (PDFs, uploads, folders) skip ``files.export`` entirely.
+
+    Drive returns 403 ``fileNotExportable`` for these; the connector
+    short-circuits on the canonical mimeType lookup before any HTTP
+    round-trip, mirroring the box_drive scanner's "non-Office
+    extension → skip" branch.
+    """
+    _patch_settings(monkeypatch, content_extraction=True)
+    _patch_excludes(monkeypatch, tmp_path)
+    fake_client = _patch_auth_and_client(
+        monkeypatch,
+        pages=[[(_raw("PDF1", mime_type="application/pdf"), "next-T")]],
+    )
+    service = _RecordingSourceService()
+
+    GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
+
+    fake_client.export_file.assert_not_called()
+    assert [c["body"] for c in service.calls] == [None]
+    # The source is still observed (ADR-0020 retain-everything).
+    assert [c["external_id"] for c in service.calls] == ["PDF1"]
+
+
+def test_sync_content_extraction_export_failure_falls_back_to_metadata_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A failed ``files.export`` collapses to ``body=None`` rather than aborting the sync.
+
+    ADR-0025 §決定 (c) fail-safe contract: a single broken export
+    must not block the rest of the sync. The connector logs the
+    failure and continues; the projection still receives the metadata
+    via the normal :class:`SourceObserved` path.
+    """
+    _patch_settings(monkeypatch, content_extraction=True)
+    _patch_excludes(monkeypatch, tmp_path)
+    fake_client = _patch_auth_and_client(
+        monkeypatch,
+        pages=[[(_raw("F1"), "next-T"), (_raw("F2"), "final-T")]],
+    )
+
+    from opshub.core.errors import ConnectorFailedError
+
+    fake_client.export_file.side_effect = [
+        ConnectorFailedError("export failed for F1"),
+        b"fake-docx-bytes",
+    ]
+
+    from opshub.core.document_extract import ExtractResult
+
+    monkeypatch.setattr(
+        "opshub.core.document_extract.extract_workspace_export",
+        MagicMock(
+            return_value=ExtractResult(
+                body="# F2 body",
+                truncated=False,
+                skip_reason=None,
+                source_type="google_doc",
+            )
+        ),
+    )
+    service = _RecordingSourceService()
+
+    result = GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
+
+    assert result.observed_count == 2
+    assert [c["external_id"] for c in service.calls] == ["F1", "F2"]
+    # F1 fell back to ``body=None``; F2 carried the extracted body.
+    assert [c["body"] for c in service.calls] == [None, "# F2 body"]
+
+
+def test_sync_content_extraction_skips_removed_items(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Removed (permanent-delete) items never reach ``files.export``.
+
+    Drive cannot export a deleted file; the metadata-only path is the
+    right shape for the ``[removed: <fileId>]`` projection row
+    (ADR-0020 retain-everything via metadata).
+    """
+    _patch_settings(monkeypatch, content_extraction=True)
+    _patch_excludes(monkeypatch, tmp_path)
+    removed_item = RawDriveItem(
+        file_id="DEL1",
+        removed=True,
+        trashed=False,
+        name="",
+        mime_type="application/vnd.google-apps.document",
+        modified_time_iso="2026-05-31T12:00:00Z",
+        web_view_link="",
+        owner_email="",
+        owner_display_name="",
+        is_shared_with_me=False,
+        shared=False,
+        last_modifying_user_email="",
+        last_modifying_user_display_name="",
+        drive_id="",
+        raw={},
+    )
+    fake_client = _patch_auth_and_client(
+        monkeypatch,
+        pages=[[(removed_item, "next-T")]],
+    )
+    service = _RecordingSourceService()
+
+    GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
+
+    fake_client.export_file.assert_not_called()
+    assert [c["body"] for c in service.calls] == [None]
+
+
+def test_sync_content_extraction_skip_reason_does_not_block_event(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When ``extract_workspace_export`` returns ``skip_reason`` (size cap, corrupt),
+    the connector keeps the event with ``body=None``.
+
+    The mapper still emits :class:`SourceObserved` so the projection
+    row + metadata are retained (ADR-0025 §決定 (c) fail-safe +
+    ADR-0020 retain-everything).
+    """
+    _patch_settings(monkeypatch, content_extraction=True)
+    _patch_excludes(monkeypatch, tmp_path)
+    fake_client = _patch_auth_and_client(
+        monkeypatch,
+        pages=[[(_raw("BIG"), "next-T")]],
+    )
+    fake_client.export_file.return_value = b"x" * 200
+
+    from opshub.core.document_extract import ExtractResult
+
+    monkeypatch.setattr(
+        "opshub.core.document_extract.extract_workspace_export",
+        MagicMock(
+            return_value=ExtractResult(
+                body=None,
+                truncated=False,
+                skip_reason="file too large",
+                source_type="google_doc",
+            )
+        ),
+    )
+    service = _RecordingSourceService()
+
+    result = GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
+
+    assert result.observed_count == 1
+    assert [c["body"] for c in service.calls] == [None]
+
+
+def test_sync_content_extraction_propagates_office_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``[office]`` overrides reach :func:`extract_workspace_export` as kwargs.
+
+    Phase 11 audit Cluster B two-key composition (ADR-0025 §決定
+    (g)): a single operator override governs Box Drive / OneDrive /
+    Google Workspace bodies in lockstep. The pin asserts the
+    cap arithmetic (MB → bytes) is correct and every cap is
+    forwarded — silent drift here would defeat the unified-knob
+    promise.
+    """
+    _patch_settings(
+        monkeypatch,
+        content_extraction=True,
+        max_file_size_mb=100,
+        max_chars=1_000_000,
+        max_cells_per_sheet=20_000,
+        max_cells_per_workbook=80_000,
+    )
+    _patch_excludes(monkeypatch, tmp_path)
+    fake_client = _patch_auth_and_client(
+        monkeypatch,
+        pages=[[(_raw("F1"), "next-T")]],
+    )
+    fake_client.export_file.return_value = b"fake-docx-bytes"
+
+    from opshub.core.document_extract import ExtractResult
+
+    fake_extract = MagicMock(
+        return_value=ExtractResult(
+            body="# body",
+            truncated=False,
+            skip_reason=None,
+            source_type="google_doc",
+        )
+    )
+    monkeypatch.setattr(
+        "opshub.core.document_extract.extract_workspace_export",
+        fake_extract,
+    )
+    service = _RecordingSourceService()
+
+    GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
+
+    fake_extract.assert_called_once()
+    kwargs = fake_extract.call_args.kwargs
+    assert kwargs["max_file_bytes"] == 100 * 1024 * 1024
+    assert kwargs["max_chars"] == 1_000_000
+    assert kwargs["max_cells_per_sheet"] == 20_000
+    assert kwargs["max_cells_per_workbook"] == 80_000
+
+
+def test_sync_existing_metadata_unchanged_when_content_extraction_off(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Default-off path: every other observe-call kwarg matches the G3 shape.
+
+    Regression guard for upgrading operators — flipping G4 on / off
+    must only toggle ``body`` (and not silently change url / summary
+    / provenance shape).
+    """
+    _patch_settings(monkeypatch, content_extraction=False)
+    _patch_excludes(monkeypatch, tmp_path)
+    _patch_auth_and_client(
+        monkeypatch,
+        pages=[[(_raw("F1"), "next-T")]],
+    )
+    service = _RecordingSourceService()
+
+    GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
+
+    assert len(service.calls) == 1
+    call = service.calls[0]
+    assert call["connector_name"] == "google_workspace"
+    assert call["external_id"] == "F1"
+    assert call["source_type"] == "google_doc"
+    assert call["url"] == "https://drive.google.com/file/d/F1/view"
+    assert call["provenance_origin"] == "external"
+    assert call["provenance_trust"] == "untrusted"
+    assert call["body"] is None

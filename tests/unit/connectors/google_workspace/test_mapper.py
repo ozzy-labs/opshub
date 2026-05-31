@@ -50,6 +50,9 @@ def _raw(
     removed: bool = False,
     trashed: bool = False,
     is_shared_with_me: bool = False,
+    shared: bool = False,
+    last_modifying_user_email: str = "",
+    last_modifying_user_display_name: str = "",
     drive_id: str = "",
     raw: dict[str, Any] | None = None,
 ) -> RawDriveItem:
@@ -65,6 +68,9 @@ def _raw(
         owner_email=owner_email,
         owner_display_name=owner_display_name,
         is_shared_with_me=is_shared_with_me,
+        shared=shared,
+        last_modifying_user_email=last_modifying_user_email,
+        last_modifying_user_display_name=last_modifying_user_display_name,
         drive_id=drive_id,
         raw=raw or {},
     )
@@ -104,18 +110,20 @@ def test_source_type_falls_back_to_generic() -> None:
 
 
 def test_google_workspace_source_types_pin_tuple() -> None:
-    """G2 / G3 interface contract: tuple shape + order pinned.
+    """G2 / G3 / G4 interface contract: tuple shape + order pinned.
 
-    Phase 13 plan §G3 wave-2 parallel implementation note: this tuple
-    is the import target G2 (#276) will publish from
-    :mod:`opshub.domain.events.source`. When the G2 PR merges and
-    swaps the import in, the *order* and *values* must match
-    bit-for-bit — this test makes that contract visible.
+    G2 (#276) published the canonical tuple in
+    :mod:`opshub.core.document_extract`; G3 (#277) carried a local
+    stub of the same name; G4 (#278) deleted the stub and re-exports
+    the canonical tuple from the mapper. The canonical order is
+    ``(doc, slides, sheets)`` per ADR-0025 §決定 (j) Table 1 — keeping
+    this pin here makes any future re-ordering surface as a CI break
+    that forces operators to acknowledge the move explicitly.
     """
     assert GOOGLE_WORKSPACE_SOURCE_TYPES == (
         "google_doc",
-        "google_sheets",
         "google_slides",
+        "google_sheets",
     )
 
 
@@ -221,3 +229,117 @@ def test_map_drive_item_actor_override() -> None:
     """Custom actor is forwarded onto the event."""
     event = map_drive_item(_raw(), actor="connector:google_workspace:test")
     assert event.actor == "connector:google_workspace:test"
+
+
+# ----- G4 body + provenance + metadata -----------------------------------
+
+
+def test_map_drive_item_default_body_is_none() -> None:
+    """No ``body`` kwarg → ``body=None`` (G3 metadata-only invariant).
+
+    G4 makes ``body`` opt-in via the connector's ``content_extraction``
+    flag; callers that omit the kwarg preserve the G3 default-off
+    behaviour bit-for-bit so unrelated tests stay valid.
+    """
+    event = map_drive_item(_raw())
+    assert event.body is None
+
+
+def test_map_drive_item_body_threads_through() -> None:
+    """When the connector passes ``body=...`` the event carries it verbatim.
+
+    The mapper does **not** re-truncate or reformat the body — that's
+    the extractor's job (ADR-0025 §決定 (b-2)). The mapper just
+    forwards what it was handed.
+    """
+    body = "# heading\n\nthis is the extracted markdown body"
+    event = map_drive_item(_raw(), body=body)
+    assert event.body == body
+    # Provenance stamps stay external / untrusted for the SaaS family
+    # — same as the body-less metadata-only path.
+    assert event.provenance_origin == "external"
+    assert event.provenance_trust == "untrusted"
+
+
+def test_map_drive_item_empty_body_stays_empty_not_none() -> None:
+    """An empty body (legit empty Google Doc) stays as ``""``, not coerced to ``None``.
+
+    :func:`opshub.core.document_extract.extract_workspace_export`
+    short-circuits empty exports to ``body=""`` (the file was
+    successfully exported, it just had no content). Surfacing that
+    distinction matters because the downstream consumer can tell
+    "extraction succeeded with no content" from "extraction was
+    skipped or failed".
+    """
+    event = map_drive_item(_raw(), body="")
+    assert event.body == ""
+
+
+def test_map_drive_item_marks_shared() -> None:
+    """``shared=True`` (but not shared-with-me) surfaces as ``[shared]``."""
+    event = map_drive_item(_raw(shared=True))
+    assert event.summary is not None
+    assert "[shared]" in event.summary
+
+
+def test_map_drive_item_shared_with_me_wins_over_shared() -> None:
+    """When both ``is_shared_with_me`` and ``shared`` are set, the more specific marker wins.
+
+    ``[shared with me]`` conveys "I received this" which strictly
+    implies ``shared=True`` (someone owns it and shared it with me).
+    Surfacing both would be redundant noise inside the 200-char cap.
+    """
+    event = map_drive_item(_raw(shared=True, is_shared_with_me=True))
+    assert event.summary is not None
+    assert "[shared with me]" in event.summary
+    assert "[shared]" not in event.summary
+
+
+def test_map_drive_item_marks_editor_when_different_from_owner() -> None:
+    """``lastModifyingUser`` distinct from the owner gets an ``[edited by ...]`` marker."""
+    event = map_drive_item(
+        _raw(
+            owner_display_name="Alice",
+            last_modifying_user_display_name="Bob",
+            last_modifying_user_email="bob@example.com",
+        )
+    )
+    assert event.summary is not None
+    assert "[edited by Bob]" in event.summary
+
+
+def test_map_drive_item_omits_editor_marker_when_matches_owner() -> None:
+    """``lastModifyingUser`` equal to the owner → no ``[edited by ...]`` marker.
+
+    Noise-reduction guard: the most common shape is "owner == last
+    editor" and stamping the marker every time would burn through
+    the 200-char summary cap for no signal gain.
+    """
+    event = map_drive_item(
+        _raw(
+            owner_display_name="Alice",
+            last_modifying_user_display_name="Alice",
+        )
+    )
+    assert event.summary is not None
+    assert "[edited by" not in event.summary
+
+
+def test_map_drive_item_omits_editor_marker_when_drive_omitted_field() -> None:
+    """Anonymous / system edits omit ``lastModifyingUser`` → no marker."""
+    event = map_drive_item(_raw(last_modifying_user_display_name=""))
+    assert event.summary is not None
+    assert "[edited by" not in event.summary
+
+
+def test_map_drive_item_preserves_web_view_link_in_url() -> None:
+    """``webViewLink`` lands on ``event.url`` — the Google Doc URL the secretary surfaces.
+
+    The Phase 13 plan's find-document story requires the secretary
+    to quote a clickable URL pointing back at the Doc / Sheet /
+    Slides. ``url`` is the canonical field that carries that.
+    """
+    event = map_drive_item(
+        _raw(web_url="https://docs.google.com/document/d/F1/edit"),
+    )
+    assert event.url == "https://docs.google.com/document/d/F1/edit"

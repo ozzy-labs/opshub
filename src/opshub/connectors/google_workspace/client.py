@@ -199,6 +199,18 @@ class RawDriveItem:
         Whether the operator received this file via "Shared with me"
         rather than owning it. Surfaced in the summary so the secretary
         can distinguish own-content from received-content.
+    shared:
+        Whether the file is shared at all (``True`` if Drive's
+        ``shared`` boolean is set, including outbound shares the
+        operator owns). G4 (#278) surfaces this in the summary so
+        downstream consumers can answer "is this private to me?".
+    last_modifying_user_email:
+        ``lastModifyingUser.emailAddress``. Empty when Drive does not
+        return a last-modifying user (anonymous edits, system updates).
+        G4 (#278) surfaces this so the secretary can attribute "who
+        touched this last" without re-reading ``raw``.
+    last_modifying_user_display_name:
+        ``lastModifyingUser.displayName``. Empty when absent.
     drive_id:
         Drive id (``""`` for My Drive; populated for Shared Drives).
     raw:
@@ -217,6 +229,9 @@ class RawDriveItem:
     owner_email: str
     owner_display_name: str
     is_shared_with_me: bool
+    shared: bool
+    last_modifying_user_email: str
+    last_modifying_user_display_name: str
     drive_id: str
     raw: dict[str, Any]
 
@@ -384,6 +399,59 @@ class DriveClient:
             else:
                 return
 
+    def export_file(self, *, file_id: str, mime_type: str) -> bytes:
+        """Fetch ``files.export(fileId, mimeType=<MS Office mediatype>)``.
+
+        Returns the raw bytes of the exported MS Office document
+        (``.docx`` / ``.xlsx`` / ``.pptx``) so the caller can hand
+        them to :func:`opshub.core.document_extract.extract_workspace_export`.
+        Only Google Workspace native types
+        (``application/vnd.google-apps.document``,
+        ``application/vnd.google-apps.spreadsheet``,
+        ``application/vnd.google-apps.presentation``) have an
+        ``export`` representation; non-native files (PDFs, uploads,
+        folders) MUST be filtered by the caller — Drive returns 403
+        ``fileNotExportable`` for those, which surfaces here as
+        :class:`ConnectorFailedError`.
+
+        Parameters
+        ----------
+        file_id:
+            Drive file id (``raw.file_id``). The id is opaque; the
+            method does not validate it beyond non-emptiness.
+        mime_type:
+            Export target mediatype (e.g.
+            ``application/vnd.openxmlformats-officedocument.wordprocessingml.document``).
+            G4 (#278) connector wiring picks the target from
+            :data:`opshub.core.document_extract.GoogleWorkspaceSourceType`
+            so the choice stays in lockstep with
+            :func:`extract_workspace_export`'s tempfile-suffix lookup.
+
+        Returns
+        -------
+        bytes
+            Raw response body. May be empty for a legitimately empty
+            Doc; :func:`extract_workspace_export` short-circuits on
+            ``b""``.
+
+        Raises
+        ------
+        ConnectorFailedError
+            On non-2xx (other than the retried 429/5xx) or transport
+            failure. Tokens never appear in the raised message.
+        PageTokenExpiredError
+            Not raised here — ``files.export`` does not consume the
+            ``startPageToken``. The exception type is mentioned so a
+            future refactor that shares the request helper does not
+            silently introduce the wrong fallback path.
+        """
+        if not file_id:
+            raise ConnectorFailedError(
+                "Google Workspace files.export was called with an empty file_id"
+            )
+        url = f"{DRIVE_API_BASE}/files/{file_id}/export"
+        return self._request_bytes("GET", url, params={"mimeType": mime_type})
+
     def close(self) -> None:
         """Release the underlying ``httpx.Client`` socket.
 
@@ -471,6 +539,74 @@ class DriveClient:
                     f"Google Workspace response from {url} was not a JSON object"
                 )
             return cast(dict[str, Any], body)
+
+        raise ConnectorFailedError(
+            f"Google Workspace request failed after {_MAX_REQUEST_ATTEMPTS} "
+            f"attempts: {method} {url} (last status {last_status})"
+        )
+
+    def _request_bytes(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, str] | None = None,
+    ) -> bytes:
+        """Same retry / sanitise contract as :meth:`_request` but returns raw bytes.
+
+        Used by :meth:`export_file` because ``files.export`` returns
+        the Office document body, not JSON. The retry budget, 429 /
+        5xx backoff and "tokens never logged" invariants are identical
+        — the only delta is that the success path returns
+        ``response.content`` instead of ``response.json()``.
+
+        Page-token-expired handling is omitted: ``files.export`` does
+        not consume the ``startPageToken``, so a 404 / 410 here would
+        mean the file id is unknown (the operator-visible state of
+        Drive moved out from under us between ``changes.list`` and the
+        export), which is a hard failure, not a cursor-fallback
+        opportunity. We surface it as :class:`ConnectorFailedError`
+        with the status code so the connector's fail-safe outer
+        envelope logs and moves on.
+        """
+        last_status: int | None = None
+        for attempt in range(_MAX_REQUEST_ATTEMPTS):
+            headers = {
+                "Authorization": f"Bearer {self._auth.get_access_token()}",
+                "User-Agent": "opshub-connector/0.1",
+            }
+            try:
+                response = self._client.request(method, url, headers=headers, params=params)
+            except self._httpx.HTTPError as exc:
+                raise ConnectorFailedError(
+                    f"Google Workspace request failed: {method} {url} ({type(exc).__name__})"
+                ) from exc
+
+            last_status = response.status_code
+
+            if response.status_code == 429 or (
+                response.status_code == 403 and _is_rate_limit_error(response)
+            ):
+                retry_after = _parse_retry_after(
+                    response.headers.get("Retry-After"), fallback=2**attempt
+                )
+                time.sleep(retry_after)
+                continue
+            if 500 <= response.status_code < 600:
+                time.sleep(2**attempt)
+                continue
+            if response.status_code >= 400:
+                # Includes 403 ``fileNotExportable`` (caller routed a
+                # non-Workspace file through the export path), 404
+                # (file moved / deleted between changes.list and the
+                # export call) and 410 (Drive's permanent-delete shape
+                # for some routes). All three are fail-fast for the
+                # caller's outer envelope, which logs and continues.
+                raise ConnectorFailedError(
+                    f"Google Workspace request returned {response.status_code}: {method} {url}"
+                )
+
+            return cast(bytes, response.content)
 
         raise ConnectorFailedError(
             f"Google Workspace request failed after {_MAX_REQUEST_ATTEMPTS} "
@@ -581,6 +717,19 @@ def _normalise_change(raw: dict[str, Any]) -> RawDriveItem | None:
             owner_email = str(first_dict.get("emailAddress") or "")
             owner_display_name = str(first_dict.get("displayName") or "")
 
+    # G4 (#278): pull the ``lastModifyingUser`` block; Drive omits it
+    # for anonymous/system edits (Workspace bot writes, drive-level
+    # change events) so the defensive ``isinstance(..., dict)`` check
+    # is load-bearing — surfacing ``""`` is the right behaviour for
+    # the mapper's metadata summary path.
+    last_user_obj = file_dict.get("lastModifyingUser")
+    last_user_email = ""
+    last_user_display_name = ""
+    if isinstance(last_user_obj, dict):
+        last_user_dict = cast(dict[str, Any], last_user_obj)
+        last_user_email = str(last_user_dict.get("emailAddress") or "")
+        last_user_display_name = str(last_user_dict.get("displayName") or "")
+
     return RawDriveItem(
         file_id=file_id_obj,
         removed=removed,
@@ -592,6 +741,14 @@ def _normalise_change(raw: dict[str, Any]) -> RawDriveItem | None:
         owner_email=owner_email,
         owner_display_name=owner_display_name,
         is_shared_with_me=bool(file_dict.get("sharedWithMeTime")),
+        # G4 (#278): ``shared`` is Drive's boolean for "this file has
+        # at least one non-owner with access" — distinct from
+        # ``sharedWithMeTime`` (which fires only when the operator is
+        # on the receiving end). Both ``False`` means the file is
+        # private to the operator (or to the owning Shared Drive).
+        shared=bool(file_dict.get("shared", False)),
+        last_modifying_user_email=last_user_email,
+        last_modifying_user_display_name=last_user_display_name,
         drive_id=drive_id or str(file_dict.get("driveId") or ""),
         raw=raw,
     )
