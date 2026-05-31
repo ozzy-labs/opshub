@@ -5,6 +5,45 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4](https://github.com/ozzy-labs/opshub/compare/v0.2.3...v0.2.4) (2026-05-31)
+
+
+### Added
+
+* **config,mcp:** wire office settings + register teams/onedrive_drive in mcp.connector.sync ([#252](https://github.com/ozzy-labs/opshub/issues/252)) ([3ca4edf](https://github.com/ozzy-labs/opshub/commit/3ca4edf331d687f96e653a300c3885d2f1ff5d5a))
+* **connectors/box_drive:** office content extraction hook ([#247](https://github.com/ozzy-labs/opshub/issues/247)) ([0d15bb7](https://github.com/ozzy-labs/opshub/commit/0d15bb7ef3f51f530c14dcddf5dd082310ca0142))
+* **connectors/ms365:** outlook body deep retention ([#244](https://github.com/ozzy-labs/opshub/issues/244)) ([0da7271](https://github.com/ozzy-labs/opshub/commit/0da7271a53ca3c18d6b1e467895573b95f922ac9))
+* **connectors/onedrive_drive:** new local-fs connector ([#248](https://github.com/ozzy-labs/opshub/issues/248)) ([41e113c](https://github.com/ozzy-labs/opshub/commit/41e113ce63e90c3d143a52522443218bc0a0b5de))
+* **connectors/teams:** graph chat delta + user token ([#243](https://github.com/ozzy-labs/opshub/issues/243)) ([cf1739d](https://github.com/ozzy-labs/opshub/commit/cf1739d5ab9b06ce382f19e950a22a8cc0cd57bc))
+* **core:** office document extraction foundation ([#245](https://github.com/ozzy-labs/opshub/issues/245)) ([2845e8b](https://github.com/ozzy-labs/opshub/commit/2845e8bf5ea6585d01467fd68395f810e63f1018))
+* **mcp,skills:** phase 12 h1 foundation (adr revisions + 4 new mcp tools + existing 5 rename) ([#262](https://github.com/ozzy-labs/opshub/issues/262)) ([178c4dc](https://github.com/ozzy-labs/opshub/commit/178c4dc83808f80c1cd2406b1e57ee6cdacfb5eb))
+* **mcp:** widen tool surface (brief + graph + source + propose.generate) ([#231](https://github.com/ozzy-labs/opshub/issues/231)) ([451214c](https://github.com/ozzy-labs/opshub/commit/451214c0b9909d1cc3fe4e7bff4f7e4e59aa6fb0))
+* **skills,mcp:** h4 hitl write (inbox-triage + source-extract + meeting-followup) ([#266](https://github.com/ozzy-labs/opshub/issues/266)) ([19ade66](https://github.com/ozzy-labs/opshub/commit/19ade66a42c5836ade8d5ac83846bc77c4ff0c98))
+* **skills:** h2 info gathering (meeting-prep + research) ([#265](https://github.com/ozzy-labs/opshub/issues/265)) ([94fdee1](https://github.com/ozzy-labs/opshub/commit/94fdee17faca840e12a9b0896b523672248187e9))
+* **skills:** h5 draft (handoff-draft + announcement-draft) ([#263](https://github.com/ozzy-labs/opshub/issues/263)) ([5fe43f4](https://github.com/ozzy-labs/opshub/commit/5fe43f409c23c4b515f1a7e411a7dcca705426b6))
+
+
+### Fixed
+
+* **ci:** post-Wave-2 CI hotfix (ruff format + mypy strict) ([#246](https://github.com/ozzy-labs/opshub/issues/246)) ([1cab7fd](https://github.com/ozzy-labs/opshub/commit/1cab7fdb45dd5fa0d97a4fd6b211df9dbd42fa79))
+* **docs,skills:** phase 12 audit cluster A (catalog drift) ([#270](https://github.com/ozzy-labs/opshub/issues/270)) ([31dbfde](https://github.com/ozzy-labs/opshub/commit/31dbfdee2bf2ef224ff0465fea2a80fdc118dc01))
+* **tests:** remove unused type: ignore in test_skill_specs ([#268](https://github.com/ozzy-labs/opshub/issues/268)) ([96af9be](https://github.com/ozzy-labs/opshub/commit/96af9bebff68efd3625ea8a5162a5cea63faf660))
+
+
+### Documentation
+
+* **adr:** adr-0025 office doc extraction / adr-0019 + 0010 改訂 (phase 11) ([#242](https://github.com/ozzy-labs/opshub/issues/242)) ([942b485](https://github.com/ozzy-labs/opshub/commit/942b485c2bfa20b07e74a3709c27c42b86ef5af2))
+* **audit:** phase 11 audit cluster C (excludes flat + claudemd status + keyring slot + e2e gap) ([#251](https://github.com/ozzy-labs/opshub/issues/251)) ([c6f687c](https://github.com/ozzy-labs/opshub/commit/c6f687cd4ad5006ebc4d9bd817d1d50ad838bf80))
+* phase 11 audit cluster A (skill drift fix) ([#250](https://github.com/ozzy-labs/opshub/issues/250)) ([bd16101](https://github.com/ozzy-labs/opshub/commit/bd16101a41b94def906b1380fcbd9c63ba17427b))
+* phase 11 closeout (docs + e2e + guard) ([#249](https://github.com/ozzy-labs/opshub/issues/249)) ([9e1c8ea](https://github.com/ozzy-labs/opshub/commit/9e1c8eabbf6f2da90e455e8a1bba6b39c7a475fd))
+* phase 12 audit cluster C (cross-cutting drift) ([#271](https://github.com/ozzy-labs/opshub/issues/271)) ([e2b1e8e](https://github.com/ozzy-labs/opshub/commit/e2b1e8e8f3f3dffbf75a2c82f1d3bd0e77bb44ff))
+* phase 12 closeout + e2e lifecycle test ([#269](https://github.com/ozzy-labs/opshub/issues/269)) ([694fe74](https://github.com/ozzy-labs/opshub/commit/694fe74823ff5520fc93018f3d7cc20d2897af0f))
+* **plan:** add Phase 11 implementation plan (MS Office 深掘り) ([#240](https://github.com/ozzy-labs/opshub/issues/240)) ([fc850fd](https://github.com/ozzy-labs/opshub/commit/fc850fd04b5732e8183014521eeb28515032397c))
+* **plan:** add Phase 12 implementation plan (Secretary Skills 拡張) ([#260](https://github.com/ozzy-labs/opshub/issues/260)) ([7a4ebbd](https://github.com/ozzy-labs/opshub/commit/7a4ebbd6f1e8fcdec3b857b254fca473340930ae))
+* **plan:** fix source_type=calendar_event → ms365_calendar in plan ([#273](https://github.com/ozzy-labs/opshub/issues/273)) ([65ec0ad](https://github.com/ozzy-labs/opshub/commit/65ec0ad0da50c86f4d408b09685c0910b8c927cc))
+* **plan:** phase 11 pre-implementation audit updates ([#241](https://github.com/ozzy-labs/opshub/issues/241)) ([f9455b2](https://github.com/ozzy-labs/opshub/commit/f9455b2f8e0868af693a3f65681cbdbe5efd80fc))
+* **plan:** phase 12 pre-implementation audit corrections ([#261](https://github.com/ozzy-labs/opshub/issues/261)) ([3c1db76](https://github.com/ozzy-labs/opshub/commit/3c1db765def7526b4c9031ca2e5d64b26ce11068))
+
 ## [0.2.3](https://github.com/ozzy-labs/opshub/compare/v0.2.2...v0.2.3) (2026-05-30)
 
 
