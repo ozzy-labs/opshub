@@ -1,11 +1,11 @@
 ---
 name: find-document
-description: 「Box にあったあの資料」「先週共有された PDF」「<キーワード>含むファイル」「あの議事録どこ」「あの Google Doc」「Sheets の <X>」「Google Slides で説明したやつ」と頼まれたら、opshub MCP の search (FTS5) で本文ベース横断検索を実行し、Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Office 文書 (Word / Excel / PowerPoint) / Google Workspace (Docs / Slides / Sheets) を横断して該当 source を返す。本文取得は読み取り経路のみで、外部 SaaS を直接叩かない。意味検索ハイブリッドが必要な場合は recall.search を補助的に併用してもよい。
+description: 「Box にあったあの資料」「先週共有された PDF」「<キーワード>含むファイル」「あの議事録どこ」「あの Google Doc」「Sheets の <X>」「Google Slides で説明したやつ」「あの Gmail」「Gmail に来てた件」「Google Calendar の予定」と頼まれたら、opshub MCP の search (FTS5) で本文ベース横断検索を実行し、Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Office 文書 (Word / Excel / PowerPoint) / Google Workspace (Docs / Slides / Sheets) / Gmail (`gmail_message`、Phase 14) / Google Calendar (`google_calendar`、Phase 14) を横断して該当 source を返す。本文取得は読み取り経路のみで、外部 SaaS を直接叩かない。意味検索ハイブリッドが必要な場合は recall.search を補助的に併用してもよい。
 ---
 
 # find-document — opshub の本文ベース横断検索で資料を引く
 
-opshub MCP server (`opshub mcp serve`、ADR-0022) の `search` (FTS5、Phase 12 H1 で MCP に露出) で、Phase 10 Sub-issue B (#214 merged) の本文ベース SQLite FTS5 横断検索を使い、Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Office 文書 (Word / Excel / PowerPoint) / Google Workspace (Docs / Slides / Sheets) を横断して該当ファイル / メッセージを引く。Phase 11 で Teams chat (`teams_message`)、Outlook 本文 deep retention (`ms365_outlook`)、Office 文書抽出 (`word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`、markitdown 経由) が追加され、`onedrive_drive` ローカル FS connector も検索対象に入った (ADR-0025、Phase 11 plan §3 F1-F6)。Phase 13 で Google Workspace 由来 (`google_doc` / `google_slides` / `google_sheets`、Drive API `files.export` → markitdown 経由) と catch-all (`google_workspace_file`、metadata-only) が追加された (ADR-0025 §決定 (d')+(j)、Phase 13 plan §3 G1-G5)。
+opshub MCP server (`opshub mcp serve`、ADR-0022) の `search` (FTS5、Phase 12 H1 で MCP に露出) で、Phase 10 Sub-issue B (#214 merged) の本文ベース SQLite FTS5 横断検索を使い、Box / Slack / GitHub / MS365 (Outlook / Calendar / OneDrive) / Teams / Box Drive / OneDrive Drive / Office 文書 (Word / Excel / PowerPoint) / Google Workspace (Docs / Slides / Sheets) / Gmail / Google Calendar を横断して該当ファイル / メッセージを引く。Phase 11 で Teams chat (`teams_message`)、Outlook 本文 deep retention (`ms365_outlook`)、Office 文書抽出 (`word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`、markitdown 経由) が追加され、`onedrive_drive` ローカル FS connector も検索対象に入った (ADR-0025、Phase 11 plan §3 F1-F6)。Phase 13 で Google Workspace 由来 (`google_doc` / `google_slides` / `google_sheets`、Drive API `files.export` → markitdown 経由) と catch-all (`google_workspace_file`、metadata-only) が追加された (ADR-0025 §決定 (d')+(j)、Phase 13 plan §3 G1-G5)。Phase 14 で Gmail (`gmail_message`、`google_mail` connector) と Google Calendar (`google_calendar`、`google_calendar` connector) が追加され、Outlook / ms365_calendar と symmetric な本文 / アジェンダ検索が可能になった (ADR-0010 §改訂、Phase 14 plan §3)。
 
 ADR-0020 (本文ローカル保持) で、要約 (summary) ではなく本文に対する hit が返るため、固有名詞や細部のキーワードでも引ける (Phase 10 plan §3-B)。
 
@@ -29,7 +29,7 @@ tool: search
 input:
   query: "<キーワード or トピック>"
   limit: 30
-  connector_name: "<box | slack | github | ms365 | teams | box_drive | onedrive_drive | google_workspace>"   # 任意
+  connector_name: "<box | slack | github | ms365 | teams | box_drive | onedrive_drive | google_workspace | google_mail | google_calendar>"   # 任意
 ```
 
 `search` は SQLite FTS5 の `sources_fts` 仮想表に MATCH を投げ、`sources` projection に join 戻して title / url / summary を返す。**ホストが渡すクエリ文字列は phrase quote されるため、FTS5 の syntax 文字 (括弧 / コロン等) をエスケープする必要はない**（ADR-0022 改訂 §決定、Phase 12 H1）。
@@ -71,8 +71,10 @@ input:
 | Google Sheets | `google_sheets` | `google_workspace` |
 | Google Slides | `google_slides` | `google_workspace` |
 | Google Drive 上のその他 (PDF / image / folder etc.) | `google_workspace_file` | `google_workspace` |
+| Gmail メッセージ | `gmail_message` | `google_mail` |
+| Google Calendar イベント | `google_calendar` | `google_calendar` |
 
-source_type 値は connector 実装の SSOT (`src/opshub/connectors/<name>/{api,mapper}.py` の `source_type=...` リテラル) に対応する。GitHub connector は `github_` prefix を持たず素の `issue` / `pull_request` / `notification` を発行する点に注意 (Phase 10 監査で SKILL.md ↔ 実装間の drift として固定済)。Phase 11 で追加された `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` は `box_drive` / `onedrive_drive` の `content_extraction = true` opt-in が必要 (markitdown 経由、ADR-0025)。Phase 13 で追加された `google_doc` / `google_slides` / `google_sheets` も同じく `google_workspace` の `content_extraction = true` opt-in が必要 (Drive API `files.export` → MS Office mediatype → markitdown 経由、ADR-0025 §決定 (j))。`google_workspace_file` (catch-all 非 native) は Drive が 403 `fileNotExportable` を返すため `content_extraction = true` 設定下でも metadata-only (`body=None`) で persist される。
+source_type 値は connector 実装の SSOT (`src/opshub/connectors/<name>/{api,mapper}.py` の `source_type=...` リテラル) に対応する。GitHub connector は `github_` prefix を持たず素の `issue` / `pull_request` / `notification` を発行する点に注意 (Phase 10 監査で SKILL.md ↔ 実装間の drift として固定済)。Phase 11 で追加された `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` は `box_drive` / `onedrive_drive` の `content_extraction = true` opt-in が必要 (markitdown 経由、ADR-0025)。Phase 13 で追加された `google_doc` / `google_slides` / `google_sheets` も同じく `google_workspace` の `content_extraction = true` opt-in が必要 (Drive API `files.export` → MS Office mediatype → markitdown 経由、ADR-0025 §決定 (j))。`google_workspace_file` (catch-all 非 native) は Drive が 403 `fileNotExportable` を返すため `content_extraction = true` 設定下でも metadata-only (`body=None`) で persist される。Phase 14 で追加された `gmail_message` (`google_mail` connector) は Gmail API `users.messages.get(format=full)` から MIME body を抽出し、`google_calendar` (`google_calendar` connector) は Calendar API `events.list` の `summary` + `description` を本文として持つ (mapper SSOT: `src/opshub/connectors/google_mail/mapper.py` の `GMAIL_SOURCE_TYPE = "gmail_message"` および `src/opshub/connectors/google_calendar/mapper.py` の `CALENDAR_SOURCE_TYPE = "google_calendar"`、ADR-0010 §改訂)。
 
 ### Step 4 (任意): 特定 hit の詳細を引く
 
@@ -120,6 +122,12 @@ input:
 
 ## Google Workspace (Drive API export → markitdown、n 件)
 - <title> (<modified>) — <snippet 抜粋>  ← `google_doc` / `google_slides` / `google_sheets` / `google_workspace_file` (catch-all、本文なし)
+
+## Gmail (Phase 14、n 件)
+- [<件名>] (<date>) — <snippet 抜粋>  ← `gmail_message`
+
+## Google Calendar (Phase 14、n 件)
+- [<会議タイトル>] (<start>) — <snippet 抜粋>  ← `google_calendar`
 ```
 
 ## 自律範囲
@@ -141,11 +149,12 @@ input:
 - ADR-0020 改訂 (本文ローカル保持、Phase 11 で Outlook body deep retention 追加)
 - ADR-0022 改訂 (MCP Server Surface、Phase 12 H1 で `search` (FTS5) 露出)
 - ADR-0025 (Office 文書本文抽出、markitdown 経由)
-- ADR-0010 §改訂 (connector contract、Phase 11 で Teams 追加、Phase 13 で Google Workspace 追加)
-- ADR-0014 §改訂 (SaaS token storage、Phase 13 で Google Refresh Token rotation pin を 3 件目として追加)
+- ADR-0010 §改訂 (connector contract、Phase 11 で Teams 追加、Phase 13 で Google Workspace 追加、Phase 14 で Gmail + Google Calendar 追加)
+- ADR-0014 §改訂 (SaaS token storage、Phase 13 で Google Refresh Token rotation pin を 3 件目として追加、Phase 14 で Gmail / Google Calendar も同一 OAuth + rotation scheme)
 - Phase 10 Sub-issue B (#214 merged、本文 FTS5 / search command)
 - Phase 11 plan (`docs/phase-11-plan.md`)
 - Phase 12 plan (`docs/phase-12-plan.md` §3 H1)
 - Phase 13 plan (`docs/phase-13-plan.md` §3 G1-G5、Google Workspace 8 番目の connector)
+- Phase 14 plan (`docs/phase-14-plan.md`、Gmail + Google Calendar 9・10 番目の connector)
 - docs/secretary-agent.md (Skill catalog SSOT)
-- docs/google-workspace-setup.md (Google OAuth + Drive API setup)
+- docs/google-workspace-setup.md (Google OAuth + Drive API setup、Gmail / Calendar scope は Phase 14 で追加)
