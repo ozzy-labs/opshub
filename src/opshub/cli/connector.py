@@ -187,7 +187,7 @@ def connector_sync(name: str) -> None:
         pass
 
     try:
-        import opshub.connectors.google_calendar  # noqa: F401  # pyright: ignore[reportUnusedImport]
+        import opshub.connectors.google_calendar  # pyright: ignore[reportUnusedImport]
     except ImportError:
         # Google Calendar connector module imports cleanly without the
         # extras (the heavy ``httpx`` imports stay inside the auth /

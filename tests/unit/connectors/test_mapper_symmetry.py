@@ -69,14 +69,17 @@ from opshub.connectors.google_mail.mapper import (
 )
 from opshub.connectors.ms365.fetcher import (
     RawCalendarEvent as MS365RawCalendarEvent,
+)
+from opshub.connectors.ms365.fetcher import (
     RawOutlookMessage,
 )
 from opshub.connectors.ms365.mapper import (
     MAX_OUTLOOK_BODY_CHARS,
-    map_calendar_event as map_ms365_calendar_event,
     map_outlook_message,
 )
-
+from opshub.connectors.ms365.mapper import (
+    map_calendar_event as map_ms365_calendar_event,
+)
 
 # ----- Pair 1: Calendar symmetry (Phase 14 G4) ---------------------------
 
