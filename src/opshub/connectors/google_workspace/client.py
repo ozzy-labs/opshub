@@ -1,0 +1,595 @@
+"""Drive API v3 client + raw item shape (Phase 13 G3).
+
+A thin ``httpx``-backed wrapper over Google Drive's v3 REST endpoints.
+The wrapper covers exactly the Phase 13 MVP needs:
+
+* ``changes.getStartPageToken`` — fresh page-token bootstrap (cursor
+  initialisation + TTL-expiry fallback per ADR-0010 §Phase 13 改訂 (g)).
+* ``changes.list`` — delta walk over file metadata; the connector
+  consumes the iterator and persists cursors as items land.
+* ``files.export`` — *deferred to G4*; the Phase 13 G3 PR ships
+  metadata-only (``body=None`` on every mapped event). The export call
+  signature is documented here so G4 can extend without re-shaping the
+  module.
+
+SDK choice (OQ8 — decided at G3 start per plan §8)
+--------------------------------------------------
+
+``httpx`` + manual OAuth + manual JSON, not ``google-api-python-client``.
+Rationale, captured here so the next reader can re-confirm:
+
+1. **Cold-start budget (M6).** ``google-api-python-client`` does
+   service-discovery on import (a ~5 MB JSON download cached on first
+   call, plus ``httplib2`` + ``oauth2client`` + ``protobuf`` deps that
+   are heavy by themselves). Maintaining the ADR-0001 ≤ 300 ms
+   ``opshub --help`` budget under it would require gymnastics
+   (sub-module lazy imports, discovery cache pre-warming) that
+   ``httpx`` simply does not need.
+2. **Sibling connectors.** Every prior connector (Phase 7 MS365 +
+   Box, Phase 11 Teams) already uses ``httpx`` for the Graph / Drive /
+   Box REST surface. Adding a second HTTP client shape would split
+   the project's retry / pagination / error-mapping idioms in half.
+3. **Auth surface.** The OAuth refresh-token flow Google requires
+   (``access_type=offline`` + paste-code + refresh + rotation) is the
+   MS365 / Box pattern. Re-implementing it on top of
+   ``google-api-python-client`` would still need ``oauth2client`` /
+   ``google-auth`` (the SDK's bundled auth helpers do roughly the
+   same thing), so the cost is the same either way.
+4. **Test ergonomics.** ``httpx.MockTransport`` is the project's
+   standard mock seam (Teams / MS365 fetchers, Ollama LLM client all
+   exercise it). The mock surface for ``google-api-python-client``
+   is more involved (build a discovery doc fixture, intercept the
+   batch HTTP layer) and would not reuse the existing fixture
+   ergonomics.
+
+Phase 13 plan §1 OQ8 + ADR-0010 §Phase 13 改訂 reference this decision.
+
+Retry / rate-limit
+------------------
+
+Drive's documented throttling envelope is HTTP 403 ``rateLimitExceeded``
+/ ``userRateLimitExceeded`` or HTTP 429 ``Too Many Requests``. We
+honour ``Retry-After`` directly when present and otherwise back off
+exponentially (1 s / 2 s / 4 s) for up to three attempts per request,
+matching Phase 7 MS365 + Phase 11 Teams precedent. 5xx server errors
+get the same backoff (Google documents them as transient). Persistent
+failure escalates to :class:`~opshub.core.errors.ConnectorFailedError`.
+
+Cursor invalidation
+-------------------
+
+Drive returns HTTP 404 with reason ``notFound`` (or 410 ``Gone`` on
+some Google data-centre paths) when the stored ``startPageToken`` has
+expired past the ~30-day vendor TTL. The client surfaces these to the
+connector via a sentinel :class:`PageTokenExpiredError` so the
+connector layer can bootstrap a fresh token via
+``changes.getStartPageToken`` and resume — mirrors the Teams
+``_DeltaLinkExpiredError`` control flow.
+
+Shared Drives (OQ10)
+--------------------
+
+The Phase 13 MVP **includes** Shared Drives ("Team Drives") so the
+secretary can see business-shared content. Drive requires two query
+flags for Shared Drives to participate in ``changes.list``:
+``supportsAllDrives=true`` and ``includeItemsFromAllDrives=true``.
+We pin both in :data:`_CHANGES_LIST_PARAMS` so a future regression
+that quietly drops them surfaces in tests.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, cast
+
+from opshub.core.errors import ConfigError, ConnectorFailedError
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from opshub.connectors.google_workspace.auth import GoogleWorkspaceAuth
+
+
+__all__ = [
+    "DRIVE_API_BASE",
+    "DriveClient",
+    "PageTokenExpiredError",
+    "RawDriveItem",
+]
+
+
+#: Google Drive API v3 base URL. The v3 surface is the GA endpoint;
+#: v2 is documented as deprecated and the connector deliberately stays
+#: off it.
+DRIVE_API_BASE = "https://www.googleapis.com/drive/v3"
+
+#: HTTP timeout for Drive calls. 30 s mirrors :class:`MS365Fetcher` /
+#: :class:`TeamsFetcher` and accommodates Drive's tail-latency on the
+#: larger ``changes.list`` pages without wedging.
+_DEFAULT_TIMEOUT_SECONDS = 30.0
+
+#: Maximum number of attempts before :meth:`DriveClient._request`
+#: gives up and raises :class:`ConnectorFailedError`. Three attempts
+#: matches the Phase 7 MS365 + Phase 11 Teams retry budget.
+_MAX_REQUEST_ATTEMPTS = 3
+
+#: ``pageSize`` for ``changes.list`` pagination. 100 mirrors Drive's
+#: documented sweet spot — small enough that 429s do not cost much
+#: re-work, large enough that paging traffic stays low. Drive caps the
+#: max at 1000 but values that high tend to trip the throttling layer
+#: before the response comes back (same pattern Teams + MS365 exhibit
+#: at 999).
+_PAGE_SIZE = 100
+
+#: ``$fields`` selector that pins the metadata columns Phase 13's
+#: mapper actually reads. Adding fields here without updating the
+#: mapper is a no-op; *removing* fields here without updating the
+#: mapper would surface as :class:`KeyError` downstream so the explicit
+#: pin keeps the contract bidirectional.
+#:
+#: Drive's ``changes.list`` returns each change as
+#: ``{"file": {...}, "fileId": ..., "removed": bool, "time": ISO}`` so
+#: the selector nests ``file/...`` to address file metadata fields.
+_CHANGES_LIST_FIELDS = (
+    "nextPageToken,newStartPageToken,"
+    "changes(fileId,removed,time,driveId,changeType,"
+    "file(id,name,mimeType,modifiedTime,createdTime,webViewLink,"
+    "iconLink,trashed,explicitlyTrashed,owners(emailAddress,displayName),"
+    "lastModifyingUser(emailAddress,displayName),"
+    "shared,sharedWithMeTime,size,parents,driveId))"
+)
+
+#: Pinned parameters for every ``changes.list`` call. Shared Drives
+#: participation (OQ10) requires both
+#: ``supportsAllDrives`` and ``includeItemsFromAllDrives``;
+#: ``includeRemoved=true`` so Google's permanent-delete events surface
+#: as ``removed=true`` (the connector retains them per ADR-0020
+#: Full Local Content Retention).
+_CHANGES_LIST_PARAMS: dict[str, str] = {
+    "supportsAllDrives": "true",
+    "includeItemsFromAllDrives": "true",
+    "includeRemoved": "true",
+    # ``allDrives`` (vs ``user``) widens the scope to My Drive + every
+    # Shared Drive the user can see. ``user`` would only walk My Drive.
+    "spaces": "drive",
+    "fields": _CHANGES_LIST_FIELDS,
+    "pageSize": str(_PAGE_SIZE),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class RawDriveItem:
+    """Normalised view of a single Drive change / file metadata.
+
+    Attributes
+    ----------
+    file_id:
+        The Drive file id (Google's stable opaque identifier). Pairs
+        with the connector name to form the natural key the projection
+        upserts on.
+    removed:
+        ``True`` iff Google reported the change as a permanent delete
+        or a loss of visibility (ADR-0020 retains both as
+        ``archived``-equivalent rather than emitting a SourceDeleted).
+    trashed:
+        ``True`` iff the file lives in the Drive trash. Retained per
+        ADR-0020 §全保持; the mapper stamps a marker in the summary so
+        downstream consumers can detect trashed items.
+    name:
+        Human-readable file name (Drive ``name`` field).
+    mime_type:
+        Google mimeType (e.g. ``application/vnd.google-apps.document``).
+        Used by the mapper to pick a source_type and (in G4) to drive
+        the ``files.export`` selection.
+    modified_time_iso:
+        ISO 8601 UTC timestamp from Drive ``modifiedTime``. Used as
+        ``occurred_at`` for ``SourceObserved``.
+    web_view_link:
+        Stable URL to surface in ``sources.url`` (Drive ``webViewLink``).
+        May be ``""`` for some change types (drive-level events,
+        permanently-deleted files).
+    owner_email:
+        ``owners[0].emailAddress``. Used by the mapper for the
+        ``actor``/``sender`` fields. ``""`` when Google did not return
+        an owner (e.g. shared drives may not expose owner identity).
+    owner_display_name:
+        ``owners[0].displayName``. ``""`` when absent.
+    is_shared_with_me:
+        Whether the operator received this file via "Shared with me"
+        rather than owning it. Surfaced in the summary so the secretary
+        can distinguish own-content from received-content.
+    drive_id:
+        Drive id (``""`` for My Drive; populated for Shared Drives).
+    raw:
+        Verbatim ``changes.list`` payload, kept for forensic debugging
+        (mapper fixtures, future backfill). The mapper does not
+        persist this.
+    """
+
+    file_id: str
+    removed: bool
+    trashed: bool
+    name: str
+    mime_type: str
+    modified_time_iso: str
+    web_view_link: str
+    owner_email: str
+    owner_display_name: str
+    is_shared_with_me: bool
+    drive_id: str
+    raw: dict[str, Any]
+
+
+class PageTokenExpiredError(Exception):
+    """Internal signal: Drive returned 404/410 for the stored page token.
+
+    Caught by :meth:`DriveClient.fetch_changes` callers so the
+    connector layer can bootstrap a fresh ``startPageToken`` via
+    :meth:`DriveClient.get_start_page_token` and resume. Never surfaced
+    to upstream callers — the connector either completes via fallback
+    or raises :class:`ConnectorFailedError` from inside the fallback
+    path. Mirrors :class:`opshub.connectors.teams.fetcher._DeltaLinkExpiredError`.
+    """
+
+
+class DriveClient:
+    """Drive API v3 client (``changes.list`` + ``changes.getStartPageToken``).
+
+    Construction is intentionally lightweight so the connector wiring
+    layer can hold one client per sync run without paying a high
+    setup cost. The ``httpx.Client`` is created here (rather than per
+    call) so the connection pool is reused across pages.
+
+    The class is **not** thread-safe — Phase 13 syncs run sequentially
+    inside ``opshub connector sync google_workspace`` (one connector
+    at a time per process), so a per-call lock would be needless
+    overhead.
+    """
+
+    def __init__(self, auth: GoogleWorkspaceAuth) -> None:
+        """Construct a client bound to a configured :class:`GoogleWorkspaceAuth`.
+
+        :param auth: An auth helper whose
+            :meth:`GoogleWorkspaceAuth.get_access_token` returns a
+            valid Drive bearer. The client calls that method on every
+            request so refresh-token rotation is observed
+            automatically (auth persists the rotated value through
+            :mod:`opshub.core.secrets`).
+
+        :raises ConfigError: When the ``[connectors-google-workspace]``
+            extras are missing — same message shape as the auth
+            module's ``httpx`` guard so the operator gets one
+            consistent install hint.
+        """
+        try:
+            import httpx
+        except ImportError as exc:
+            raise ConfigError(
+                "Google Workspace connector requires the "
+                "[connectors-google-workspace] extras. "
+                "Install with: uv sync --extra connectors-google-workspace"
+            ) from exc
+
+        self._auth = auth
+        # Keep the module on the instance so the request loop can refer
+        # to ``httpx.HTTPError`` without re-importing on the hot path.
+        self._httpx: Any = httpx
+        self._client: Any = httpx.Client(timeout=_DEFAULT_TIMEOUT_SECONDS)
+
+    # ----- public API ------------------------------------------------------
+
+    def get_start_page_token(self) -> str:
+        """Return a fresh root ``startPageToken``.
+
+        Drive ``changes.getStartPageToken`` is the documented bootstrap
+        endpoint for ``changes.list``. We pass the Shared Drives
+        flags so the issued token covers every drive the user can see
+        (matching :data:`_CHANGES_LIST_PARAMS`).
+
+        Raises :class:`ConnectorFailedError` on any non-2xx or transport
+        failure. Tokens never appear in the raised message.
+        """
+        body = self._request(
+            "GET",
+            f"{DRIVE_API_BASE}/changes/startPageToken",
+            params={"supportsAllDrives": "true"},
+        )
+        token_obj = body.get("startPageToken")
+        if not isinstance(token_obj, str) or not token_obj:
+            raise ConnectorFailedError(
+                "Google Workspace getStartPageToken returned no startPageToken "
+                "(unexpected response shape)"
+            )
+        return token_obj
+
+    def fetch_changes(self, *, page_token: str) -> Iterator[tuple[RawDriveItem, str]]:
+        """Yield ``(item, cursor)`` for every change since ``page_token``.
+
+        Walks Drive's ``changes.list`` endpoint forward across paginated
+        responses; each page yields its items in Drive's natural order
+        (Google does not guarantee ordering across pages but within a
+        page the order is the SourceObserved-friendly time order).
+
+        Cursor semantics (mirrors Teams + MS365 OneDrive delta walks):
+
+        * Until the final page is reached, the yielded cursor is the
+          **incoming** ``page_token`` so a mid-iteration crash does
+          not advance the cursor past unconsumed items.
+        * On the final page (the page that returns
+          ``newStartPageToken`` and no ``nextPageToken``) the yielded
+          cursor is the fresh ``newStartPageToken`` — the caller
+          persists it and the next sync resumes there.
+
+        Raises
+        ------
+        PageTokenExpiredError
+            Drive rejected ``page_token`` as expired (HTTP 404
+            ``notFound`` or HTTP 410 ``Gone``). The connector layer
+            traps this, bootstraps a fresh token via
+            :meth:`get_start_page_token`, and resumes.
+        ConnectorFailedError
+            On any other transport / API failure, or when the retry
+            budget is exhausted. Tokens never appear in the error
+            message.
+        """
+        url: str | None = f"{DRIVE_API_BASE}/changes"
+        params: dict[str, str] = dict(_CHANGES_LIST_PARAMS)
+        params["pageToken"] = page_token
+        cursor_in_flight = page_token
+        next_link: str | None = None  # carried so we can pass params only on the first call
+
+        while url is not None:
+            body = self._request("GET", url, params=params if next_link is None else None)
+            changes_obj = body.get("changes")
+            if not isinstance(changes_obj, list):
+                raise ConnectorFailedError(
+                    "Google Workspace changes.list response is missing the "
+                    "'changes' list (unexpected response shape)"
+                )
+            changes = cast(list[dict[str, Any]], changes_obj)
+
+            next_page_token = body.get("nextPageToken")
+            new_start_page_token = body.get("newStartPageToken")
+            # The final page is identified by the presence of
+            # ``newStartPageToken`` and the absence of
+            # ``nextPageToken``. When we are on that page the cursor
+            # we hand out advances to the new start page token.
+            page_cursor = (
+                new_start_page_token
+                if isinstance(new_start_page_token, str)
+                and new_start_page_token
+                and not isinstance(next_page_token, str)
+                else cursor_in_flight
+            )
+
+            for raw_change in changes:
+                item = _normalise_change(raw_change)
+                if item is None:
+                    continue
+                yield item, page_cursor
+
+            # Follow ``nextPageToken`` by re-issuing the same URL but
+            # with the updated ``pageToken`` query parameter. We rebuild
+            # the params dict to keep the field selector + Shared
+            # Drives flags pinned on every page (Drive does not carry
+            # them forward implicitly).
+            if isinstance(next_page_token, str) and next_page_token:
+                params = dict(_CHANGES_LIST_PARAMS)
+                params["pageToken"] = next_page_token
+                next_link = url
+                cursor_in_flight = page_cursor
+            else:
+                url = None
+
+    def close(self) -> None:
+        """Release the underlying ``httpx.Client`` socket.
+
+        Optional — the connection pool is GC-managed — but provided so
+        a long-lived service process can clean up between sync runs.
+        """
+        self._client.close()
+
+    # ----- internals -------------------------------------------------------
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Issue a Drive request with bearer auth + 429 backoff + page-token-expired detection.
+
+        Retry budget: up to :data:`_MAX_REQUEST_ATTEMPTS` attempts.
+
+        * **404 / 410** — page-token expired (ADR-0010 §Phase 13
+          改訂 (g)). Raised as :class:`PageTokenExpiredError` so the
+          iterator can switch to the fallback path; not retried inline.
+        * **429** — Drive's standard rate-limit. We sleep for
+          ``Retry-After`` seconds (header), falling back to
+          ``2 ** attempt`` when the header is missing or unparseable.
+        * **403 with ``rateLimitExceeded`` / ``userRateLimitExceeded``** —
+          Drive's documented user-quota signal, same handling as 429.
+        * **5xx** — Drive documents these as transient; same backoff.
+        * **Other 4xx** — fail-fast: wrap into
+          :class:`ConnectorFailedError` so the CLI driver always sees
+          one error class.
+
+        Tokens are NEVER logged or included in the raised message
+        (ADR-0005 / ADR-0020 §(e) provenance discipline). The error
+        message identifies the offending HTTP verb / URL only.
+        """
+        last_status: int | None = None
+        for attempt in range(_MAX_REQUEST_ATTEMPTS):
+            headers = {
+                "Authorization": f"Bearer {self._auth.get_access_token()}",
+                "Accept": "application/json",
+                "User-Agent": "opshub-connector/0.1",
+            }
+            try:
+                response = self._client.request(method, url, headers=headers, params=params)
+            except self._httpx.HTTPError as exc:
+                raise ConnectorFailedError(
+                    f"Google Workspace request failed: {method} {url} ({type(exc).__name__})"
+                ) from exc
+
+            last_status = response.status_code
+
+            if response.status_code in (404, 410):
+                # Page token expired. Not retryable here: the connector
+                # must restart in fallback mode after bootstrapping a
+                # fresh token via :meth:`get_start_page_token`.
+                raise PageTokenExpiredError
+            if response.status_code == 429 or (
+                response.status_code == 403 and _is_rate_limit_error(response)
+            ):
+                retry_after = _parse_retry_after(
+                    response.headers.get("Retry-After"), fallback=2**attempt
+                )
+                time.sleep(retry_after)
+                continue
+            if 500 <= response.status_code < 600:
+                # 5xx: Drive documents these as transient; back off.
+                time.sleep(2**attempt)
+                continue
+            if response.status_code >= 400:
+                raise ConnectorFailedError(
+                    f"Google Workspace request returned {response.status_code}: {method} {url}"
+                )
+
+            try:
+                body = response.json()
+            except ValueError as exc:
+                raise ConnectorFailedError(
+                    f"Google Workspace response from {url} was not valid JSON"
+                ) from exc
+            if not isinstance(body, dict):
+                raise ConnectorFailedError(
+                    f"Google Workspace response from {url} was not a JSON object"
+                )
+            return cast(dict[str, Any], body)
+
+        raise ConnectorFailedError(
+            f"Google Workspace request failed after {_MAX_REQUEST_ATTEMPTS} "
+            f"attempts: {method} {url} (last status {last_status})"
+        )
+
+
+# ----- helpers -------------------------------------------------------------
+
+
+def _is_rate_limit_error(response: Any) -> bool:
+    """True iff a Drive 403 body carries a rate-limit reason code.
+
+    Drive returns ``userRateLimitExceeded`` / ``rateLimitExceeded`` in
+    the JSON body's ``error.errors[].reason`` field on 403s that are
+    really rate limits rather than scope / permission denials. We must
+    distinguish: scope denials would not benefit from backoff and would
+    just retry-then-fail more loudly.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    if not isinstance(body, dict):
+        return False
+    # ``response.json()`` returns ``Any``; narrow each nested layer
+    # before reading. The explicit casts let pyright (strict) follow
+    # the dict shape without leaking ``Unknown`` types into the loop
+    # body — same pattern :mod:`opshub.connectors.ms365.fetcher` uses
+    # for its Graph payloads.
+    body_dict = cast(dict[str, Any], body)
+    error_obj = body_dict.get("error")
+    if not isinstance(error_obj, dict):
+        return False
+    error_dict = cast(dict[str, Any], error_obj)
+    errors_obj = error_dict.get("errors")
+    if not isinstance(errors_obj, list):
+        return False
+    errors_list = cast(list[Any], errors_obj)  # type: ignore[redundant-cast]
+    for entry in errors_list:
+        if not isinstance(entry, dict):
+            continue
+        entry_dict = cast(dict[str, Any], entry)
+        reason = entry_dict.get("reason")
+        if isinstance(reason, str) and reason in (
+            "userRateLimitExceeded",
+            "rateLimitExceeded",
+            "quotaExceeded",
+        ):
+            return True
+    return False
+
+
+def _parse_retry_after(header_value: str | None, *, fallback: int) -> int:
+    """Return the ``Retry-After`` delay in seconds, or ``fallback`` on parse failure.
+
+    Drive documents the header as an integer number of seconds; we
+    still defend against the HTTP-date variant by falling back rather
+    than raising — a connector that hot-loops because the server
+    returned an exotic header would be worse than one that waits an
+    extra few seconds (same defensive shape Teams uses).
+    """
+    if header_value is None:
+        return fallback
+    try:
+        return int(header_value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _normalise_change(raw: dict[str, Any]) -> RawDriveItem | None:
+    """Lift a Drive ``change`` payload into :class:`RawDriveItem`.
+
+    Returns ``None`` for change records that do not pin a fileId — a
+    handful of drive-level events (Shared Drive renames, permission
+    changes) carry only a ``driveId`` and have no file metadata we can
+    map to ``SourceObserved``. Surfacing them as observed sources
+    would only add noise.
+
+    The function tolerates Drive's nested-object shape: when ``file``
+    is missing (the ``removed=true`` permanent-delete case) we still
+    return a :class:`RawDriveItem` with the ``file_id`` from the
+    top-level field so the projection can mark it ``removed``.
+    """
+    file_id_obj = raw.get("fileId")
+    if not isinstance(file_id_obj, str) or not file_id_obj:
+        return None
+    removed = bool(raw.get("removed", False))
+    drive_id = str(raw.get("driveId") or "")
+    file_obj = raw.get("file")
+    file_dict: dict[str, Any]
+    if isinstance(file_obj, dict):
+        file_dict = cast(dict[str, Any], file_obj)
+    else:
+        file_dict = {}
+
+    owners_obj = file_dict.get("owners")
+    owner_email = ""
+    owner_display_name = ""
+    if isinstance(owners_obj, list) and owners_obj:
+        # Same cast shape as ``_is_rate_limit_error`` — Drive responses
+        # arrive as ``dict[str, Any]`` so the inner element type needs
+        # an explicit cast for pyright (strict) to follow.
+        owners_list = cast(list[Any], owners_obj)  # type: ignore[redundant-cast]
+        first = owners_list[0]
+        if isinstance(first, dict):
+            first_dict = cast(dict[str, Any], first)
+            owner_email = str(first_dict.get("emailAddress") or "")
+            owner_display_name = str(first_dict.get("displayName") or "")
+
+    return RawDriveItem(
+        file_id=file_id_obj,
+        removed=removed,
+        trashed=bool(file_dict.get("trashed", False)),
+        name=str(file_dict.get("name") or ""),
+        mime_type=str(file_dict.get("mimeType") or ""),
+        modified_time_iso=str(file_dict.get("modifiedTime") or raw.get("time") or ""),
+        web_view_link=str(file_dict.get("webViewLink") or ""),
+        owner_email=owner_email,
+        owner_display_name=owner_display_name,
+        is_shared_with_me=bool(file_dict.get("sharedWithMeTime")),
+        drive_id=drive_id or str(file_dict.get("driveId") or ""),
+        raw=raw,
+    )

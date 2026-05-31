@@ -167,12 +167,23 @@ def connector_sync(name: str) -> None:
         pass
 
     try:
-        import opshub.connectors.teams  # noqa: F401  # pyright: ignore[reportUnusedImport]
+        import opshub.connectors.teams  # pyright: ignore[reportUnusedImport]
     except ImportError:
         # Teams connector module imports cleanly without the extras
         # (the heavy ``httpx`` imports stay inside the fetcher
         # constructor); this branch is defensive and would only
         # trigger if a future refactor adds a top-level SDK import.
+        pass
+
+    try:
+        import opshub.connectors.google_workspace  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    except ImportError:
+        # Google Workspace connector module imports cleanly without
+        # the extras (the heavy ``httpx`` imports stay inside the auth
+        # / client constructors); this branch is defensive and would
+        # only trigger if a future refactor adds a top-level SDK
+        # import (Phase 13 G3 — ADR-0001 cold-start guard, ADR-0010
+        # §Phase 13 改訂).
         pass
     from opshub.connectors import discover_connectors
     from opshub.connectors.context import ConnectorContext
@@ -240,7 +251,9 @@ def auth_set(
     Currently supported names: ``github``, ``connector:slack`` (or
     legacy ``slack``), ``embedder:openai``, ``embedder:voyage``,
     ``llm:anthropic``, ``llm:openai``, ``connector:ms365``,
-    ``connector:box``. The recommended form for the Phase 7 connectors
+    ``connector:box``, ``connector:teams``, ``google_workspace``
+    (Phase 13 G3, bare form mirrors ``opshub connector sync
+    google_workspace``). The recommended form for the Phase 7 connectors
     is the ``connector:<name>`` namespace (matches keyring key prefix
     ``connector:<name>:<purpose>`` and the Phase 7 plan §1 #4 contract);
     the bare ``slack`` form is a backward-compat alias retained for
@@ -303,6 +316,34 @@ def auth_set(
         from opshub.cli._box_oauth import run_paste_code_flow as run_box
 
         run_box()
+        return
+
+    if name == "google_workspace":
+        # Phase 13 G3 (ADR-0010 §Phase 13 改訂 + ADR-0014 §Phase 7
+        # Validation rotation pin リスト 3 件目): Google Workspace
+        # mirrors the MS365 / Box paste-code OAuth flow. The
+        # ``--token`` flag has no meaning here — the refresh token is
+        # produced by Google's OAuth code exchange, not pasted in.
+        # Warn rather than silently drop it so a misconfigured script
+        # surfaces the mistake.
+        #
+        # Note: unlike MS365 / Box the connector name is the bare
+        # ``google_workspace`` rather than the ``connector:<name>``
+        # form. The bare form mirrors the issue body
+        # (`opshub connector auth set google_workspace`) and the
+        # ``opshub connector sync google_workspace`` pair so both CLI
+        # verbs use the same identifier.
+        if token is not None:
+            typer.echo(
+                "warning: --token is ignored for google_workspace "
+                "(OAuth paste-code flow is used instead)",
+                err=True,
+            )
+        from opshub.cli._google_workspace_oauth import (
+            run_paste_code_flow as run_google_workspace,
+        )
+
+        run_google_workspace()
         return
 
     if name == "connector:box_drive":
@@ -411,7 +452,7 @@ def auth_set(
             f"unknown auth target {name!r}; currently supported: "
             "github, connector:slack (or legacy slack), embedder:openai, "
             "embedder:voyage, llm:anthropic, llm:openai, connector:ms365, "
-            "connector:box, connector:teams "
+            "connector:box, connector:teams, google_workspace "
             "(connector:box_drive / connector:onedrive_drive use opshub.toml, not auth set)",
             err=True,
         )
@@ -442,7 +483,7 @@ def auth_test(
         ...,
         help=(
             "Connector name to verify (github, slack / connector:slack, "
-            "connector:ms365, connector:box)."
+            "connector:ms365, connector:box, google_workspace)."
         ),
     ),
 ) -> None:
@@ -607,10 +648,42 @@ def _resolve_auth_test_verifier(
             )
         return BoxAuth(client_id=box_client_id).test_token
 
+    if name == "google_workspace":
+        # Phase 13 G3 (ADR-0010 §Phase 13 改訂): Google Workspace
+        # mirrors the MS365 / Box ``test_token`` shape via the Drive
+        # ``about.get`` endpoint. Construction requires both client_id
+        # AND client_secret (Google's installed-app OAuth wire format
+        # demands the secret on every refresh round-trip even though
+        # Google documents it as non-secret).
+        from opshub.connectors.google_workspace.auth import GoogleWorkspaceAuth
+        from opshub.core.config import OpsHubSettings
+
+        settings = OpsHubSettings()
+        gws_cfg = settings.connectors.google_workspace
+        if not gws_cfg.client_id:
+            raise ConfigError(
+                "Google Workspace client_id is not configured. Set "
+                "`[connectors.google_workspace] client_id` in "
+                f"{settings.config_dir}/config.toml "
+                "(run `opshub init` first if the file does not exist yet)."
+            )
+        if not gws_cfg.client_secret:
+            raise ConfigError(
+                "Google Workspace client_secret is not configured. Set "
+                "`[connectors.google_workspace] client_secret` in "
+                f"{settings.config_dir}/config.toml "
+                "(run `opshub init` first if the file does not exist yet)."
+            )
+        return GoogleWorkspaceAuth(
+            client_id=gws_cfg.client_id,
+            client_secret=gws_cfg.client_secret,
+            redirect_uri=gws_cfg.redirect_uri,
+        ).test_token
+
     raise _UnknownAuthTargetError(
         f"unknown auth target {name!r}; currently supported: "
         "github, connector:slack (or legacy slack), "
-        "connector:ms365, connector:box"
+        "connector:ms365, connector:box, google_workspace"
     )
 
 
