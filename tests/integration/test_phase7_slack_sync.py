@@ -259,6 +259,108 @@ def test_slack_sync_creates_sources(
         engine.dispose()
 
 
+def test_slack_sync_handles_empty_text_message(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """Regression: a Slack message with ``text == ""`` must not abort the sync (issue #332).
+
+    Slackbot notifications, ``channel_join`` subtypes, and ``files``-only
+    messages arrive without a ``text`` field. Before the fix the
+    mapper passed ``summary=""`` through to
+    :class:`SourceService.observe`, whose ``is None`` fallback let the
+    empty string reach :class:`ItemEnqueued`'s ``min_length=1``
+    validator — :class:`pydantic.ValidationError` propagated up,
+    crashed the connector run, and stranded the cursor before the
+    offending message.
+
+    Post-fix the mapper normalises empty text to ``None`` and
+    ``SourceService.observe`` applies the
+    ``f"{source_type}: {title}"`` fallback for the inbox preview, so
+    the sync completes 0, the projection rows land, and the cursor
+    advances past the empty-text message.
+    """
+    yields: list[tuple[str, RawSlackMessage, str | None]] = [
+        (
+            "C1",
+            _raw_message(ts="1700000001.000100", text="first message"),
+            "1700000001.000100",
+        ),
+        (
+            "C1",
+            # The realistic empty-text case (Slackbot / channel_join /
+            # file_share). user_display_name + channel_name still
+            # provide enough metadata for the fallback summary to be
+            # identifiable, which is the contract this test pins.
+            _raw_message(ts="1700000002.000200", text="", user_display_name="bob"),
+            "1700000002.000200",
+        ),
+        (
+            "C1",
+            _raw_message(ts="1700000003.000300", text="third message"),
+            "1700000003.000300",
+        ),
+    ]
+    _patch_slack_fetcher(monkeypatch, yields=yields)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["connector", "sync", "slack"])
+    # The empty-text message must not abort the run — exit 0, no
+    # ``ValidationError`` in stderr.
+    assert result.exit_code == 0, result.stdout
+    assert "ValidationError" not in result.stderr
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        # Three messages → 3 SourceObserved + 3 ItemEnqueued + sync
+        # bracket (started + completed) = 8 events. Sources + inbox
+        # projections gain one row per message.
+        assert _row_count(engine, "events") == 8
+        assert _row_count(engine, "sources") == 3
+        assert _row_count(engine, "inbox_items") == 3
+
+        from sqlalchemy import select
+        from sqlalchemy import text as sql_text
+
+        with engine.connect() as conn:
+            source_rows = conn.execute(select(sources_table)).mappings().all()
+            inbox_rows = conn.execute(select(inbox_items_table)).mappings().all()
+            cursor_row = (
+                conn.execute(
+                    sql_text(
+                        "SELECT cursor_value FROM connector_cursors WHERE connector_name = 'slack'"
+                    )
+                )
+                .mappings()
+                .one()
+            )
+
+        # The empty-text source row stores NULL ``summary`` (mapper
+        # normalises empty → None for symmetry with ``body``).
+        empty_text_external_id = "C1:1700000002.000200"
+        empty_text_source = next(
+            row for row in source_rows if row["external_id"] == empty_text_external_id
+        )
+        assert empty_text_source["summary"] is None
+        assert empty_text_source["title"] == "bob in #general"
+
+        # The inbox row for the empty-text message falls back to the
+        # ``f"{source_type}: {title}"`` shape so the inbox stays
+        # legible without a join back to ``sources``.
+        empty_text_inbox = next(
+            row for row in inbox_rows if row["source_ref"] == f"slack:{empty_text_external_id}"
+        )
+        assert empty_text_inbox["summary"] == "slack_message: bob in #general"
+
+        # Cursor advanced through every message, including the empty
+        # one — no take-back / stranding.
+        assert cursor_row["cursor_value"] is not None
+        assert "1700000003.000300" in cursor_row["cursor_value"]
+    finally:
+        engine.dispose()
+
+
 # ---------------------------------------------------------------------- idempotency
 
 
