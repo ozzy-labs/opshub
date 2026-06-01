@@ -19,8 +19,10 @@ from collections.abc import Iterator
 import pytest
 from rich.console import Console
 from rich.progress import Task
+from typer.testing import CliRunner
 
 from opshub.cli import _progress
+from opshub.cli.app import app
 
 # Private-surface aliases (one waiver each instead of one per call site).
 _enabled = _progress._enabled  # pyright: ignore[reportPrivateUsage]
@@ -146,3 +148,19 @@ def test_rich_reporter_update_changes_total() -> None:
         task = _first_task(reporter)
         assert task.total == 10
         assert task.description == "rebuilding tasks"
+
+
+def test_root_no_progress_flag_sets_preference() -> None:
+    """``--no-progress`` on the root command records the preference."""
+    runner = CliRunner()
+    result = runner.invoke(app, ["--no-progress", "connector", "list"])
+    assert result.exit_code == 0, result.stdout
+    assert _progress._preference is False  # pyright: ignore[reportPrivateUsage]
+
+
+def test_root_progress_flag_sets_preference() -> None:
+    """``--progress`` on the root command records the preference."""
+    runner = CliRunner()
+    result = runner.invoke(app, ["--progress", "connector", "list"])
+    assert result.exit_code == 0, result.stdout
+    assert _progress._preference is True  # pyright: ignore[reportPrivateUsage]
