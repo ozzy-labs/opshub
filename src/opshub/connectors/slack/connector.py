@@ -35,6 +35,20 @@ as a single string. A future operator-facing ``opshub connector status``
 CLI could pretty-print the parsed dict, but Phase 7 MVP does not
 expose it.
 
+Cursor monotonicity (defense in depth)
+--------------------------------------
+
+The fetcher (post-issue #339 fix) yields messages in ts-ascending
+order across pages so the cursor naturally advances monotonically.
+We *additionally* guard the projection-bound cursor with
+``cursors[ch] = _max_ts(prior, yielded)`` at the connector level so
+a future fetcher regression that loses chronological ordering does
+not silently rewind the persisted cursor (and cause the entire
+re-ingest cascade documented in issue #339). The pattern mirrors
+:class:`~opshub.connectors.github.connector.GitHubConnector`, which
+keeps its cursor as ``max(observed.updated_at)`` rather than
+trusting iteration order.
+
 Configuration source
 --------------------
 
@@ -151,7 +165,14 @@ class SlackConnector:
         for channel_id, raw_message, new_cursor in fetcher.fetch_messages(
             cursor_per_channel=cursors,
         ):
-            cursors[channel_id] = new_cursor
+            # Defense-in-depth: never let the persisted cursor regress.
+            # The fetcher (post-#339 fix) yields ts-ascending across
+            # pages so ``new_cursor`` is naturally monotonic, but a
+            # future fetcher bug that yields an older ts after a
+            # newer one would otherwise rewind the projection cursor
+            # and cause every subsequent sync to re-ingest the gap
+            # (the regression-cascade documented in issue #339).
+            cursors[channel_id] = _max_ts(cursors.get(channel_id), new_cursor)
             if excludes.excludes_channel(raw_message.channel_id) or excludes.excludes_sender(
                 raw_message.user_id
             ):
@@ -232,6 +253,34 @@ def _load_cursors(cursor_value: str | None) -> dict[str, str | None]:
             )
         result[key] = value
     return result
+
+
+def _max_ts(prior: str | None, candidate: str | None) -> str | None:
+    """Return the chronologically-later of two Slack ``ts`` strings.
+
+    Slack ``ts`` is documented as ``"seconds.microseconds"`` so
+    :func:`float` comparison is total. ``None`` represents "no prior
+    cursor" (first observation for the channel) and yields the other
+    operand. If both sides parse but the candidate is older, we keep
+    the prior — that's the load-bearing invariant for the issue #339
+    fix: a yielded ``ts`` that goes *backwards* must never overwrite
+    a persisted cursor.
+
+    Defensive fallback: a non-numeric ``ts`` (Slack contract
+    violation, would have to be a malformed test fixture or a future
+    API shape change) falls through to the candidate so the connector
+    still records some progress rather than silently dropping the
+    new value. The fetcher's malformed-ts skip-arm normally prevents
+    this branch from being reached.
+    """
+    if prior is None:
+        return candidate
+    if candidate is None:
+        return prior
+    try:
+        return candidate if float(candidate) >= float(prior) else prior
+    except (TypeError, ValueError):
+        return candidate
 
 
 def _dump_cursors(cursors: dict[str, str | None]) -> str:

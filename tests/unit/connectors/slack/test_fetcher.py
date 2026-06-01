@@ -291,17 +291,25 @@ def test_fetch_messages_paginates_via_next_cursor(
     to walk the in-call response chunks. This is distinct from our
     per-channel resume cursor (``oldest``), which is separately
     pinned in ``test_fetch_messages_skips_already_fetched_when_oldest_set``.
+
+    Page ordering follows the Slack API contract: page 1 is the
+    **newest** chunk and ``next_cursor`` walks toward **older**
+    history (each subsequent page's messages have smaller ``ts``
+    than the prior page's). The pre-#339 fixture had the page
+    relationship reversed which masked the cursor-rewind bug —
+    see the dedicated chronological-order test below for the
+    cross-page invariant the fetcher now enforces.
     """
     page1 = _history_response(
         [
+            _slack_message(ts="1700000003.000300", text="msg-3"),
             _slack_message(ts="1700000002.000200", text="msg-2"),
-            _slack_message(ts="1700000001.000100", text="msg-1"),
         ],
         has_more=True,
         next_cursor="page2",
     )
     page2 = _history_response(
-        [_slack_message(ts="1700000003.000300", text="msg-3")],
+        [_slack_message(ts="1700000001.000100", text="msg-1")],
         has_more=False,
     )
     client = _build_client(history=[page1, page2])
@@ -310,12 +318,124 @@ def test_fetch_messages_paginates_via_next_cursor(
     fetcher = SlackFetcher(_auth(), channels=["C1"])
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
+    # Yields are sorted ts-ascending across pages (issue #339 fix)
+    # so the caller's cursor advances monotonically.
     assert [r[1].text for r in results] == ["msg-1", "msg-2", "msg-3"]
     # Two ``conversations.history`` calls — the second using the
     # ``next_cursor`` returned by the first.
     assert client.conversations_history.call_count == 2
     second_kwargs = client.conversations_history.call_args_list[1].kwargs
     assert second_kwargs["cursor"] == "page2"
+
+
+def test_fetch_messages_yields_chronological_order_across_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three pages (newest→oldest) → yields ts-ascending across page boundaries.
+
+    Regression guard for issue #339: ``conversations.history`` is
+    documented as returning the **newest** chunk on page 1 and
+    walking to **older** history via ``next_cursor``. Pre-fix the
+    fetcher reversed each page individually but yielded pages in
+    API order, so the persisted cursor ended up at the **oldest ts
+    of the oldest page** — strictly less than messages already
+    committed earlier in the loop. The next sync then re-fetched
+    everything between the regressed cursor and the true latest ts,
+    re-emitting ``SourceObserved`` / ``ItemEnqueued`` and inflating
+    ``inbox_items`` on every run.
+
+    Post-fix the fetcher buffers all pages and yields sorted
+    ts-ascending, so the caller's ``cursor = ts`` write strictly
+    advances. This test pins the cross-page invariant explicitly so
+    a future refactor that reintroduces per-page yielding fails
+    fast.
+    """
+    # Page 1: newest chunk (ts 5, 4 within page, newest-first per API).
+    page1 = _history_response(
+        [
+            _slack_message(ts="1700000005.000500", text="msg-5"),
+            _slack_message(ts="1700000004.000400", text="msg-4"),
+        ],
+        has_more=True,
+        next_cursor="page2",
+    )
+    # Page 2: middle chunk (ts 3, 2).
+    page2 = _history_response(
+        [
+            _slack_message(ts="1700000003.000300", text="msg-3"),
+            _slack_message(ts="1700000002.000200", text="msg-2"),
+        ],
+        has_more=True,
+        next_cursor="page3",
+    )
+    # Page 3: oldest chunk (ts 1).
+    page3 = _history_response(
+        [_slack_message(ts="1700000001.000100", text="msg-1")],
+        has_more=False,
+    )
+    client = _build_client(history=[page1, page2, page3])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    # All five messages yielded in strict ts-ascending order across
+    # the three page boundaries.
+    assert [r[1].ts for r in results] == [
+        "1700000001.000100",
+        "1700000002.000200",
+        "1700000003.000300",
+        "1700000004.000400",
+        "1700000005.000500",
+    ]
+    assert [r[1].text for r in results] == ["msg-1", "msg-2", "msg-3", "msg-4", "msg-5"]
+    # The yielded cursor is the message's own ts so the caller's
+    # ``cursor = ts`` write monotonically advances.
+    assert [r[2] for r in results] == [
+        "1700000001.000100",
+        "1700000002.000200",
+        "1700000003.000300",
+        "1700000004.000400",
+        "1700000005.000500",
+    ]
+    # Three API calls walked via the documented ``next_cursor`` chain.
+    assert client.conversations_history.call_count == 3
+    assert client.conversations_history.call_args_list[1].kwargs["cursor"] == "page2"
+    assert client.conversations_history.call_args_list[2].kwargs["cursor"] == "page3"
+
+
+def test_fetch_messages_single_page_yields_chronological_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Single page (no ``has_more``) → yields ts-ascending, no extra API call.
+
+    Regression guard alongside the cross-page test: the single-page
+    path is the common case and must keep its
+    "newest-first-on-the-wire → oldest-first-out" contract under the
+    new buffer-then-sort implementation. Without this, a refactor
+    that mishandles the empty ``next_cursor`` arm could silently
+    drop the single-page path back to API-order yielding.
+    """
+    msgs = [
+        # Slack API returns newest-first within a page.
+        _slack_message(ts="1700000003.000300", text="msg-3"),
+        _slack_message(ts="1700000002.000200", text="msg-2"),
+        _slack_message(ts="1700000001.000100", text="msg-1"),
+    ]
+    client = _build_client(history=[_history_response(msgs)])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    assert [r[1].ts for r in results] == [
+        "1700000001.000100",
+        "1700000002.000200",
+        "1700000003.000300",
+    ]
+    # Only one ``conversations.history`` call — pagination not
+    # triggered (``has_more=False`` default).
+    assert client.conversations_history.call_count == 1
 
 
 def test_fetch_messages_skips_already_fetched_when_oldest_set(

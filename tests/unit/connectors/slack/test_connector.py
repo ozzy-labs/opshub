@@ -38,6 +38,7 @@ from opshub.connectors.slack.connector import (
     SlackConnector,
     _dump_cursors,  # pyright: ignore[reportPrivateUsage]
     _load_cursors,  # pyright: ignore[reportPrivateUsage]
+    _max_ts,  # pyright: ignore[reportPrivateUsage]
 )
 from opshub.connectors.slack.fetcher import RawSlackMessage
 from opshub.core.errors import ConfigError
@@ -261,6 +262,38 @@ def test_load_cursors_rejects_non_string_values() -> None:
         _load_cursors('{"C1": 42}')
 
 
+def test_max_ts_returns_candidate_when_prior_is_none() -> None:
+    """First observation for a channel → ``_max_ts(None, ts) == ts``.
+
+    Defense-in-depth helper introduced for issue #339; the load-bearing
+    invariant is that a freshly-observed message overwrites a
+    placeholder ``None`` (channel previously had no cursor entry).
+    """
+    assert _max_ts(None, "1700000001.000100") == "1700000001.000100"
+
+
+def test_max_ts_keeps_prior_when_candidate_is_older() -> None:
+    """Out-of-order yield (older candidate) → prior wins; cursor never rewinds.
+
+    The pre-#339 connector wrote ``cursors[ch] = new_cursor``
+    unconditionally and so a fetcher that yielded an older ts after
+    a newer one would silently rewind the persisted cursor. The
+    ``_max_ts`` guard is the connector-level defense against that
+    regression class.
+    """
+    assert _max_ts("1700000002.000200", "1700000001.000100") == "1700000002.000200"
+
+
+def test_max_ts_picks_candidate_when_newer() -> None:
+    """In-order yield (newer candidate) → candidate wins; cursor advances."""
+    assert _max_ts("1700000001.000100", "1700000002.000200") == "1700000002.000200"
+
+
+def test_max_ts_returns_prior_when_candidate_is_none() -> None:
+    """``None`` candidate (channel drained nothing this run) → prior preserved."""
+    assert _max_ts("1700000001.000100", None) == "1700000001.000100"
+
+
 def test_dump_cursors_is_deterministic() -> None:
     """``sort_keys=True`` → identical input dicts produce identical output strings.
 
@@ -345,6 +378,52 @@ def test_sync_resumes_from_persisted_cursor(monkeypatch: pytest.MonkeyPatch) -> 
     # No yields → observed_count=0; cursor stays at the prior value.
     assert result.observed_count == 0
     assert result.new_cursor == prior_cursor
+
+
+def test_sync_persists_max_ts_when_yield_order_regresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defense-in-depth: a fetcher that yields out-of-order does not rewind the cursor.
+
+    Regression guard for the cursor-rewind half of issue #339. The
+    fetcher (post-#339 fix) yields ts-ascending across pages, but
+    the connector additionally guards the persisted cursor with
+    ``cursors[ch] = _max_ts(prior, yielded)`` so a future fetcher
+    bug that yields an older ``ts`` after a newer one cannot
+    overwrite the projection cursor with a stale value (which would
+    re-trigger the issue #339 inbox-inflation cascade on the next
+    sync).
+
+    The mock fetcher here deliberately yields the **newest** message
+    first, then the **older** one — the exact failure mode the
+    pre-#339 ``cursors[ch] = new_cursor`` line exhibited. With the
+    ``_max_ts`` guard the persisted cursor stays at the newer ts.
+    """
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch)
+    msg_new = _raw_message(channel_id="C1", ts="1700000002.000200", text="newer")
+    msg_old = _raw_message(channel_id="C1", ts="1700000001.000100", text="older")
+    _patch_fetcher(
+        monkeypatch,
+        yields=[
+            # Deliberately out-of-order: newer first, older second.
+            ("C1", msg_new, "1700000002.000200"),
+            ("C1", msg_old, "1700000001.000100"),
+        ],
+    )
+
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=None))
+
+    # Both messages still reach the service (the connector does not
+    # itself drop out-of-order yields — that's the fetcher's
+    # responsibility post-#339).
+    assert result.observed_count == 2
+    # The persisted cursor is the maximum ts despite the regression
+    # in yield order — this is the load-bearing invariant against
+    # issue #339 inbox inflation.
+    assert result.new_cursor is not None
+    assert _load_cursors(result.new_cursor) == {"C1": "1700000002.000200"}
 
 
 def test_sync_advances_cursor_per_channel(monkeypatch: pytest.MonkeyPatch) -> None:

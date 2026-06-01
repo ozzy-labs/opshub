@@ -314,20 +314,38 @@ class SlackFetcher:
         oldest: str | None,
         limit: int,
     ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
-        """Yield messages for a single channel, paging via ``next_cursor``.
+        """Yield messages for a single channel in chronological (ts-ascending) order.
 
-        Slack returns messages in **reverse-chronological** order
-        (newest first) within a page. For our resume semantics we
-        need the **oldest unseen** message to come first so the
-        cursor (``ts``) advances monotonically as the caller commits
-        each event — otherwise a mid-loop crash would leave the
-        cursor pointing past unprocessed messages.
+        Slack's ``conversations.history`` returns messages
+        **newest-first within a page** and walks to **older pages**
+        via ``response_metadata.next_cursor``. Both axes are reversed
+        relative to our resume cursor semantics, which require
+        messages to arrive in ts-ascending order so the persisted
+        cursor advances monotonically (``cursor[ch] = ts``) even when
+        the caller crashes mid-loop.
 
-        We solve this by buffering the page, walking it in reverse,
-        and only then advancing to the next ``next_cursor`` page.
-        The page size is bounded by ``limit`` so memory is O(limit)
-        per channel, not O(total messages).
+        Reversing each page individually (the previous strategy) only
+        fixed the **intra-page** axis: ``yield`` order across pages
+        was still newest-page → oldest-page, so the last cursor
+        written to the projection was the **oldest** ts of the
+        **oldest** page — strictly less than the latest message the
+        caller had already committed. The next sync would then
+        re-fetch every message between the persisted (old) cursor
+        and the true latest ts, re-emitting :class:`SourceObserved`
+        + :class:`ItemEnqueued` events (and inflating ``inbox_items``
+        on every run — see issue #339).
+
+        We fix the page-axis bug by buffering **all** pages first,
+        then sorting by ``float(ts)`` ascending before yielding.
+        Memory cost is O(per-channel-per-sync messages); on a healthy
+        resume (``oldest=cursor``) Slack returns only messages newer
+        than the cursor, so the buffer is bounded by the activity
+        accumulated since the last sync. The cold-start sync (no
+        prior cursor) buffers the whole channel history, but that is
+        a one-time cost paid in exchange for a cursor that cannot be
+        rewound by a mid-sync crash.
         """
+        buffered: list[dict[str, Any]] = []
         page_cursor: str | None = None
         while True:
             response = self._call_history(
@@ -345,34 +363,7 @@ class SlackFetcher:
             messages: list[dict[str, Any]] = (
                 cast(list[dict[str, Any]], messages_obj) if isinstance(messages_obj, list) else []
             )
-            # Walk oldest → newest so the yielded cursor (``ts``) is
-            # monotonically increasing. ``conversations.history``
-            # documents the response order as newest-first; reversing
-            # gives us the chronological order our cursor semantics
-            # require.
-            for raw in reversed(messages):
-                ts = str(raw.get("ts", ""))
-                if not ts:
-                    # A message without ``ts`` is malformed — Slack's
-                    # contract says every message has it. Skip rather
-                    # than crash so a single bad row doesn't poison
-                    # the whole sync; the malformed message stays in
-                    # ``raw`` for forensic inspection on the next page.
-                    continue
-                user_id = str(raw.get("user", ""))
-                user_display_name = self._resolve_user_name(client, user_id)
-                permalink = self._resolve_permalink(client=client, channel_id=channel_id, ts=ts)
-                message = RawSlackMessage(
-                    channel_id=channel_id,
-                    channel_name=channel_name,
-                    ts=ts,
-                    text=str(raw.get("text", "")),
-                    user_id=user_id,
-                    user_display_name=user_display_name,
-                    permalink=permalink,
-                    raw=raw,
-                )
-                yield channel_id, message, ts
+            buffered.extend(messages)
             # Walk to the next page only if Slack signals more data.
             # ``has_more`` is the documented stop signal;
             # ``next_cursor`` may be present-but-empty in some response
@@ -385,8 +376,48 @@ class SlackFetcher:
             )
             next_cursor = response_metadata.get("next_cursor")
             if not response.get("has_more") or not next_cursor:
-                return
+                break
             page_cursor = str(next_cursor)
+
+        # Sort the cross-page buffer ts-ascending so the caller's
+        # cursor advances monotonically. Malformed messages without
+        # ``ts`` are filtered here (rather than mid-yield) so the
+        # sort key is total. Using ``float(ts)`` matches Slack's
+        # documented ``ts`` format ("seconds.microseconds") and is
+        # stable across pages because Slack guarantees ``ts``
+        # uniqueness per channel.
+        def _ts_key(raw: dict[str, Any]) -> float:
+            ts_raw = raw.get("ts")
+            try:
+                return float(ts_raw) if ts_raw is not None else 0.0
+            except (TypeError, ValueError):
+                # Malformed ts — sort to the front so the skip
+                # branch below drops it before yielding.
+                return 0.0
+
+        for raw in sorted(buffered, key=_ts_key):
+            ts = str(raw.get("ts", ""))
+            if not ts:
+                # A message without ``ts`` is malformed — Slack's
+                # contract says every message has it. Skip rather
+                # than crash so a single bad row doesn't poison
+                # the whole sync; the malformed message stays in
+                # ``raw`` for forensic inspection.
+                continue
+            user_id = str(raw.get("user", ""))
+            user_display_name = self._resolve_user_name(client, user_id)
+            permalink = self._resolve_permalink(client=client, channel_id=channel_id, ts=ts)
+            message = RawSlackMessage(
+                channel_id=channel_id,
+                channel_name=channel_name,
+                ts=ts,
+                text=str(raw.get("text", "")),
+                user_id=user_id,
+                user_display_name=user_display_name,
+                permalink=permalink,
+                raw=raw,
+            )
+            yield channel_id, message, ts
 
     def _call_history(
         self,
