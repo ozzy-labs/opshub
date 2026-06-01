@@ -626,6 +626,214 @@ def test_slack_sync_advances_to_latest_across_pagination(
         engine.dispose()
 
 
+def test_slack_sync_first_then_resume_no_duplicate_ingest(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """First sync drains a paginated history; second sync with the same
+    stubbed Slack history ingests zero rows (cursor-driven resume).
+
+    Audit followup for #345 (PR 1 of #339). The integration suite
+    already pins:
+
+    * :func:`test_slack_sync_advances_to_latest_across_pagination`
+      — first sync persists the **maximum** ts across pages.
+    * :func:`test_slack_sync_is_idempotent_when_no_new_messages`
+      — second sync with an *empty* fetcher does not re-ingest.
+
+    Neither test exercises the load-bearing case the #345 fix
+    actually targets: a second sync where the **stubbed Slack
+    workspace still holds the same history** must skip every
+    message via the ``oldest=cursor`` + ``inclusive=False`` resume
+    path. Pre-#345 the persisted cursor pointed at the oldest ts of
+    the oldest page, so the second sync's ``oldest=cursor`` request
+    re-fetched the entire gap and re-emitted ``SourceObserved`` /
+    ``ItemEnqueued`` events — the projection-inflation cascade
+    described in issue #339.
+
+    Post-fix the persisted cursor is the maximum ts, so the second
+    sync's ``oldest=cursor`` filter (Slack-side) returns zero
+    messages and the projection rows stay at their post-first-sync
+    counts. We exercise the real :class:`SlackFetcher` against a
+    mocked :class:`slack_sdk.WebClient` whose
+    ``conversations_history`` honours the ``oldest`` kwarg the
+    fetcher passes — that is what closes the end-to-end loop pre/post.
+
+    Composition rationale: this test does not replace the two prior
+    tests. They pin orthogonal contracts (first-sync chronological
+    ordering; idempotency with a literally-empty fetcher). The
+    first→resume composition is the property that pre-#345 was
+    *silently broken* even though the two prior tests would have
+    passed — exactly the gap the post-merge audit flagged.
+    """
+    from unittest.mock import MagicMock
+
+    # Three pages totalling five messages, matching the API contract
+    # (page 1 = newest chunk, ``next_cursor`` walks toward older
+    # history). Persistent across both sync calls so the fixture
+    # models a stable Slack workspace.
+    def _msg(ts: str, text: str) -> dict[str, Any]:
+        return {"ts": ts, "text": text, "user": "U1"}
+
+    page1_full = {
+        "ok": True,
+        "messages": [
+            _msg("1700000005.000500", "msg-5"),
+            _msg("1700000004.000400", "msg-4"),
+        ],
+        "has_more": True,
+        "response_metadata": {"next_cursor": "page2"},
+    }
+    page2_full = {
+        "ok": True,
+        "messages": [
+            _msg("1700000003.000300", "msg-3"),
+            _msg("1700000002.000200", "msg-2"),
+        ],
+        "has_more": True,
+        "response_metadata": {"next_cursor": "page3"},
+    }
+    page3_full = {
+        "ok": True,
+        "messages": [_msg("1700000001.000100", "msg-1")],
+        "has_more": False,
+        "response_metadata": {"next_cursor": ""},
+    }
+    # Post-resume Slack response shape: ``oldest=1700000005.000500`` +
+    # ``inclusive=False`` (the fetcher pins this kwarg shape in
+    # :func:`test_fetch_messages_skips_already_fetched_when_oldest_set`)
+    # means Slack server-side filters to messages **strictly newer**
+    # than the cursor — zero messages, no pagination needed.
+    empty_response: dict[str, Any] = {
+        "ok": True,
+        "messages": [],
+        "has_more": False,
+        "response_metadata": {"next_cursor": ""},
+    }
+
+    web_client = MagicMock()
+
+    # ``conversations_history`` side-effect routes on whether
+    # ``oldest`` is set: no cursor → drain the three pages in
+    # newest→oldest API order; cursor set → return empty (Slack-side
+    # filter). We track the call order via ``call_args_list`` rather
+    # than a stateful generator so a regression that drops the
+    # ``oldest`` kwarg trips on the assertion below.
+    def _history_side_effect(**kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("oldest") is None:
+            # First sync: serve the paginated history. ``cursor``
+            # kwarg routes between pages.
+            page_cursor = kwargs.get("cursor")
+            if page_cursor is None:
+                return page1_full
+            if page_cursor == "page2":
+                return page2_full
+            if page_cursor == "page3":
+                return page3_full
+            raise AssertionError(f"unexpected page cursor: {page_cursor!r}")
+        # Resume sync: ``oldest`` set → Slack server filters everything
+        # out. The fetcher must not page further (``has_more=False``).
+        return empty_response
+
+    web_client.conversations_history.side_effect = _history_side_effect
+    web_client.conversations_info.return_value = {
+        "ok": True,
+        "channel": {"id": "C1", "name": "general"},
+    }
+    web_client.users_info.return_value = {
+        "ok": True,
+        "user": {
+            "id": "U1",
+            "name": "alice",
+            "profile": {"display_name": "alice", "real_name": "Alice"},
+        },
+    }
+
+    def _permalink_fn(*, channel: str, message_ts: str) -> dict[str, Any]:
+        slug = message_ts.replace(".", "")
+        return {
+            "ok": True,
+            "permalink": f"https://acme.slack.com/archives/{channel}/p{slug}",
+        }
+
+    web_client.chat_getPermalink.side_effect = _permalink_fn
+
+    # ``WebClient`` lazy-imported inside ``fetch_messages``; patching
+    # on the SDK module itself catches the import at call time.
+    import slack_sdk
+
+    monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=web_client))
+
+    runner = CliRunner()
+
+    # ---- First sync: drains the three pages, cursor advances to max ts.
+    first = runner.invoke(app, ["connector", "sync", "slack"])
+    assert first.exit_code == 0, first.stdout
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        from sqlalchemy import text as sql_text
+
+        assert _row_count(engine, "sources") == 5
+        assert _row_count(engine, "inbox_items") == 5
+
+        with engine.connect() as conn:
+            cursor_after_first = (
+                conn.execute(
+                    sql_text(
+                        "SELECT cursor_value FROM connector_cursors WHERE connector_name = 'slack'"
+                    )
+                )
+                .mappings()
+                .one()["cursor_value"]
+            )
+        assert cursor_after_first is not None
+        assert "1700000005.000500" in cursor_after_first
+
+        # The first sync consumed three pages, so
+        # ``conversations_history`` was called three times — all
+        # without ``oldest`` (first-sync path).
+        first_calls = list(web_client.conversations_history.call_args_list)
+        assert len(first_calls) == 3
+        assert all(c.kwargs.get("oldest") is None for c in first_calls)
+
+        # ---- Second sync: same stubbed Slack history; cursor-driven resume.
+        second = runner.invoke(app, ["connector", "sync", "slack"])
+        assert second.exit_code == 0, second.stdout
+
+        # Projection counts unchanged — pre-#345 these would have
+        # grown to 10 each (re-fetched gap re-emitted).
+        assert _row_count(engine, "sources") == 5
+        assert _row_count(engine, "inbox_items") == 5
+
+        # Cursor unchanged (no new messages to advance past).
+        with engine.connect() as conn:
+            cursor_after_second = (
+                conn.execute(
+                    sql_text(
+                        "SELECT cursor_value FROM connector_cursors WHERE connector_name = 'slack'"
+                    )
+                )
+                .mappings()
+                .one()["cursor_value"]
+            )
+        assert cursor_after_second == cursor_after_first
+
+        # Exactly one additional ``conversations_history`` call (the
+        # resume sync's empty page), and that call carried the
+        # ``oldest=max_ts`` + ``inclusive=False`` kwargs the fetcher
+        # pins. Without ``oldest`` the stub would re-serve page 1 and
+        # the projection counts would diverge.
+        all_calls = list(web_client.conversations_history.call_args_list)
+        assert len(all_calls) == 4
+        resume_call = all_calls[3]
+        assert resume_call.kwargs.get("oldest") == "1700000005.000500"
+        assert resume_call.kwargs.get("inclusive") is False
+    finally:
+        engine.dispose()
+
+
 # ---------------------------------------------------------------------- failure recording
 
 
