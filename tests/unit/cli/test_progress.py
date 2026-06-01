@@ -14,6 +14,7 @@ each rather than peppering every assertion with one.
 from __future__ import annotations
 
 import io
+import sys
 from collections.abc import Iterator
 
 import pytest
@@ -49,13 +50,13 @@ def _forced_terminal_console() -> Console:
 
 
 def test_disabled_when_stderr_not_a_tty(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_progress.sys.stderr, "isatty", lambda: False)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
     monkeypatch.delenv("OPSHUB_PROGRESS", raising=False)
     assert _enabled() is False
 
 
 def test_enabled_when_stderr_is_a_tty(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_progress.sys.stderr, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
     monkeypatch.delenv("OPSHUB_PROGRESS", raising=False)
     assert _enabled() is True
 
@@ -63,11 +64,11 @@ def test_enabled_when_stderr_is_a_tty(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_flag_overrides_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPSHUB_PROGRESS", raising=False)
     # --no-progress wins over a TTY.
-    monkeypatch.setattr(_progress.sys.stderr, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
     _progress.set_preference(False)
     assert _enabled() is False
     # --progress wins over a non-TTY.
-    monkeypatch.setattr(_progress.sys.stderr, "isatty", lambda: False)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
     _progress.set_preference(True)
     assert _enabled() is True
 
@@ -87,7 +88,7 @@ def test_flag_overrides_tty(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_env_var_overrides_tty(monkeypatch: pytest.MonkeyPatch, value: str, expected: bool) -> None:
     # Set the TTY to the *opposite* of the expected outcome so a pass
     # proves the env var (not the TTY) decided.
-    monkeypatch.setattr(_progress.sys.stderr, "isatty", lambda: not expected)
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: not expected)
     monkeypatch.setenv("OPSHUB_PROGRESS", value)
     assert _enabled() is expected
 
