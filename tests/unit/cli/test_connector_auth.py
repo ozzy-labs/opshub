@@ -404,7 +404,14 @@ def test_auth_test_github_success(monkeypatch: pytest.MonkeyPatch) -> None:
     The token never appears in stdout — the consumer prints only the
     keys ``github.auth.test_token`` returned.
     """
-    import opshub.connectors.github.auth as github_auth
+    # ``from <pkg> import <name>`` (not ``import <pkg>.<name> as ...``)
+    # because the latter rebinds the local name from a *fresh* copy of
+    # the module on every invocation under Python 3.13's import
+    # machinery — even when ``sys.modules[<pkg>.<name>]`` already holds
+    # the cached module. That divergence broke this test under
+    # full-suite runs (opshub#348): the test patched the fresh copy
+    # while the CLI's lazy lookup hit the ``sys.modules`` copy.
+    from opshub.connectors.github import auth as github_auth
 
     def fake_test_token() -> dict[str, str]:
         return {"login": "alice", "name": "Alice Smith", "scopes": "repo, read:user"}
@@ -428,7 +435,9 @@ def test_auth_test_github_failure_exits_1(monkeypatch: pytest.MonkeyPatch) -> No
     The error message is rendered on stderr (not stdout) so scripts
     parsing stdout for success markers cannot get false positives.
     """
-    import opshub.connectors.github.auth as github_auth
+    # ``from <pkg> import <name>`` — see test_auth_test_github_success
+    # for why ``import <pkg>.<name> as ...`` cannot be used (opshub#348).
+    from opshub.connectors.github import auth as github_auth
     from opshub.core.errors import ConfigError
 
     def fake_test_token() -> dict[str, str]:
@@ -497,7 +506,9 @@ def test_auth_test_renders_empty_values_as_none(monkeypatch: pytest.MonkeyPatch)
     """Empty-string values (e.g. a GitHub user without a configured
     display name) render as ``(none)`` rather than a blank line — the
     operator-readability contract pinned in the CLI docstring."""
-    import opshub.connectors.github.auth as github_auth
+    # ``from <pkg> import <name>`` — see test_auth_test_github_success
+    # for why ``import <pkg>.<name> as ...`` cannot be used (opshub#348).
+    from opshub.connectors.github import auth as github_auth
 
     def fake_test_token() -> dict[str, str]:
         return {"login": "bob", "name": "", "scopes": ""}

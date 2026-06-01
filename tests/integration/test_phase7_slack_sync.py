@@ -711,6 +711,24 @@ def test_slack_sync_works_without_github_extra(
     fix the github package is import-clean, so it still registers (the
     assertion below proves we exercise the real fix, not just the CLI's
     defensive ``ImportError`` swallow), and Slack sync completes 0.
+
+    Test-isolation note (opshub#348): ``monkeypatch.delitem`` /
+    ``setitem`` only rolls back ``sys.modules`` entries on teardown; it
+    does NOT undo the parent-package ``.auth`` / ``.connector`` etc.
+    *attribute* rebinding that happens when the CLI re-imports the
+    github subpackage under the ``httpx`` block. After teardown the
+    restored ``sys.modules['opshub.connectors.github.auth']`` and the
+    parent package's ``opshub.connectors.github.auth`` attribute can
+    point at **different** module objects, and a later test that does
+    ``import opshub.connectors.github.auth as github_auth`` +
+    ``monkeypatch.setattr(github_auth, "test_token", ...)`` patches the
+    parent-attr module while ``opshub.cli.connector._resolve_auth_test_verifier``
+    looks up ``test_token`` via the ``sys.modules`` entry — the patch
+    does not take effect and ``opshub connector auth test github`` calls
+    the real ``test_token``. We pin a deterministic post-condition here:
+    evict the github subpackage from ``sys.modules`` again on teardown
+    so the next consumer triggers a fresh import that re-binds both
+    surfaces consistently.
     """
     import sys
 
@@ -718,12 +736,46 @@ def test_slack_sync_works_without_github_extra(
     monkeypatch.setitem(sys.modules, "httpx", None)
     # Evict cached github modules so the CLI's ``import
     # opshub.connectors.github`` re-executes (and would re-pull httpx if
-    # the import were not deferred). monkeypatch restores them on exit.
+    # the import were not deferred).
+    #
+    # We do NOT use ``monkeypatch.delitem`` here: its restore semantics
+    # re-insert the *original* module objects on teardown, but the CLI's
+    # ``import opshub.connectors.github`` (run under the ``httpx`` block
+    # above) rebinds the parent package's ``.<submodule>`` attributes to
+    # *new* module objects. After teardown ``sys.modules['…github.auth']``
+    # would point at the restored original while
+    # ``opshub.connectors.github.auth`` (the parent attribute) points at
+    # the new one. Later tests that ``import opshub.connectors.github.auth
+    # as github_auth`` resolve via the parent attribute and patch the new
+    # module, while ``opshub.cli.connector._resolve_auth_test_verifier``
+    # does ``from opshub.connectors.github.auth import test_token`` which
+    # resolves via the ``sys.modules`` entry — the patch silently misses
+    # and the call hits the real ``test_token`` → 1 / keyring error
+    # (opshub#348). Manage the eviction by hand instead and evict again
+    # on teardown so the next consumer triggers a fresh, consistent
+    # import (both ``sys.modules`` and the parent attribute resolve to
+    # the same module object).
+    _evicted: dict[str, object] = {}
     for mod_name in list(sys.modules):
         if mod_name == "opshub.connectors.github" or mod_name.startswith(
             "opshub.connectors.github."
         ):
-            monkeypatch.delitem(sys.modules, mod_name, raising=False)
+            _evicted[mod_name] = sys.modules.pop(mod_name)
+
+    def _restore_github_consistently() -> None:
+        """Drop every github module (and registry slot) so the next
+        import re-binds ``sys.modules`` and the parent attributes
+        atomically. See opshub#348 for the divergence we are guarding."""
+        from opshub.connectors._registry import (
+            _REGISTRY,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        for mod_name in list(sys.modules):
+            if mod_name == "opshub.connectors.github" or mod_name.startswith(
+                "opshub.connectors.github."
+            ):
+                sys.modules.pop(mod_name, None)
+        _REGISTRY.pop("github", None)
 
     _patch_slack_fetcher(
         monkeypatch,
@@ -737,15 +789,26 @@ def test_slack_sync_works_without_github_extra(
     )
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "slack"])
-    assert result.exit_code == 0, result.stdout
+    try:
+        result = runner.invoke(app, ["connector", "sync", "slack"])
+        assert result.exit_code == 0, result.stdout
 
-    # The github package is import-clean, so it registers even with httpx
-    # absent — proving the deferred-import fix, not merely the CLI's
-    # defensive ImportError guard, is what makes Slack sync work.
-    from opshub.connectors import discover_connectors
+        # The github package is import-clean, so it registers even with httpx
+        # absent — proving the deferred-import fix, not merely the CLI's
+        # defensive ImportError guard, is what makes Slack sync work.
+        from opshub.connectors import discover_connectors
 
-    assert "github" in {c.name for c in discover_connectors()}
+        assert "github" in {c.name for c in discover_connectors()}
+    finally:
+        _restore_github_consistently()
+        # The original modules are intentionally discarded: any reference
+        # to them held by other test modules will still resolve to the
+        # same objects (Python imports are lazy / cached at module load),
+        # but ``sys.modules`` and the parent attributes will be re-bound
+        # together on the next import. ``_evicted`` is kept alive only
+        # to defer GC of the originals until after this teardown so any
+        # in-flight finalisers from the CLI invoke run cleanly.
+        _evicted.clear()
 
 
 # ---------------------------------------------------------------------- summary truncation
