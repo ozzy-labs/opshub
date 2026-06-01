@@ -28,6 +28,7 @@ projections_app = typer.Typer(
 def projections_rebuild() -> None:
     """Reset and replay every projection from the events table."""
     # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.cli import _progress
     from opshub.cli._wiring import build_engine
     from opshub.db import SqlAlchemyEventStore
     from opshub.projections import all_projections, rebuild_all
@@ -41,8 +42,10 @@ def projections_rebuild() -> None:
 
     # Count events up front. ``iter_all`` is a generator backed by a
     # streaming SELECT, so this is one read pass; ``rebuild_all`` will
-    # do its own independent pass during replay.
+    # do its own independent pass during replay. The count also sizes the
+    # determinate progress bar (renders on stderr, no-ops on non-TTY).
     n_events = sum(1 for _ in store.iter_all())
 
-    rebuild_all(engine, store, projections)
+    with _progress.determinate(n_events, "rebuilding projections") as reporter:
+        rebuild_all(engine, store, projections, progress_callback=reporter.advance)
     typer.echo(f"rebuilt {len(projections)} projection(s) from {n_events} event(s)")

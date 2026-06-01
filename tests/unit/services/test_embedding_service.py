@@ -522,6 +522,49 @@ def test_embed_pending_skips_rows_with_empty_text(migrated_engine: Engine) -> No
     assert len(embedded_events) == 1
 
 
+def test_count_pending_matches_scope_and_drops_to_zero_after_embed(
+    migrated_engine: Engine,
+) -> None:
+    """``count_pending`` counts only un-embedded rows; zero after a rebuild."""
+    embedder = _StubEmbedder()
+    for i in range(3):
+        _seed_task(migrated_engine, title=f"task {i}")
+    pre_embedded = _seed_task(migrated_engine, title="already done")
+    _seed_existing_embedding(
+        migrated_engine,
+        entity_type="task",
+        entity_id=pre_embedded,
+        model_id=embedder.model_id,
+        model_version=embedder.model_version,
+    )
+    service = _make_service(migrated_engine, embedder=embedder)
+
+    # Same NOT EXISTS scope as embed_pending: the pre-embedded row is excluded.
+    assert service.count_pending(entity_type="task") == 3
+
+    service.embed_pending(entity_type="task")
+    assert service.count_pending(entity_type="task") == 0
+
+
+def test_embed_pending_invokes_progress_callback_once_per_processed_row(
+    migrated_engine: Engine,
+) -> None:
+    """The callback fires once per row processed (embedded + skipped alike)."""
+    embedder = _StubEmbedder()
+    _seed_source(migrated_engine, summary=None, external_id="repo#null")
+    _seed_source(migrated_engine, summary="   ", external_id="repo#ws")
+    _seed_source(migrated_engine, summary="real summary", external_id="repo#ok")
+    service = _make_service(migrated_engine, embedder=embedder)
+
+    ticks: list[int] = []
+    result = service.embed_pending(entity_type="source", progress_callback=ticks.append)
+
+    # 1 embedded + 2 skipped = 3 rows processed = 3 callback ticks.
+    assert result.embedded_count == 1
+    assert result.skipped_count == 2
+    assert ticks == [1, 1, 1]
+
+
 def test_embed_pending_records_failure_event_and_continues(
     migrated_engine: Engine,
 ) -> None:
