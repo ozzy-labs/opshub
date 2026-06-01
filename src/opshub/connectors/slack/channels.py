@@ -28,10 +28,14 @@ Scope
   issue defers ``im:read`` / ``mpim:read`` scope adds until a real
   use case appears (#341 §Out of scope).
 * Archived channels are filtered client-side. Slack's
-  ``conversations.list`` does not expose a server-side
-  ``exclude_archived`` toggle equivalent to the per-channel
-  ``is_archived`` flag; filtering after fetch keeps the logic in one
-  place and lets ``--include-archived`` flip a single boolean.
+  ``conversations.list`` does accept a server-side ``exclude_archived``
+  query parameter, but we deliberately filter on the per-channel
+  ``is_archived`` flag after fetch so the include / exclude decision
+  lives in one place: the helper always asks Slack for the full set
+  and a single ``--include-archived`` boolean flips the gate
+  uniformly (no separate server / client filter paths to keep in
+  lockstep, and tests can stub ``is_archived`` without monkey-patching
+  the request URL).
 
 Pagination
 ----------
@@ -163,9 +167,11 @@ def list_channels(
         ADR-0018.
     include_archived:
         When ``True``, archived channels are yielded alongside live
-        ones. Filtering happens client-side because Slack does not
-        expose an ``exclude_archived`` toggle on this method (only
-        the per-channel ``is_archived`` flag in the response body).
+        ones. Filtering is applied client-side on the per-channel
+        ``is_archived`` flag (rather than via Slack's
+        ``exclude_archived`` query parameter) so the include / exclude
+        decision lives in one place and ``--include-archived`` flips a
+        single boolean across both code paths and tests.
     filter_substring:
         Case-insensitive substring match against ``channel.name``.
         ``None`` (or the empty string) disables filtering. Filtering
