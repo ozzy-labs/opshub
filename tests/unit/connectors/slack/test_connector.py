@@ -294,6 +294,56 @@ def test_max_ts_returns_prior_when_candidate_is_none() -> None:
     assert _max_ts("1700000001.000100", None) == "1700000001.000100"
 
 
+def test_max_ts_returns_candidate_when_both_sides_non_numeric() -> None:
+    """Defensive fallback: both operands non-numeric → ``float()`` raises and
+    the ``except (TypeError, ValueError)`` arm returns ``candidate``.
+
+    The fetcher's ``_ts_key`` + ``if not ts: continue`` skip-arm
+    normally drops malformed ``ts`` strings before they reach the
+    connector, so this branch is purely defensive — but it is
+    load-bearing for forensic visibility: if the fetcher contract
+    ever drifts and starts yielding non-numeric values, we want the
+    connector to record *some* cursor (the candidate) rather than
+    silently lose progress to the prior. Pinning the fallback also
+    means a future hardening that raises here instead of returning
+    will fail this test loudly, prompting an ADR-grade conversation
+    rather than a silent semantic flip.
+
+    Audit followup for #345 (PR 1 of #339) — see
+    ``connector.py:281-282`` for the source-of-truth comment.
+    """
+    # Both sides parse-fail → fallback returns candidate.
+    assert _max_ts("abc", "xyz") == "xyz"
+
+
+def test_max_ts_returns_candidate_when_prior_non_numeric_but_candidate_numeric() -> None:
+    """Defensive fallback: prior is non-numeric → comparison raises and
+    candidate is returned regardless of whether candidate parses.
+
+    The ``try`` block does ``float(candidate) >= float(prior)``; if
+    ``prior`` is unparseable the whole comparison raises
+    :class:`ValueError` and the except-arm returns the candidate.
+    Pins the behaviour so a future refactor that re-orders the
+    operands (or short-circuits) is caught.
+    """
+    assert _max_ts("abc", "1700000001.000100") == "1700000001.000100"
+
+
+def test_max_ts_returns_candidate_when_candidate_non_numeric_but_prior_numeric() -> None:
+    """Defensive fallback: candidate is non-numeric → fallback still returns
+    candidate (not prior).
+
+    This is the asymmetric arm: the ``except`` arm unconditionally
+    yields ``candidate`` rather than picking the parseable operand.
+    Documented behaviour (see connector docstring): "the connector
+    still records some progress rather than silently dropping the
+    new value". Pinning prevents a "fix" that quietly switches the
+    fallback to prior — which would mean a malformed-ts regression
+    would stall the cursor indefinitely.
+    """
+    assert _max_ts("1700000001.000100", "abc") == "abc"
+
+
 def test_dump_cursors_is_deterministic() -> None:
     """``sort_keys=True`` → identical input dicts produce identical output strings.
 

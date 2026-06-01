@@ -438,6 +438,89 @@ def test_fetch_messages_single_page_yields_chronological_order(
     assert client.conversations_history.call_count == 1
 
 
+def test_iter_channel_skips_malformed_ts_and_preserves_sort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed ``ts`` rows are sorted to position 0.0 then skipped, and the
+    remaining well-formed rows still yield in ts-ascending order.
+
+    Audit followup for #345 (PR 1 of #339). The buffer-then-sort
+    rewrite added two malformed-ts guards in
+    :meth:`SlackFetcher._iter_channel`:
+
+    * ``_ts_key`` returns ``0.0`` for messages with missing /
+      ``None`` / non-numeric ``ts`` so the sort key is total (and
+      the malformed rows land at the head of the sorted buffer).
+    * The yield loop checks ``if not ts: continue`` so the
+      malformed-but-sortable rows are dropped before reaching the
+      caller.
+
+    The two pieces interlock: without ``_ts_key`` returning a
+    sentinel the ``sorted()`` call would raise ``TypeError`` and
+    abort the entire sync; without the skip arm a malformed row
+    would still reach the mapper as a synthetic ``ts=""`` message.
+    Pin both halves with a single fixture that interleaves a
+    missing-``ts`` row, an empty-``ts`` row, and three well-formed
+    rows in API-order (newest-first within the page).
+
+    Pre-#345 the code reversed each page individually, so the
+    malformed rows happened to fall through the per-page reverse
+    without crashing — but the sort that #345 introduced is total
+    only because of ``_ts_key``'s sentinel. A future refactor that
+    drops the sentinel (or tightens the ``except`` to a single
+    exception type) without restoring the skip arm would silently
+    leak malformed ``RawSlackMessage`` rows to the mapper. Pinning
+    the contract here catches that regression class.
+    """
+    # Page mixes well-formed and malformed rows. Slack's API normally
+    # guarantees ``ts`` on every message but we model a contract
+    # violation here — the fetcher's defensive arm is the only line
+    # between the violation and a poisoned projection.
+    msgs: list[dict[str, Any]] = [
+        # Well-formed: newest in the page, should land last in yield.
+        _slack_message(ts="1700000003.000300", text="msg-3"),
+        # Malformed: ``ts`` key entirely absent (synthetic / unknown
+        # subtype). ``_ts_key`` returns 0.0; skip arm drops it.
+        {"text": "no-ts row", "user": "U1"},
+        # Well-formed: middle ts.
+        _slack_message(ts="1700000002.000200", text="msg-2"),
+        # Malformed: ``ts`` present but empty string. ``float("")``
+        # raises ``ValueError``; ``_ts_key`` returns 0.0; the
+        # ``if not ts: continue`` arm drops it before the mapper.
+        {"ts": "", "text": "empty-ts row", "user": "U1"},
+        # Well-formed: oldest ts in the page.
+        _slack_message(ts="1700000001.000100", text="msg-1"),
+    ]
+    client = _build_client(history=[_history_response(msgs)])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    # Only the three well-formed messages survive, in strict
+    # ts-ascending order. The malformed rows were sorted to position
+    # 0.0 by ``_ts_key`` and then dropped by the ``if not ts:
+    # continue`` skip arm — they never reach the caller. The well-
+    # formed rows' relative order is preserved (the malformed rows
+    # being sorted to 0.0 does not invert the well-formed sequence
+    # because every well-formed ``ts`` is strictly greater than 0.0).
+    assert [r[1].ts for r in results] == [
+        "1700000001.000100",
+        "1700000002.000200",
+        "1700000003.000300",
+    ]
+    assert [r[1].text for r in results] == ["msg-1", "msg-2", "msg-3"]
+    # The yielded cursor mirrors the ``ts`` field so the caller's
+    # ``cursor[ch] = ts`` write advances monotonically. Critically
+    # the malformed rows did not contribute a ``""`` cursor write
+    # that would have stalled the connector's ``_max_ts`` guard.
+    assert [r[2] for r in results] == [
+        "1700000001.000100",
+        "1700000002.000200",
+        "1700000003.000300",
+    ]
+
+
 def test_fetch_messages_skips_already_fetched_when_oldest_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
