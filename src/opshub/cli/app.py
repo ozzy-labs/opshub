@@ -91,6 +91,17 @@ def _root(  # pyright: ignore[reportUnusedFunction]
             help="Show the installed opshub version and exit.",
         ),
     ] = None,
+    progress: Annotated[
+        bool | None,
+        typer.Option(
+            "--progress/--no-progress",
+            help=(
+                "Show a progress indicator for long-running commands "
+                "(connector sync, embeddings rebuild, projections rebuild). "
+                "Default: auto-detect (on when stderr is a TTY)."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Root callback. Required so that single-subcommand mode is not used; this keeps
     `opshub <subcommand>` invocation stable as more commands are added in Phase 1.
@@ -99,7 +110,16 @@ def _root(  # pyright: ignore[reportUnusedFunction]
     so that ``opshub --version`` is recognised before any subcommand
     parsing. The existing ``opshub version`` subcommand is preserved
     below and produces identical output.
+
+    The ``--progress`` / ``--no-progress`` flag records the operator's
+    progress-display preference before any subcommand runs (issue #316).
+    The import + call are kept inside the callback so ``opshub --help`` —
+    which does not invoke the callback body — never pays for it, preserving
+    the ADR-0001 cold-start budget.
     """
+    from opshub.cli import _progress
+
+    _progress.set_preference(progress)
 
 
 @app.command()
