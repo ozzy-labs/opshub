@@ -241,3 +241,55 @@ def test_url_passes_through_web_url() -> None:
     """``url`` is the Graph ``webUrl`` verbatim — projection accepts ``""``."""
     raw = _raw(web_url="https://teams.microsoft.com/l/message/xyz")
     assert map_chat_message(raw)["url"] == "https://teams.microsoft.com/l/message/xyz"
+
+
+def test_map_chat_message_normalises_empty_plain_text_to_none() -> None:
+    """Empty ``plain_text`` → ``summary=None`` / ``body=None`` (issue #332 PR 2).
+
+    The Slack mapper normalises empty text to ``None`` on both
+    ``summary`` and ``body``; the Teams mapper must do the same so a
+    sender-only Teams chat message (no body, or HTML that strips to
+    empty such as ``"<div></div>"``) does not leak ``summary=""`` into
+    :meth:`SourceService.observe` and trip the ``ItemEnqueued.summary``
+    ``min_length=1`` validation. Two fixture shapes are exercised here
+    so the contract is pinned for both content types Graph emits:
+
+    1. ``body_content_type="text"`` with ``body_html=""`` — the empty
+       string passes through ``_to_plain_text`` verbatim.
+    2. ``body_content_type="html"`` with ``body_html="<div></div>"`` —
+       the HTML stripper collapses the markup to an empty string.
+
+    Both must produce ``summary is None`` / ``body is None`` while
+    preserving the rest of the kwargs shape (title, external_id,
+    connector_name, source_type) so downstream callers see a
+    structurally identical row apart from the two normalised fields.
+    """
+    # Case 1: plain text body that is literally empty.
+    raw_text_empty = _raw(
+        body_html="",
+        body_content_type="text",
+        sender_display_name="Alice",
+        chat_topic="Project Alpha",
+    )
+    kwargs_text: dict[str, Any] = map_chat_message(raw_text_empty)
+    assert kwargs_text["summary"] is None
+    assert kwargs_text["body"] is None
+    assert kwargs_text["title"] == "Alice in Project Alpha"
+    assert kwargs_text["external_id"] == "19:abc@thread.v2:1700000000001"
+    assert kwargs_text["connector_name"] == "teams"
+    assert kwargs_text["source_type"] == SOURCE_TYPE
+
+    # Case 2: HTML body that strips to an empty string.
+    raw_html_strips_empty = _raw(
+        body_html="<div></div>",
+        body_content_type="html",
+        sender_display_name="Alice",
+        chat_topic="Project Alpha",
+    )
+    kwargs_html: dict[str, Any] = map_chat_message(raw_html_strips_empty)
+    assert kwargs_html["summary"] is None
+    assert kwargs_html["body"] is None
+    assert kwargs_html["title"] == "Alice in Project Alpha"
+    assert kwargs_html["external_id"] == "19:abc@thread.v2:1700000000001"
+    assert kwargs_html["connector_name"] == "teams"
+    assert kwargs_html["source_type"] == SOURCE_TYPE
