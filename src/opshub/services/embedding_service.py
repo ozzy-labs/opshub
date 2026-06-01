@@ -56,7 +56,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ColumnElement, Table, func, select, text
+from sqlalchemy import ColumnElement, Table, TextClause, func, select, text
 
 from opshub.core.ids import new_ulid
 from opshub.core.sanitise import sanitise_error_message
@@ -396,11 +396,35 @@ class EmbeddingService:
             deleted += self._vector_store.delete(entity_type=ety, entity_id=eid)
         return deleted
 
+    def count_pending(self, *, entity_type: str | None = None) -> int:
+        """Count entities lacking a current ``(model_id, model_version)`` embedding.
+
+        Mirrors :meth:`embed_pending`'s scope using the same
+        ``NOT EXISTS`` predicate (via :meth:`_pending_not_exists`) but
+        issues a single ``COUNT(*)`` per source, summed across the
+        scope. The CLI uses this to size a determinate progress bar
+        before :meth:`embed_pending` runs. The count is a snapshot and
+        may drift if the store changes concurrently, which is fine for
+        a progress total.
+        """
+        total = 0
+        with self._engine.connect() as conn:
+            for source in self._sources(entity_type):
+                source_table = _TABLE_BY_ENTITY_TYPE[source.entity_type]
+                stmt = (
+                    select(func.count())
+                    .select_from(source_table)
+                    .where(self._pending_not_exists(source))
+                )
+                total += int(conn.execute(stmt).scalar_one())
+        return total
+
     def embed_pending(
         self,
         *,
         entity_type: str | None = None,
         limit: int | None = None,
+        progress_callback: Callable[[int], None] | None = None,
     ) -> EmbedResult:
         """Embed every entity that lacks a current ``(model_id, model_version)`` row.
 
@@ -424,6 +448,12 @@ class EmbeddingService:
             for operators who want a paced rebuild on a large store.
             Skipped rows (empty text) do **not** count against the
             limit; only embedded + failed rows do.
+        progress_callback:
+            Optional callable invoked with ``1`` after each row is
+            processed (embedded / skipped / failed alike), so a CLI
+            driver can advance a progress bar sized via
+            :meth:`count_pending`. ``None`` (the default) keeps the
+            method side-effect-free for non-interactive callers.
 
         Returns
         -------
@@ -442,6 +472,10 @@ class EmbeddingService:
                 if remaining is not None and remaining <= 0:
                     break
                 outcome = self._embed_one(source, entity_id, raw_text)
+                if progress_callback is not None:
+                    # Advance once per processed row regardless of outcome
+                    # so the bar tracks rows seen, matching count_pending.
+                    progress_callback(1)
                 if outcome == "embedded":
                     embedded += 1
                     if remaining is not None:
@@ -501,10 +535,27 @@ class EmbeddingService:
         source_table = _TABLE_BY_ENTITY_TYPE[source.entity_type]
         id_col = source_table.c[source.id_column]
         text_expr = self._text_expr(source, source_table)
-        # ``NOT EXISTS`` keeps the predicate well-formed even when the
-        # ``embeddings`` row count is zero (the first rebuild on a
-        # fresh database). Bind params keep the SQL value-safe.
-        not_exists_sql = text(
+        stmt = select(id_col, text_expr).where(self._pending_not_exists(source))
+        with self._engine.connect() as conn:
+            for row in conn.execute(stmt):
+                # SQLAlchemy returns ``Any`` for column values; the
+                # projection schemas constrain id_column to ``str`` and
+                # text_column to ``str | None``.
+                yield str(row[0]), (None if row[1] is None else str(row[1]))
+
+    def _pending_not_exists(self, source: EntitySource) -> TextClause:
+        """The correlated ``NOT EXISTS`` predicate selecting un-embedded rows.
+
+        Shared by :meth:`_iter_pending` (row stream) and
+        :meth:`count_pending` (``COUNT(*)``) so the two can never drift.
+        ``NOT EXISTS`` keeps the predicate well-formed even when the
+        ``embeddings`` row count is zero (the first rebuild on a fresh
+        database). Bind params keep the SQL value-safe; the
+        ``embeddings`` table is referenced via raw :func:`sqlalchemy.text`
+        because it is not registered on the shared metadata (SqliteVecStore
+        precedent).
+        """
+        return text(
             "NOT EXISTS (SELECT 1 FROM embeddings "
             "WHERE embeddings.entity_type = :__et "
             f"  AND embeddings.entity_id = {source.table_name}.{source.id_column} "
@@ -515,13 +566,6 @@ class EmbeddingService:
             __mid=self._embedder.model_id,
             __mv=self._embedder.model_version,
         )
-        stmt = select(id_col, text_expr).where(not_exists_sql)
-        with self._engine.connect() as conn:
-            for row in conn.execute(stmt):
-                # SQLAlchemy returns ``Any`` for column values; the
-                # projection schemas constrain id_column to ``str`` and
-                # text_column to ``str | None``.
-                yield str(row[0]), (None if row[1] is None else str(row[1]))
 
     @staticmethod
     def _text_expr(source: EntitySource, source_table: Table) -> ColumnElement[str]:

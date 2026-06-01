@@ -136,6 +136,26 @@ def test_rebuild_all_replays_event_log_into_tasks_projection(migrated_engine: En
     assert row["updated_at"] >= row["created_at"]
 
 
+def test_rebuild_all_invokes_progress_callback_once_per_event(
+    migrated_engine: Engine,
+) -> None:
+    """The optional ``progress_callback`` fires once per replayed event."""
+    store = SqlAlchemyEventStore(migrated_engine)
+    projection = TasksProjection()
+    service = TaskService(store=store, projector=NoOpProjector())
+
+    created = service.create_task(title="ship", body="b")
+    service.activate_task(created.aggregate_id)
+    service.complete_task(created.aggregate_id, "done")
+
+    n_events = sum(1 for _ in store.iter_all())
+    ticks: list[int] = []
+    rebuild_all(migrated_engine, store, [projection], progress_callback=ticks.append)
+
+    assert n_events == 3
+    assert ticks == [1, 1, 1]
+
+
 def test_rebuild_all_is_idempotent(migrated_engine: Engine) -> None:
     """``rebuild_all`` called twice must produce the same snapshot as one call.
 

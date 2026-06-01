@@ -18,7 +18,7 @@ in the Phase 5 plan is verified by going through the real factory
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 from typer.testing import CliRunner
@@ -92,7 +92,11 @@ def test_drain_calls_embed_pending(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     result = runner.invoke(app, ["embeddings", "drain"])
 
     assert result.exit_code == 0, result.stdout
-    service.embed_pending.assert_called_once_with(entity_type=None, limit=None)
+    # progress_callback is the determinate reporter's advance (a no-op on the
+    # non-TTY test runner); assert the scope/limit kwargs and accept any callback.
+    service.embed_pending.assert_called_once_with(
+        entity_type=None, limit=None, progress_callback=ANY
+    )
     assert "embedded 3" in result.stdout
     assert "skipped 1" in result.stdout
     assert "failed 0" in result.stdout
@@ -116,7 +120,9 @@ def test_drain_passes_entity_type_filter(monkeypatch: pytest.MonkeyPatch, tmp_pa
     result = runner.invoke(app, ["embeddings", "drain", "--entity-type", "task"])
 
     assert result.exit_code == 0, result.stdout
-    service.embed_pending.assert_called_once_with(entity_type="task", limit=None)
+    service.embed_pending.assert_called_once_with(
+        entity_type="task", limit=None, progress_callback=ANY
+    )
 
 
 def test_drain_passes_limit_flag(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -136,7 +142,7 @@ def test_drain_passes_limit_flag(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     result = runner.invoke(app, ["embeddings", "drain", "--limit", "5"])
 
     assert result.exit_code == 0, result.stdout
-    service.embed_pending.assert_called_once_with(entity_type=None, limit=5)
+    service.embed_pending.assert_called_once_with(entity_type=None, limit=5, progress_callback=ANY)
 
 
 def test_drain_exit_code_zero_on_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -87,13 +87,21 @@ def embeddings_rebuild(
     keeps the stale summary-based vector.
     """
     # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.cli import _progress
     from opshub.cli._wiring import build_embedding_service
 
     service = build_embedding_service()
     purged = 0
     if purge:
         purged = service.purge_embeddings(entity_type=entity_type)
-    result = service.embed_pending(entity_type=entity_type, limit=limit)
+    # Size the determinate bar from the pending count (after any purge, so
+    # purged rows are counted back in). The bar renders on stderr and
+    # no-ops on a non-TTY, so the stdout summary below is unchanged.
+    total = service.count_pending(entity_type=entity_type)
+    with _progress.determinate(total, f"embedding {entity_type or 'all'}") as reporter:
+        result = service.embed_pending(
+            entity_type=entity_type, limit=limit, progress_callback=reporter.advance
+        )
     if purge:
         typer.echo(f"purged {purged} existing embedding(s) before rebuild")
     typer.echo(
@@ -137,10 +145,15 @@ def embeddings_drain(
     appended so audit trails treat drains and rebuilds uniformly.
     """
     # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.cli import _progress
     from opshub.cli._wiring import build_embedding_service
 
     service = build_embedding_service(actor="cli:embeddings_drain")
-    result = service.embed_pending(entity_type=entity_type, limit=limit)
+    total = service.count_pending(entity_type=entity_type)
+    with _progress.determinate(total, f"draining {entity_type or 'all'}") as reporter:
+        result = service.embed_pending(
+            entity_type=entity_type, limit=limit, progress_callback=reporter.advance
+        )
     typer.echo(
         f"rebuild_run_id={result.rebuild_run_id}: "
         f"embedded {result.embedded_count}, "
