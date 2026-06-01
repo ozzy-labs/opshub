@@ -99,6 +99,7 @@ NNNN-kebab-case-title.md
 | 0021 | [Encryption at Rest](0021-encryption-at-rest.md) | Accepted |
 | 0022 | [MCP Server Surface](0022-mcp-server-surface.md) | Accepted |
 | 0025 | [Office Document Content Extraction](0025-office-document-content-extraction.md) | Accepted |
+| 0026 | [CLI Progress Reporting for Long-Running Commands](0026-cli-progress-reporting.md) | Accepted |
 
 ## Open Questions
 

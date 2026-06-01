@@ -90,6 +90,8 @@ Phase 10 実装状況: **本文取り込み + provenance タグの拡張** ([ADR
 
 CLI / Connector / Agent から渡された command を受け、ドメイン的に有効化を検証し、Event Store に append、Projector に通知、必要なら Lock を取得・解放する。
 
+長時間処理 (connector sync / embeddings rebuild・drain / projections rebuild) の進捗表示は CLI 層に閉じる (ADR-0026)。service は rich に依存せず、optional な `progress_callback` (default `None`) を受けるだけの IoC seam を提供する (例: `EmbeddingService.embed_pending` / `projections.rebuild_all`)。connector sync は `Connector` Protocol を変えずに source service を透過プロキシでラップして進捗を取る。進捗は stderr へ描画し非 TTY では no-op のため、stdout の結果サマリは不変。
+
 ### 2.3 Event Store
 
 `events` テーブル (SQLite)。append-only、immutable、`schema_version` 付き。Event は semantic ("TaskActivated") であるべきで、generic CRUD event は避ける。

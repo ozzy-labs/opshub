@@ -262,6 +262,17 @@ opshub mcp tools -f json                               # JSON for diff / scripti
 opshub mcp serve                                       # stdio MCP server — agent host spawns this as a subprocess
 ```
 
+### Progress for long-running commands
+
+Long-running commands — `connector sync`, `embeddings rebuild` / `drain`, and
+`projections rebuild` — show a progress indicator on stderr while they run
+(a spinner + item count for streaming syncs, a percentage bar + ETA for
+counted work). It is shown automatically when stderr is a TTY and is a no-op
+otherwise, so piped / redirected output stays clean. Force it either way with
+the root `--progress` / `--no-progress` flag or the `OPSHUB_PROGRESS`
+environment variable (precedence: flag > env > TTY). See
+[ADR-0026](docs/adr/0026-cli-progress-reporting.md).
+
 ## Optional dependencies
 
 | Extras | Purpose | Heavy? |
@@ -286,7 +297,7 @@ opshub mcp serve                                       # stdio MCP server — ag
 - [`docs/architecture.md`](docs/architecture.md) — layered architecture overview
 - [`docs/secretary-agent.md`](docs/secretary-agent.md) — Phase 10 secretary agent platform usage (skills catalog, what it can / cannot do)
 - [`docs/mcp-setup.md`](docs/mcp-setup.md) — Phase 10 MCP setup for agent hosts (Claude Code etc.)
-- [`docs/adr/`](docs/adr/README.md) — Architecture Decision Records
+- [`docs/adr/`](docs/adr/README.md) — Architecture Decision Records (incl. ADR-0026 CLI progress reporting)
 - [`docs/box-drive-setup.md`](docs/box-drive-setup.md) — Phase 9 `box_drive` connector setup (WSL2 / macOS)
 - [`docs/onedrive-drive-setup.md`](docs/onedrive-drive-setup.md) — Phase 11 `onedrive_drive` connector setup (WSL2 / macOS)
 - [`docs/teams-setup.md`](docs/teams-setup.md) — Phase 11 `teams` connector setup (Azure app registration + User Token)
