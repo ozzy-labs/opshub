@@ -6,3 +6,5 @@ scan:
     - node_modules
     - .pnpm-store
     - .venv
+    - .pytest_cache
+    - .claude/worktrees
