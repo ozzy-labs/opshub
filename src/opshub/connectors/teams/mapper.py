@@ -119,7 +119,14 @@ def map_chat_message(raw: RawTeamsChatMessage) -> dict[str, Any]:
       defensive against future Graph schema changes).
     * ``summary`` — first :data:`SUMMARY_MAX_CHARS` chars of the plain
       text body. Truncation appends ``"…"`` (U+2026) so an operator
-      can tell at a glance that the preview was clipped.
+      can tell at a glance that the preview was clipped. Empty
+      ``plain_text`` (e.g. ``body_html=""`` or HTML that strips to
+      empty such as ``"<div></div>"``) normalises to ``None`` — the
+      same empty→``None`` rule the ``body`` field already applies, and
+      symmetric with the Phase 7 Slack mapper (#332). Without this
+      normalisation an empty summary would reach
+      :meth:`SourceService.observe` as ``""`` and fail the
+      :class:`ItemEnqueued.summary` ``min_length=1`` validation.
     * ``body`` — full plain text body (``None`` when empty) per
       ADR-0020.
     * ``provenance_origin = "external"`` + ``provenance_trust =
@@ -137,7 +144,7 @@ def map_chat_message(raw: RawTeamsChatMessage) -> dict[str, Any]:
         "external_id": f"{raw.chat_id}:{raw.id}",
         "source_type": SOURCE_TYPE,
         "title": f"{sender_label} in {chat_label}",
-        "summary": _truncate(plain_text, SUMMARY_MAX_CHARS),
+        "summary": _truncate(plain_text, SUMMARY_MAX_CHARS) or None,
         "url": raw.web_url,
         # ADR-0020: retain the full message body and tag it
         # external + untrusted. Empty body → ``None`` so the projection
