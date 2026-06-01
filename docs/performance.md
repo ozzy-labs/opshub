@@ -18,6 +18,12 @@ path. Heavy imports happen inside command function bodies, only when actually
 needed. The complementary tripwire `tests/integration/test_cold_start.py`
 asserts that `opshub --help` stays under the ADR-0001 budget on every CI run.
 
+The CLI progress indicators (ADR-0026) do not affect this budget: `rich` is
+imported lazily inside the `opshub.cli._progress` context managers (and that
+module is only reached through a lazy import inside a command callback), so
+`opshub --help` never loads it — the budget holds at ~210 ms with the feature
+in place.
+
 ## Test suite
 
 | Configuration | Tests | Time |
