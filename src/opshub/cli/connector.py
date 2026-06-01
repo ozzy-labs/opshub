@@ -17,7 +17,10 @@ Phase 3 step A5 ships two connector commands:
 Phase 14 T3 (#320, parent epic #317) adds a ``--debug`` opt-in error
 trail. The default failure path stays unchanged — the event log row
 still carries only the exception **type name** (R3 invariant from the
-ADR-0027 audit) and the stdout summary line is byte-identical. When
+ADR-0027 audit) and the one-line ``sync failed: <Type>`` summary on
+**stderr** is byte-identical (the success path's ``synced <name>: N
+item(s) observed`` line stays on stdout, so result-capturing pipes
+keep working; only the failure summary rides stderr). When
 ``OPSHUB_DEBUG=1`` (set by T2's root callback when ``--debug`` or
 ``-vv`` is used, or by the operator directly when ``opshub mcp serve``
 runs as a subprocess) the sync failure path additionally writes a
@@ -346,8 +349,13 @@ def connector_sync(name: str) -> None:
             typer.echo(f"sync failed: {type(exc).__name__}", err=True)
             # ``--debug`` (or ``OPSHUB_DEBUG=1`` set by T2's root
             # callback / by the operator) flips on a sanitised
-            # message + traceback on stderr. ``stdout`` is unchanged
-            # so scripts grepping the summary line keep working.
+            # message + traceback on stderr. The default ``sync failed:
+            # <Type>`` stderr line above is byte-identical regardless of
+            # ``--debug`` — scripts grepping that line for the type name
+            # keep working (note: capture stderr with ``2>&1`` or
+            # ``2>err.log`` since the summary rides stderr, not stdout;
+            # the success path still uses stdout so result-capturing
+            # pipes are unaffected).
             # The traceback is routed through ``format_debug_traceback``
             # which itself pipes the output through
             # ``sanitise_error_message`` so a stray bearer token in

@@ -65,12 +65,18 @@ from opshub.core.sanitise import sanitise_error_message
 
 _configured = False
 
-# Truthy / falsy strings accepted by ``OPSHUB_DEBUG`` (mirrors the
-# convention used by ``OPSHUB_PROGRESS`` in ``cli/_progress.py`` — see
-# ADR-0026). Matched case-insensitively, with surrounding whitespace
-# stripped. Unknown values are treated as ``False``.
+# Truthy strings accepted by ``OPSHUB_DEBUG`` (mirrors the convention
+# used by ``OPSHUB_PROGRESS`` in ``cli/_progress.py`` — see ADR-0026).
+# Matched case-insensitively, with surrounding whitespace stripped.
+# Unknown values — including the documented falsy spellings (``0`` /
+# ``false`` / ``no`` / ``off`` / empty string) — are treated as
+# ``False`` by :func:`_coerce_bool_env` which only checks ``_TRUTHY``.
+# We intentionally do **not** maintain a separate ``_FALSY`` set: the
+# docs (``docs/troubleshooting.md`` §2) pin "any non-truthy value is
+# False" as the contract, so a falsy set would be dead weight that
+# could drift away from the env-var enumeration in the docs (post-
+# merge audit L2, epic #317 followup).
 _TRUTHY = frozenset({"1", "true", "yes", "on", "debug"})
-_FALSY = frozenset({"0", "false", "no", "off", ""})
 
 # Format names accepted by ``--log-format`` and ``OPSHUB_LOG_FORMAT``.
 # ``auto`` resolves at ``configure_logging`` time based on the stderr
@@ -157,10 +163,16 @@ def resolve_log_settings(
     1. CLI flags. ``-v`` (``verbose=1``) → ``INFO``, ``-vv`` (``verbose=2``) → ``DEBUG``.
        ``-q`` (``quiet=1``) → ``WARNING``, ``-qq`` (``quiet=2``) → ``ERROR``.
        ``--debug`` forces ``DEBUG`` and also sets ``debug=True`` so the
-       caller knows to print sanitised tracebacks. ``-v`` and ``-q`` are
-       mutually compatible at the parser level but in practice T2 will
-       reject the combination; here we let the larger absolute value
-       win (``quiet`` after ``verbose``).
+       caller knows to print sanitised tracebacks. **``-vv`` (any CLI
+       path that resolves to DEBUG level) likewise implies
+       ``debug=True``**, matching the operator-facing contract pinned
+       by [`docs/troubleshooting.md`](../../docs/troubleshooting.md)
+       and decisions-log §33: an operator who typed ``-vv`` should see
+       the same debug-traceback surface (and the same
+       ``OPSHUB_DEBUG=1`` subprocess hand-off) as ``--debug``.
+       ``-v`` and ``-q`` are mutually compatible at the parser level
+       but in practice T2 will reject the combination; here we let the
+       larger absolute value win (``quiet`` after ``verbose``).
     2. Environment variables. ``OPSHUB_LOG_LEVEL`` overrides the
        level only if no CLI flag bumped it; ``OPSHUB_DEBUG`` likewise
        only fires when ``--debug`` was not set on the CLI.
@@ -188,8 +200,6 @@ def resolve_log_settings(
     env_level = _coerce_level(environ.get("OPSHUB_LOG_LEVEL"))
     env_debug = _coerce_bool_env(environ.get("OPSHUB_DEBUG"))
 
-    resolved_debug = bool(debug or env_debug)
-
     if cli_level is not None:
         resolved_level = cli_level
     elif env_level is not None:
@@ -198,6 +208,22 @@ def resolve_log_settings(
         resolved_level = "DEBUG"
     else:
         resolved_level = _DEFAULT_LEVEL
+
+    # ``-vv`` (DEBUG-level CLI) is documented as implying ``--debug``
+    # (see [`docs/troubleshooting.md`](../../docs/troubleshooting.md) §1
+    # and decisions-log §33). Folding "any path that lands on DEBUG"
+    # into the ``debug`` flag here keeps that contract honest — the T2
+    # root callback exports ``OPSHUB_DEBUG=1`` off ``settings.debug``,
+    # so the env-var hand-off to subprocess paths (``opshub mcp serve``,
+    # cron-driven sync) fires uniformly whether the operator typed
+    # ``--debug``, ``-vv``, or ``OPSHUB_DEBUG=1`` / ``OPSHUB_LOG_LEVEL=DEBUG``.
+    # Env-only ``OPSHUB_LOG_LEVEL=DEBUG`` does **not** light up ``debug``
+    # because the legacy contract is "env LOG_LEVEL = level only,
+    # OPSHUB_DEBUG = flip the debug flag" — a process started under
+    # ``OPSHUB_LOG_LEVEL=DEBUG`` keeps its existing one-liner ``Error:``
+    # behaviour. Operators who want the debug error wrapper must set
+    # ``OPSHUB_DEBUG=1`` (or pass ``--debug`` / ``-vv``).
+    resolved_debug = bool(debug or env_debug or (cli_level == "DEBUG"))
 
     # --- Step 3: format ---
     cli_format = _coerce_format(log_format)

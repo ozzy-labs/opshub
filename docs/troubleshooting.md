@@ -18,6 +18,10 @@ OpsHub の CLI / MCP server で問題が起きたときの調査手順をまと�
 
 優先順位は **CLI フラグ > 環境変数 > デフォルト**。フラグは root callback で解決されるため、`opshub <subcommand>` の `<subcommand>` 直前に置く (例: `opshub -vv connector sync github`)。
 
+`-v` と `-q` を同時に指定した場合は **`-q` (quiet) が優先される** (例: `-vv -q` は WARNING 相当)。これは「ノイズの多いコマンドに `-q` を後付けしたら明示的に静かになってほしい」という保守的なデフォルトであり、`src/opshub/core/logging.py:resolve_log_settings` が SSOT。
+
+`--log-format` に未知の値 (例: `--log-format yaml`) を渡したときは silent に `auto` フォールバックする。明示的なエラーは出さず stderr に warning も出さないので、CI などで「想定通りのレンダラに固定したい」場合は値を厳密に管理すること (`auto` / `json` / `console` の 3 値のみ受理)。
+
 ## 2. 環境変数
 
 CLI フラグを渡せない文脈 (`mcp serve` を subprocess として起動する agent host、cron 経由の sync 等) では同等の制御を環境変数で行う。
@@ -37,7 +41,7 @@ CLI フラグを渡せない文脈 (`mcp serve` を subprocess として起動�
 
 ### 3.1 `opshub connector sync <name>` が失敗する
 
-デフォルトの失敗表示は `ConnectorSyncFailed` event に **例外型名だけ** を残す (R3 不変条件、ADR-0014 / ADR-0022 由来)。stdout サマリ・event log の `error_message` は型名のみで、例外メッセージは出さない。
+デフォルトの失敗表示は `ConnectorSyncFailed` event に **例外型名だけ** を残す (R3 不変条件、ADR-0014 / ADR-0022 由来)。`sync failed: <Type>` の 1 行サマリは **stderr** に、event log の `error_message` は型名のみで、例外メッセージは出さない。成功時の `synced <name>: N item(s) observed` は従来通り **stdout** なので、結果を pipe で受け取るスクリプトは影響を受けない (`opshub connector sync ... > out.txt 2> err.txt` のように分けると挙動が明快)。
 
 原因調査には `--debug` を付けて再実行する:
 
@@ -45,7 +49,7 @@ CLI フラグを渡せない文脈 (`mcp serve` を subprocess として起動�
 opshub --debug connector sync github
 ```
 
-`--debug` 時のみ、サニタイズ済みの例外メッセージと traceback が **stderr** に追加表示される。stdout サマリ・event log の `error_message` は変わらない (R3 cont'd)。トークン形状はすべて marker に置換されてから出力されるため、ログを社内チャットや issue に貼っても安全。
+`--debug` 時のみ、サニタイズ済みの例外メッセージと traceback が **stderr** に追加表示される。デフォルトの `sync failed: <Type>` stderr サマリ・event log の `error_message` 自体は変わらない (R3 cont'd) — `--debug` が増やすのは追加の stderr 行 (例外メッセージ + サニタイズ済み traceback) だけ。トークン形状はすべて marker に置換されてから出力されるため、ログを社内チャットや issue に貼っても安全。
 
 cron 経由など、フラグを渡せない場合は環境変数で:
 

@@ -50,6 +50,9 @@ from opshub.mcp._registry import (
     WriteCategory,
 )
 from tests._secrets import (
+    FAKE_AWS_ACCESS_KEY,
+    FAKE_GITHUB_PAT,
+    FAKE_GOOGLE_API_KEY,
     FAKE_JWT,
     FAKE_SLACK_BOT_TOKEN,
 )
@@ -197,6 +200,84 @@ class TestOtelLogRedaction:
         scrubbed = _redaction_processor(None, "info", merged)
         assert FAKE_BEARER_TAIL not in scrubbed["header"]
         assert "Bearer ***" in scrubbed["header"]
+
+    @pytest.mark.parametrize(
+        ("fake_token", "marker_substring"),
+        [
+            # Each pair = (literal that matches ``core/sanitise.py`` regex,
+            # marker substring guaranteed to appear in the redactor output).
+            # We deliberately use ``tests/_secrets`` literals where they
+            # exist (AWS / Google / JWT / github_pat) so the redactor regex
+            # is exercised against the canonical wire shape kept under
+            # ``tests/_secrets.py``. The two ``sk-`` / ``ghp_`` shapes are
+            # built locally to mirror the pattern used by
+            # ``tests/unit/core/test_logging.py``.
+            pytest.param(FAKE_SK_KEY, "sk-***", id="sk-"),
+            pytest.param(FAKE_GHP_KEY, "ghp_***", id="ghp_"),
+            pytest.param(FAKE_GITHUB_PAT, "github_pat_***", id="github_pat_"),
+            pytest.param(FAKE_SLACK_BOT_TOKEN, "xoxb", id="xoxb-"),
+            pytest.param(FAKE_AWS_ACCESS_KEY, "AKIA***", id="AKIA"),
+            pytest.param(FAKE_GOOGLE_API_KEY, "AIza***", id="AIza"),
+            pytest.param(FAKE_JWT, "[JWT REDACTED]", id="JWT"),
+            pytest.param(FAKE_BEARER_HEADER, "Bearer ***", id="Bearer"),
+        ],
+    )
+    def test_otel_log_redacts_token_shape(self, fake_token: str, marker_substring: str) -> None:
+        """Every known token shape gets scrubbed in the MCP OTel log path.
+
+        Post-merge audit followup for epic #317 (M1): the prior test set
+        only pinned 3/8 token shapes (``sk-`` / ``Bearer`` / ``xoxb-``);
+        the redactor in :mod:`opshub.core.sanitise` covers 8 shapes
+        (``sk-`` / ``ghp_`` / ``github_pat_`` / ``xox*-`` / ``AKIA`` /
+        ``AIza`` / JWT / ``Bearer``). This parametrize exhaustively pins
+        all 8 against the structlog redaction processor that wraps the
+        MCP OTel naming layer, so a future regression that drops a
+        regex from ``sanitise.py`` (or skips routing a new attribute
+        through the processor) surfaces on a single failing case
+        rather than silently leaking through one shape.
+
+        The token must (a) actually round-trip the redactor regex
+        (``sanitise_error_message`` confirms the wire shape would have
+        matched in production), and (b) be rewritten to the documented
+        marker substring after the processor runs over a bound
+        ``header`` attribute.
+        """
+        from opshub.core.logging import (
+            _redaction_processor,  # pyright: ignore[reportPrivateUsage]
+        )
+        from opshub.core.sanitise import sanitise_error_message
+
+        # (a) Sanity-check the fixture matches the production regex
+        # set: if a future regex tightening drops one of these shapes
+        # the test must fail loudly here rather than in step (b) which
+        # would look like a redactor bug.
+        assert sanitise_error_message(fake_token) != fake_token, (
+            f"fixture {fake_token!r} no longer matches any sanitise regex; "
+            f"update tests/_secrets.py or the test parametrize set"
+        )
+
+        # (b) The structlog redaction processor — wired into
+        # ``configure_logging`` and therefore covering the MCP OTel
+        # naming layer — must rewrite the bound value to its marker.
+        capturing = _CapturingLogger()
+        log_tool_call_complete(
+            capturing,
+            tool_name="recall.search",
+            call_id="01HFAKEFAKEFAKEFAKEFAKEFAK",
+            duration_ms=1.5,
+            status="ok",
+        )
+        _event, payload = capturing.events[0]
+        merged = {**payload, "header": fake_token}
+
+        scrubbed = _redaction_processor(None, "info", merged)
+        assert isinstance(scrubbed["header"], str)
+        assert marker_substring in scrubbed["header"]
+        # Belt-and-braces: the full raw token must not survive verbatim.
+        # The marker replaces the matched span entirely, so the original
+        # multi-character string can never reappear in the scrubbed
+        # payload (this is the load-bearing R1 contract).
+        assert fake_token not in scrubbed["header"]
 
     def test_error_type_attribute_is_class_name_only(self) -> None:
         """``error.type`` carries the class name, not the message body.

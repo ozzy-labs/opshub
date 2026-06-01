@@ -199,12 +199,15 @@ invariants hold at every verbosity level:
   `sanitise_error_message`. The CLI never prints a raw `str(exc)`.
 - **Connector sync stays type-name only by default (R3).** The default
   `opshub connector sync <name>` failure path writes only the exception
-  **type name** to the `ConnectorSyncFailed` event and the stdout
-  summary. The exception message is never persisted there. Only when
-  `--debug` (or `OPSHUB_DEBUG=1`) is set does the CLI additionally print
-  a sanitised exception message + sanitised traceback to **stderr**;
-  the stdout summary and the event-log `error_message` field stay
-  byte-identical to the default path.
+  **type name** to the `ConnectorSyncFailed` event and to the one-line
+  `sync failed: <Type>` summary on **stderr**. The exception message
+  is never persisted there. (The success path — `synced <name>: N
+  item(s) observed` — stays on **stdout**, so scripts redirecting
+  stdout to capture results still work; only the failure summary
+  rides stderr.) Only when `--debug` (or `OPSHUB_DEBUG=1`) is set does
+  the CLI additionally print a sanitised exception message + sanitised
+  traceback to **stderr**; the stderr summary line and the event-log
+  `error_message` field stay byte-identical to the default path.
 - **`--log-file` is created at mode 0600 (R5).** When `--log-file PATH`
   or `OPSHUB_LOG_FILE=PATH` is set, the file is opened via
   `os.open(path, O_CREAT | O_WRONLY | O_APPEND, 0o600)`, so the

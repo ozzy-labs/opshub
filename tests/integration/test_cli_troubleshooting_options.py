@@ -297,6 +297,20 @@ class TestContextHandover:
         assert result.exit_code == 0, result.stdout
         assert os.environ.get("OPSHUB_DEBUG") == "1"
 
+    def test_double_v_exports_opshub_debug_env(self) -> None:
+        """``-vv`` exports ``OPSHUB_DEBUG=1`` (matches docs §1, §33 contract).
+
+        Post-merge audit followup for epic #317: docs already document
+        that ``-vv`` implies ``--debug`` (incl. the ``OPSHUB_DEBUG``
+        subprocess hand-off), so the env export must fire on the ``-vv``
+        path too. Pins the H1 fix.
+        """
+        os.environ.pop("OPSHUB_DEBUG", None)
+        runner = CliRunner()
+        result = runner.invoke(app, ["-vv", "version"])
+        assert result.exit_code == 0, result.stdout
+        assert os.environ.get("OPSHUB_DEBUG") == "1"
+
     def test_default_does_not_export_opshub_debug_env(self) -> None:
         os.environ.pop("OPSHUB_DEBUG", None)
         runner = CliRunner()
@@ -597,3 +611,118 @@ class TestDebugActiveHelper:
     def test_unset_is_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("OPSHUB_DEBUG", raising=False)
         assert _debug_active() is False
+
+
+# ============================================================================
+# Flag co-occurrence (epic #316 ``--no-progress`` x epic #317 verbosity)
+# ============================================================================
+
+
+class TestFlagCombinations:
+    """``--no-progress`` (epic #316) combines cleanly with verbosity flags (epic #317).
+
+    Post-merge audit followup: epic #316 and epic #317 each added
+    root-callback flags but the integration combinations were never
+    pinned. A future refactor of the root callback (e.g. parameter
+    reordering, eager-option promotion, callback signature change)
+    could silently break one combination while keeping the others
+    green. These tests pin every pairwise combination at the
+    happy-path level so regressions surface here.
+    """
+
+    def test_no_progress_and_debug_combine(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``--no-progress --debug`` resolves both flags together."""
+        os.environ.pop("OPSHUB_DEBUG", None)
+        calls = _spy_configure(monkeypatch)
+
+        from opshub.cli import _progress
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["--no-progress", "--debug", "version"])
+
+        assert result.exit_code == 0, result.stdout
+        # ``--debug`` lifted to DEBUG level.
+        assert calls[0]["level"] == "DEBUG"
+        # ``--no-progress`` flowed into the progress preference.
+        assert _progress._preference is False  # pyright: ignore[reportPrivateUsage]
+        # ``OPSHUB_DEBUG=1`` env export still fires alongside ``--no-progress``.
+        assert os.environ.get("OPSHUB_DEBUG") == "1"
+
+    def test_no_progress_and_verbose_combine(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``--no-progress -vv`` lifts level to DEBUG and disables progress."""
+        os.environ.pop("OPSHUB_DEBUG", None)
+        calls = _spy_configure(monkeypatch)
+
+        from opshub.cli import _progress
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["--no-progress", "-vv", "version"])
+
+        assert result.exit_code == 0, result.stdout
+        assert calls[0]["level"] == "DEBUG"
+        assert _progress._preference is False  # pyright: ignore[reportPrivateUsage]
+        # ``-vv`` implies ``--debug`` (H1) → OPSHUB_DEBUG exported.
+        assert os.environ.get("OPSHUB_DEBUG") == "1"
+
+    def test_no_progress_and_quiet_combine(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``--no-progress -qq`` drops level to ERROR and disables progress."""
+        calls = _spy_configure(monkeypatch)
+
+        from opshub.cli import _progress
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["--no-progress", "-qq", "version"])
+
+        assert result.exit_code == 0, result.stdout
+        assert calls[0]["level"] == "ERROR"
+        assert _progress._preference is False  # pyright: ignore[reportPrivateUsage]
+
+    def test_progress_and_log_format_combine(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``--progress --log-format json`` honours both flags."""
+        calls = _spy_configure(monkeypatch)
+
+        from opshub.cli import _progress
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["--progress", "--log-format", "json", "version"])
+
+        assert result.exit_code == 0, result.stdout
+        assert calls[0]["json"] is True
+        assert _progress._preference is True  # pyright: ignore[reportPrivateUsage]
+
+
+# ============================================================================
+# -v / -q precedence pin (epic #317 audit L4)
+# ============================================================================
+
+
+class TestVerboseQuietPrecedence:
+    """``-q`` wins over ``-v`` when both are supplied.
+
+    The implementation in :mod:`opshub.core.logging` has had this
+    "quiet beats verbose" behaviour from T1, but it was undocumented at
+    the operator-facing layer. Pin it here so the docs sentence in
+    [`docs/troubleshooting.md`](../../docs/troubleshooting.md) §1 (L4
+    of the post-merge audit) cannot drift away from the implementation.
+    """
+
+    def test_verbose_then_quiet_yields_warning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = _spy_configure(monkeypatch)
+        runner = CliRunner()
+        result = runner.invoke(app, ["-v", "-q", "version"])
+        assert result.exit_code == 0, result.stdout
+        # ``-q`` (WARNING) wins over ``-v`` (INFO).
+        assert calls[0]["level"] == "WARNING"
+
+    def test_double_verbose_then_quiet_yields_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = _spy_configure(monkeypatch)
+        runner = CliRunner()
+        result = runner.invoke(app, ["-vv", "-q", "version"])
+        assert result.exit_code == 0, result.stdout
+        # Even ``-vv`` (which would imply DEBUG + debug=True) is
+        # overruled by a subsequent ``-q``. The conservative posture
+        # protects operators who add ``-q`` to a noisy command without
+        # noticing an earlier ``-v``.
+        assert calls[0]["level"] == "WARNING"
