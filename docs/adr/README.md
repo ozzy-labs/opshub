@@ -101,6 +101,7 @@ NNNN-kebab-case-title.md
 | 0025 | [Office Document Content Extraction](0025-office-document-content-extraction.md) | Accepted |
 | 0026 | [CLI Progress Reporting for Long-Running Commands](0026-cli-progress-reporting.md) | Accepted |
 | 0027 | [Observability & Troubleshooting Logging](0027-observability-and-troubleshooting-logging.md) | Accepted |
+| 0028 | [FTS5 sources_fts tokenizer choice (trigram + short-query LIKE fallback)](0028-fts5-japanese-tokenizer.md) | Accepted |
 
 ## Open Questions
 
