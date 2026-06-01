@@ -61,7 +61,7 @@ Phase 15 の目的は、opshub の秘書 use case で頻出する「日本語キ
 
 - **依存: なし** (entry)
 - `docs/adr/0028-fts5-japanese-tokenizer.md` 新規起草 (Context / Decision / Alternatives / Consequences、上表のとおり)
-- `docs/phase-15-plan.md` 新規起草 (本ファイル、PR 4 本 scope / OQ 一覧 / 検証手順 / rollback 戦略)
+- `docs/phase-15-plan.md` 新規起草 (本ファイル、PR 4 本 scope / OQ 一覧 / 検証手順 / downgrade 戦略 (§S2 + §Alternatives #5 参照))
 - `docs/adr/README.md` に ADR-0028 行追加 (索引同期)
 - `AGENTS.md` の Phase status の「次の候補は Phase 15+」記述に `Search 品質改善 (FTS5 日本語 tokenizer 修正、ADR-0028)` を追記 (Phase 15 着手 / 候補化を可視化)
 - ADR / plan / index のみで実装変更なし、CI green
