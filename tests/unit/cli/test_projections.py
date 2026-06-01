@@ -126,3 +126,33 @@ def test_rebuild_without_init_raises_config_error(
     assert result.exit_code != 0
     # CliRunner records the raised exception on ``result.exception``.
     assert isinstance(result.exception, ConfigError)
+
+
+def test_rebuild_does_not_leak_ansi_escapes_under_clirunner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Issue #316 post-merge audit: ``projections rebuild`` under CliRunner is ANSI-clean.
+
+    The determinate progress reporter is TTY-gated: under :class:`CliRunner`
+    stderr is a buffer, not a real terminal, so :func:`_progress.determinate`
+    resolves to the no-op reporter and emits nothing. This test pins that
+    contract end-to-end (against a real seeded event store) so a future
+    refactor of the reporter wiring — e.g. switching the default console
+    or moving the gate — fails fast instead of silently leaking escape
+    codes into pipes and scripts.
+    """
+    db_path = _isolate_env(monkeypatch, tmp_path)
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0, init_result.stdout
+
+    _seed_two_tasks(db_path)
+
+    result = runner.invoke(app, ["projections", "rebuild"])
+    assert result.exit_code == 0, result.stdout
+    # Neither stream may carry an ANSI escape sequence: stdout is the
+    # operator-facing summary, stderr is where the progress reporter
+    # would otherwise write its bar / cursor-control codes.
+    assert "\x1b[" not in result.stdout
+    assert "\x1b[" not in (result.stderr or "")

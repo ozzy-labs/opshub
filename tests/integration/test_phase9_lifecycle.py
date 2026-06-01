@@ -257,6 +257,14 @@ def test_box_drive_lifecycle_2_pass_sync(
     pass1 = runner.invoke(app, ["connector", "sync", "box_drive"])
     assert pass1.exit_code == 0, pass1.stdout + (pass1.stderr or "")
     assert "synced box_drive: 3 item(s) observed" in pass1.stdout, pass1.stdout
+    # Issue #316 post-merge audit: ``opshub connector sync`` drives the
+    # indeterminate progress reporter, which is TTY-gated. Under
+    # :class:`CliRunner` stderr is a buffer (not a real terminal), so
+    # the reporter resolves to the no-op path and no ANSI escapes leak
+    # into stdout or stderr. This guard fails fast if a future refactor
+    # of the reporter wiring breaks the gate.
+    assert "\x1b[" not in pass1.stdout
+    assert "\x1b[" not in (pass1.stderr or "")
 
     # Three rows in ``sources``, three in ``inbox_items``.
     sources_after_pass1 = _fetch_sources(db_path)
