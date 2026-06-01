@@ -565,6 +565,45 @@ def test_embed_pending_invokes_progress_callback_once_per_processed_row(
     assert ticks == [1, 1, 1]
 
 
+def test_embed_pending_progress_callback_fires_for_failed_rows_too(
+    migrated_engine: Engine,
+) -> None:
+    """The callback ticks once per ``failed`` row as well, not just embedded / skipped.
+
+    Issue #316 post-merge audit (PR #325): the determinate progress bar
+    is sized via :meth:`EmbeddingService.count_pending`, which counts
+    every row the rebuild will attempt. If the per-row callback were to
+    skip the ``failed`` branch the bar would stall short of 100% on any
+    batch that hit an embedder error, which is exactly the operator-
+    facing failure mode the indicator is supposed to surface. This pins
+    the contract that the tick fires for all three outcomes — embedded,
+    skipped, *and* failed.
+    """
+    embedder = _StubEmbedder(fail_on="poison row")
+    _seed_task(migrated_engine, title="harmless")
+    _seed_task(migrated_engine, title="poison row")
+    # A skipped row (NULL summary on a source) lets the assertion span
+    # all three outcomes in a single batch.
+    _seed_source(migrated_engine, summary=None, external_id="repo#null-summary")
+
+    service = _make_service(migrated_engine, embedder=embedder)
+
+    ticks: list[int] = []
+    result = service.embed_pending(progress_callback=ticks.append)
+
+    # Sanity: one of each outcome — pins the setup so a future change
+    # cannot silently collapse this into "all-embedded" and erase the
+    # failed-branch coverage.
+    assert result.embedded_count == 1
+    assert result.skipped_count == 1
+    assert result.failed_count == 1
+    # The callback must have fired once per processed row across every
+    # outcome, matching the count_pending(...) total the CLI uses to
+    # size the bar.
+    assert len(ticks) == (result.embedded_count + result.skipped_count + result.failed_count)
+    assert ticks == [1, 1, 1]
+
+
 def test_embed_pending_records_failure_event_and_continues(
     migrated_engine: Engine,
 ) -> None:

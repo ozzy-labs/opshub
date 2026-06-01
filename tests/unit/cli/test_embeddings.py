@@ -209,6 +209,14 @@ def test_embeddings_rebuild_with_no_data_returns_zero_counts(
 
     The bracketing :class:`EmbeddingRebuildRequested` still appends so
     ``rebuild_run_id`` is a real ULID even with no entities to embed.
+
+    Issue #316 post-merge audit: with zero pending rows the determinate
+    progress reporter must not leak any rendered residue to stderr —
+    CliRunner is non-TTY so :func:`_progress.determinate` resolves to
+    a :class:`_NoOpReporter` and nothing should reach stderr beyond
+    whatever existing log lines (typically empty) the wiring emits.
+    The ANSI guard below also pins that no escape codes slip through
+    on either channel.
     """
     _isolate_env(monkeypatch, tmp_path)
     monkeypatch.setenv("OPSHUB_EMBEDDING__BACKEND", "local")
@@ -224,6 +232,76 @@ def test_embeddings_rebuild_with_no_data_returns_zero_counts(
     assert "skipped 0" in result.stdout
     assert "failed 0" in result.stdout
     assert "rebuild_run_id=" in result.stdout
+    # No ANSI escape sequences leak into either stream — the non-TTY
+    # CliRunner takes the no-op reporter path.
+    assert "\x1b[" not in result.stdout
+    assert "\x1b[" not in (result.stderr or "")
+    # The zero-row rebuild leaves no progress residue on stderr (the
+    # no-op reporter writes nothing). Wiring may emit structlog warnings
+    # in edge cases, so we constrain rather than assert exact-empty: any
+    # non-empty stderr must be plain text, never the spinner / bar
+    # animation frames.
+    stderr = result.stderr or ""
+    for marker in ("\r", "rebuilding", "item(s)"):
+        assert marker not in stderr, (
+            f"unexpected progress residue on stderr (marker={marker!r}): {stderr!r}"
+        )
+
+
+def test_embeddings_rebuild_no_progress_flag_matches_default_stdout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--no-progress`` end-to-end: stdout summary matches the default invocation.
+
+    Issue #316 post-merge audit: the explicit ``--no-progress`` flag
+    must produce byte-identical stdout to the default (non-TTY)
+    invocation, because the only thing the flag changes is *whether
+    the progress display is rendered to stderr*. Stdout — the script-
+    friendly summary line — is invariant under the flag, and no ANSI
+    escape sequence leaks into either stream.
+    """
+    db_path = _isolate_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_EMBEDDING__BACKEND", "local")
+    _install_stub_embedder(monkeypatch, _StubEmbedder())
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0, init_result.stdout
+
+    engine = _open_db(db_path)
+    try:
+        _seed_task(engine, title="hello world")
+    finally:
+        engine.dispose()
+
+    default_run = runner.invoke(app, ["embeddings", "rebuild"])
+    assert default_run.exit_code == 0, default_run.stdout
+
+    # Re-seed for a parallel run: ``embed_pending`` consumed the only
+    # task on the first invocation, so the no-progress run needs its
+    # own pending row to produce the same "embedded 1" summary line.
+    engine = _open_db(db_path)
+    try:
+        _seed_task(engine, title="hello world 2")
+    finally:
+        engine.dispose()
+
+    no_progress_run = runner.invoke(app, ["--no-progress", "embeddings", "rebuild"])
+    assert no_progress_run.exit_code == 0, no_progress_run.stdout
+
+    # Strip the ``rebuild_run_id=<ULID>`` token from each summary — the
+    # ULID differs per invocation by design. What we care about is that
+    # every other byte (counts, labels, line shape) is identical.
+    def _strip_run_id(stdout: str) -> str:
+        return "\n".join(
+            line for line in stdout.splitlines() if not line.lstrip().startswith("rebuild_run_id=")
+        )
+
+    assert _strip_run_id(default_run.stdout) == _strip_run_id(no_progress_run.stdout)
+    # And neither stream carries an ANSI escape on the explicit
+    # ``--no-progress`` path.
+    assert "\x1b[" not in no_progress_run.stdout
+    assert "\x1b[" not in (no_progress_run.stderr or "")
 
 
 def test_embeddings_rebuild_embeds_pending_tasks(

@@ -165,3 +165,55 @@ def test_root_progress_flag_sets_preference() -> None:
     result = runner.invoke(app, ["--progress", "connector", "list"])
     assert result.exit_code == 0, result.stdout
     assert _progress._preference is True  # pyright: ignore[reportPrivateUsage]
+
+
+# ---- tear-down on exception ----------------------------------------------
+#
+# These pins guarantee the ``Progress`` live display is stopped even when
+# the body of the ``with determinate(...)`` / ``with indeterminate(...)``
+# block raises. The contract matters because a half-closed Live keeps the
+# alternate-screen buffer / cursor-hide control codes active, which would
+# leave the operator's terminal in a broken state until the next ``reset``.
+# ``Progress.__exit__`` performs the cleanup, so we assert it ran by
+# probing the underlying ``Live._started`` flag after the exception
+# propagates out of the context manager (the issue #316 audit asked for
+# this fail-fast guard before someone refactors the reporter wiring).
+
+
+def test_determinate_progress_live_stops_when_body_raises() -> None:
+    """A raise inside ``with determinate(...)`` still tears down the Live display."""
+    _progress.set_preference(True)
+    console = _forced_terminal_console()
+    captured: _RichReporter | None = None
+
+    with pytest.raises(RuntimeError, match="boom-determinate"):
+        with _progress.determinate(4, "rebuilding", console=console) as reporter:
+            assert isinstance(reporter, _RichReporter)
+            captured = reporter
+            reporter.advance(1)
+            raise RuntimeError("boom-determinate")
+
+    assert captured is not None
+    # ``Progress.__exit__`` calls ``Live.stop()`` which flips this flag
+    # back to False — the only externally observable signal that the live
+    # render loop has wound down cleanly.
+    progress = captured._progress  # pyright: ignore[reportPrivateUsage]
+    assert progress.live._started is False  # pyright: ignore[reportPrivateUsage]
+
+
+def test_indeterminate_progress_live_stops_when_body_raises() -> None:
+    """A raise inside ``with indeterminate(...)`` still tears down the Live display."""
+    _progress.set_preference(True)
+    console = _forced_terminal_console()
+    captured: _RichReporter | None = None
+
+    with pytest.raises(RuntimeError, match="boom-indeterminate"):
+        with _progress.indeterminate("syncing", console=console) as reporter:
+            assert isinstance(reporter, _RichReporter)
+            captured = reporter
+            reporter.advance(2)
+            raise RuntimeError("boom-indeterminate")
+
+    assert captured is not None
+    progress = captured._progress  # pyright: ignore[reportPrivateUsage]
+    assert progress.live._started is False  # pyright: ignore[reportPrivateUsage]
