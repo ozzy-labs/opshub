@@ -48,6 +48,8 @@ uv run alembic upgrade head   # DB migration 適用
 
 長時間 CLI (`opshub connector sync` / `opshub embeddings rebuild` / `opshub embeddings drain` / `opshub projections rebuild`) は stderr が TTY のとき進捗を自動表示し、ルートの `--progress` / `--no-progress` フラグまたは `OPSHUB_PROGRESS` 環境変数 (truthy = `1`/`true`/`yes`/`on`、falsy = `0`/`false`/`no`/`off`、case-insensitive) で上書きできる ([ADR-0026](docs/adr/0026-cli-progress-reporting.md))。
 
+トラブルシュート用にはルートに `-v` / `-q` / `--debug` / `--log-format` / `--log-file` フラグと対応する `OPSHUB_LOG_LEVEL` / `OPSHUB_LOG_FORMAT` / `OPSHUB_DEBUG` / `OPSHUB_LOG_FILE` 環境変数があり、トークン / 鍵 / 既知形状の secret は全 verbosity で redaction される ([ADR-0027](docs/adr/0027-observability-and-troubleshooting-logging.md))。手順は [`docs/troubleshooting.md`](docs/troubleshooting.md)。
+
 ## 検証（必須）
 
 コード変更後、報告前に以下を通すこと:

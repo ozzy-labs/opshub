@@ -55,3 +55,7 @@ opshub は形A (ADR-0004) に基づき秘書 **14 Skill** を提供する。SKIL
 ## 長時間 CLI の進捗表示
 
 長時間 CLI (`opshub connector sync` / `opshub embeddings rebuild` / `opshub embeddings drain` / `opshub projections rebuild`) は TTY 時に進捗を自動表示し、`--progress` / `--no-progress` フラグまたは `OPSHUB_PROGRESS` 環境変数 (truthy = `1`/`true`/`yes`/`on`、falsy = `0`/`false`/`no`/`off`、case-insensitive) で上書きできる ([ADR-0026](docs/adr/0026-cli-progress-reporting.md))。
+
+## トラブルシュート用オプション
+
+全サブコマンドに共通の `-v` / `-q` / `--debug` / `--log-format` / `--log-file` フラグと `OPSHUB_LOG_LEVEL` / `OPSHUB_LOG_FORMAT` / `OPSHUB_DEBUG` / `OPSHUB_LOG_FILE` 環境変数で verbosity を制御できる。トークン / 鍵 / 既知形状の secret は全 verbosity で redaction される ([ADR-0027](docs/adr/0027-observability-and-troubleshooting-logging.md))。手順は [`docs/troubleshooting.md`](docs/troubleshooting.md)。

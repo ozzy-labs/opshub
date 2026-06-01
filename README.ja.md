@@ -260,6 +260,24 @@ opshub mcp tools -f json                               # diff / scripting 用 JS
 opshub mcp serve                                       # stdio MCP server — エージェント host が subprocess として spawn
 ```
 
+### トラブルシュート（verbosity / debug / log file）
+
+Phase 14 epic #317 ([ADR-0027](docs/adr/0027-observability-and-troubleshooting-logging.md))
+で全サブコマンド共通の調査用フラグを追加した。`-v` / `-vv` で INFO /
+DEBUG にログレベルを上げ、`-q` / `-qq` で WARNING / ERROR に下げる。
+`--debug` を付けると `OpsHubError` 発生時にサニタイズ済み full
+traceback が stderr に追加される (デフォルトの `Error: <msg>` 1 行も
+残る)。`--log-format auto|json|console` でレンダラを明示し、
+`--log-file PATH` を渡せば stderr と同じ内容を mode 0600 のファイル
+に tee する。フラグを渡せない経路 (`opshub mcp serve` を agent host
+が spawn する場合、cron 経由の sync など) では `OPSHUB_LOG_LEVEL` /
+`OPSHUB_LOG_FORMAT` / `OPSHUB_DEBUG` / `OPSHUB_LOG_FILE` 環境変数で
+同等に制御する。トークン / 鍵 / 既知形状の secret (`sk-`、`ghp_`、
+`github_pat_`、`xox*-`、`AKIA`、`AIza`、`Bearer`、JWT) はどの
+verbosity でも redaction processor で marker 化される。手順は
+[`docs/troubleshooting.md`](docs/troubleshooting.md)、保証内容は
+[`SECURITY.md`](SECURITY.md) §Debug-safe logging を参照。
+
 ## オプション依存関係
 
 | Extras | 用途 | サイズ |
@@ -289,6 +307,7 @@ opshub mcp serve                                       # stdio MCP server — �
 - [`docs/onedrive-drive-setup.md`](docs/onedrive-drive-setup.md) — Phase 11 `onedrive_drive` connector setup (WSL2 / macOS)
 - [`docs/teams-setup.md`](docs/teams-setup.md) — Phase 11 `teams` connector setup (Azure app 登録 + User Token)
 - [`docs/google-workspace-setup.md`](docs/google-workspace-setup.md) — Phase 13 `google_workspace` connector setup (GCP project + OAuth consent screen + paste-code Refresh Token)
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) — Phase 14 epic #317 トラブルシュート手順（`-v` / `--debug` / `--log-file`、MCP serve 用の環境変数、redaction 保証）
 - [`docs/upgrading.md`](docs/upgrading.md) — バージョン移行ノート (該当時のみ)
 - [`docs/release-notes-v0.1.0.md`](docs/release-notes-v0.1.0.md) — v0.1.0 ナラティブリリースノート
 - [`docs/RELEASE_RUNBOOK.md`](docs/RELEASE_RUNBOOK.md) — リリースの切り方 (maintainer 向け)
