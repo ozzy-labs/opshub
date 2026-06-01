@@ -197,12 +197,16 @@ class SourceService:
           collapses them into a single row.
         * :class:`ItemEnqueued` — minted with its own fresh ULID.
           ``summary`` defaults to ``f"{source_type}: {title}"`` when the
-          caller passed ``None`` **or** an empty string for ``summary``
-          (both are treated as "no caller-supplied summary"; the
-          downstream :class:`ItemEnqueued.summary` field requires
-          ``min_length=1`` so propagating ``""`` would raise
+          caller passed ``None``, an empty string, or a whitespace-only
+          string for ``summary`` (all three are treated as "no
+          caller-supplied summary"; the downstream
+          :class:`ItemEnqueued.summary` field requires ``min_length=1``
+          so propagating ``""`` would raise
           :class:`pydantic.ValidationError` mid-sync — see issue #332
-          for the Slack empty-text trigger). ``source_ref`` is always
+          for the Slack empty-text trigger — and propagating ``"  "``
+          would pass the schema but leave the inbox preview visually
+          blank (see issue #337 for the whitespace-only audit
+          followup)). ``source_ref`` is always
           ``f"{connector_name}:{external_id}"`` so the inbox row
           carries the natural key back to the source.
 
@@ -257,7 +261,7 @@ class SourceService:
         inbox_event = ItemEnqueued(
             aggregate_id=new_ulid(),
             actor=self._actor,
-            summary=summary if summary else f"{source_type}: {title}",
+            summary=summary if (summary and summary.strip()) else f"{source_type}: {title}",
             source_ref=f"{connector_name}:{external_id}",
         )
         self._commit([source_event, inbox_event])

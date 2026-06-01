@@ -115,14 +115,21 @@ def map_message(raw: RawSlackMessage) -> dict[str, Any]:
       ``"…"`` (U+2026) so an operator can tell at a glance that the
       preview was clipped. The ellipsis is one **character**, not
       three dots, so the cap counts correctly in unicode terms.
-      Empty ``text`` is normalised to ``None`` (mirrors the ``body``
-      field rule below) so the projection stores NULL rather than
-      ``""``. ``SourceService.observe`` then falls back to
+      Empty or whitespace-only ``text`` is normalised to ``None`` so
+      the projection stores NULL rather than ``""`` / ``"  "``. This
+      mirrors the ``body`` field rule for **empty** content, but the
+      ``body`` field intentionally retains whitespace verbatim
+      (ADR-0020 Full Local Content Retention §(d) keeps body
+      content unmodified for forensic / agent re-render purposes);
+      the summary path is the preview-shaped projection so
+      whitespace-only summaries provide no recognition value and
+      are flattened. ``SourceService.observe`` then falls back to
       ``f"{source_type}: {title}"`` for the ``ItemEnqueued.summary``
       preview — the inbox row stays identifiable even when Slack
       delivers a text-less event (Slackbot / ``channel_join`` /
-      ``file_share``). See issue #332 for the original
-      ``ValidationError`` regression.
+      ``file_share``). See issue #332 for the original empty-text
+      ``ValidationError`` regression and issue #337 for the
+      whitespace-only audit followup.
     * ``url = raw.permalink`` — Slack's :func:`chat.getPermalink`
       result. Empty string is preserved verbatim (the fetcher
       already handles the rare permalink-lookup failure by yielding
@@ -143,7 +150,7 @@ def map_message(raw: RawSlackMessage) -> dict[str, Any]:
         "external_id": f"{raw.channel_id}:{raw.ts}",
         "source_type": SOURCE_TYPE,
         "title": f"{raw.user_display_name} in #{raw.channel_name}",
-        "summary": _truncate(raw.text, SUMMARY_MAX_CHARS) or None,
+        "summary": _truncate(raw.text.strip(), SUMMARY_MAX_CHARS) or None,
         "url": raw.permalink,
         # Phase 10 (ADR-0020): retain the full message text and tag it
         # external + untrusted. ``summary`` stays the ≤200-char preview;

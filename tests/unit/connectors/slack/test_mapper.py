@@ -200,6 +200,44 @@ def test_map_message_normalises_empty_text_to_none() -> None:
     assert kwargs["external_id"] == "C123:1700000000.000100"
 
 
+def test_map_message_normalises_whitespace_only_text_to_none() -> None:
+    """Whitespace-only ``text`` → ``summary=None`` (issue #337).
+
+    Audit followup to issue #332. The #332 fix normalised empty
+    ``text=""`` to ``None`` but whitespace-only payloads (``"  "``,
+    ``"\\t\\n"``) slipped through ``_truncate`` and landed in the
+    ``summary`` field as visually-blank previews — passing
+    :class:`ItemEnqueued`'s ``min_length=1`` but contaminating the
+    inbox UX.
+
+    Post-fix the mapper strips ``text`` before truncation so any
+    whitespace-only payload collapses to the empty string and
+    normalises to ``None``. The ``body`` field intentionally retains
+    whitespace verbatim per ADR-0020 §(d) Full Local Content
+    Retention (the body is the forensic record; the summary is the
+    preview projection), so this test pins the asymmetry: the same
+    raw text yields ``summary=None`` but ``body="  "``.
+    """
+    raw = _raw_message(text="  ")
+    kwargs = map_message(raw)
+
+    assert kwargs["summary"] is None
+    # ADR-0020: body retains the verbatim whitespace; only summary is
+    # flattened. Pinning this guards the retention contract against a
+    # future "clean both sides" refactor that would lose the forensic
+    # record.
+    assert kwargs["body"] == "  "
+    # Title / external_id remain populated from metadata.
+    assert kwargs["title"] == "alice in #general"
+    assert kwargs["external_id"] == "C123:1700000000.000100"
+
+    # Mixed tab / newline whitespace behaves identically.
+    raw_mixed = _raw_message(text="\t\n")
+    kwargs_mixed = map_message(raw_mixed)
+    assert kwargs_mixed["summary"] is None
+    assert kwargs_mixed["body"] == "\t\n"
+
+
 def test_map_message_truncates_long_text_to_max_chars() -> None:
     """Text longer than :data:`SUMMARY_MAX_CHARS` → summary is clipped.
 

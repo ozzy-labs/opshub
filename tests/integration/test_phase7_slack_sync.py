@@ -361,6 +361,102 @@ def test_slack_sync_handles_empty_text_message(
         engine.dispose()
 
 
+def test_slack_sync_handles_whitespace_only_message(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """Regression: whitespace-only ``text`` lands a fallback summary (issue #337).
+
+    Audit followup to #332. The empty-text fix normalised ``text=""``
+    to ``None`` but whitespace-only payloads (``"  "`` / ``"\\t\\n"``)
+    slipped through ``_truncate`` and reached
+    :class:`ItemEnqueued.summary` as visually-blank previews (2+
+    chars, so they cleared ``min_length=1``). The sync would not
+    crash — unlike the #332 case — but inbox / brief / propose
+    surfaces showed blank rows that wasted operator attention.
+
+    Post-fix the mapper strips ``text`` before truncation
+    (``summary=None``) and :meth:`SourceService.observe` falls back to
+    ``f"{source_type}: {title}"`` for the inbox preview. The cursor
+    advances past the whitespace-only message just like the
+    empty-text case so subsequent syncs do not re-process it.
+    """
+    yields: list[tuple[str, RawSlackMessage, str | None]] = [
+        (
+            "C1",
+            _raw_message(ts="1700000001.000100", text="first message"),
+            "1700000001.000100",
+        ),
+        (
+            "C1",
+            # Whitespace-only payload (HTML renderer artifact, padded
+            # bot notification, etc). user_display_name + channel_name
+            # still provide enough metadata for the fallback summary
+            # to be identifiable.
+            _raw_message(ts="1700000002.000200", text="  ", user_display_name="carol"),
+            "1700000002.000200",
+        ),
+        (
+            "C1",
+            _raw_message(ts="1700000003.000300", text="third message"),
+            "1700000003.000300",
+        ),
+    ]
+    _patch_slack_fetcher(monkeypatch, yields=yields)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["connector", "sync", "slack"])
+    # The whitespace-only message must not abort the run — exit 0
+    # and no ``ValidationError`` in stderr.
+    assert result.exit_code == 0, result.stdout
+    assert "ValidationError" not in result.stderr
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        # Three messages → 3 SourceObserved + 3 ItemEnqueued + sync
+        # bracket (started + completed) = 8 events.
+        assert _row_count(engine, "events") == 8
+        assert _row_count(engine, "sources") == 3
+        assert _row_count(engine, "inbox_items") == 3
+
+        from sqlalchemy import select
+        from sqlalchemy import text as sql_text
+
+        with engine.connect() as conn:
+            source_rows = conn.execute(select(sources_table)).mappings().all()
+            inbox_rows = conn.execute(select(inbox_items_table)).mappings().all()
+            cursor_row = (
+                conn.execute(
+                    sql_text(
+                        "SELECT cursor_value FROM connector_cursors WHERE connector_name = 'slack'"
+                    )
+                )
+                .mappings()
+                .one()
+            )
+
+        # Mapper flattens whitespace-only summaries to NULL; the body
+        # retains verbatim whitespace per ADR-0020 §(d).
+        ws_external_id = "C1:1700000002.000200"
+        ws_source = next(row for row in source_rows if row["external_id"] == ws_external_id)
+        assert ws_source["summary"] is None
+        assert ws_source["title"] == "carol in #general"
+
+        # Inbox preview falls back to the identifiable
+        # ``f"{source_type}: {title}"`` shape rather than landing a
+        # 2-char whitespace string in the projection.
+        ws_inbox = next(row for row in inbox_rows if row["source_ref"] == f"slack:{ws_external_id}")
+        assert ws_inbox["summary"] == "slack_message: carol in #general"
+
+        # Cursor advanced through every message, including the
+        # whitespace one.
+        assert cursor_row["cursor_value"] is not None
+        assert "1700000003.000300" in cursor_row["cursor_value"]
+    finally:
+        engine.dispose()
+
+
 # ---------------------------------------------------------------------- idempotency
 
 

@@ -211,6 +211,51 @@ def test_observe_falls_back_when_summary_is_empty_string() -> None:
     assert source_event.summary == ""
 
 
+def test_observe_falls_back_when_summary_is_whitespace_only() -> None:
+    """Whitespace-only ``summary`` is treated as "no caller summary" → fallback applies.
+
+    Regression guard for issue #337 (audit followup to #332). The
+    original #332 fix flipped the fallback condition from ``is None``
+    to truthy so empty strings landed on the
+    ``f"{source_type}: {title}"`` shape, but whitespace-only inputs
+    (``"  "``, ``"\\t\\n "``) are still truthy and slipped past — they
+    cleared :class:`ItemEnqueued.summary`'s ``min_length=1`` validator
+    (2+ chars) and recorded a useless blank preview in the inbox row,
+    contaminating briefing / propose / next-actions surfaces.
+
+    Post-fix the fallback condition is ``summary and summary.strip()``
+    so ``None`` / ``""`` / any whitespace-only string all trigger the
+    identifiable fallback. The :class:`SourceObserved` event still
+    carries the caller-supplied summary verbatim — pin the asymmetry
+    here so a future refactor that normalises both sides surfaces at
+    review time.
+    """
+    store = InMemoryEventStore()
+    service = _make_service(store=store)
+
+    # Plain whitespace fallback.
+    source_event, inbox_event = service.observe(
+        connector_name="slack",
+        external_id="C123:1700000001.000100",
+        source_type="slack_message",
+        title="ozzy in #general",
+        summary="  ",
+    )
+    assert inbox_event.summary == "slack_message: ozzy in #general"
+    # The source event retains the caller's whitespace summary verbatim.
+    assert source_event.summary == "  "
+
+    # Mixed tab / newline / space whitespace also falls back.
+    _, mixed_inbox = service.observe(
+        connector_name="slack",
+        external_id="C123:1700000002.000200",
+        source_type="slack_message",
+        title="ozzy in #general",
+        summary="\t\n ",
+    )
+    assert mixed_inbox.summary == "slack_message: ozzy in #general"
+
+
 def test_observe_uses_explicit_summary_when_provided() -> None:
     """Explicit ``summary`` overrides the default ``"<type>: <title>"`` shape."""
     store = InMemoryEventStore()
