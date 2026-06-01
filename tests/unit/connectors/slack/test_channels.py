@@ -46,6 +46,7 @@ pytest.importorskip(
 from opshub.connectors.slack.auth import SlackAuth
 from opshub.connectors.slack.channels import (
     SlackChannel,
+    _as_response_dict,  # pyright: ignore[reportPrivateUsage]
     list_channels,
 )
 from opshub.core.errors import ConnectorFailedError
@@ -581,3 +582,170 @@ def test_channels_module_does_not_import_slack_sdk_eagerly() -> None:
         "opshub.connectors.slack.channels imports slack_sdk at module level "
         "(must be lazy-loaded inside list_channels / _call_list):\n  - " + "\n  - ".join(offenders)
     )
+
+
+# ----- audit followup: edge cases missed in #344 ------------------------
+
+
+def test_as_response_dict_handles_slack_response_object() -> None:
+    """:func:`_as_response_dict` unwraps the SDK ``SlackResponse`` via ``.data``.
+
+    ``slack_sdk.web.SlackResponse`` proxies the underlying dict via a
+    ``.data`` attribute rather than subclassing :class:`dict`. The
+    helper must walk the ``.data`` path before falling back to
+    ``dict(response)`` — otherwise a real SDK response would land on
+    the bare ``dict()`` constructor and lose the typed keys.
+
+    The fallback ``dict(response)`` path is exercised by a second
+    object that exposes neither :class:`dict` interface nor ``.data``
+    but is itself iterable as key/value pairs (mirrors how SDK
+    versions < 3 returned responses).
+    """
+    # Path 1: ``.data`` carries the canonical dict — the helper must
+    # prefer it over ``dict(response)``.
+    response_with_data = MagicMock(spec=["data"])
+    response_with_data.data = {"ok": True, "channels": [{"id": "C1"}]}
+
+    result = _as_response_dict(response_with_data)
+    assert result == {"ok": True, "channels": [{"id": "C1"}]}
+
+    # Path 2: no dict, no ``.data`` — fall back to ``dict(response)``.
+    # A lightweight stand-in: an object whose ``keys()`` / ``__getitem__``
+    # protocol satisfies the dict constructor (the documented contract
+    # for ``dict(mapping)``).
+    class _DictLike:
+        def keys(self) -> list[str]:
+            return ["ok", "error"]
+
+        def __getitem__(self, key: str) -> object:
+            return {"ok": False, "error": "ratelimited"}[key]
+
+    result_fallback = _as_response_dict(_DictLike())
+    assert result_fallback == {"ok": False, "error": "ratelimited"}
+
+
+def test_list_channels_handles_empty_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    """0-channel workspace → empty iterator, exactly one API call.
+
+    A fresh workspace (or one whose token only sees DM/MPIM, both
+    excluded by the helper) returns ``channels=[]`` + an empty
+    ``next_cursor`` on the first page. :func:`list_channels` must
+    terminate after the single call rather than looping on the empty
+    cursor — pinning this guards against a regression that treats
+    ``""`` as a valid pagination token.
+    """
+    page = _list_response([], next_cursor="")
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_channels(_auth()))
+
+    assert results == []
+    assert client.conversations_list.call_count == 1
+
+
+def test_list_channels_surfaces_private_channel_with_is_member_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Private channels the token has *not* joined are surfaced (discovery semantics).
+
+    ``conversations.list`` with ``types=private_channel`` returns
+    every private channel the token's principal can *see* (via
+    ``groups:read``) — not just the ones it has joined. This is
+    intentional for discovery: the operator wants the full list so
+    they can decide which to add to ``opshub.toml``'s sync set, even
+    if the bot user is not yet a member. Pinning the behaviour stops
+    a future "is_member filter" refactor from silently dropping rows.
+    """
+    page = _list_response(
+        [
+            {
+                "id": "G1",
+                "name": "secret-eng",
+                "is_private": True,
+                "is_archived": False,
+                "is_member": False,
+            },
+        ]
+    )
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_channels(_auth(), include_private=True))
+
+    assert [c.id for c in results] == ["G1"]
+    assert results[0].is_private is True
+
+
+def test_row_from_dict_falls_back_when_purpose_value_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``purpose`` sub-object present but lacking ``value`` → ``purpose=""``.
+
+    The existing missing-purpose test covers ``purpose=None`` /
+    ``purpose=""``. This one pins the third shape Slack proxies
+    occasionally emit: the sub-object exists (``creator`` /
+    ``last_set`` populated) but ``value`` is absent. The row builder
+    must fall through to the empty string rather than crash on a
+    ``KeyError`` lookup.
+    """
+    page = _list_response(
+        [
+            {
+                "id": "C1",
+                "name": "general",
+                "is_private": False,
+                "is_archived": False,
+                "purpose": {"creator": "U-creator", "last_set": 123},
+            }
+        ]
+    )
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_channels(_auth()))
+
+    assert [c.id for c in results] == ["C1"]
+    assert results[0].purpose == ""
+
+
+def test_call_list_handles_malformed_retry_after_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-numeric ``Retry-After`` (e.g. ``"soon"``) → exponential fallback (2**attempt).
+
+    Slack documents ``Retry-After`` as integer seconds, but proxies
+    and edge servers occasionally inject HTTP-date or free-text values.
+    ``int(retry_after_raw)`` raises :class:`ValueError` for ``"soon"``
+    and :class:`TypeError` for non-strings; the helper must catch
+    both and fall back to the exponential schedule so a malformed
+    header degrades gracefully into a uniform backoff rather than
+    raising before the recovery attempt.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    bad_response = MagicMock()
+    bad_response.status_code = 429
+    bad_response.headers = {"Retry-After": "soon"}
+    bad_response.get.return_value = "rate_limited"
+    success = _list_response([_channel("C1", name="recovered")])
+
+    client = _build_client(
+        list_side_effect=[
+            # See the existing 429 test for the ``no-untyped-call`` rationale.
+            SlackApiError(message="ratelimited", response=bad_response),  # type: ignore[no-untyped-call]
+            success,
+        ]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    import time as _stdlib_time
+
+    sleep_mock = MagicMock()
+    monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
+
+    results = list(list_channels(_auth()))
+
+    assert [c.name for c in results] == ["recovered"]
+    # First attempt failed (attempt=0) → 2**0 = 1s exponential fallback.
+    sleep_mock.assert_called_once_with(1)
