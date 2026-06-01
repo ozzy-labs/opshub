@@ -119,7 +119,7 @@ def _recording_source(  # pyright: ignore[reportUnusedFunction]
     """Patch ``_build_source_service`` to hand back a recording stub."""
     source = _RecordingSource()
 
-    def _fake_builder(*, actor: str) -> _RecordingSource:  # noqa: ARG001
+    def _fake_builder(*, actor: str) -> _RecordingSource:
         return source
 
     monkeypatch.setattr("opshub.cli.connector._build_source_service", _fake_builder)
@@ -395,3 +395,37 @@ class TestHorizontalRedaction:
         assert "Bearer ***" in result["event"]
         # Non-token values pass through untouched.
         assert result["connector"] == "test-connector"
+
+
+# ============================================================================
+# Drift pin — ``_DEBUG_TRUTHY`` mirrors ``opshub.core.logging._TRUTHY``
+# ============================================================================
+
+
+class TestDebugTruthyDriftPin:
+    """The two truthy tables must stay in sync.
+
+    ``opshub.cli.connector`` inlines its own copy of the truthy
+    accept-list (rather than importing from :mod:`opshub.core.logging`)
+    so the ``test_cli_imports`` static check stays green
+    (ADR-0001 cold-start whitelist forbids top-level ``opshub.core``
+    imports in CLI modules). The downside is divergence risk — a
+    future PR that extends ``OPSHUB_DEBUG`` to also accept ``y`` /
+    ``Y`` in :mod:`opshub.core.logging` could silently leave the CLI
+    layer behind. This drift-pin makes the divergence a test failure.
+    """
+
+    def test_cli_truthy_table_matches_core_logging(self) -> None:
+        from opshub.cli.connector import (
+            _DEBUG_TRUTHY,  # pyright: ignore[reportPrivateUsage]
+        )
+        from opshub.core.logging import (
+            _TRUTHY as CORE_TRUTHY,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        assert _DEBUG_TRUTHY == CORE_TRUTHY, (
+            "opshub.cli.connector._DEBUG_TRUTHY drifted from "
+            "opshub.core.logging._TRUTHY. The two tables must accept the "
+            "same set of strings for OPSHUB_DEBUG so the CLI in-process "
+            "path and the MCP subprocess path agree on what 'truthy' means."
+        )

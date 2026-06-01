@@ -246,10 +246,12 @@ async def serve_stdio(*, server_name: str = "opshub", server_version: str = "0.0
     from opshub.core.logging import configure_logging, resolve_log_settings
 
     # Resolve env-driven log settings before any ``get_logger`` call
-    # in the dispatch loop. Passing ``json=None`` lets ``auto`` fold
-    # back to the stderr-isatty probe (MCP servers are non-TTY, so
-    # the JSON renderer is the natural choice — and JSON output is
+    # in the dispatch loop. ``log_format`` of ``auto`` folds back to
+    # the stderr-isatty probe (MCP servers are normally non-TTY, so
+    # the JSON renderer is the natural choice — JSON output is also
     # easier for the agent host to capture alongside the MCP stream).
+    # An explicit ``OPSHUB_LOG_FORMAT=console`` overrides the auto
+    # path for operators running ``opshub mcp serve`` interactively.
     log_settings = resolve_log_settings()
     use_json = log_settings.log_format == "json" or (
         log_settings.log_format == "auto" and not _stderr_is_tty()
