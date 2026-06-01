@@ -21,7 +21,21 @@ import pytest
 from typer.testing import CliRunner
 
 from opshub.cli.app import app
+from opshub.cli.connector import _ProgressSourceProxy  # pyright: ignore[reportPrivateUsage]
 from opshub.connectors import SyncResult, register_connector, unregister_all
+
+
+class _CountingReporter:
+    """Stand-in :class:`ProgressReporter` recording advance calls."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def advance(self, n: int = 1) -> None:
+        self.count += n
+
+    def update(self, *, total: int | None = None, description: str | None = None) -> None:
+        del total, description
 
 
 class _StubConnector:
@@ -133,3 +147,56 @@ def test_connector_auth_set_rejects_box_drive() -> None:
     assert "root_path" in result.stderr
     assert "[connectors.box_drive]" in result.stderr
     assert "0019" in result.stderr
+
+
+def test_progress_proxy_advances_reporter_once_per_observe() -> None:
+    """Each successful ``observe`` bumps the progress counter by one."""
+
+    class _FakeSource:
+        def __init__(self) -> None:
+            self.observed: list[dict[str, object]] = []
+
+        def observe(self, **kwargs: object) -> tuple[str, str]:
+            self.observed.append(kwargs)
+            return ("source-id", "inbox-id")
+
+    reporter = _CountingReporter()
+    inner = _FakeSource()
+    proxy = _ProgressSourceProxy(inner, reporter)
+
+    out = proxy.observe(external_id="x", title="t")
+
+    # The wrapped service's return value passes through untouched.
+    assert out == ("source-id", "inbox-id")
+    assert inner.observed == [{"external_id": "x", "title": "t"}]
+    assert reporter.count == 1
+
+
+def test_progress_proxy_forwards_other_attributes_without_counting() -> None:
+    """Non-observe calls (cursor_set, ...) forward and do not advance."""
+
+    class _FakeSource:
+        def cursor_set(self, name: str, value: str | None, *, sync_started: bool) -> str:
+            return f"{name}:{value}:{sync_started}"
+
+    reporter = _CountingReporter()
+    proxy = _ProgressSourceProxy(_FakeSource(), reporter)
+
+    assert proxy.cursor_set("slack", "ts-1", sync_started=False) == "slack:ts-1:False"
+    assert reporter.count == 0
+
+
+def test_progress_proxy_does_not_count_failed_observe() -> None:
+    """A raising ``observe`` must not inflate the counter."""
+
+    class _BoomSource:
+        def observe(self, **kwargs: object) -> tuple[str, str]:
+            del kwargs
+            raise RuntimeError("boom")
+
+    reporter = _CountingReporter()
+    proxy = _ProgressSourceProxy(_BoomSource(), reporter)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        proxy.observe(external_id="x")
+    assert reporter.count == 0

@@ -25,7 +25,7 @@ every CI run.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import typer
 
@@ -33,6 +33,45 @@ import typer
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from opshub.cli._progress import ProgressReporter
+
+
+class _ProgressSourceProxy:
+    """Wrap a source service so each ``observe`` advances a progress bar.
+
+    The connector sync loop calls ``context.source_service.observe(...)``
+    once per item it ingests, but the total item count is unknown until the
+    connector's paginated stream drains. Rather than thread a progress
+    handle through the :class:`~opshub.connectors.base.Connector` Protocol
+    and all ten connectors, the driver swaps the source service for this
+    transparent proxy: every successful ``observe`` bumps the indeterminate
+    spinner's counter, and all other attributes (``cursor_set`` /
+    ``record_sync_failure`` / ...) forward unchanged to the wrapped
+    service.
+
+    The counter advances **after** the wrapped ``observe`` returns so a
+    failed observe (which raises) does not inflate the count — matching the
+    at-most-once-or-no-loss posture the connectors already hold for cursor
+    advancement.
+    """
+
+    def __init__(self, inner: Any, reporter: ProgressReporter) -> None:
+        self._inner = inner
+        self._reporter = reporter
+
+    def observe(self, *args: Any, **kwargs: Any) -> Any:
+        result = self._inner.observe(*args, **kwargs)
+        self._reporter.advance(1)
+        return result
+
+    def __getattr__(self, name: str) -> Any:
+        # Forward everything else (cursor_set, record_sync_failure, ...) to
+        # the wrapped service untouched. ``__getattr__`` only fires for
+        # names not found on the proxy itself, so ``observe`` above is not
+        # shadowed.
+        return getattr(self._inner, name)
+
 
 connector_app = typer.Typer(
     name="connector",
@@ -94,8 +133,7 @@ def connector_sync(name: str) -> None:
     """
     # Lazy imports: keep CLI cold start fast (ADR-0001) and satisfy the
     # ``test_cli_imports`` static check.
-    from typing import Any
-
+    #
     # Importing each connector subpackage triggers ``register_connector``
     # as an import side effect (see ``opshub.connectors.<name>.__init__``).
     # Phase 3.x will replace this with entry-points / scan-based
@@ -230,25 +268,36 @@ def connector_sync(name: str) -> None:
     # typed as :class:`~typing.Any` to keep this module typecheck-clean
     # while A4/A5/A6 race; the public ``SourceService`` type binds when
     # A4 merges.
+    from opshub.cli import _progress
+
     source: Any = _build_source_service(actor=f"connector:{name}")
     logger = get_logger().bind(connector=name)
     cursor = source.cursor_get(name)
     # Open the sync run bracket so observers see ConnectorSyncStarted.
     source.cursor_set(name, cursor, sync_started=True)
-    context = ConnectorContext(
-        source_service=source,
-        cursor_value=cursor,
-        secrets=None,  # refined in B1 once core.secrets lands
-        logger=logger,
-    )
-    try:
-        result = connector.sync(context)
-    except Exception as exc:
-        # Sanitise: surface only the exception type name, never the
-        # message, so tokens / PII never reach the event log.
-        source.record_sync_failure(name, error_message=type(exc).__name__)
-        typer.echo(f"sync failed: {type(exc).__name__}", err=True)
-        raise typer.Exit(code=1) from exc
+
+    # Indeterminate progress: connectors stream items via pagination, so
+    # the total is unknown up front. The spinner + per-observe counter +
+    # elapsed clock answers "is it moving, and how far has it got" without
+    # a costly pre-count pass. The source service is wrapped so each
+    # ``observe`` advances the counter without touching the ten connectors.
+    # Progress renders on stderr and is a no-op on non-TTY (CI / pipes), so
+    # the stdout summary below is unchanged.
+    with _progress.indeterminate(f"syncing {name}") as reporter:
+        context = ConnectorContext(
+            source_service=_ProgressSourceProxy(source, reporter),
+            cursor_value=cursor,
+            secrets=None,  # refined in B1 once core.secrets lands
+            logger=logger,
+        )
+        try:
+            result = connector.sync(context)
+        except Exception as exc:
+            # Sanitise: surface only the exception type name, never the
+            # message, so tokens / PII never reach the event log.
+            source.record_sync_failure(name, error_message=type(exc).__name__)
+            typer.echo(f"sync failed: {type(exc).__name__}", err=True)
+            raise typer.Exit(code=1) from exc
 
     source.cursor_set(name, result.new_cursor, sync_started=False)
     typer.echo(f"synced {name}: {result.observed_count} item(s) observed")
