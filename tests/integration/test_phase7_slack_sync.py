@@ -6,7 +6,10 @@ twists:
 
 1. :class:`opshub.connectors.slack.fetcher.SlackFetcher` is
    monkeypatched to yield controlled :class:`RawSlackMessage`
-   payloads so the suite never reaches Slack's API.
+   payloads so the suite never reaches Slack's API. The pagination
+   regression test for issue #339 is the exception: it patches
+   :class:`slack_sdk.WebClient` instead so the real fetcher's
+   buffer-then-sort logic is exercised end-to-end.
 2. The Slack OAuth access token is injected through the
    ``OPSHUB_CONNECTOR_SLACK_TOKEN`` env var override so the
    ``[secrets]`` keyring backend is never consulted (matches the
@@ -502,6 +505,123 @@ def test_slack_sync_is_idempotent_when_no_new_messages(
         assert _row_count(engine, "events") == 6
         assert _row_count(engine, "sources") == 1
         assert _row_count(engine, "inbox_items") == 1
+    finally:
+        engine.dispose()
+
+
+# ---------------------------------------------------------------------- chronological pagination
+
+
+def test_slack_sync_advances_to_latest_across_pagination(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """End-to-end: a paginated Slack history yields ts-ascending and the cursor
+    persists the **maximum** ``ts`` across all pages (issue #339 regression guard).
+
+    Drives the real :class:`SlackFetcher` against a mocked
+    :class:`slack_sdk.WebClient` so the buffer-then-sort logic and
+    its interaction with the connector's ``_max_ts`` guard are both
+    exercised end-to-end. Pre-#339 the persisted
+    ``connector_cursors.cursor_value`` JSON pointed at the **oldest
+    ts of the oldest page** — strictly behind messages that had
+    already been committed — and the next sync re-fetched and
+    re-enqueued the gap, inflating ``inbox_items`` indefinitely.
+
+    Post-#339 the cursor JSON contains the **latest ts** observed
+    across **every** page, so a follow-up sync with ``oldest=cursor``
+    correctly receives zero messages and ``inbox_items`` does not
+    grow on re-runs.
+    """
+    from unittest.mock import MagicMock
+
+    # Two-page history. Page 1 is the newest chunk and ``next_cursor``
+    # walks to the older page — matches the documented Slack API
+    # contract (and the pattern that pre-#339 broke).
+    def _msg(ts: str, text: str) -> dict[str, Any]:
+        return {"ts": ts, "text": text, "user": "U1"}
+
+    page1 = {
+        "ok": True,
+        "messages": [
+            _msg("1700000005.000500", "msg-5"),
+            _msg("1700000004.000400", "msg-4"),
+            _msg("1700000003.000300", "msg-3"),
+        ],
+        "has_more": True,
+        "response_metadata": {"next_cursor": "older"},
+    }
+    page2 = {
+        "ok": True,
+        "messages": [
+            _msg("1700000002.000200", "msg-2"),
+            _msg("1700000001.000100", "msg-1"),
+        ],
+        "has_more": False,
+        "response_metadata": {"next_cursor": ""},
+    }
+
+    web_client = MagicMock()
+    web_client.conversations_history.side_effect = [page1, page2]
+    web_client.conversations_info.return_value = {
+        "ok": True,
+        "channel": {"id": "C1", "name": "general"},
+    }
+    web_client.users_info.return_value = {
+        "ok": True,
+        "user": {
+            "id": "U1",
+            "name": "alice",
+            "profile": {"display_name": "alice", "real_name": "Alice"},
+        },
+    }
+
+    def _permalink_fn(*, channel: str, message_ts: str) -> dict[str, Any]:
+        slug = message_ts.replace(".", "")
+        return {
+            "ok": True,
+            "permalink": f"https://acme.slack.com/archives/{channel}/p{slug}",
+        }
+
+    web_client.chat_getPermalink.side_effect = _permalink_fn
+
+    # ``WebClient`` is imported lazily inside ``fetch_messages`` from
+    # ``slack_sdk`` itself — patch the symbol on the SDK module so the
+    # ``from slack_sdk import WebClient`` lookup at the lazy-import
+    # site resolves to our factory.
+    import slack_sdk
+
+    monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=web_client))
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["connector", "sync", "slack"])
+    assert result.exit_code == 0, result.stdout
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        from sqlalchemy import text as sql_text
+
+        # All five messages landed in projections (no take-backs).
+        assert _row_count(engine, "sources") == 5
+        assert _row_count(engine, "inbox_items") == 5
+
+        with engine.connect() as conn:
+            cursor_row = (
+                conn.execute(
+                    sql_text(
+                        "SELECT cursor_value FROM connector_cursors WHERE connector_name = 'slack'"
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        # The persisted cursor advanced to the **latest** ts across
+        # both pages — pre-#339 this would have been
+        # ``1700000001.000100`` (oldest ts of oldest page) instead.
+        assert cursor_row["cursor_value"] is not None
+        assert "1700000005.000500" in cursor_row["cursor_value"]
+        assert "1700000001.000100" not in cursor_row["cursor_value"]
     finally:
         engine.dispose()
 
