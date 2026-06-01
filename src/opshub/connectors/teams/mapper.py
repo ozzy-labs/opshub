@@ -119,16 +119,23 @@ def map_chat_message(raw: RawTeamsChatMessage) -> dict[str, Any]:
       defensive against future Graph schema changes).
     * ``summary`` — first :data:`SUMMARY_MAX_CHARS` chars of the plain
       text body. Truncation appends ``"…"`` (U+2026) so an operator
-      can tell at a glance that the preview was clipped. Empty
-      ``plain_text`` (e.g. ``body_html=""`` or HTML that strips to
-      empty such as ``"<div></div>"``) normalises to ``None`` — the
-      same empty→``None`` rule the ``body`` field already applies, and
-      symmetric with the Phase 7 Slack mapper (#332). Without this
-      normalisation an empty summary would reach
-      :meth:`SourceService.observe` as ``""`` and fail the
-      :class:`ItemEnqueued.summary` ``min_length=1`` validation.
+      can tell at a glance that the preview was clipped. Empty or
+      whitespace-only ``plain_text`` (e.g. ``body_html=""``,
+      ``body_html="  "``, HTML that strips to empty such as
+      ``"<div></div>"``, or HTML that strips to whitespace such as
+      ``"<p>  </p>"``) normalises to ``None`` — the same empty→``None``
+      rule the ``body`` field already applies for the empty case, and
+      symmetric with the Phase 7 Slack mapper (issue #337 / #332). The
+      strip is applied to ``plain_text`` **before** truncation so an
+      operator never sees a 200-char preview of meaningless padding,
+      and ``SourceService.observe`` falls back to its synthetic title-
+      based summary rather than persisting a useless whitespace
+      preview that would also fail the :class:`ItemEnqueued.summary`
+      ``min_length=1`` validation.
     * ``body`` — full plain text body (``None`` when empty) per
-      ADR-0020.
+      ADR-0020. Whitespace-only bodies are retained verbatim
+      (``body="  "``) so the retain-everything contract is preserved;
+      only the ``summary`` preview side normalises whitespace.
     * ``provenance_origin = "external"`` + ``provenance_trust =
       "untrusted"`` — ADR-0020 §(e) discipline for SaaS-sourced
       bodies.
@@ -144,7 +151,7 @@ def map_chat_message(raw: RawTeamsChatMessage) -> dict[str, Any]:
         "external_id": f"{raw.chat_id}:{raw.id}",
         "source_type": SOURCE_TYPE,
         "title": f"{sender_label} in {chat_label}",
-        "summary": _truncate(plain_text, SUMMARY_MAX_CHARS) or None,
+        "summary": _truncate(plain_text.strip(), SUMMARY_MAX_CHARS) or None,
         "url": raw.web_url,
         # ADR-0020: retain the full message body and tag it
         # external + untrusted. Empty body → ``None`` so the projection

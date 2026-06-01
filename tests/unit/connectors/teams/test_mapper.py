@@ -293,3 +293,91 @@ def test_map_chat_message_normalises_empty_plain_text_to_none() -> None:
     assert kwargs_html["external_id"] == "19:abc@thread.v2:1700000000001"
     assert kwargs_html["connector_name"] == "teams"
     assert kwargs_html["source_type"] == SOURCE_TYPE
+
+
+def test_map_chat_message_normalises_whitespace_only_to_none() -> None:
+    """Whitespace-only ``plain_text`` → ``summary=None`` (issue #337).
+
+    The follow-up to issue #332 / PR #335 (which fixed strictly empty
+    ``plain_text``) widens the empty→``None`` rule to cover
+    whitespace-only bodies. Three shapes are exercised here so the
+    contract is pinned across the realistic ways a sender-only message
+    can deliver whitespace:
+
+    1. ``body_content_type="text"`` with ``body_html="  "`` — a plain
+       whitespace run passes through ``_to_plain_text`` verbatim.
+    2. ``body_content_type="html"`` with ``body_html="<p>  </p>"`` —
+       the HTML stripper currently collapses this shape to ``""`` (the
+       paragraph close becomes a newline, per-line strip drops the
+       trailing whitespace line); the ``.strip()`` defense remains as
+       a future-proofing guard if the stripper ever forwards whitespace
+       residue.
+    3. ``body_content_type="text"`` with ``body_html="\t\n"`` — a mix
+       of tabs and newlines, exercising the non-space whitespace
+       characters ``str.strip`` covers.
+
+    All three must produce ``summary is None`` while leaving the rest
+    of the kwargs shape (title, external_id, connector_name,
+    source_type) untouched. Critically, ``body`` is **not** whitespace-
+    normalised — ADR-0020 retain-everything keeps the verbatim
+    whitespace on the body field so a downstream consumer can still
+    distinguish a sender-only message from a no-body message. Body
+    asserts therefore reflect what ``plain_text or None`` actually
+    returns for each shape (truthy whitespace stays; the HTML strip
+    case still collapses to ``None`` because the existing stripper
+    already returns ``""`` for ``"<p>  </p>"``). This is the symmetric
+    mirror of the Slack mapper whitespace fix that lands in the paired
+    PR for issue #337.
+    """
+    # Case 1: plain whitespace, text content type — passes through
+    # ``_to_plain_text`` verbatim; body retains the whitespace.
+    raw_plain_ws = _raw(
+        body_html="  ",
+        body_content_type="text",
+        sender_display_name="Alice",
+        chat_topic="Project Alpha",
+    )
+    kwargs_plain: dict[str, Any] = map_chat_message(raw_plain_ws)
+    assert kwargs_plain["summary"] is None
+    # ADR-0020 retain-everything: whitespace body is preserved verbatim.
+    assert kwargs_plain["body"] == "  "
+    assert kwargs_plain["title"] == "Alice in Project Alpha"
+    assert kwargs_plain["external_id"] == "19:abc@thread.v2:1700000000001"
+    assert kwargs_plain["connector_name"] == "teams"
+    assert kwargs_plain["source_type"] == SOURCE_TYPE
+
+    # Case 2: HTML body that strips to whitespace residue.
+    # The existing ``_to_plain_text`` already collapses
+    # ``"<p>  </p>"`` to ``""`` (so body is ``None``); the
+    # ``.strip()`` on summary remains as defence-in-depth in case the
+    # HTML stripper ever forwards residual whitespace.
+    raw_html_ws = _raw(
+        body_html="<p>  </p>",
+        body_content_type="html",
+        sender_display_name="Alice",
+        chat_topic="Project Alpha",
+    )
+    kwargs_html_ws: dict[str, Any] = map_chat_message(raw_html_ws)
+    assert kwargs_html_ws["summary"] is None
+    assert kwargs_html_ws["body"] is None
+    assert kwargs_html_ws["title"] == "Alice in Project Alpha"
+    assert kwargs_html_ws["external_id"] == "19:abc@thread.v2:1700000000001"
+    assert kwargs_html_ws["connector_name"] == "teams"
+    assert kwargs_html_ws["source_type"] == SOURCE_TYPE
+
+    # Case 3: tab/newline whitespace, text content type — exercises
+    # the non-space whitespace characters that ``str.strip`` covers.
+    raw_tab_newline = _raw(
+        body_html="\t\n",
+        body_content_type="text",
+        sender_display_name="Alice",
+        chat_topic="Project Alpha",
+    )
+    kwargs_tab_newline: dict[str, Any] = map_chat_message(raw_tab_newline)
+    assert kwargs_tab_newline["summary"] is None
+    # ADR-0020 retain-everything: tab/newline body is preserved verbatim.
+    assert kwargs_tab_newline["body"] == "\t\n"
+    assert kwargs_tab_newline["title"] == "Alice in Project Alpha"
+    assert kwargs_tab_newline["external_id"] == "19:abc@thread.v2:1700000000001"
+    assert kwargs_tab_newline["connector_name"] == "teams"
+    assert kwargs_tab_newline["source_type"] == SOURCE_TYPE
