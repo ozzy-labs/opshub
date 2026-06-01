@@ -14,17 +14,32 @@ Phase 3 step A5 ships two connector commands:
   summary. Failures are sanitised (only the exception type name is
   surfaced) to avoid leaking secrets / PII into the event log.
 
-Module-level imports are restricted to ``__future__`` and ``typer`` so
-``opshub --help`` cold start stays under the ~300ms budget set by
-ADR-0001; everything heavy (the connectors package, ``_wiring``,
-``core.logging``, :class:`ConnectorContext`) is imported lazily inside
-each command callback. The static check in
+Phase 14 T3 (#320, parent epic #317) adds a ``--debug`` opt-in error
+trail. The default failure path stays unchanged — the event log row
+still carries only the exception **type name** (R3 invariant from the
+ADR-0027 audit) and the stdout summary line is byte-identical. When
+``OPSHUB_DEBUG=1`` (set by T2's root callback when ``--debug`` or
+``-vv`` is used, or by the operator directly when ``opshub mcp serve``
+runs as a subprocess) the sync failure path additionally writes a
+sanitised exception message + a sanitised traceback to **stderr**.
+Both run through ``opshub.core.logging.format_debug_traceback`` and
+``opshub.core.sanitise.sanitise_error_message`` (T1) so any known
+token shape — ``sk-``, ``ghp_``, ``github_pat_``, ``xox*-``, ``AKIA``,
+``AIza``, ``Bearer …``, JWTs — is rewritten to its marker form
+before it ever reaches a terminal.
+
+Module-level imports are restricted to ``__future__``, ``os`` and
+``typer`` so ``opshub --help`` cold start stays under the ~300ms
+budget set by ADR-0001; everything heavy (the connectors package,
+``_wiring``, ``core.logging``, :class:`ConnectorContext`) is
+imported lazily inside each command callback. The static check in
 ``tests/integration/test_cli_imports.py`` enforces this whitelist on
 every CI run.
 """
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 import typer
@@ -35,6 +50,34 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from opshub.cli._progress import ProgressReporter
+
+
+# Truthy strings accepted by ``OPSHUB_DEBUG`` — mirrors the convention
+# used by ``opshub.core.logging`` (``_TRUTHY`` there) so the operator
+# sees the same accept-list everywhere (T1 + T3 contract). Kept inline
+# rather than imported so this module's top-level import set stays
+# inside the ``test_cli_imports`` whitelist (no ``opshub.core``).
+_DEBUG_TRUTHY: frozenset[str] = frozenset({"1", "true", "yes", "on", "debug"})
+
+
+def _is_debug_enabled() -> bool:
+    """Return True iff ``OPSHUB_DEBUG`` resolves to a truthy value.
+
+    The env var is the **primary** source of truth (T3 design note in
+    issue #320): T2's root callback sets ``OPSHUB_DEBUG=1`` when the
+    operator passed ``--debug`` / ``-vv``, so the same probe works for
+    both the in-process CLI path and the MCP subprocess path (where
+    no Typer Context is available). Falling back to the Typer
+    ``Context`` directly would need an extra parameter on every
+    command, which is overkill for a single opt-in toggle.
+
+    Unknown / empty values are treated as False — matching the
+    ``_coerce_bool_env`` helper in :mod:`opshub.core.logging`.
+    """
+    value = os.environ.get("OPSHUB_DEBUG")
+    if value is None:
+        return False
+    return value.strip().lower() in _DEBUG_TRUTHY
 
 
 class _ProgressSourceProxy:
@@ -294,9 +337,35 @@ def connector_sync(name: str) -> None:
             result = connector.sync(context)
         except Exception as exc:
             # Sanitise: surface only the exception type name, never the
-            # message, so tokens / PII never reach the event log.
+            # message, so tokens / PII never reach the event log
+            # (R3 — Phase 14 T3, ADR-0027). The event-log row is the
+            # operator's audit trail; growing its token surface there
+            # would defeat the redaction stance even if the live
+            # terminal is locked down.
             source.record_sync_failure(name, error_message=type(exc).__name__)
             typer.echo(f"sync failed: {type(exc).__name__}", err=True)
+            # ``--debug`` (or ``OPSHUB_DEBUG=1`` set by T2's root
+            # callback / by the operator) flips on a sanitised
+            # message + traceback on stderr. ``stdout`` is unchanged
+            # so scripts grepping the summary line keep working.
+            # The traceback is routed through ``format_debug_traceback``
+            # which itself pipes the output through
+            # ``sanitise_error_message`` so a stray bearer token in
+            # ``str(exc)`` is rewritten to its marker form before any
+            # byte hits stderr (R2 / R4 — Phase 14 T3, ADR-0027).
+            if _is_debug_enabled():
+                # Lazy-import the helpers from ``opshub.core`` so the
+                # ``test_cli_imports`` static check stays green
+                # (ADR-0001 cold-start whitelist).
+                from opshub.core.logging import format_debug_traceback
+                from opshub.core.sanitise import sanitise_error_message
+
+                sanitised_msg = sanitise_error_message(str(exc))
+                typer.echo(
+                    f"sync failed: {type(exc).__name__}: {sanitised_msg}",
+                    err=True,
+                )
+                typer.echo(format_debug_traceback(exc), err=True)
             raise typer.Exit(code=1) from exc
 
     source.cursor_set(name, result.new_cursor, sync_started=False)

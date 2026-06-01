@@ -39,6 +39,7 @@ Invariants enforced here (ADR-0022):
 
 from __future__ import annotations
 
+import sys
 import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
@@ -50,6 +51,19 @@ if TYPE_CHECKING:
 
 
 __all__ = ["build_tool_specs_for_engine", "dispatch_tool_call", "serve_stdio"]
+
+
+def _stderr_is_tty() -> bool:
+    """Return True when stderr is attached to an interactive terminal.
+
+    Factored out so tests can monkey-patch the probe without reaching
+    into :mod:`sys`. The MCP server is normally spawned as a
+    subprocess by the agent host (stderr is piped, not a TTY), but
+    operators may also launch it manually for diagnostics — the probe
+    keeps the JSON-vs-console renderer choice automatic.
+    """
+    isatty = getattr(sys.stderr, "isatty", None)
+    return bool(isatty()) if callable(isatty) else False
 
 
 def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
@@ -208,6 +222,20 @@ async def serve_stdio(*, server_name: str = "opshub", server_version: str = "0.0
     Builds a fresh :class:`Engine` for this server lifetime and wires
     the read / write handlers against it. Returns when the agent host
     closes the stdio pair (e.g. the parent process exits).
+
+    Logging bootstrap (Phase 14 T3, #320 / ADR-0027). The MCP server
+    is spawned as a subprocess by the agent host, so the CLI flags
+    that :mod:`opshub.cli.app` parses do not reach this entry point.
+    Instead we resolve ``OPSHUB_LOG_LEVEL`` / ``OPSHUB_LOG_FORMAT`` /
+    ``OPSHUB_DEBUG`` / ``OPSHUB_LOG_FILE`` via
+    :func:`opshub.core.logging.resolve_log_settings` and feed the
+    result into :func:`opshub.core.logging.configure_logging`.
+    ``configure_logging`` is idempotent (first-call-wins), so the
+    inevitable ``get_logger`` call inside ``dispatch_tool_call`` will
+    see the env-driven settings rather than the bare defaults. The
+    redaction processor wired by T1 is already on the structlog
+    pipeline, so :mod:`opshub.mcp._logging` events are scrubbed
+    without any change at the call site.
     """
     import mcp.server.stdio
     from mcp import types
@@ -215,6 +243,24 @@ async def serve_stdio(*, server_name: str = "opshub", server_version: str = "0.0
     from mcp.server.models import InitializationOptions
 
     from opshub.cli._wiring import build_engine
+    from opshub.core.logging import configure_logging, resolve_log_settings
+
+    # Resolve env-driven log settings before any ``get_logger`` call
+    # in the dispatch loop. ``log_format`` of ``auto`` folds back to
+    # the stderr-isatty probe (MCP servers are normally non-TTY, so
+    # the JSON renderer is the natural choice — JSON output is also
+    # easier for the agent host to capture alongside the MCP stream).
+    # An explicit ``OPSHUB_LOG_FORMAT=console`` overrides the auto
+    # path for operators running ``opshub mcp serve`` interactively.
+    log_settings = resolve_log_settings()
+    use_json = log_settings.log_format == "json" or (
+        log_settings.log_format == "auto" and not _stderr_is_tty()
+    )
+    configure_logging(
+        level=log_settings.level,
+        json=use_json,
+        log_file=log_settings.log_file,
+    )
 
     engine = build_engine()
     specs = build_tool_specs_for_engine(engine)
