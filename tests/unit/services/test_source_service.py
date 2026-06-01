@@ -174,6 +174,43 @@ def test_observe_appends_source_observed_then_item_enqueued() -> None:
     assert projector.applied == [source_event, inbox_event]
 
 
+def test_observe_falls_back_when_summary_is_empty_string() -> None:
+    """``summary=""`` is treated as "no caller summary" → fallback applies.
+
+    Regression guard for issue #332. The Slack mapper used to pass
+    ``summary=""`` through verbatim whenever a message had no ``text``
+    (Slackbot / ``channel_join`` / ``file_share`` events). The fallback
+    in :meth:`SourceService.observe` only kicked in on ``is None`` so
+    the empty string reached :class:`ItemEnqueued`, whose ``summary``
+    field requires ``min_length=1`` and raised
+    :class:`pydantic.ValidationError`, aborting the sync.
+
+    The defence-in-depth fix: any falsy ``summary`` (``None`` or ``""``)
+    triggers the ``f"{source_type}: {title}"`` fallback for the inbox
+    event. The :class:`SourceObserved` event still carries the empty
+    string verbatim — the projection layer accepts it — so the
+    behaviour difference is localised to the inbox preview.
+    """
+    store = InMemoryEventStore()
+    service = _make_service(store=store)
+
+    source_event, inbox_event = service.observe(
+        connector_name="slack",
+        external_id="C123:1700000001.000100",
+        source_type="slack_message",
+        title="ozzy in #general",
+        summary="",
+    )
+
+    # The inbox preview falls back to the identifiable shape rather
+    # than tripping ``ItemEnqueued.summary``'s ``min_length=1``.
+    assert inbox_event.summary == "slack_message: ozzy in #general"
+    # The source event preserves the caller's empty string — only the
+    # inbox-side fallback differs. This pins the asymmetry so a future
+    # refactor that normalises both sides will surface here.
+    assert source_event.summary == ""
+
+
 def test_observe_uses_explicit_summary_when_provided() -> None:
     """Explicit ``summary`` overrides the default ``"<type>: <title>"`` shape."""
     store = InMemoryEventStore()

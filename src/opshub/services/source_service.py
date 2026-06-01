@@ -197,9 +197,14 @@ class SourceService:
           collapses them into a single row.
         * :class:`ItemEnqueued` — minted with its own fresh ULID.
           ``summary`` defaults to ``f"{source_type}: {title}"`` when the
-          caller did not pass an explicit ``summary``; ``source_ref``
-          is always ``f"{connector_name}:{external_id}"`` so the inbox
-          row carries the natural key back to the source.
+          caller passed ``None`` **or** an empty string for ``summary``
+          (both are treated as "no caller-supplied summary"; the
+          downstream :class:`ItemEnqueued.summary` field requires
+          ``min_length=1`` so propagating ``""`` would raise
+          :class:`pydantic.ValidationError` mid-sync — see issue #332
+          for the Slack empty-text trigger). ``source_ref`` is always
+          ``f"{connector_name}:{external_id}"`` so the inbox row
+          carries the natural key back to the source.
 
         ``fingerprint`` (Phase 9 step A2, ADR-0019 §決定 (d)) is the
         ``f"{size}:{mtime_ns}"`` stat-derived diff-detection token
@@ -252,7 +257,7 @@ class SourceService:
         inbox_event = ItemEnqueued(
             aggregate_id=new_ulid(),
             actor=self._actor,
-            summary=summary if summary is not None else f"{source_type}: {title}",
+            summary=summary if summary else f"{source_type}: {title}",
             source_ref=f"{connector_name}:{external_id}",
         )
         self._commit([source_event, inbox_event])

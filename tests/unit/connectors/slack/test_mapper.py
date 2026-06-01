@@ -174,6 +174,32 @@ def test_map_message_empty_permalink_passes_through() -> None:
     assert kwargs["url"] == ""
 
 
+def test_map_message_normalises_empty_text_to_none() -> None:
+    """Empty ``text`` → ``summary=None`` and ``body=None`` (issue #332).
+
+    Slackbot / ``channel_join`` / ``file_share`` events arrive with an
+    empty ``text`` field. The mapper used to pass that empty string
+    through as ``summary``, which downstream tripped
+    :class:`ItemEnqueued`'s ``min_length=1`` and aborted the sync.
+
+    Post-fix the mapper normalises empty ``text`` to ``None`` for both
+    ``summary`` and ``body`` (mirroring the existing ``body`` rule), so
+    the projection stores NULL and :meth:`SourceService.observe` applies
+    its ``f"{source_type}: {title}"`` fallback for the inbox preview.
+    Title / external_id / url remain populated as usual since they
+    derive from the channel / user metadata, not the message text.
+    """
+    raw = _raw_message(text="")
+    kwargs = map_message(raw)
+
+    assert kwargs["summary"] is None
+    assert kwargs["body"] is None
+    # Other fields keep their normal shape — the empty-text case only
+    # affects ``summary`` / ``body``.
+    assert kwargs["title"] == "alice in #general"
+    assert kwargs["external_id"] == "C123:1700000000.000100"
+
+
 def test_map_message_truncates_long_text_to_max_chars() -> None:
     """Text longer than :data:`SUMMARY_MAX_CHARS` → summary is clipped.
 
