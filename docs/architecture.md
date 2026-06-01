@@ -86,6 +86,8 @@ Phase 10 実装状況: **本文取り込み + provenance タグの拡張** ([ADR
 | Gmail (Phase 14) | Gmail API v1 (`users.messages.list` initial + `users.history.list` delta + 7 日 TTL 失効時 full-pass fallback、Phase 14 ADR-0010 改訂 (i)/(j)/(k)/(l)、Outlook と symmetric な message 単位 mapper、body = text/plain 優先 → text/html 生保持 / markitdown なし / 添付 retain なし / `[Labels: ...]` prepend / `[gmail body truncated]` tag / threadId field) | `gmail_message` | OAuth paste-code (`connectors/google_auth/` 共有、Refresh Token rotation 書き戻し、Phase 14 で 3-scope) | `[connectors-google-workspace]` (httpx 共有) |
 | Google Calendar (Phase 14) | Calendar API v3 (`events.list(syncToken=...)` + 410 GONE 失効時 full-pass + `timeMin` / `timeMax` window fallback、Phase 14 ADR-0010 改訂 (i)/(j)/(k)/(l)、MS365 Calendar と symmetric な master event only + override 別 record、summary = `start_iso - end_iso (N attendees)` / RRULE field / attendee body 埋め込み) | `google_calendar` | OAuth paste-code (`connectors/google_auth/` 共有、Refresh Token rotation 書き戻し、Phase 14 で 3-scope) | `[connectors-google-workspace]` (httpx 共有) |
 
+長時間 `opshub connector sync <name>` 中の進捗表示は CLI driver 側で `_ProgressSourceProxy` (`src/opshub/cli/connector.py` L37-65) が source service を透過プロキシでラップし、`observe()` 成功ごとに `advance(1)` する形で実現する。`Connector` Protocol および 10 connector 本体は無改修で、進捗表示は connector 層の不変条件 (差分 fetch / cursor 保存 / event 発行依頼) を一切変えない。詳細は [ADR-0026](adr/0026-cli-progress-reporting.md) を参照。
+
 ### 2.2 Application Services
 
 CLI / Connector / Agent から渡された command を受け、ドメイン的に有効化を検証し、Event Store に append、Projector に通知、必要なら Lock を取得・解放する。

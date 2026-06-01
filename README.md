@@ -270,7 +270,10 @@ Long-running commands — `connector sync`, `embeddings rebuild` / `drain`, and
 counted work). It is shown automatically when stderr is a TTY and is a no-op
 otherwise, so piped / redirected output stays clean. Force it either way with
 the root `--progress` / `--no-progress` flag or the `OPSHUB_PROGRESS`
-environment variable (precedence: flag > env > TTY). See
+environment variable (precedence: flag > env > TTY). `OPSHUB_PROGRESS`
+accepts `1` / `true` / `yes` / `on` to force on and `0` / `false` / `no` /
+`off` to force off (case-insensitive, surrounding whitespace trimmed; any
+other value is ignored and falls back to TTY auto-detection). See
 [ADR-0026](docs/adr/0026-cli-progress-reporting.md).
 
 ## Optional dependencies
