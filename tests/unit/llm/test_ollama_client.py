@@ -158,7 +158,7 @@ def test_module_imports_without_extras_marker() -> None:
     lazily inside ``__init__``), so the cold-start guard
     (``tests/integration/test_cli_imports.py``) stays unbroken.
     """
-    import opshub.llm.ollama_client as ollama_module
+    from opshub.llm import ollama_client as ollama_module
 
     module_globals = set(vars(ollama_module).keys())
     assert "httpx" not in module_globals, (

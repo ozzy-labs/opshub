@@ -146,7 +146,7 @@ def test_factory_module_does_not_import_heavy_deps() -> None:
     own globals* — those must not reference the heavy SDKs even after
     import.
     """
-    import opshub.llm.factory as factory_module
+    from opshub.llm import factory as factory_module
 
     factory_globals = set(vars(factory_module).keys())
     for heavy_name in ("anthropic", "openai", "httpx"):

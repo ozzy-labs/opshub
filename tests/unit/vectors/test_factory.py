@@ -125,7 +125,7 @@ def test_factory_module_does_not_import_heavy_deps() -> None:
     own globals* — those must not reference the heavy modules even
     after import.
     """
-    import opshub.vectors.factory as factory_module
+    from opshub.vectors import factory as factory_module
 
     factory_globals = set(vars(factory_module).keys())
     for heavy_name in ("sentence_transformers", "openai", "voyageai", "sqlite_vec"):

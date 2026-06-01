@@ -83,7 +83,7 @@ def test_init_loads_from_secrets_when_not_supplied(
     documented key. We patch ``get_secret`` rather than configure a real
     keyring backend so this test does not require the ``[secrets]``
     extras (mirrors the Slack / MS365 construction-only tests)."""
-    import opshub.core.secrets as secrets_module
+    from opshub.core import secrets as secrets_module
     from tests._secrets import FAKE_GRAPH_USER_TOKEN_FROM_SECRET
 
     seen_keys: list[str] = []
@@ -112,7 +112,7 @@ def test_init_raises_when_get_secret_returns_none(
     override so an operator on a CI box (where keyring may not exist)
     sees the alternative without round-tripping the docs.
     """
-    import opshub.core.secrets as secrets_module
+    from opshub.core import secrets as secrets_module
 
     def _none_stub(_key: str) -> None:
         return None
@@ -135,7 +135,7 @@ def test_init_raises_when_get_secret_returns_empty_string(
     we normalise both to the same "missing" branch so operators don't
     see a subtle keyring-backend-dependent failure mode.
     """
-    import opshub.core.secrets as secrets_module
+    from opshub.core import secrets as secrets_module
 
     def _empty_stub(_key: str) -> str:
         return ""
