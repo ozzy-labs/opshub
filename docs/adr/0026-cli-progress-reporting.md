@@ -22,12 +22,17 @@
    - `determinate(total, description)` — バー + パーセンテージ + ETA。件数既知の作業向け（embeddings rebuild/drain の pending 数、projections rebuild の event 数）。
 3. **出力チャネル = stderr**（`Console(stderr=True)`）。stdout の結果サマリは不変に保ち、パイプ / スクリプト互換と既存テストの stdout assertion を維持する。
 4. **TTY ゲート**: stderr が TTY でないとき（CI / パイプ / リダイレクト）は **no-op**。ANSI 制御文字を一切出さない。
-5. **明示制御**: ルートの `--progress` / `--no-progress` フラグと `OPSHUB_PROGRESS` 環境変数が自動判定を上書きする。優先順位は flag > env > stderr-TTY。
+5. **明示制御**: ルートの `--progress` / `--no-progress` フラグと `OPSHUB_PROGRESS` 環境変数が自動判定を上書きする。優先順位は flag > env > stderr-TTY。`OPSHUB_PROGRESS` の受理値: truthy = `1` / `true` / `yes` / `on`、falsy = `0` / `false` / `no` / `off`（大文字小文字無視、前後空白は trim、`src/opshub/cli/_progress.py` `_TRUTHY` / `_FALSY` が SSOT）。未知の値は無視し TTY 自動判定にフォールバックする。
 6. **cold-start 順守**: `rich` は context manager 内で **遅延 import** する。`_progress.py` は `_` 始まりの private module（`test_cli_imports` の対象外）だが、wall-clock の `test_cold_start` を守るため遅延 import は必須。
 7. **service 層に rich を持ち込まない（IoC seam）**:
    - connector sync は source service を透過プロキシ（`_ProgressSourceProxy`）でラップし、`observe` 成功ごとに spinner を advance する。`Connector` Protocol と各コネクタ実装は無改修。
    - embeddings / projections は service / driver に optional な `progress_callback`（default `None`）を渡す。`EmbeddingService.count_pending()` / `rebuild_all` の event count が determinate バーの total を供給する。
 8. **ストリーミング型は事前カウントしない**: connector sync で総数を得るための事前カウントパスは走らせない（API 呼び出し倍増・レート制限リスク・delta 型コネクタでは事前カウント自体が困難）。これらは indeterminate で割り切る。
+9. **structlog ログとの併存は do-nothing (黙認)**: 進捗描画中に `structlog` の stderr ログが割り込むと表示が乱れ得るが、本 PR1 (#316 epic、PR #323 / #325 / #326) では (a) `rich` Console 経由でログを出す / (b) ログを WARNING 以上に引き上げる / (c) `Progress.redirect_stderr` で標準出力を奪う のいずれも採用しない。理由は次の 2 点に絞る:
+   - 対象 10 connector は通常運用で WARNING 中心の疎なログ (各 connector mapper / fetcher を確認済み) で、INFO が連投される経路がほぼなく、実害が限定的。
+   - MVP の追加複雑度を最小化するため。(a) は rich/structlog の二重 sink、(b) は loglevel の global 上書き、(c) は global stream replacement と、いずれも cold-start (ADR-0001) や test 観測点に副作用を持つ。
+
+   将来 INFO ログとの可視的衝突が顕在化した時点で (a) を採用候補とする (rich Console を structlog の sink に差し替える形が他案より影響範囲が狭いため)。
 
 ## Consequences
 
