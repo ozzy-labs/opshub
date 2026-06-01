@@ -231,7 +231,24 @@ class TestResolveLogSettings:
     def test_double_v_lifts_to_debug(self) -> None:
         settings = resolve_log_settings(verbose=2, env={})
         assert settings.level == "DEBUG"
-        assert settings.debug is False  # ``-vv`` alone does not flip ``debug``.
+        # ``-vv`` implies ``--debug`` per docs/troubleshooting.md §1 +
+        # decisions-log §33 (post-merge audit followup, epic #317).
+        # Any CLI path landing on DEBUG level flips the ``debug`` flag
+        # so the OPSHUB_DEBUG subprocess hand-off and the sanitised
+        # full-traceback error wrapper fire uniformly.
+        assert settings.debug is True
+
+    def test_triple_v_clamps_to_debug_and_implies_debug(self) -> None:
+        """``-vvv`` and beyond still clamp at DEBUG, and still imply ``debug=True``.
+
+        Pins the "any CLI path that resolves to DEBUG implies debug"
+        contract for the clamp edge case so a future refactor that
+        special-cases ``verbose>=3`` cannot silently drop the
+        ``debug=True`` hand-off.
+        """
+        settings = resolve_log_settings(verbose=3, env={})
+        assert settings.level == "DEBUG"
+        assert settings.debug is True
 
     def test_single_q_drops_to_warning(self) -> None:
         settings = resolve_log_settings(quiet=1, env={})
@@ -254,6 +271,21 @@ class TestResolveLogSettings:
     def test_env_used_when_no_cli_level(self) -> None:
         settings = resolve_log_settings(env={"OPSHUB_LOG_LEVEL": "WARNING"})
         assert settings.level == "WARNING"
+
+    def test_env_log_level_debug_does_not_imply_debug_flag(self) -> None:
+        """``OPSHUB_LOG_LEVEL=DEBUG`` without ``OPSHUB_DEBUG`` keeps ``debug=False``.
+
+        The "any DEBUG implies ``debug=True``" contract is scoped to
+        **CLI** paths (``--debug`` / ``-vv``). Env-only LOG_LEVEL=DEBUG
+        is the back-door operators use to bump verbosity for log
+        ingestion **without** flipping the error wrapper to full
+        sanitised traceback — those operators want the existing
+        one-liner ``Error: <msg>`` shape preserved. ``OPSHUB_DEBUG=1``
+        is the dedicated knob for the debug flag.
+        """
+        settings = resolve_log_settings(env={"OPSHUB_LOG_LEVEL": "DEBUG"})
+        assert settings.level == "DEBUG"
+        assert settings.debug is False
 
     def test_env_debug_flag_also_lifts_level_and_sets_debug(self) -> None:
         settings = resolve_log_settings(env={"OPSHUB_DEBUG": "1"})

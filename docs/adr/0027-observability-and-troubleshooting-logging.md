@@ -26,15 +26,17 @@ CLI root callback に以下のグローバルフラグを追加する（T2 PR �
 
 | Option | Effect |
 |---|---|
-| `-v` / `--verbose` (repeatable) | `-v` → INFO / `-vv` → DEBUG。friendly error wrapper は維持 |
+| `-v` / `--verbose` (repeatable) | `-v` → INFO / `-vv` → DEBUG。`-vv` は `--debug` を含意し `OPSHUB_DEBUG=1` env export + サニタイズ済み full traceback を有効化する |
 | `-q` / `--quiet` (repeatable) | `-q` → WARNING / `-qq` → ERROR |
 | `--debug` | DEBUG + 例外を**サニタイズ済み** full traceback で表示（`main()` の `Error: <msg>` 一行を上書き） |
-| `--log-format [auto\|json\|console]` | TTY 自動検出を明示上書き |
+| `--log-format [auto\|json\|console]` | TTY 自動検出を明示上書き。未知値は silent に `auto` フォールバック |
 | `--log-file PATH` | ログをファイルにも tee。0600 で作成 |
 
 環境変数同義: `OPSHUB_LOG_LEVEL` / `OPSHUB_LOG_FORMAT` / `OPSHUB_DEBUG` / `OPSHUB_LOG_FILE`（`mcp serve` の subprocess 起動・cron 経由 sync 等、フラグを渡せない文脈用）。**優先順位は CLI フラグ > 環境変数 > デフォルト**。`OPSHUB_DEBUG` の truthy 値は `1` / `true` / `yes` / `on` / `debug`（大文字小文字無視、前後空白 trim、`core/logging.py` `_TRUTHY` が SSOT）。
 
 `-v` と `-q` の衝突は CLI 層（T2）でエラーにする想定だが、`resolve_log_settings` は両方渡された場合 quiet を最終的に適用する（保守的）。
+
+**`-vv` ⇒ `--debug` の含意契約**（epic #317 post-merge audit H1、2026-06-02 で明文化）: CLI 層で DEBUG レベルに到達するすべての経路 (`--debug` / `-vv` / `-vvv`...) は `LogSettings.debug = True` を flip する。これにより T2 root callback の `OPSHUB_DEBUG=1` env export と T2 `main()` error wrapper のサニタイズ済み full traceback がフラグ綴り差で取りこぼされない。env 経路 (`OPSHUB_LOG_LEVEL=DEBUG`) は本契約の対象外で、`debug` flag を flip するには `OPSHUB_DEBUG=1` を明示する（既存 operator スクリプトの後方互換のため）。
 
 ### (b) structlog redaction processor 契約
 
