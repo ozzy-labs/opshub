@@ -94,6 +94,8 @@ CLI / Connector / Agent から渡された command を受け、ドメイン的�
 
 長時間処理 (connector sync / embeddings rebuild・drain / projections rebuild) の進捗表示は CLI 層に閉じる (ADR-0026)。service は rich に依存せず、optional な `progress_callback` (default `None`) を受けるだけの IoC seam を提供する (例: `EmbeddingService.embed_pending` / `projections.rebuild_all`)。connector sync は `Connector` Protocol を変えずに source service を透過プロキシでラップして進捗を取る。進捗は stderr へ描画し非 TTY では no-op のため、stdout の結果サマリは不変。
 
+**Observability surface (Phase 14、[ADR-0027](adr/0027-observability-and-troubleshooting-logging.md))**: structlog ベースのログは redaction processor を経由するように構造化されている。`src/opshub/core/logging.py` の `_redaction_processor` が全イベント値 + `format_exc_info` 展開後の traceback 文字列を `core/sanitise.sanitise_error_message` に通すため、`sk-` / `ghp_` / `github_pat_` / `xox*-` / `AKIA` / `AIza` / JWT / `Bearer` の既知トークン形状はどのレンダラ (`JSONRenderer` / `ConsoleRenderer`) にも届かない (R1)。verbosity は root callback (`src/opshub/cli/app.py`) のグローバルフラグ `-v` / `-q` / `--debug` / `--log-format` / `--log-file` で制御し、フラグを渡せない subprocess 経路 (`opshub mcp serve` / cron) では `OPSHUB_LOG_LEVEL` / `OPSHUB_LOG_FORMAT` / `OPSHUB_DEBUG` / `OPSHUB_LOG_FILE` 環境変数が同等に効く。優先順位は CLI フラグ > 環境変数 > デフォルト。`--debug` 時に出る full traceback は `format_debug_traceback` でサニタイズ済み (R2)、connector sync 失敗時のデフォルトは「型名のみ + stdout サマリ不変」を維持し `--debug` 時にだけサニタイズ済みメッセージ + traceback を stderr に opt-in 追加する (R3)。`--log-file` 指定時は `O_CREAT | O_WRONLY | O_APPEND` + mode `0600` でファイルを作成しファイル内容にも redaction を適用する (R5)。operator 向け手順は [docs/troubleshooting.md](troubleshooting.md) に集約。
+
 ### 2.3 Event Store
 
 `events` テーブル (SQLite)。append-only、immutable、`schema_version` 付き。Event は semantic ("TaskActivated") であるべきで、generic CRUD event は避ける。

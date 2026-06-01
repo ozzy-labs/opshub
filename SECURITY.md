@@ -171,6 +171,65 @@ We treat the following as security issues:
   sensitive bodies — this is a documented opt-in (see [Phase 10 body
   retention — what changed](#phase-10-body-retention--what-changed) above)
 
+## Debug-safe logging
+
+Phase 14 epic #317 ([ADR-0027](docs/adr/0027-observability-and-troubleshooting-logging.md)) added a
+structured verbosity surface (`-v` / `-q` / `--debug` / `--log-format` /
+`--log-file` plus the matching `OPSHUB_LOG_LEVEL` / `OPSHUB_LOG_FORMAT` /
+`OPSHUB_DEBUG` / `OPSHUB_LOG_FILE` env vars) so an operator can investigate
+incidents without compromising token / key hygiene. The following
+invariants hold at every verbosity level:
+
+- **All log values pass through the redaction processor (R1).** A
+  structlog processor in `src/opshub/core/logging.py` walks every event
+  value — including the traceback string expanded by
+  `structlog.processors.format_exc_info` — through
+  `opshub.core.sanitise.sanitise_error_message`. Known token shapes
+  (`sk-...`, `ghp_...`, `github_pat_...`, `xoxp-` / `xoxb-` / `xoxa-` /
+  `xoxr-` / `xoxs-`, `AKIA...`, `AIza...`, `eyJ...eyJ...` JWTs, and
+  `Bearer ...`) are rewritten to their marker form before any renderer
+  serialises the event. The processor is inserted **after**
+  `format_exc_info` (so `logger.exception(...)` traceback strings are
+  also scrubbed) and **before** the JSON / console renderer (so the
+  scrubbed dict is what gets serialised).
+- **`--debug` tracebacks are sanitised (R2).** The `main()` error
+  wrapper renders full tracebacks through
+  `opshub.core.logging.format_debug_traceback`, which joins
+  `traceback.format_exception` output and pipes the result through
+  `sanitise_error_message`. The CLI never prints a raw `str(exc)`.
+- **Connector sync stays type-name only by default (R3).** The default
+  `opshub connector sync <name>` failure path writes only the exception
+  **type name** to the `ConnectorSyncFailed` event and the stdout
+  summary. The exception message is never persisted there. Only when
+  `--debug` (or `OPSHUB_DEBUG=1`) is set does the CLI additionally print
+  a sanitised exception message + sanitised traceback to **stderr**;
+  the stdout summary and the event-log `error_message` field stay
+  byte-identical to the default path.
+- **`--log-file` is created at mode 0600 (R5).** When `--log-file PATH`
+  or `OPSHUB_LOG_FILE=PATH` is set, the file is opened via
+  `os.open(path, O_CREAT | O_WRONLY | O_APPEND, 0o600)`, so the
+  permission bits are tight from byte zero. Existing files have their
+  mode preserved (operators may have intentionally tightened them).
+  Operators sharing a log file with a third party should still review
+  the content — module paths, line numbers, and internal IDs survive
+  redaction by design.
+- **MCP boundary keeps no token passthrough, even under `--debug`.**
+  The `redact_secrets` layer on the MCP tool response path
+  ([ADR-0022](docs/adr/0022-mcp-server-surface.md) §(b)) is independent
+  of the structlog processor and runs on every `CallTool` round-trip.
+  A `--debug` (or `OPSHUB_DEBUG=1`) launch of `opshub mcp serve` does
+  not relax this; the agent-host transcript never sees a raw token.
+
+The contract is operator-visible in [docs/troubleshooting.md](docs/troubleshooting.md)
+(Phase 14 epic #317), and the wiring is pinned by
+`tests/unit/core/test_logging.py` (redaction + 0600 mode +
+`format_debug_traceback`),
+`tests/integration/test_cli_troubleshooting_options.py` (CLI > env >
+default precedence + `OPSHUB_DEBUG=1` export on `-vv` / `--debug`),
+`tests/unit/cli/test_connector_debug.py` (sync default = type-name only,
+`--debug` opt-in adds sanitised stderr), and
+`tests/unit/mcp/test_logging_redaction.py` (MCP boundary redaction).
+
 ## Cryptographic dependencies
 
 OpsHub does not implement custom cryptography. We rely on:

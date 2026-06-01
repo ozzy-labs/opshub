@@ -314,6 +314,52 @@ Tool arguments and tool outputs are deliberately **not** logged — they may con
 | `unknown connector` error from `connector.sync`          | Connector extras not installed (`--extra connectors-<name>`).             |
 | `connector.sync google_workspace` fails with `ConfigError: ... client_id`| Google OAuth client not configured. Set `[connectors.google_workspace] client_id` / `client_secret` (see `docs/google-workspace-setup.md`) and re-run `opshub connector auth set google_workspace`. |
 
+### 8.1 Debugging `opshub mcp serve` itself (Phase 14)
+
+When `opshub mcp serve` is spawned by an agent host, the CLI flags
+that `opshub` parses at the root callback (`-v` / `-q` / `--debug` /
+`--log-format` / `--log-file`) do **not** reach the server — the host
+invokes the binary directly without going through the operator's
+shell. Drive the log surface with the matching env vars instead
+(Phase 14 epic #317 / [ADR-0027](adr/0027-observability-and-troubleshooting-logging.md)):
+
+* `OPSHUB_LOG_LEVEL=DEBUG` (or `OPSHUB_DEBUG=1`) — DEBUG-level structlog output on stderr.
+* `OPSHUB_LOG_FORMAT=json` — force JSON renderer so the agent host can capture log lines alongside the MCP stream (`console` is also accepted for interactive runs).
+* `OPSHUB_LOG_FILE=/path/to/opshub-mcp.log` — tee the structlog output to a file created with mode 0600 (append-safe via `O_APPEND`).
+
+In Claude Code (`~/.claude/mcp_servers.json`):
+
+```json
+{
+  "mcpServers": {
+    "opshub": {
+      "command": "opshub",
+      "args": ["mcp", "serve"],
+      "env": {
+        "OPSHUB_LOG_LEVEL": "DEBUG",
+        "OPSHUB_LOG_FORMAT": "json"
+      }
+    }
+  }
+}
+```
+
+You can also launch the server manually from a shell for diagnostics:
+
+```sh
+OPSHUB_LOG_LEVEL=DEBUG opshub mcp serve
+# blocks on stdio; Ctrl-D shuts it down cleanly
+```
+
+The server resolves these env vars via
+`opshub.core.logging.resolve_log_settings` **before** any `get_logger`
+call (`src/opshub/mcp/server.py:serve_stdio`), so the redaction
+processor (R1) is already on the pipeline and `--debug` semantics
+never relax the no-token-passthrough contract on the MCP response
+side ([ADR-0022](adr/0022-mcp-server-surface.md) §(b)). For the full
+recipe set (connector sync failures, embedding / LLM errors,
+encrypted-DB issues) see [`docs/troubleshooting.md`](troubleshooting.md).
+
 ## 9. Related
 
 - [ADR-0022: MCP Server Surface](adr/0022-mcp-server-surface.md) — the invariants this doc operationalises.

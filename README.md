@@ -276,6 +276,24 @@ accepts `1` / `true` / `yes` / `on` to force on and `0` / `false` / `no` /
 other value is ignored and falls back to TTY auto-detection). See
 [ADR-0026](docs/adr/0026-cli-progress-reporting.md).
 
+### Troubleshooting (verbosity / debug / log file)
+
+Every subcommand inherits a small set of global flags for incident
+investigation ([ADR-0027](docs/adr/0027-observability-and-troubleshooting-logging.md)):
+`-v` / `-vv` raises the log level to INFO / DEBUG, `-q` / `-qq` lowers
+it to WARNING / ERROR, `--debug` adds a sanitised full traceback to
+stderr on `OpsHubError`, `--log-format auto|json|console` overrides
+the renderer choice, and `--log-file PATH` tees the structlog output
+to a file created with mode 0600. The matching env vars
+(`OPSHUB_LOG_LEVEL` / `OPSHUB_LOG_FORMAT` / `OPSHUB_DEBUG` /
+`OPSHUB_LOG_FILE`) cover paths where flags cannot be passed — notably
+`opshub mcp serve` started by an agent host. Tokens / keys / known
+secret shapes (`sk-`, `ghp_`, `github_pat_`, `xox*-`, `AKIA`, `AIza`,
+`Bearer`, JWT) are redacted at every verbosity. See
+[`docs/troubleshooting.md`](docs/troubleshooting.md) for the recipes
+and [`SECURITY.md`](SECURITY.md) §Debug-safe logging for the
+guarantees.
+
 ## Optional dependencies
 
 | Extras | Purpose | Heavy? |
@@ -305,6 +323,7 @@ other value is ignored and falls back to TTY auto-detection). See
 - [`docs/onedrive-drive-setup.md`](docs/onedrive-drive-setup.md) — Phase 11 `onedrive_drive` connector setup (WSL2 / macOS)
 - [`docs/teams-setup.md`](docs/teams-setup.md) — Phase 11 `teams` connector setup (Azure app registration + User Token)
 - [`docs/google-workspace-setup.md`](docs/google-workspace-setup.md) — Phase 13 `google_workspace` connector setup (GCP project + OAuth consent screen + paste-code Refresh Token)
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) — Phase 14 epic #317 troubleshooting recipes (`-v` / `--debug` / `--log-file`, MCP serve env vars, redaction guarantees)
 - [`docs/upgrading.md`](docs/upgrading.md) — version migration notes (when applicable)
 - [`docs/release-notes-v0.1.0.md`](docs/release-notes-v0.1.0.md) — v0.1.0 narrative release notes
 - [`docs/RELEASE_RUNBOOK.md`](docs/RELEASE_RUNBOOK.md) — how to cut a release (maintainers)
