@@ -617,7 +617,7 @@ def _seed_refresh_token_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     must keep using the real keyring path so ``isolated_env`` /
     ``opshub init`` continues to work end-to-end.
     """
-    import opshub.core.secrets as secrets_module
+    from opshub.core import secrets as secrets_module
 
     real_get_secret = secrets_module.get_secret
     real_set_secret = secrets_module.set_secret

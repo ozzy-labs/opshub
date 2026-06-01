@@ -175,7 +175,7 @@ def stub_secrets(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     def fake_set(key: str, value: str) -> None:
         store[key] = value
 
-    import opshub.core.secrets as secrets_module
+    from opshub.core import secrets as secrets_module
 
     monkeypatch.setattr(secrets_module, "get_secret", fake_get)
     monkeypatch.setattr(secrets_module, "set_secret", fake_set)
