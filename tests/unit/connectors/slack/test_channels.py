@@ -46,7 +46,7 @@ pytest.importorskip(
 from opshub.connectors.slack.auth import SlackAuth
 from opshub.connectors.slack.channels import (
     SlackChannel,
-    _as_response_dict,
+    _as_response_dict,  # pyright: ignore[reportPrivateUsage]
     list_channels,
 )
 from opshub.core.errors import ConnectorFailedError
