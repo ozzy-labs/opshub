@@ -313,7 +313,7 @@ MCP セットアップ手順は [docs/mcp-setup.md](mcp-setup.md) を参照。�
    | `pr-review` | (stand-alone) | 「PR レビューして」「この差分どう?」 | `recall.search` + `decision.list` (`recorded_after/before`) + `task.list` + `graph.related` / `graph.trace` | 自律 OK |
    | `find-document` | (stand-alone) | 「Box にあったあの資料」「<キーワード>含むファイル」 | `search` (FTS5、Phase 12 H1) + 補助的に `recall.search` / `source.list` (`observed_after/before`) / `source.get` | 自律 OK |
    | `meeting-prep` | ↔ meeting-followup | 「来週の会議準備」「明日のミーティング前確認」 | `source.list` (`source_type=ms365_calendar` + `observed_after/before`) + `recall.search` + `graph.related` | 自律 OK |
-   | `research` | (stand-alone) | 「<X> について調べて」「<トピック> 網羅的に」 | `recall.search` (semantic) + `search` (FTS5) + `graph.related` / `graph.expand` + `brief` | 自律 OK |
+   | `research` | (stand-alone) | 「`<X>` について調べて」「<トピック> 網羅的に」 | `recall.search` (semantic) + `search` (FTS5) + `graph.related` / `graph.expand` + `brief` | 自律 OK |
    | `external-brief` | ↔ personal-brief | 「上司向け週次報告」「クライアント向け進捗」 | `task.list` (`state=completed` + `updated_after`) + `decision.list` (`recorded_after`) + `brief` (外向き tone) | 自律 OK |
    | `decision-rationale` | (stand-alone) | 「あの決定はなぜ」「X を選んだ理由」 | `decision.list` (topic 絞り) + `graph.trace` + `recall.search` | 自律 OK |
    | `handoff-draft` | (draft family) | 「引き継ぎ書作って」「handoff 書く」 | `task.list` (`state=in_progress`) + `decision.list` + `recall.search` + `graph.related` (text-only、persist なし、ADR-0016 §決定 (l)(a)) | 自律 OK |
