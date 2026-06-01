@@ -13,10 +13,25 @@ code, rather than leaking a Python traceback at the user. The wrapper
 only sits on :func:`main` so existing tests using
 ``typer.testing.CliRunner`` (which invokes ``app`` directly) still see
 the raw exception on ``result.exception``.
+
+ADR-0027 (T2 of #317) adds five global troubleshooting options to the
+root callback — ``-v`` / ``-q`` / ``--debug`` / ``--log-format`` /
+``--log-file`` — wired through :func:`opshub.core.logging.resolve_log_settings`
+and :func:`opshub.core.logging.configure_logging`. The wiring is
+deliberately deferred (lazy import inside the callback body) so that
+``opshub --help`` and ``opshub --version`` do not pay for the
+structlog import and configuration. The resolved
+:class:`~opshub.core.logging.LogSettings` is stored on the Typer
+``Context`` (``ctx.obj``) so subcommands (notably ``connector sync``
+and ``mcp serve`` in T3) can read the ``debug`` flag without
+re-resolving. ``--debug`` and ``-vv`` additionally set
+``OPSHUB_DEBUG=1`` in the environment so that subprocess paths (MCP
+serve) which never see the parent ``ctx`` still receive the signal.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
 import typer
@@ -82,7 +97,8 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def _root(  # pyright: ignore[reportUnusedFunction]
-    version: Annotated[
+    ctx: typer.Context,
+    version: Annotated[  # pyright: ignore[reportUnusedParameter]
         bool | None,
         typer.Option(
             "--version",
@@ -102,6 +118,61 @@ def _root(  # pyright: ignore[reportUnusedFunction]
             ),
         ),
     ] = None,
+    verbose: Annotated[
+        int,
+        typer.Option(
+            "--verbose",
+            "-v",
+            count=True,
+            help=(
+                "Increase log verbosity (repeatable). "
+                "``-v`` lifts the level to INFO, ``-vv`` to DEBUG. "
+                "Mutually exclusive with ``--quiet``; ``--debug`` overrides both."
+            ),
+        ),
+    ] = 0,
+    quiet: Annotated[
+        int,
+        typer.Option(
+            "--quiet",
+            "-q",
+            count=True,
+            help=(
+                "Decrease log verbosity (repeatable). "
+                "``-q`` lowers the level to WARNING, ``-qq`` to ERROR."
+            ),
+        ),
+    ] = 0,
+    debug: Annotated[
+        bool,
+        typer.Option(
+            "--debug",
+            help=(
+                "Enable DEBUG-level logging and print a sanitised "
+                "traceback on uncaught OpsHubError. Implies ``-vv``."
+            ),
+        ),
+    ] = False,
+    log_format: Annotated[
+        str,
+        typer.Option(
+            "--log-format",
+            help=(
+                "Log renderer: ``auto`` (default, JSON when stderr is "
+                "not a TTY, console otherwise), ``json``, or ``console``."
+            ),
+        ),
+    ] = "auto",
+    log_file: Annotated[
+        str | None,
+        typer.Option(
+            "--log-file",
+            help=(
+                "Tee the log stream to this file (created with mode 0600). "
+                "Redaction applies to the file content."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Root callback. Required so that single-subcommand mode is not used; this keeps
     `opshub <subcommand>` invocation stable as more commands are added in Phase 1.
@@ -113,13 +184,73 @@ def _root(  # pyright: ignore[reportUnusedFunction]
 
     The ``--progress`` / ``--no-progress`` flag records the operator's
     progress-display preference before any subcommand runs (issue #316).
-    The import + call are kept inside the callback so ``opshub --help`` —
-    which does not invoke the callback body — never pays for it, preserving
-    the ADR-0001 cold-start budget.
+
+    The ``-v`` / ``-q`` / ``--debug`` / ``--log-format`` / ``--log-file``
+    flags (ADR-0027, T2 of #317) configure structlog before any
+    subcommand runs. The wiring is intentionally deferred:
+
+    * ``configure_logging`` is **only** called when the callback body
+      actually runs — Typer short-circuits the body for ``--help`` and
+      eager ``--version`` callbacks, so the structlog import / setup
+      cost is never paid for help / version queries (R6, cold-start
+      budget).
+    * The import of :mod:`opshub.core.logging` is lazy (inside the
+      function body) so :file:`tests/integration/test_cli_imports.py`
+      stays green — that test bans top-level ``opshub.core`` imports
+      inside :mod:`opshub.cli.app` precisely to protect the cold-start
+      budget.
+    * The resolved :class:`LogSettings` is stored on ``ctx.obj`` so
+      subcommands can read the ``debug`` flag (T3 reads it from
+      ``ctx.obj["debug"]`` for connector sync / MCP error rendering).
+    * When DEBUG-level is in effect (``--debug`` or ``-vv``), the
+      callback also exports ``OPSHUB_DEBUG=1`` so subprocess paths
+      (e.g. ``mcp serve`` re-execed without inheriting the parent
+      ``ctx``) pick up the signal.
     """
+    # Lazy imports keep ``opshub --help`` under the ADR-0001 cold-start
+    # budget and satisfy ``test_cli_imports`` (which bans top-level
+    # ``opshub.core`` imports in this module).
     from opshub.cli import _progress
+    from opshub.core.logging import configure_logging, resolve_log_settings
 
     _progress.set_preference(progress)
+
+    settings = resolve_log_settings(
+        verbose=verbose,
+        quiet=quiet,
+        debug=debug,
+        log_format=log_format,
+        log_file=log_file,
+    )
+
+    # Translate ``auto`` into ``json=None`` (let ``configure_logging``
+    # probe the stderr TTY); ``json`` / ``console`` are explicit overrides.
+    if settings.log_format == "json":
+        json_flag: bool | None = True
+    elif settings.log_format == "console":
+        json_flag = False
+    else:  # "auto"
+        json_flag = None
+
+    configure_logging(
+        level=settings.level,
+        json=json_flag,
+        log_file=settings.log_file,
+    )
+
+    # Expose the resolved settings to subcommands. T3 reads
+    # ``ctx.obj["debug"]`` from connector sync / MCP rendering paths.
+    # ``ensure_object`` would also work but we want exactly this shape.
+    ctx.obj = {"log_settings": settings, "debug": settings.debug}
+
+    # Mirror the debug signal into the environment so subprocess paths
+    # (``mcp serve`` re-execed without inheriting ``ctx``; cron-driven
+    # sync; tests that read ``OPSHUB_DEBUG`` after the callback ran)
+    # observe the same flag. We only **set** ``OPSHUB_DEBUG``; we never
+    # *unset* a pre-existing value, so a user who exported it remains
+    # in debug mode for the duration of the process.
+    if settings.debug:
+        os.environ["OPSHUB_DEBUG"] = "1"
 
 
 @app.command()
@@ -154,6 +285,22 @@ def db_migrate() -> None:
     migrate_command()
 
 
+def _debug_active() -> bool:
+    """Return True iff ``--debug`` or ``OPSHUB_DEBUG`` was effective.
+
+    The root callback exports ``OPSHUB_DEBUG=1`` when ``--debug`` (or
+    ``-vv``) is set. ``main()`` consults this env var (rather than
+    threading the ``LogSettings`` back from the callback) because
+    Typer / Click have already torn down the context by the time the
+    exception reaches the wrapper. The env-var probe also picks up
+    operators who exported ``OPSHUB_DEBUG=1`` directly (e.g. in cron).
+    """
+    raw = os.environ.get("OPSHUB_DEBUG")
+    if raw is None:
+        return False
+    return raw.strip().lower() in {"1", "true", "yes", "on", "debug"}
+
+
 def main() -> None:
     """Console script entry point (referenced by ``[project.scripts].opshub``).
 
@@ -169,8 +316,26 @@ def main() -> None:
 
     The catch order matters: :class:`ValidationError` is a subclass of
     :class:`OpsHubError`, so the narrower handler must come first.
-    Unexpected (non-OpsHub) exceptions are deliberately left to
-    propagate so a real bug still shows its traceback in CI logs.
+
+    ADR-0027 (T2 of #317) adds ``--debug`` semantics:
+
+    * Default (no ``--debug``): the existing one-line ``Error: <msg>``
+      output. The message is passed through
+      :func:`opshub.core.sanitise.sanitise_error_message` so that an
+      ``OpsHubError`` whose message accidentally embeds a token (a
+      connector exception bubbling up through a service layer that
+      forgot to scrub) is still marker-redacted before reaching
+      stderr (R2).
+    * ``--debug`` (or ``OPSHUB_DEBUG=1``): a sanitised full traceback
+      via :func:`opshub.core.logging.format_debug_traceback` is printed
+      to stderr **in addition** to the one-line ``Error:`` summary.
+      The traceback is also sanitised, so operators can safely paste
+      it into an issue or chat.
+    * Non-:class:`OpsHubError` exceptions (real bugs) propagate as
+      before. In ``--debug`` mode we additionally render a sanitised
+      traceback before re-raising so operators see the same output
+      shape; the actual exception is left to bubble up so CI keeps
+      the original ``__traceback__`` for log aggregation.
 
     Implementation notes:
 
@@ -180,8 +345,9 @@ def main() -> None:
       that only Click's runtime knows how to translate into an exit
       code. Raising ``SystemExit`` directly is the idiomatic way to
       surface a process exit code from a plain ``main()`` entry point.
-    * The exception types are imported lazily so that
-      ``tests/integration/test_cli_imports.py`` can keep
+    * The exception types and the sanitiser / traceback helper are
+      imported lazily so that
+      :file:`tests/integration/test_cli_imports.py` can keep
       ``opshub.cli.app``'s module-level surface limited to ``typer``
       and the sub-app objects (ADR-0001 cold-start discipline).
     """
@@ -189,15 +355,31 @@ def main() -> None:
     # ``test_cli_imports`` static check that bans top-level
     # ``opshub.core`` imports inside ``opshub.cli.*``.
     from opshub.core.errors import OpsHubError, ValidationError
+    from opshub.core.logging import format_debug_traceback
+    from opshub.core.sanitise import sanitise_error_message
 
     try:
         app()
     except ValidationError as exc:
-        typer.echo(f"Error: {exc}", err=True)
+        message = sanitise_error_message(str(exc))
+        if _debug_active():
+            typer.echo(format_debug_traceback(exc), err=True)
+        typer.echo(f"Error: {message}", err=True)
         raise SystemExit(2) from exc
     except OpsHubError as exc:
-        typer.echo(f"Error: {exc}", err=True)
+        message = sanitise_error_message(str(exc))
+        if _debug_active():
+            typer.echo(format_debug_traceback(exc), err=True)
+        typer.echo(f"Error: {message}", err=True)
         raise SystemExit(1) from exc
+    except Exception as exc:
+        # Real bugs (non-OpsHubError) bubble up so CI captures the
+        # native traceback. In ``--debug`` mode we additionally emit
+        # the sanitised traceback so operators get the same shape on
+        # stderr as for OpsHubError.
+        if _debug_active():
+            typer.echo(format_debug_traceback(exc), err=True)
+        raise
 
 
 if __name__ == "__main__":
