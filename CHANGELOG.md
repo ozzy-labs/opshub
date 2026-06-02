@@ -5,6 +5,29 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9](https://github.com/ozzy-labs/opshub/compare/v0.2.8...v0.2.9) (2026-06-02)
+
+
+### Added
+
+* **cli:** add opshub skills install / list (Phase 16-B) ([#390](https://github.com/ozzy-labs/opshub/issues/390)) ([836e8cf](https://github.com/ozzy-labs/opshub/commit/836e8cf8ea3f93bca225d791785e0a148bcb1f7d))
+* **cli:** wire opshub init to opshub skills install (Phase 16-C) ([#392](https://github.com/ozzy-labs/opshub/issues/392)) ([a88ef48](https://github.com/ozzy-labs/opshub/commit/a88ef488de0b409430c4c73f1fd43f5f51496ee2))
+* **connectors/slack,cli:** add type sort + --since filter to conversations command ([#374](https://github.com/ozzy-labs/opshub/issues/374)) ([#375](https://github.com/ozzy-labs/opshub/issues/375)) ([3ff8d08](https://github.com/ozzy-labs/opshub/commit/3ff8d08c8b55b3a22135688d2ed5c083dfc22d3e))
+
+
+### Changed
+
+* **connectors/slack:** extract retry_on_rate_limit helper to dedupe history call paths ([#377](https://github.com/ozzy-labs/opshub/issues/377)) ([#378](https://github.com/ozzy-labs/opshub/issues/378)) ([4fabc81](https://github.com/ozzy-labs/opshub/commit/4fabc81117bb42958d9046f66376f1e86a339e4c))
+* **connectors/slack:** migrate _call_list to retry_on_rate_limit helper ([#379](https://github.com/ozzy-labs/opshub/issues/379)) ([#380](https://github.com/ozzy-labs/opshub/issues/380)) ([1963360](https://github.com/ozzy-labs/opshub/commit/1963360946c11a29e02b3682b1c4fe3871b0b3cb))
+
+
+### Documentation
+
+* **adr,skills:** add ADR-0029 distribute secretary skills via opshub package bundling (Phase 16-A) ([#389](https://github.com/ozzy-labs/opshub/issues/389)) ([af8b6c4](https://github.com/ozzy-labs/opshub/commit/af8b6c4cf517e8f8ed3ca052caf0ec0272d76d1b))
+* **agents:** apply PR [#387](https://github.com/ozzy-labs/opshub/issues/387) review info findings (Retry-After wording + Phase 16 criterion) ([#388](https://github.com/ozzy-labs/opshub/issues/388)) ([6bc2cd9](https://github.com/ozzy-labs/opshub/commit/6bc2cd95089243bea2f0465d37f4b02f6b46e1ed))
+* **agents:** extract Post-Phase 15 Maintenance from Status run-on into bulleted section ([#387](https://github.com/ozzy-labs/opshub/issues/387)) ([b2f35fb](https://github.com/ozzy-labs/opshub/commit/b2f35fb2a6dcd25220ac060648c72e2b7589d51f))
+* fix Phase 16 audit gaps (skills-sync-check description + stale Phase 15+ defer mentions) ([#394](https://github.com/ozzy-labs/opshub/issues/394)) ([44bca39](https://github.com/ozzy-labs/opshub/commit/44bca39ab16c2c461de4ce5f666526232fc76876))
+
 ## [0.2.8](https://github.com/ozzy-labs/opshub/compare/v0.2.7...v0.2.8) (2026-06-02)
 
 
