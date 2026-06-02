@@ -872,13 +872,17 @@ async def test_propose_apply_propagates_unknown_proposal(
 def _bootstrap_fts_index(engine: Engine) -> None:
     """Create the ``sources_fts`` virtual table + sync triggers.
 
-    Mirrors migration ``0019_create_sources_fts`` (the alembic-only path
-    is too heavy for a unit test that already created the projection
-    tables via Table.create()). We bootstrap just enough for the
+    Mirrors the head migration state (the alembic-only path is too
+    heavy for a unit test that already created the projection tables
+    via Table.create()). We bootstrap just enough for the
     SearchService MATCH query to land — the virtual table + the AFTER
-    INSERT trigger so seeded rows show up. ``unicode61 remove_diacritics 2``
-    matches the migration tokeniser so query semantics are identical
-    to production.
+    INSERT trigger so seeded rows show up. Phase 15 S3 (#359) syncs
+    the tokenizer to ``trigram`` to match migration
+    ``0028_rebuild_sources_fts_trigram`` so query semantics are
+    identical to production after the Phase 15 S2 supersede; before
+    the sync this helper still spun up the Phase 10 ``unicode61
+    remove_diacritics 2`` tokenizer and would have silently diverged
+    from production MATCH behaviour.
     """
     from sqlalchemy import text
 
@@ -887,7 +891,7 @@ def _bootstrap_fts_index(engine: Engine) -> None:
             text(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS sources_fts USING fts5("
                 "body, content='sources', content_rowid='rowid',"
-                " tokenize='unicode61 remove_diacritics 2'"
+                " tokenize='trigram'"
                 ")"
             )
         )
