@@ -1,6 +1,6 @@
 # Phase 15 Implementation Plan
 
-> Status: **Phase 15 着手中 (2026-06-02、epic #338)**. Scope: **Search 品質改善 (FTS5 日本語 tokenizer trigram 化 + 短クエリ LIKE fallback)** = Phase 10 で導入した `opshub search` (migration 0019、`sources_fts`) が日本語自然文で実質ヒットしない問題を、`sources_fts` の tokenizer を `unicode61 remove_diacritics 2` から `trigram` (FTS5 built-in、SQLite 3.34+) に張り替え + SearchService 層で 1-2 文字短クエリを `body LIKE '%q%'` にルーティングする fallback を入れて根治する。形 A (能動性なし) + 外部書き戻しなしを Phase 10〜14 から継承。
+> Status: **Phase 15 complete (2026-06-02、epic #338)**. Scope: **Search 品質改善 (FTS5 日本語 tokenizer trigram 化 + 短クエリ LIKE fallback)** = Phase 10 で導入した `opshub search` (migration 0019、`sources_fts`) が日本語自然文で実質ヒットしない問題を、`sources_fts` の tokenizer を `unicode61 remove_diacritics 2` から `trigram` (FTS5 built-in、SQLite 3.34+) に張り替え + SearchService 層で 1-2 文字短クエリを `body LIKE '%q%'` にルーティングする fallback を入れて根治した。形 A (能動性なし) + 外部書き戻しなしを Phase 10〜14 から継承。
 >
 > Sub-issue は **S1〜S4 の 4 つ**（親 epic #338、子は S1 から順次起票）。**新規 ADR 1 本** (ADR-0028 = FTS5 sources_fts tokenizer choice)、**改訂 ADR ゼロ**。Phase 11 / 12 / 13 / 14 流の単一トピック集中パターンを継承しつつ、本 Phase は新規 ADR 1 本ルート (Phase 11 = 1 新規 + 2 改訂、Phase 15 = 1 新規 + 0 改訂)。本 plan が SSOT であり、各 sub-issue body は要点抜粋。
 >
@@ -56,8 +56,10 @@ Phase 15 の目的は、opshub の秘書 use case で頻出する「日本語キ
 ## 3. Commit 順序 (Sub-issue 骨子)
 
 > 各 sub-issue を 1 PR に割る。S1 から順次起票する (Phase 13/14 のように先に全部 sub-issue を切ってしまう運用も可能だが、Phase 15 は scope が小さいため逐次起票を default とする)。依存順に並べる。
+>
+> **実績サマリ (2026-06-02 完了)**: S1 = PR [#346](https://github.com/ozzy-labs/opshub/pull/346) (ADR-0028 + 本 plan) merged、S2 = PR [#363](https://github.com/ozzy-labs/opshub/pull/363) (migration 0028 trigram 張り替え) merged、S3 = PR [#364](https://github.com/ozzy-labs/opshub/pull/364) (SearchService LIKE fallback + 日本語 e2e) merged、S4 = 本 PR (closeout) merged。Phase 15 全体の DoD は §4 参照。
 
-### Sub-issue S1: ADR-0028 + phase-15-plan + index 更新 (#338 直下、本 PR)
+### Sub-issue S1: ADR-0028 + phase-15-plan + index 更新 (#338 直下、本 PR) ✅ merged (PR #346)
 
 - **依存: なし** (entry)
 - `docs/adr/0028-fts5-japanese-tokenizer.md` 新規起草 (Context / Decision / Alternatives / Consequences、上表のとおり)
@@ -68,7 +70,7 @@ Phase 15 の目的は、opshub の秘書 use case で頻出する「日本語キ
 
 **PR S1** `docs: ADR-0028 (FTS5 Japanese tokenizer trigram) + phase-15-plan + index 追加`
 
-### Sub-issue S2: migration 0028 (trigram 張り替え + back-fill + trigger 再作成)
+### Sub-issue S2: migration 0028 (trigram 張り替え + back-fill + trigger 再作成) ✅ merged (PR #363)
 
 - **依存: S1**
 - `src/opshub/db/migrations/versions/0028_rebuild_sources_fts_trigram.py` 新規
@@ -86,7 +88,7 @@ Phase 15 の目的は、opshub の秘書 use case で頻出する「日本語キ
 
 **PR S2** `feat(db/migrations): 0028 rebuild sources_fts with trigram tokenizer`
 
-### Sub-issue S3: SearchService LIKE fallback + 日本語 unit / integration test
+### Sub-issue S3: SearchService LIKE fallback + 日本語 unit / integration test ✅ merged (PR #364)
 
 - **依存: S2**
 - `src/opshub/services/search_service.py` 改修
@@ -109,7 +111,7 @@ Phase 15 の目的は、opshub の秘書 use case で頻出する「日本語キ
 
 **PR S3** `feat(services/search): trigram path + short-query LIKE fallback`
 
-### Sub-issue S4: Phase 15 closeout (docs)
+### Sub-issue S4: Phase 15 closeout (docs) ✅ merged (本 PR)
 
 - **依存: S3**
 - `docs/troubleshooting.md` に「日本語 search で hit が少ない場合」節を追加 (旧 workaround `--raw + *` から trigram default への変化、`--raw` の出番が減ったことを記載)
@@ -141,39 +143,45 @@ drive 例: `/drive --merge S1 -> S2 -> S3 -> S4` (各 PR は前 PR の green を
 
 > 着手前に各項目を具体化。ここでは代表項目のみ。
 
-### S1 — ADR-0028 + phase-15-plan + index
+### S1 — ADR-0028 + phase-15-plan + index ✅ merged (PR #346)
 
-- [ ] `docs/adr/0028-fts5-japanese-tokenizer.md` 起草 (Status: Accepted、Context / Decision / Alternatives / Consequences、上表のとおり)
-- [ ] `docs/phase-15-plan.md` 起草 (本ファイル、SSOT として OQ1-7 + 残 OQ8-12 + PR 分割 + 各 Sub DoD + テスト戦略 + Alternatives 網羅)
-- [ ] `docs/adr/README.md` に ADR-0028 行追加 (索引同期)
-- [ ] `AGENTS.md` の「次の候補は Phase 15+」記述に `Search 品質改善 (FTS5 日本語 tokenizer 修正、ADR-0028)` を追記
-- [ ] 新規 ADR 1 本 + 改訂ゼロ方針が plan §2 に明記
-- [ ] ADR / plan / index のみで実装変更なし、CI green
+- [x] `docs/adr/0028-fts5-japanese-tokenizer.md` 起草 (Status: Accepted、Context / Decision / Alternatives / Consequences、上表のとおり)
+- [x] `docs/phase-15-plan.md` 起草 (本ファイル、SSOT として OQ1-7 + 残 OQ8-12 + PR 分割 + 各 Sub DoD + テスト戦略 + Alternatives 網羅)
+- [x] `docs/adr/README.md` に ADR-0028 行追加 (索引同期)
+- [x] `AGENTS.md` の「次の候補は Phase 15+」記述に `Search 品質改善 (FTS5 日本語 tokenizer 修正、ADR-0028)` を追記
+- [x] 新規 ADR 1 本 + 改訂ゼロ方針が plan §2 に明記
+- [x] ADR / plan / index のみで実装変更なし、CI green
 
-### S2 — migration 0028 (trigram 張り替え)
+### S2 — migration 0028 (trigram 張り替え) ✅ merged (PR #363)
 
-- [ ] `src/opshub/db/migrations/versions/0028_rebuild_sources_fts_trigram.py` 新規 (upgrade + downgrade)
-- [ ] `tests/integration/test_phase15_fts_trigram_migration.py` 新規 (tokenizer 検証 + back-fill + trigger + 日本語 MATCH + downgrade)
-- [ ] 既存 `tests/integration/test_phase10_fts_migration.py` は touch せず維持
-- [ ] CI green、`uv run alembic upgrade head` → `downgrade base` → `upgrade head` round-trip OK
+- [x] `src/opshub/db/migrations/versions/0028_rebuild_sources_fts_trigram.py` 新規 (upgrade + downgrade)
+- [x] `tests/integration/test_phase15_fts_trigram_migration.py` 新規 (tokenizer 検証 + back-fill + trigger + 日本語 MATCH + downgrade、14 cases)
+- [x] 既存 `tests/integration/test_phase10_fts_migration.py` は touch せず維持
+- [x] CI green、`uv run alembic upgrade head` → `downgrade 0019_create_sources_fts` → `upgrade head` round-trip OK
 
-### S3 — SearchService LIKE fallback + 日本語 test
+### S3 — SearchService LIKE fallback + 日本語 test ✅ merged (PR #364)
 
-- [ ] `src/opshub/services/search_service.py` に短クエリ判定 + LIKE fallback path を追加
-- [ ] `tests/unit/services/test_search_service.py` に日本語 8 ケース + LIKE escape 1 ケース + `--raw` 短クエリ 1 ケース
-- [ ] `tests/unit/cli/test_search.py` に日本語 smoke 1-2 件
-- [ ] OQ8 (3 文字境界 fallback の閾値) を本 PR 着手時にベンチで確定 (1-2 文字 fallback で十分か、3 文字を含めるか)
-- [ ] OQ9 (case sensitivity / NFC 正規化) を本 PR 着手時に確定 (trigram default と揃える)
-- [ ] CI green、coverage 既存ライン維持
+- [x] `src/opshub/services/search_service.py` に短クエリ判定 + LIKE fallback path を追加 (`_MIN_FTS_QUERY_CHARS = 3` + `_search_like_fallback`)
+- [x] `tests/unit/services/test_search_service.py` に日本語ケース追加 (+14 tests: trigram path 3+ char Japanese / camelCase / space-separated phrase、LIKE fallback path 1-2 char Japanese / English / case-insensitivity / connector filter / limit / NULL-body guard / LIKE wildcard escaping / SQL-injection smoke / NFC normalisation / raw-mode bypass / 3-char boundary)
+- [x] `tests/unit/cli/test_search.py` に日本語 smoke 1-2 件 (`依頼` / `boxの権限`)
+- [x] `tests/integration/test_phase15_search_japanese.py` 新規 (e2e against alembic upgrade head + real SearchService、epic #338 §背景 operator cases を pin)
+- [x] OQ8 (3 文字境界 fallback の閾値) 確定: `len(NFC(query).strip()) < 3` → LIKE fallback (3-char はちょうど 1 trigram なので FTS5 path で十分、責務 overlap 回避)
+- [x] OQ9 (case sensitivity / NFC 正規化) 確定: `LOWER(body) LIKE LOWER(?)` + `unicodedata.normalize("NFC", query)` (trigram default ASCII case-insensitive と整合、Japanese は no-op、composed/decomposed paste を symmetric に hit させる)
+- [x] OQ10 (connector filter / limit 適用順) 確定: `LOWER(body) LIKE LOWER(?) [AND connector_name = ?] AND body IS NOT NULL ORDER BY observed_at DESC LIMIT ?` (full scan 受容、NULL-body 行 = Phase 3-9 historical + box_drive ADR-0019 を明示除外)
+- [x] OQ11 (`--raw` モードでの fallback) 確定: `raw_query=True` で fallback bypass (operator MATCH の silent rewrite 回避、ADR-0028 §Decision (b) 契約遵守)
+- [x] OQ12 (`opshub projections rebuild` 連動) 確定: S2 / S3 では out of scope、`opshub db migrate` の 0028 適用で back-fill 自動。projection rebuild hook 化は Phase 16+ 候補に移送 (operator が頻繁 rebuild する pattern がまだ顕在化していない)
+- [x] cross-cutting fix: `tests/unit/mcp/test_phase12_handlers.py::_bootstrap_fts_index()` の seed tokenizer も `unicode61 remove_diacritics 2` から `trigram` に同期 (S2 で flag された divergence の closeout、production と MCP unit boundary を再整合)
+- [x] CI green、coverage 既存ライン維持
 
-### S4 — closeout
+### S4 — closeout ✅ merged (本 PR)
 
-- [ ] `docs/troubleshooting.md` に日本語 search 節追加
-- [ ] `AGENTS.md` Phase status 行 Phase 15 complete + Phase 15 MVP 文追記
-- [ ] `CLAUDE.md` の `opshub search` 短行更新
-- [ ] `opshub search --help` の `--raw` 説明更新 (`src/opshub/cli/search.py`)
-- [ ] `docs/phase-15-plan.md` Status header を `Phase 15 complete (YYYY-MM-DD)` に更新
-- [ ] CI green
+- [x] `docs/troubleshooting.md` §3.6 に日本語 search 節追加 (Phase 14 以前の 0 hit 原因 + Phase 15 改善 = trigram + LIKE fallback + `--raw` fallback 無効 + 確認方法 + 関連リンク)
+- [x] `AGENTS.md` Phase status 行を `Phase 1-15 complete` に更新、Phase 15 の MVP 文を Phase 13/14 同型で追記
+- [x] `CLAUDE.md` の `opshub search` 言及箇所 (短行) を更新 (default で日本語部分一致 / `--raw` は power-user 向け)
+- [x] `opshub search --help` の `--raw` 説明更新 (`src/opshub/cli/search.py` click help text)
+- [x] `docs/phase-15-plan.md` Status header を `Phase 15 complete (2026-06-02)` に更新 + sub-issue 状態列を ✅ merged に更新
+- [x] `docs/decisions-log.md` Phase 15 narrative chronicle 追記 (§35 拡張 = S2/S3/S4 完了反映)
+- [x] CI green
 
 ---
 
@@ -229,17 +237,17 @@ drive 例: `/drive --merge S1 -> S2 -> S3 -> S4` (各 PR は前 PR の green を
 
 ## 8. Open Questions (残)
 
-> Phase 15 着手時に確定済の OQ1-7 は §1 確定済み事項参照。以下は **S2 / S3 着手時に決定** する実装詳細。
+> Phase 15 着手時に確定済の OQ1-7 は §1 確定済み事項参照。OQ8-OQ12 は **S2 / S3 で全て確定済 (2026-06-02、PR #363 / #364)**。下表は履歴として残す。
 
-| # | 論点 | 決定時期 |
-|---|---|---|
-| OQ8 | LIKE fallback の **閾値** (現案 = 1-2 文字)。3 文字ジャストの境界ケース (trigram が 1 個しか作れない) も fallback 含めるか、純 trigram で十分か | S3 着手時、実測ベンチで確定 |
-| OQ9 | LIKE fallback の **case sensitivity / NFC 正規化**。trigram tokenizer の `case_sensitive` option との挙動差を埋めるか trigram と同じ挙動 (default = case-insensitive) に揃えるか | S3 着手時、trigram default と揃える方針で確定見込み |
-| OQ10 | LIKE fallback の **connector filter / limit 適用順**。`body LIKE '%q%' AND connector_name = ?` + `LIMIT n` で済むが、index hit 不可なため full scan。`sources` row 数増加に伴う性能境界 (~1M rows で許容できるか) を S3 で測定、超えたら別途 issue で索引追加 | S3 着手時 |
-| OQ11 | `--raw` モードでの LIKE fallback の扱い (現案 = `--raw` のときは fallback **無し** = operator 責任で FTS5 文法を書く前提) | S3 着手時 |
-| OQ12 | `opshub projections rebuild` (ADR-0022) との連動。projection rebuild 時に sources_fts も自動 rebuild するか、別 CLI (`opshub search rebuild-index` 等) を切るか。MVP は projection rebuild に乗せる方針だが S2 で確定 | S2 着手時 |
+| # | 論点 | 決定時期 | 結果 |
+|---|---|---|---|
+| OQ8 | LIKE fallback の **閾値** (現案 = 1-2 文字)。3 文字ジャストの境界ケース (trigram が 1 個しか作れない) も fallback 含めるか、純 trigram で十分か | S3 (PR #364) | ✅ 確定: `len(NFC(query).strip()) < 3` → LIKE fallback。3-char はちょうど 1 trigram で FTS5 path が native に処理するため、責務 overlap 回避のため fallback は 1-2 文字専用 |
+| OQ9 | LIKE fallback の **case sensitivity / NFC 正規化**。trigram tokenizer の `case_sensitive` option との挙動差を埋めるか trigram と同じ挙動 (default = case-insensitive) に揃えるか | S3 (PR #364) | ✅ 確定: `LOWER(body) LIKE LOWER(?)` + `unicodedata.normalize("NFC", query)`。trigram default の ASCII case-insensitive と整合、Japanese は no-op、composed/decomposed paste を symmetric に hit させる。body 側は upstream connector が NFC で保存している前提 (module docstring に明記) |
+| OQ10 | LIKE fallback の **connector filter / limit 適用順**。`body LIKE '%q%' AND connector_name = ?` + `LIMIT n` で済むが、index hit 不可なため full scan。`sources` row 数増加に伴う性能境界 (~1M rows で許容できるか) を S3 で測定、超えたら別途 issue で索引追加 | S3 (PR #364) | ✅ 確定: `LOWER(body) LIKE LOWER(?) [AND connector_name = ?] AND body IS NOT NULL ORDER BY observed_at DESC LIMIT ?` (full scan 受容、operator-scale (≤100K rows) で sub-second、NULL-body 行 = Phase 3-9 historical + box_drive ADR-0019 を明示除外)。dedicated index 追加は Phase 16+ optimisation hook (ADR-0028 §Consequences) |
+| OQ11 | `--raw` モードでの LIKE fallback の扱い (現案 = `--raw` のときは fallback **無し** = operator 責任で FTS5 文法を書く前提) | S3 (PR #364) | ✅ 確定: `raw_query=True` で fallback bypass。operator MATCH の silent rewrite を回避し ADR-0028 §Decision (b) の `--raw` 契約を遵守 |
+| OQ12 | `opshub projections rebuild` (ADR-0022) との連動。projection rebuild 時に sources_fts も自動 rebuild するか、別 CLI (`opshub search rebuild-index` 等) を切るか。MVP は projection rebuild に乗せる方針だが S2 で確定 | S4 (本 PR closeout) | ✅ 確定: S2 / S3 では out of scope、`opshub db migrate` の migration 0028 適用で 1 回 back-fill 自動。projection rebuild hook 化は **Phase 16+** 候補に移送 (operator が頻繁 rebuild する pattern がまだ顕在化していない、需要顕在化時に別 issue 起票) |
 
-着手中に新たな OQ が発生した場合は本節を更新。
+着手中に新たな OQ が発生した場合は本節を更新 (Phase 15 完了時点では追加なし)。
 
 ---
 
