@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import AbstractContextManager
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -978,3 +978,68 @@ def test_conversations_since_toml_comment_includes_activity_date(
 
     assert result.exit_code == 0
     assert "last 2024-06-01" in result.stdout
+
+
+def test_conversations_warnings_from_iterator_surface_on_stderr_in_order(
+    _slack_token_env: None,
+) -> None:
+    """Iterator-populated warnings flush to stderr in append order after the spinner closes.
+
+    Pin the CLI boundary: the driver passes a ``warnings`` list to
+    ``list_conversations``, then echoes each entry on stderr in the
+    order the iterator appended them. Regression in either direction
+    (driver swallowing warnings, or re-ordering them) would miss the
+    per-type ``missing_scope`` UX from #374.
+    """
+
+    def _fake_list(auth: Any, **kwargs: Any) -> Iterator[SlackConversation]:
+        bucket_obj = kwargs.get("warnings")
+        if isinstance(bucket_obj, list):
+            bucket = cast("list[str]", bucket_obj)
+            bucket.append("warning: skipping public conversations: missing_scope ...")
+            bucket.append("warning: skipping mpim conversations: missing_scope ...")
+        del auth
+        return iter(())
+
+    runner = CliRunner()
+    with patch(
+        "opshub.connectors.slack.conversations.list_conversations",
+        side_effect=_fake_list,
+    ):
+        result = runner.invoke(
+            app,
+            ["connector", "slack", "conversations", "--since", "7d"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    stderr = result.stderr
+    public_idx = stderr.find("skipping public conversations")
+    mpim_idx = stderr.find("skipping mpim conversations")
+    assert public_idx != -1, stderr
+    assert mpim_idx != -1, stderr
+    assert public_idx < mpim_idx, "warnings must surface in iterator-append order"
+
+
+def test_sort_rows_activity_mode_pushes_missing_ts_to_bucket_tail() -> None:
+    """``_sort_rows(by_activity=True)`` parks ``last_activity_ts is None`` at bucket end.
+
+    The docstring marks the ``None`` branch as defensive (``--since``
+    should always populate the ts), but the branch is reachable if a
+    thin proxy returns a non-numeric ts that ``_fetch_last_activity_ts``
+    cannot parse — we keep the row, with ``None`` ts. The CLI sort
+    must place such rows last within their type bucket so the
+    presented order does not falsely promote a "no signal" row above
+    a row with a real recent ts.
+    """
+    from opshub.cli._slack_conversations import _sort_rows  # pyright: ignore[reportPrivateUsage]
+
+    rows = [
+        _row_with_activity(_public_row("C-mid", name="charlie"), last_activity_ts=1_500_000.0),
+        # ``last_activity_ts=None`` via the dataclass default — public bucket fallback.
+        _public_row("C-none", name="bravo"),
+        _row_with_activity(_public_row("C-new", name="alpha"), last_activity_ts=2_000_000.0),
+    ]
+
+    result = _sort_rows(rows, by_activity=True)
+
+    assert [r.id for r in result] == ["C-new", "C-mid", "C-none"]

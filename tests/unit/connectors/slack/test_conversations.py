@@ -1112,6 +1112,72 @@ def test_list_conversations_since_missing_scope_disables_type_with_warning(
     assert "xoxb-test" not in warnings[0]
 
 
+def test_list_conversations_since_missing_scope_per_type_warnings_are_independent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two types failing with distinct ``needed`` scopes → two independent warnings.
+
+    Pins the per-type semantics of the ``disabled_history_types`` set:
+    a public-channel miss disables only the public bucket and surfaces
+    one warning naming ``channels:history``; a concurrent mpim-bucket
+    miss disables only mpim and surfaces a second warning naming
+    ``mpim:history``. Other types' rows (private here) continue to flow.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response(
+        [
+            _public_channel("C-pub", name="public-one"),
+            _private_channel("G-priv", name="private-one"),
+            _mpim_row("G-mpim-1"),
+        ]
+    )
+    client = _build_client(
+        list_pages=[page],
+        members_responses={"G-mpim-1": _members_response(["U-alice", "U-bob"])},
+        users_info_responses={
+            "U-alice": _user_info_response(display_name="alice"),
+            "U-bob": _user_info_response(display_name="bob"),
+        },
+    )
+
+    def _make_miss(needed: str) -> SlackApiError:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {}
+
+        def _get(key: str, default: object = None) -> object:
+            return {"error": "missing_scope", "needed": needed}.get(key, default)
+
+        resp.get.side_effect = _get
+        return SlackApiError(  # type: ignore[no-untyped-call]
+            message="missing_scope", response=resp
+        )
+
+    def _history(*, channel: str, **_kwargs: Any) -> dict[str, Any]:
+        if channel.startswith("C"):
+            raise _make_miss("channels:history")
+        if channel.startswith("G-mpim"):
+            raise _make_miss("mpim:history")
+        return _history_response([{"ts": "1717200000.000000"}])
+
+    client.conversations_history.side_effect = _history
+    _patch_webclient(monkeypatch, client)
+
+    warnings: list[str] = []
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+
+    # Only the private row (whose history call succeeded) survived.
+    assert [c.id for c in results] == ["G-priv"]
+    assert len(warnings) == 2
+    public_warn = next(w for w in warnings if "public" in w)
+    mpim_warn = next(w for w in warnings if "mpim" in w)
+    assert "channels:history" in public_warn
+    assert "mpim:history" in mpim_warn
+    # Token never leaks through the warning surface.
+    assert all("xoxb-test" not in w for w in warnings)
+
+
 def test_list_conversations_since_warnings_none_drops_silently(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

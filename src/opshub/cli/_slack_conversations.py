@@ -171,7 +171,20 @@ def parse_since(raw: str) -> datetime:
     if relative is not None:
         amount = int(relative.group(1))
         unit = relative.group(2)
-        delta = timedelta(days=amount) if unit == "d" else timedelta(weeks=amount)
+        # ``\d+`` is unbounded, so a typo like ``--since 99999999999d``
+        # would propagate to :class:`timedelta` and raise
+        # :class:`OverflowError` (escaping the documented
+        # :class:`typer.BadParameter` contract that surfaces with
+        # exit code 2). Translate the overflow into the documented
+        # usage-error vocabulary so the operator sees one consistent
+        # ``--help``-able message.
+        try:
+            delta = timedelta(days=amount) if unit == "d" else timedelta(weeks=amount)
+        except OverflowError as exc:
+            raise typer.BadParameter(
+                f"--since {raw!r} is too far in the past; use an ISO date "
+                "(e.g. '2026-05-01') for cutoffs beyond a few centuries."
+            ) from exc
         return now_utc() - delta
 
     iso_text = text.replace("Z", "+00:00") if text.endswith("Z") else text

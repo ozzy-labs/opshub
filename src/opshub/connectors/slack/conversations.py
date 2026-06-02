@@ -805,9 +805,14 @@ def _call_history_oldest(
         # newer than ``ts`` are returned (with ``inclusive=False`` we
         # exclude the boundary message itself so an exact-match
         # ``since`` does not double-count). Slack accepts the unix
-        # epoch as a stringified float — we format here to keep the
-        # call site uncluttered.
-        "oldest": f"{oldest:.6f}",
+        # epoch as a stringified float — ``repr`` preserves the full
+        # IEEE-754 precision that ``now_utc().timestamp()`` carries,
+        # so a ``--since 7d`` cutoff close to a message ts is not
+        # silently rounded into either side of the cutoff (review
+        # finding: 6-digit ``f"{oldest:.6f}"`` was banker-rounded and
+        # could nudge the cutoff a fraction of a microsecond in
+        # either direction).
+        "oldest": repr(float(oldest)),
         "inclusive": False,
     }
 
