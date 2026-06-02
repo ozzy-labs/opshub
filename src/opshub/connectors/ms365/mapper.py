@@ -73,7 +73,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from opshub.core.errors import ConnectorFailedError
 from opshub.core.logging import get_logger
-from opshub.core.text_limits import truncate_with_marker
+from opshub.core.text_limits import normalise_optional_text, truncate_with_marker
 from opshub.core.time import now_utc
 from opshub.domain.events.source import SourceObserved
 
@@ -371,7 +371,12 @@ def _build_source_observed(
     Centralising the construction here keeps the three public mapper
     functions free of repetition and guarantees the same defensive
     checks (non-empty natural keys, ``None``-on-empty for optional
-    fields) fire for every endpoint group.
+    fields) fire for every endpoint group. The optional ``summary``
+    field is routed through
+    :func:`opshub.core.text_limits.normalise_optional_text` so empty
+    *and* whitespace-only previews (e.g. HTML-strip residue on
+    Outlook ``bodyPreview``) collapse to ``None`` consistently with
+    the rest of the connector family (issue #343).
 
     Raises
     ------
@@ -409,7 +414,15 @@ def _build_source_observed(
         # but provide no recognition value — normalise to ``None`` so
         # downstream projections / templates can branch cleanly.
         url=url if url else None,
-        summary=summary if summary else None,
+        # Issue #343: whitespace-only summary is also normalised to
+        # ``None`` (in addition to empty) via
+        # :func:`opshub.core.text_limits.normalise_optional_text`, so
+        # the ``sources.summary`` column never holds a visually-empty
+        # preview. The same helper backs the Slack / Teams mappers
+        # (#337) and the GitHub notification path so the
+        # "summary is missing" semantics are SSOT-uniform across
+        # connectors.
+        summary=normalise_optional_text(summary),
         # Phase 10 (ADR-0020): full body + provenance. External SaaS
         # content is tagged untrusted so downstream agent / LLM context
         # treats it as reference material, never instructions.

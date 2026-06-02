@@ -32,6 +32,7 @@ from opshub.connectors.google_calendar.mapper import (
     DEFAULT_ACTOR,
     GOOGLE_CALENDAR_SOURCE_TYPE,
     SUMMARY_MAX_CHARS,
+    _build_source_observed,  # pyright: ignore[reportPrivateUsage]
     map_calendar_event,
 )
 from opshub.core.errors import ConnectorFailedError
@@ -505,3 +506,29 @@ def test_body_preserves_japanese_kanji_in_location() -> None:
     event = map_calendar_event(_raw(location=location_jp))
     assert event.body is not None
     assert location_jp in event.body
+
+
+def test_build_source_observed_whitespace_only_summary_normalises_to_none() -> None:
+    """Issue #343: whitespace-only summary input collapses to ``None``.
+
+    The Calendar mapper's natural summary template
+    (``"<start> - <end> (N attendees)"``) is timestamp-derived so a
+    whitespace-only candidate is not currently reachable via
+    :func:`map_calendar_event`. This test exercises
+    :func:`_build_source_observed` directly to pin the SSOT helper
+    wiring so a future ``_build_summary`` refactor cannot start
+    leaking whitespace into ``sources.summary`` (matches the
+    workspace mapper sibling test and the Slack / Teams / Gmail /
+    MS365 / GitHub-notification mappers).
+    """
+    event = _build_source_observed(
+        external_id="evt-ws",
+        source_type=GOOGLE_CALENDAR_SOURCE_TYPE,
+        title="title",
+        url="https://calendar.google.com/event?eid=evt-ws",
+        summary="\n\t  ",
+        occurred_at=datetime(2026, 5, 31, 12, 0, 0, tzinfo=UTC),
+        actor=DEFAULT_ACTOR,
+        body=None,
+    )
+    assert event.summary is None

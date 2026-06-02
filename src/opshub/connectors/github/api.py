@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any, cast
 import httpx
 
 from opshub.core.errors import OpsHubError
+from opshub.core.text_limits import normalise_optional_text
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -353,7 +354,21 @@ def _normalise_notification(item: dict[str, Any]) -> GitHubItem:
         external_id=str(item["id"]),
         title=_truncate(title, TITLE_MAX_CHARS),
         url=url,
-        summary=_truncate_optional(raw_summary, SUMMARY_MAX_CHARS),
+        # Issue #343: GitHub's notification ``reason`` field is a
+        # closed enum (``subscribed`` / ``mention`` / ...) so
+        # whitespace-only input is not actually reachable here, but
+        # routing the result through
+        # :func:`opshub.core.text_limits.normalise_optional_text`
+        # keeps the "summary is missing" semantics SSOT-uniform with
+        # the four helper-based mappers (ms365 / google_workspace /
+        # google_mail / google_calendar) and the Slack / Teams
+        # mappers (#337). The wrap (rather than mutating
+        # :func:`_truncate_optional` itself) localises the whitespace
+        # normalisation to the one caller that needs it; the
+        # general-purpose truncation primitive stays semantics-free
+        # for any future caller that genuinely wants to preserve
+        # whitespace.
+        summary=normalise_optional_text(_truncate_optional(raw_summary, SUMMARY_MAX_CHARS)),
         updated_at=_parse_iso_utc(item["updated_at"]),
     )
 

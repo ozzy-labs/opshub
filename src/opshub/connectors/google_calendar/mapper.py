@@ -60,6 +60,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final, Literal
 
 from opshub.core.errors import ConnectorFailedError
+from opshub.core.text_limits import normalise_optional_text
 from opshub.core.time import now_utc
 from opshub.domain.events.source import SourceObserved
 
@@ -293,8 +294,11 @@ def _build_source_observed(
 
     Centralising the construction here keeps :func:`map_calendar_event`
     readable and guarantees every event carries the same provenance
-    stamps + normalisation rules (empty-string-to-``None`` on optional
-    fields).
+    stamps + normalisation rules. The optional ``summary`` field is
+    routed through
+    :func:`opshub.core.text_limits.normalise_optional_text` so empty
+    *and* whitespace-only previews collapse to ``None`` (issue #343
+    — SSOT semantics across the connector family).
     """
     # Lazy import keeps the module-load cost off ``opshub.core.ids`` for
     # callers that only need the literals, mirroring the MS365 mapper.
@@ -309,7 +313,14 @@ def _build_source_observed(
         source_type=source_type,
         title=title,
         url=url if url else None,
-        summary=summary if summary else None,
+        # Issue #343: route the optional summary through
+        # :func:`opshub.core.text_limits.normalise_optional_text` so
+        # whitespace-only previews collapse to ``None`` (SSOT-uniform
+        # with the rest of the connector family). The composed
+        # ``"<start> - <end> (N attendees)"`` shape used here is
+        # whitespace-free in practice, but routing through the helper
+        # keeps the wiring identical to its peer mappers.
+        summary=normalise_optional_text(summary),
         body=body,
         # ADR-0020 §(e): SaaS-connector events are external + untrusted
         # so host LLM / skill side treats the body as reference

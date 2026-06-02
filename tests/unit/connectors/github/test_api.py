@@ -263,6 +263,41 @@ def test_list_notifications_returns_subject_data() -> None:
     assert item.summary == "mention"
 
 
+def test_list_notifications_normalises_whitespace_only_reason_to_none() -> None:
+    """Issue #343: SSOT wiring — whitespace-only ``reason`` collapses to ``None``.
+
+    GitHub's notification ``reason`` field is a closed enum
+    (``subscribed`` / ``mention`` / ``assign`` / ``...``) so a
+    whitespace-only value is not actually reachable in production —
+    but pinning the helper wiring here keeps the
+    ``GitHubItem.summary`` semantics SSOT-uniform with the four
+    helper-based mappers (ms365 / google_workspace / google_mail /
+    google_calendar) and Slack / Teams (#337). A future schema change
+    that lets ``reason`` carry free-form strings cannot start leaking
+    whitespace into ``sources.summary`` without this assertion
+    failing first.
+    """
+    payload: list[dict[str, object]] = [
+        {
+            "id": "ws-1",
+            "reason": "   \n\t ",
+            "subject": {
+                "title": "notification subject",
+                "url": "https://api.github.com/repos/owner/repo/issues/7",
+            },
+            "updated_at": "2026-05-15T11:00:00Z",
+        }
+    ]
+    routes = {
+        ("GET", "/notifications"): httpx.Response(200, json=payload),
+    }
+    with _client(routes) as client:
+        items = list(list_notifications(token=_TOKEN, client=client))
+
+    assert len(items) == 1
+    assert items[0].summary is None
+
+
 # ---------------------------------------------------------------------------
 # Optional-field normalisation
 # ---------------------------------------------------------------------------

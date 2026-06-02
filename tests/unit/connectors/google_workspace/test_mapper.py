@@ -32,6 +32,7 @@ from opshub.connectors.google_workspace.mapper import (
     GOOGLE_SLIDES_SOURCE_TYPE,
     GOOGLE_WORKSPACE_SOURCE_TYPES,
     SUMMARY_MAX_CHARS,
+    _build_source_observed,  # pyright: ignore[reportPrivateUsage]
     map_drive_item,
     source_type_for_mime_type,
 )
@@ -500,3 +501,30 @@ def test_handles_web_view_link_missing() -> None:
     # degrades on a missing webViewLink.
     assert event.title == "Hello"
     assert event.summary is not None
+
+
+def test_build_source_observed_whitespace_only_summary_normalises_to_none() -> None:
+    """Issue #343: whitespace-only summary input collapses to ``None``.
+
+    The naturally composed Workspace summary always carries the
+    mimeType suffix (``"<owner> (<email>) — <mime>"`` or just
+    ``"<mime>"``) so a whitespace-only candidate is not currently
+    reachable via :func:`map_drive_item`. This test exercises
+    :func:`_build_source_observed` directly to pin the SSOT helper
+    wiring: even if a future change to ``_build_summary`` could emit a
+    whitespace candidate, the :func:`normalise_optional_text` helper
+    keeps the ``sources.summary`` column free of visually-empty
+    previews (matches the Slack / Teams / MS365 / Gmail / Calendar /
+    GitHub-notification mappers).
+    """
+    event = _build_source_observed(
+        external_id="F-ws",
+        source_type=GENERIC_FILE_SOURCE_TYPE,
+        title="title",
+        url="https://example.com/",
+        summary="   \n\t  ",
+        occurred_at=datetime(2026, 5, 31, 12, 0, 0, tzinfo=UTC),
+        actor=DEFAULT_ACTOR,
+        body=None,
+    )
+    assert event.summary is None

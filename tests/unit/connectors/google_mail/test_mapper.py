@@ -180,6 +180,38 @@ def test_summary_falls_back_to_snippet_when_headers_empty() -> None:
     assert event.summary == "A snippet from Gmail's server-computed preview."
 
 
+def test_summary_whitespace_only_snippet_normalises_to_none() -> None:
+    """Issue #343: whitespace-only snippet fallback collapses to ``summary=None``.
+
+    Gmail's server-computed ``snippet`` is the last-resort summary
+    when both the ``From:`` and ``Subject:`` headers are empty. A
+    snippet of whitespace (e.g. an HTML-only mail whose Gmail-side
+    preview strips to whitespace) previously leaked through into
+    ``sources.summary`` as a visually-empty preview because
+    ``summary if summary else None`` only filtered the empty string.
+    The :func:`opshub.core.text_limits.normalise_optional_text`
+    helper introduced in #343 collapses it to ``None`` consistently
+    with the rest of the connector family.
+    """
+    # subject is whitespace-only ("(no subject)" placeholder kicks in
+    # for the title) so the snippet path is the summary fallback.
+    raw = RawGmailMessage(
+        message_id="m-ws",
+        thread_id="t",
+        label_ids=(),
+        history_id="h",
+        internal_date_ms="0",
+        from_header="",
+        subject_header="",
+        snippet="   \n\t  ",
+        body_text="",
+        body_html="",
+        raw={},
+    )
+    event = map_gmail_message(raw)
+    assert event.summary is None
+
+
 # ----- title --------------------------------------------------------------
 
 

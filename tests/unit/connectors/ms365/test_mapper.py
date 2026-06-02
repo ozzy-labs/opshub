@@ -344,6 +344,38 @@ def test_mapper_supports_custom_actor() -> None:
     assert event.actor == "connector:ms365:test"
 
 
+def test_map_outlook_message_whitespace_only_body_preview_normalises_to_none() -> None:
+    """Issue #343: a whitespace-only ``bodyPreview`` collapses to ``summary=None``.
+
+    The Microsoft Graph ``bodyPreview`` field is the HTML-strip preview
+    of the message body. HTML-only / image-only Outlook messages can
+    surface this as whitespace (``" "`` / ``"\\n\\n"``) — the
+    pre-#343 ``summary if summary else None`` check let the
+    whitespace through into ``sources.summary`` as a visually-empty
+    preview. Routing through
+    :func:`opshub.core.text_limits.normalise_optional_text` collapses
+    those to ``None`` consistently with Slack / Teams / Gmail /
+    Calendar / Workspace / GitHub-notification.
+    """
+    event = map_outlook_message(_outlook(body_preview="   \n\t "))
+    assert event.summary is None
+
+
+def test_map_onedrive_item_whitespace_only_path_normalises_to_none() -> None:
+    """Issue #343: whitespace-only OneDrive ``path`` collapses to ``summary=None``.
+
+    OneDrive's ``path`` reconstruction in the B2 normaliser composes
+    ``"<parentReference.path>/<name>"``; a malformed root reference
+    could in principle leave the candidate as whitespace. Even though
+    this is a rare degenerate case, routing through the SSOT
+    :func:`opshub.core.text_limits.normalise_optional_text` helper
+    means the ``sources.summary`` column never holds a whitespace-only
+    preview.
+    """
+    event = map_onedrive_item(_onedrive(path="   \t  "))
+    assert event.summary is None
+
+
 def test_mapper_parses_offset_iso_8601() -> None:
     """A ``+00:00`` offset (without ``Z``) parses identically to ``...Z``.
 
