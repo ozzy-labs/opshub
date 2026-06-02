@@ -102,7 +102,7 @@ Phase 12 H1 also unified the original 5 skills (`personal-brief`, `next-actions`
 
 ## 3a. Install the 14 secretary skills on the agent host
 
-Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirms **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 14 secretary skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Implementation lands in Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)). The up-to-date install steps live in [`docs/secretary-agent.md`](secretary-agent.md) §8. Until Phase 16-B lands, clone the opshub repo and copy `docs/skills/<name>/SKILL.md` into the host loader manually (historical procedure, retained on the interim).
+Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirms **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 14 secretary skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI — `opshub skills install` writes the 14 bundled skills to `~/.claude/skills/` and `~/.agents/skills/`. Flag details (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) and the `opshub skills list` status command live in [`docs/secretary-agent.md`](secretary-agent.md) §8.
 
 The 14 skills are:
 

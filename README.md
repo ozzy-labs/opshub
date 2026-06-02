@@ -113,7 +113,15 @@ Full setup (other hosts, encryption, troubleshooting): [`docs/mcp-setup.md`](doc
 
 ## Install the secretary skills
 
-Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirmed package bundling + `opshub skills install` as the canonical distribution channel for the 14 secretary skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`). Implementation lands in Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)); see [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 for the current install steps (Phase 16-B 着地までは opshub repo を clone して `docs/skills/<name>/SKILL.md` を host loader 配下に手動 copy する経路を維持).
+Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirmed package bundling + `opshub skills install` as the canonical distribution channel for the 14 secretary skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI:
+
+```bash
+uv tool install ozzylabs-opshub[mcp]   # bundled _skills/ ships with the wheel
+opshub skills install                  # writes to ~/.claude/skills/ + ~/.agents/skills/
+opshub skills list                     # show installed / missing / modified status per skill
+```
+
+See [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 for flag details (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`).
 
 ## Configure an LLM backend (optional)
 

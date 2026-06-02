@@ -267,7 +267,7 @@ Two existing skills were renamed (`daily-brief` → `personal-brief`, `file-look
 
 ### Skill install on the host
 
-Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirmed **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 14 secretary skills (the **opshub repo `docs/skills/<name>/SKILL.md`** remains the SSOT, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Implementation lands in Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)); the up-to-date install steps live in [`docs/secretary-agent.md`](secretary-agent.md) §8. Until Phase 16-B lands, clone the opshub repo and copy `docs/skills/<name>/SKILL.md` into the host loader manually (interim procedure).
+Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirmed **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 14 secretary skills (the **opshub repo `docs/skills/<name>/SKILL.md`** remains the SSOT, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI — operators install the 14 skills by running `opshub skills install` after `uv tool install ozzylabs-opshub[mcp]`. Flag details (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) and the `opshub skills list` status command live in [`docs/secretary-agent.md`](secretary-agent.md) §8.
 
 The pre-existing 5 skills' SKILL.md were rewritten to call MCP directly (the previous CLI fallback was dropped); the MCP server (`opshub mcp serve`, Phase 10) is now a hard dependency for the secretary skills.
 
