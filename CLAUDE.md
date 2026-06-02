@@ -54,7 +54,7 @@ opshub は形A (ADR-0004) に基づき秘書 **14 Skill** を提供する。SKIL
 
 ## 長時間 CLI の進捗表示
 
-長時間 CLI (`opshub connector sync` / `opshub embeddings rebuild` / `opshub embeddings drain` / `opshub projections rebuild`) は TTY 時に進捗を自動表示し、`--progress` / `--no-progress` フラグまたは `OPSHUB_PROGRESS` 環境変数 (truthy = `1`/`true`/`yes`/`on`、falsy = `0`/`false`/`no`/`off`、case-insensitive) で上書きできる ([ADR-0026](docs/adr/0026-cli-progress-reporting.md))。
+長時間 CLI (`opshub connector sync` / `opshub connector slack conversations` / `opshub embeddings rebuild` / `opshub embeddings drain` / `opshub projections rebuild`) は TTY 時に進捗を自動表示し、`--progress` / `--no-progress` フラグまたは `OPSHUB_PROGRESS` 環境変数 (truthy = `1`/`true`/`yes`/`on`、falsy = `0`/`false`/`no`/`off`、case-insensitive) で上書きできる ([ADR-0026](docs/adr/0026-cli-progress-reporting.md))。
 
 ## トラブルシュート用オプション
 
