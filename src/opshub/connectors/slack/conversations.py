@@ -808,7 +808,7 @@ def _flush_inaccessible_history_warning(
     plural = "channel" if total == 1 else "channels"
     message = (
         f"warning: skipped {total} inaccessible {plural} "
-        f"({', '.join(parts)}). See ADR-0018 §Decision (7) or "
+        f"({', '.join(parts)}). See "
         f"https://api.slack.com/methods/conversations.history#errors "
         f"for the error catalogue."
     )
