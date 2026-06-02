@@ -2,29 +2,31 @@
 
 ADR-0029 §不変条件 — the ``[tool.hatch.build.force-include]`` mapping
 in ``pyproject.toml`` copies ``docs/skills/`` to
-``src/opshub/_skills/`` at build time so ``importlib.resources``
-lookups succeed for wheel-installed users. This test asserts that
-every name in :data:`SECRETARY_SKILL_NAMES` resolves to a valid
-``SKILL.md`` file inside the bundle — both in the source tree (Phase
-16-B onwards, ``docs/skills/`` and ``src/opshub/_skills/`` will look
-the same once ``uv build`` has been run, but the resources API works
-against either layout) and inside a wheel-installed environment.
+``src/opshub/_skills/`` at wheel build time so
+``importlib.resources`` lookups succeed for wheel-installed users.
 
-The test runs in two passes:
+This test asserts that every name in :data:`SECRETARY_SKILL_NAMES`
+resolves to a valid ``SKILL.md`` file inside the wheel-bundle path
+(``opshub/_skills/<name>/SKILL.md`` via :mod:`importlib.resources`).
+The test deliberately bypasses
+``opshub._skills_resources._skills_root`` and looks at ``_skills/``
+directly so that the wheel-shipping invariant is pinned separately
+from the editable-mode fallback (the resolver's checkout
+short-circuit is covered by ``tests/unit/skills/test_skills_resolver.py``).
 
-1. ``test_package_ships_skill_files`` — iterate every name and
-   confirm ``opshub/_skills/<name>/SKILL.md`` is reachable via
-   :mod:`importlib.resources` and contains the SSOT-shaped frontmatter
-   (``---`` opener + ``name:`` + ``description:``). The check uses
-   ``importlib.resources.files('opshub')`` so it implicitly verifies
-   the wheel build glued the payload at the right import path.
+The frontmatter is then round-tripped through
+:func:`yaml.safe_load` to enforce YAML 1.2 plain-scalar rules — host
+loaders (Claude Code / codex CLI / Copilot CLI) parse the
+frontmatter with strict YAML, and a phrase like ``pair: <name>``
+inside a plain scalar trips ``mapping values are not allowed here``.
+Single-quote the description value to satisfy the parser when
+introducing such phrases.
 
-A failure here means either the build did not run yet (developers
-need to ``uv build`` once before running the test in a clean
-checkout, OR the source tree already mirrors the bundle path because
-Phase 16-B's force-include happens during ``uv build``). In a CI
-green path the test always runs against the freshly-built wheel via
-``uv sync`` so the bundled payload is in place.
+A failure here typically means either: (1) ``uv build`` has not run
+yet in a clean checkout (the gitignored ``src/opshub/_skills/`` is
+materialised at build time), or (2) a new secretary skill name was
+added to :data:`SECRETARY_SKILL_NAMES` without authoring
+``docs/skills/<name>/SKILL.md``.
 """
 
 from __future__ import annotations

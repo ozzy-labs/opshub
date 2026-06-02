@@ -45,6 +45,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from importlib import resources
 from importlib.resources.abc import Traversable
+from pathlib import Path
+from typing import cast
 
 __all__ = [
     "SECRETARY_SKILL_NAMES",
@@ -136,14 +138,82 @@ class SkillBundleEntry:
     data: bytes
 
 
-def _skills_root() -> Traversable:
-    """Return the ``importlib.resources`` handle for the bundled payload.
+def _checkout_docs_skills() -> Path | None:
+    """Return ``<repo>/docs/skills/`` when running from an opshub checkout.
 
-    Raises :class:`SkillResourceError` when the bundle is missing —
-    e.g. when running against a wheel built before Phase 16-B added the
-    ``force-include`` mapping. The CLI catches this and renders an
-    upgrade hint instead of crashing with an opaque ``FileNotFoundError``.
+    Editable installs (``uv sync`` / ``pip install -e .``) do **not**
+    re-run the wheel's ``[tool.hatch.build.targets.wheel.force-include]``
+    mapping, so ``src/opshub/_skills/`` becomes stale (or absent) as
+    soon as an opshub maintainer edits ``docs/skills/`` (the SSOT,
+    ADR-0004 §決定 (c)). Without this fallback ``opshub skills install``
+    would silently copy the pre-edit bundle into ``.claude/skills/`` /
+    ``.agents/skills/``, breaking the Phase 16-D dogfood workflow
+    (CLAUDE.md: "編集したら ``opshub skills install --scope project``
+    で再生成").
+
+    Detection rule:
+
+    * ``importlib.resources.files('opshub')`` resolves to the package
+      directory. In editable mode that's ``<repo>/src/opshub/``; in a
+      wheel install it's ``<site-packages>/opshub/``.
+    * If a sibling ``<package_root>/../../docs/skills/`` exists AND
+      contains a canonical SSOT marker (``personal-brief/SKILL.md``),
+      we treat the layout as a repo checkout and resolve skills
+      against ``docs/skills/`` directly.
+    * The marker check makes a false positive (some unrelated venv
+      happening to live next to a ``docs/skills/`` directory)
+      impossible in practice — wheel installs land deep inside
+      ``<venv>/lib/pythonX.Y/site-packages/``, so the candidate path
+      points at ``<venv>/lib/docs/skills/`` which never exists.
+
+    Returning ``None`` falls through to the bundled ``_skills/`` lookup
+    so wheel-installed users hit the original code path unchanged.
     """
+    try:
+        package_root = resources.files("opshub")
+        package_path = Path(str(package_root))
+    except (TypeError, OSError):
+        return None
+    if not package_path.is_dir():
+        return None
+    candidate = package_path.parent.parent / "docs" / "skills"
+    marker = candidate / "personal-brief" / "SKILL.md"
+    if candidate.is_dir() and marker.is_file():
+        return candidate
+    return None
+
+
+def _skills_root() -> Traversable:
+    """Return the resource root for the 14 bundled secretary skills.
+
+    Resolution order:
+
+    1. **Repo checkout (editable install)** — prefer
+       ``<repo>/docs/skills/`` (the SSOT) when the layout signals an
+       opshub working tree. See :func:`_checkout_docs_skills` for the
+       detection contract. This makes ``opshub skills install`` reflect
+       the latest hand-edit immediately, without requiring a manual
+       ``uv build`` or ``rsync docs/skills/ src/opshub/_skills/`` round-trip.
+    2. **Wheel install** — fall back to ``opshub/_skills/`` resolved via
+       :mod:`importlib.resources`. ``[tool.hatch.build.targets.wheel.force-include]``
+       (ADR-0029 §決定 (a)) ships the same payload inside the wheel for
+       ``uv tool install ozzylabs-opshub`` users.
+
+    Raises :class:`SkillResourceError` when both paths are unavailable —
+    e.g. an old wheel built before Phase 16-B (``_skills/`` directory
+    missing) installed outside any opshub checkout. The CLI surfaces
+    the exception's message as an actionable upgrade hint instead of
+    crashing with an opaque ``FileNotFoundError``.
+    """
+    checkout = _checkout_docs_skills()
+    if checkout is not None:
+        # Path implements the structural subset of Traversable the
+        # caller uses (``iterdir`` / ``is_dir`` / ``is_file`` /
+        # ``joinpath`` / ``read_bytes`` / ``name``), but the stdlib
+        # does not register Path as a Traversable subtype, so cast
+        # to keep mypy strict happy without widening the public API.
+        return cast(Traversable, checkout)
+
     package_root = resources.files("opshub")
     bundle = package_root.joinpath("_skills")
     if not bundle.is_dir():
