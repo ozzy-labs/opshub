@@ -407,6 +407,26 @@ def test_conversations_types_flag_rejects_empty(_slack_token_env: None) -> None:
     assert result.exit_code == 2, result.stdout + result.stderr
 
 
+def test_conversations_types_flag_rejects_whitespace_and_comma_only(
+    _slack_token_env: None,
+) -> None:
+    """``--types " , , "`` → usage error.
+
+    Whitespace-only chunks individually skip (via the parser's per-
+    chunk ``strip()``) so a payload that is *only* whitespace + commas
+    collapses to zero parsed types. The parser must catch this case
+    via the post-loop ``if not parts`` guard rather than silently
+    sending an empty ``types`` parameter to the Slack API.
+    """
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["connector", "slack", "conversations", "--types", " , , "],
+    )
+
+    assert result.exit_code == 2, result.stdout + result.stderr
+
+
 def test_conversations_all_flag_propagates(_slack_token_env: None) -> None:
     """``--all`` → ``all=True`` upstream (workspace-wide endpoint)."""
     record = _CallRecord()
