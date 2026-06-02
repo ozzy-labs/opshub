@@ -121,7 +121,9 @@ _PAGE_SIZE = 200
 
 #: Retry budget for ``users.conversations`` / ``conversations.list``
 #: HTTP 429 responses. ``_call_list`` keeps its own retry loop for
-#: now (#377 §Out of scope), but the budget matches
+#: now (#377 §Out of scope; tracked as a one-line follow-up in
+#: `#379 <https://github.com/ozzy-labs/opshub/issues/379>`_), but
+#: the budget matches
 #: :data:`opshub.connectors.slack._retry.MAX_RETRIES_ON_RATE_LIMIT`
 #: so the listing path can opt into the shared helper later without
 #: changing operator-visible behaviour.

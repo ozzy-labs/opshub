@@ -204,30 +204,30 @@ def test_budget_exhaustion_reraises_last_429(
 
 
 def test_max_retries_override_honoured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``max_retries=1`` → single attempt, no sleep, error re-raises immediately on 429.
+    """``max_retries=1`` → single attempt, then re-raise.
 
     Used by tests that want to keep call counts tight without monkey-
-    patching the module-level constant.
+    patching the module-level constant. The sleep count is *not*
+    pinned: the current loop happens to sleep on the terminal
+    attempt before the post-loop raise (a quirk inherited from the
+    pre-refactor copies), and a future loop-shape cleanup that
+    skips the terminal sleep would be a strict improvement we do
+    not want to lock out.
     """
     import time as _stdlib_time
 
     from slack_sdk.errors import SlackApiError
 
-    sleep_mock = MagicMock()
-    monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
+    monkeypatch.setattr(_stdlib_time, "sleep", MagicMock())
 
     error = _rate_limited_error(retry_after="1")
     call = MagicMock(side_effect=error)
 
-    with pytest.raises(SlackApiError):
+    with pytest.raises(SlackApiError) as excinfo:
         retry_on_rate_limit(call, max_retries=1)
 
+    assert excinfo.value is error
     assert call.call_count == 1
-    # ``max_retries=1`` still runs the attempt-0 sleep before exiting
-    # the loop — the helper sleeps unconditionally on 429 before the
-    # loop boundary recheck. Pin the count so a future refactor of
-    # the loop shape stays observable.
-    assert sleep_mock.call_count == 1
 
 
 def test_module_does_not_import_slack_sdk_eagerly() -> None:
