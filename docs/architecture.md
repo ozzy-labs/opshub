@@ -76,7 +76,7 @@ Phase 10 実装状況: **本文取り込み + provenance タグの拡張** ([ADR
 | Connector | 経路 | source_type | 認証 | Extras |
 |---|---|---|---|---|
 | GitHub | Web API (PyGithub) | `github_issue` / `github_pr` / etc. | PAT (`core/secrets` + keyring) | `[connectors-github]` |
-| Slack | Web API (slack-sdk) | `slack_message` | User Token (`xoxp-`) / Bot Token (`xoxb-`) | `[connectors-slack]` |
+| Slack | Web API (slack-sdk)。channel ID 一覧は `opshub connector slack channels` (`conversations.list` 経由、`--format toml` で `[connectors.slack] channels` 用 snippet 出力、Phase 14.x #341) で取得 | `slack_message` | User Token (`xoxp-`) / Bot Token (`xoxb-`) | `[connectors-slack]` |
 | Microsoft 365 | Web API (msgraph、Phase 11 で outlook 本文 deep retention) | `ms365_calendar` / `ms365_onedrive` / `ms365_outlook` | OAuth paste-code (msal) | `[connectors-ms365]` |
 | Box | Web API (boxsdk) | `box_event` | OAuth paste-code (boxsdk) | `[connectors-box]` |
 | Box Drive (FS) | Local FS scan (`os.scandir()` + `stat()`、ADR-0019。Phase 11 で `content_extraction` opt-in 経路を追加し Office 文書 (`.docx`/`.xlsx`/`.pptx`) を markitdown 抽出) | `box_drive_file` / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` | なし (OS daemon に委譲、`opshub.toml` 設定のみ) | `[office]` (extraction 利用時) |

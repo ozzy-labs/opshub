@@ -157,6 +157,32 @@ sqlite3 ~/.local/share/opshub/db/opshub.sqlite \
 - [ADR-0020 §決定 (f)](adr/0020-full-local-content-retention.md) — summary 側 whitespace 正規化の規約
 - [`src/opshub/core/text_limits.py`](../src/opshub/core/text_limits.py) — `normalise_optional_text` SSOT helper
 
+### 3.6 Slack の channel ID が分からない / `[connectors.slack] channels` に何を書けばよいか
+
+Slack connector を有効化するには `opshub.toml` の `[connectors.slack] channels = ["C012345...", ...]` に **channel ID** を列挙する必要がある。Slack Web UI から「リンクをコピー → URL 末尾」を読む手作業はチャネル数が多いワークスペースで現実的でない。
+
+**手順** (Phase 14.x、issue [#341](https://github.com/ozzy-labs/opshub/issues/341)):
+
+```bash
+opshub connector auth set connector:slack       # 既存。User Token (`xoxp-`) 推奨
+opshub connector slack channels                 # 表形式で channel 一覧を表示
+opshub connector slack channels --format toml   # `[connectors.slack] channels` 用 snippet
+opshub connector slack channels --filter eng    # name に "eng" を含む channel のみ
+opshub connector slack channels --include-private    # private channel も対象 (`groups:read` 要)
+opshub connector slack channels --include-archived   # archived channel も対象
+```
+
+`--format toml` の出力を `~/.config/opshub/config.toml` の `[connectors.slack]` セクションに貼り、不要行を消すだけで sync 対象が確定する。
+
+**典型エラー**:
+
+- `Error: Slack OAuth token is not configured` → `opshub connector auth set connector:slack` を先に実行する
+- `Error: Slack conversations.list failed: missing_scope (needed: 'groups:read')` → `--include-private` を使うには Slack App の OAuth スコープに `groups:read` を追加し、再認可後にトークンを `auth set` で更新する ([ADR-0018](adr/0018-slack-token-principal.md) §Decision (7))
+- `Error: Slack conversations.list failed: invalid_auth` → トークンが失効。`opshub connector auth set connector:slack` で再登録する
+- `no channels matched (filter: '...')` (stderr 出力、exit code 0) → `--filter` 文字列を見直すか、`--include-private` / `--include-archived` で対象を広げる
+
+トークン値・API レスポンス本文はどの出力経路 (stdout / stderr) にも出ない。`--debug` を付けた場合の追加 traceback もサニタイズ済み (§3.1 と同じ redaction processor が効く)。
+
 ## 4. セキュリティ注意書き
 
 `-v` / `-vv` / `--debug` / `--log-file` を使うときに operator が知っておくこと:
