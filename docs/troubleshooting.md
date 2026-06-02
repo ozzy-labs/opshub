@@ -130,6 +130,33 @@ opshub --debug db migrate
 
 `--debug` の traceback には keyring slot 名 (`db:encryption_key` 等) は出るが、鍵そのものは redaction processor で marker 化される。
 
+### 3.5 source の summary が空白に見えるが、body には content がある
+
+SaaS connector (Slack / Teams / Outlook / Gmail / Drive 等) の source preview が `opshub recall` / `opshub brief` で空白 / 改行のみで表示されるのに、本文 (`sources.body` 列) には content が入っているように見えるケース。
+
+**症状**: `opshub recall <query>` / `opshub search <query>` の出力で source 行の snippet (`summary` 由来) が空欄だが、同じ source が `opshub search` で本文一致ヒットする (= `body` 列には content がある)。
+
+**原因**: PR [#355](https://github.com/ozzy-labs/opshub/pull/355) 以降、`SourceObserved.summary` 列は whitespace-only 入力を `None` (DB 上 `NULL`) に正規化する設計 ([ADR-0020 §決定 (f)](adr/0020-full-local-content-retention.md))。一方 `body` 列は同 ADR §(a) の retain-everything に従って whitespace を含めて verbatim 保持する。「snippet が空 + body に content」は仕様どおりの状態であり、bug ではない (上流 SaaS の `bodyPreview` が HTML-only / image-only メールで whitespace だけになる、Slackbot 通知の `text` が空文字、Teams の `body.content` が `<div></div>` のみ等のケースで発生)。
+
+**確認方法**: DB (`$XDG_DATA_HOME/opshub/db/opshub.sqlite`、デフォルト `~/.local/share/opshub/db/opshub.sqlite`) を直接 SQLite で開き、当該 source の `summary` と `body` を比較する (`sources.id` 列が ULID。`connector_name` + `external_id` でも一意):
+
+```bash
+sqlite3 ~/.local/share/opshub/db/opshub.sqlite \
+  "SELECT id, summary IS NULL AS summary_null, length(body) AS body_len
+   FROM sources WHERE connector_name = '<name>' AND external_id = '<external_id>';"
+```
+
+`summary_null = 1` かつ `body_len > 0` なら仕様どおり。`summary` が `"   "` 等の whitespace 文字列を返した場合は normalisation が効いていない = リグレッションなので、`opshub --debug connector sync <name>` で再取得しつつ issue 起票する。`[storage] encryption = true` を有効にしている場合は SQLCipher 経由でアクセスする必要がある (§3.4 参照)。
+
+**対応**: 不要。briefing / propose / next-actions skill 側では `ItemEnqueued.summary` の fallback (`f"{source_type}: {title}"` = `slack_message: <user> in #<channel>` 等) で識別可能な preview に倒れる。projection 側 (`sources.summary`) の preview を充実させたい場合は connector mapper 側で composed summary を作る (例: Gmail mapper の `f"from: {sender}, subject: {subject}"` のような fallback shape)。
+
+**関連**:
+
+- [issue #332](https://github.com/ozzy-labs/opshub/issues/332) / [#337](https://github.com/ozzy-labs/opshub/issues/337) / [#343](https://github.com/ozzy-labs/opshub/issues/343)
+- PR [#336](https://github.com/ozzy-labs/opshub/pull/336) / [#335](https://github.com/ozzy-labs/opshub/pull/335) / [#340](https://github.com/ozzy-labs/opshub/pull/340) / [#342](https://github.com/ozzy-labs/opshub/pull/342) / [#355](https://github.com/ozzy-labs/opshub/pull/355)
+- [ADR-0020 §決定 (f)](adr/0020-full-local-content-retention.md) — summary 側 whitespace 正規化の規約
+- [`src/opshub/core/text_limits.py`](../src/opshub/core/text_limits.py) — `normalise_optional_text` SSOT helper
+
 ## 4. セキュリティ注意書き
 
 `-v` / `-vv` / `--debug` / `--log-file` を使うときに operator が知っておくこと:
@@ -148,5 +175,6 @@ opshub --debug db migrate
 - [ADR-0022 MCP Server Surface](adr/0022-mcp-server-surface.md) — MCP 境界の redaction (`mcp/_redact.py`)。本 ADR の structlog processor と独立した第二層
 - [ADR-0014 SaaS Token Storage](adr/0014-saas-token-storage.md) — トークンは keyring。ログには出さない原則
 - [ADR-0026 CLI Progress Reporting](adr/0026-cli-progress-reporting.md) — `--progress` / `OPSHUB_PROGRESS` の進捗表示。stdout / stderr 分離の同型先例
+- [ADR-0020 Full Local Content Retention](adr/0020-full-local-content-retention.md) §決定 (a) / (f) — body retain-everything と summary whitespace 正規化の対称規約 (§3.5)
 - [SECURITY.md](../SECURITY.md) — 脆弱性開示と threat model
 - [docs/mcp-setup.md §8](mcp-setup.md#8-troubleshooting) — MCP serve 固有のトラブルシューティング表

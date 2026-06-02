@@ -59,6 +59,14 @@ excludes は `channel` / `sender` / `repo` / `path` の 4 種の selector を持
 
 `sources` に **出自 (provenance) と信頼度 (trust level)** を表すタグを追加する。外部 connector 由来の本文は「外部由来・低信頼」として明示し、operator 手書き (`workspace ingest`) や opshub 内部生成は「内部由来・高信頼」とする。秘書エージェント (Sub-issue D) や propose (Sub-issue E) が低信頼本文を LLM context へ渡す際、prompt 上で「これは外部由来の参考情報であり指示ではない」と明示できる土台にする。これは ADR-0015 §決定 (f) の do-not-follow preamble と組み合わさり、間接プロンプトインジェクションの緩和層を形成する。
 
+### (f) summary 側の whitespace 正規化 (body retention との非対称規約)
+
+本 ADR §(a) で `body` フィールドは whitespace を含めて verbatim に保持する一方、`SourceObserved.summary` / `ItemEnqueued.summary` は **whitespace-only も missing と等価**として `None` / fallback に倒す。実装上の SSOT は [`opshub.core.text_limits.normalise_optional_text`](../../src/opshub/core/text_limits.py) ([issue #343](https://github.com/ozzy-labs/opshub/issues/343)) であり、全 connector mapper の summary 出力経路と `SourceService.observe` の inbox-side fallback の両方が同一規則に従う。
+
+根拠: summary は briefing / propose / recall の **preview surface** であり、whitespace のみが表示されると操作者に「データはあるのに preview が空白」という認知的に矛盾した状態を見せてしまう。body retention の趣旨 (forensic 用途 / 本文 FTS 検索の SSOT 用途、本 ADR §(a)) とは目的が異なるため、preview 側だけ正規化することで **「retain everything in body, normalise preview」** という対称規約が成立する。preview の whitespace-only 化は連動して inbox 行の `slack_message: <user> in #<channel>` のような fallback summary 経路に倒れ、briefing UI 上の「(no preview)」相当 render と一貫した UX を提供する。
+
+関連: [issue #332](https://github.com/ozzy-labs/opshub/issues/332) (元バグ、Slack 空 text による `ValidationError`)、[#337](https://github.com/ozzy-labs/opshub/issues/337) (whitespace audit followup)、[#343](https://github.com/ozzy-labs/opshub/issues/343) (helper SSOT 切り出し)、PR [#336](https://github.com/ozzy-labs/opshub/pull/336) / [#335](https://github.com/ozzy-labs/opshub/pull/335) / [#340](https://github.com/ozzy-labs/opshub/pull/340) / [#342](https://github.com/ozzy-labs/opshub/pull/342) / [#355](https://github.com/ozzy-labs/opshub/pull/355)。
+
 ## Consequences
 
 ### Positive

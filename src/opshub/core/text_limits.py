@@ -45,6 +45,18 @@ Design intent
 This module is core-tier (ADR-0004): no connector / projection /
 service imports. It stays import-safe on the M6 cold-start path
 (stdlib only).
+
+ADR context
+-----------
+
+The Phase 3-9 era ADR-0005 (External Content Minimization) pinned a
+"summary + metadata only, never the body" posture; Phase 10 ADR-0020
+(Full Local Content Retention) superseded ADR-0005 and flipped the
+body-side rule to retain-everything. The summary-side caps and
+optional-text normalisation defined here remain in force under
+ADR-0020 — body and summary serve different surfaces (forensic /
+search SSOT vs. preview), so the supersession only inverted the
+body-side rule, not the summary-side discipline this module owns.
 """
 
 from __future__ import annotations
@@ -89,6 +101,14 @@ def normalise_optional_text(text: str | None) -> str | None:
     value keeps the cross-connector semantics aligned. The full body
     retention path (ADR-0020) intentionally preserves whitespace and
     is **not** routed through this helper.
+
+    The rule lives here precisely because ADR-0005's
+    "minimise everything" stance was superseded by ADR-0020's
+    "retain everything in the body, normalise the preview" split:
+    the summary cap + normalisation discipline survived the
+    supersession unchanged, and this helper is the SSOT for the
+    summary side of that split (body retention is the symmetric
+    counterpart owned by the connector mappers themselves).
 
     Parameters
     ----------
