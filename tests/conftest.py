@@ -37,7 +37,7 @@ _BUNDLE_DIR = _REPO_ROOT / "src" / "opshub" / "_skills"
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _mirror_secretary_skill_bundle() -> None:
+def _mirror_secretary_skill_bundle() -> None:  # pyright: ignore[reportUnusedFunction]
     """Mirror ``docs/skills/`` into ``src/opshub/_skills/`` for the test run.
 
     Idempotent — every pytest session re-syncs from the SSOT so a

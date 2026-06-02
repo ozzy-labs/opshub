@@ -44,6 +44,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from importlib import resources
+from importlib.resources.abc import Traversable
 
 __all__ = [
     "SECRETARY_SKILL_NAMES",
@@ -135,7 +136,7 @@ class SkillBundleEntry:
     data: bytes
 
 
-def _skills_root() -> resources.abc.Traversable:
+def _skills_root() -> Traversable:
     """Return the ``importlib.resources`` handle for the bundled payload.
 
     Raises :class:`SkillResourceError` when the bundle is missing —
@@ -156,14 +157,14 @@ def _skills_root() -> resources.abc.Traversable:
 
 
 def _iter_files_recursive(
-    node: resources.abc.Traversable,
+    node: Traversable,
     *,
     relative_to: str,
-) -> Iterator[tuple[str, resources.abc.Traversable]]:
+) -> Iterator[tuple[str, Traversable]]:
     """Depth-first walk yielding ``(rel_path, leaf)`` for every file.
 
     ``relative_to`` is the POSIX-style directory prefix to strip from
-    each leaf name. ``importlib.resources.abc.Traversable`` does not
+    each leaf name. ``importlib.Traversable`` does not
     expose a built-in recursive walker (only ``iterdir`` + ``is_dir``),
     so we recurse manually. The yield order is sorted by name at every
     level for deterministic install output.
