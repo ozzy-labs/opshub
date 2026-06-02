@@ -23,7 +23,7 @@
 
 ### 秘書エージェント Skills (Phase 10 で 5 Skill 開始、Phase 12 で 14 Skill 体制に拡張、opshub MCP 経由)
 
-opshub は形A (ADR-0004) に基づき秘書 **14 Skill** を提供する。SKILL.md の SSOT は `docs/skills/<name>/SKILL.md` に置く (Phase 12 H1 で opshub を SSOT に確定、ADR-0004 §決定 (c))。配信機構 (`ozzy-labs/skills` CI + Renovate preset) は引き続き Phase 15+ に defer されているため、Phase 14 までは host 側に手動 install (詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8)。発火条件は自然文 (skill description) で表現されており、自分で叩く必要はない。
+opshub は形A (ADR-0004) に基づき秘書 **14 Skill** を提供する。SKILL.md の SSOT は `docs/skills/<name>/SKILL.md` に置く (Phase 12 H1 で opshub を SSOT に確定、ADR-0004 §決定 (c))。配信経路は Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地。Phase 16-B 着地までは host 側に手動 install、詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8)。ecosystem 共通 skill (drive / lint / commit 等) は引き続き `@ozzylabs/skills` Renovate preset 経由で配布される (秘書 14 skill 経路と名前空間 disjoint)。発火条件は自然文 (skill description) で表現されており、自分で叩く必要はない。
 
 **read 自律 OK (10 件)**:
 

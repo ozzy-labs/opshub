@@ -112,20 +112,7 @@ opshub mcp tools           # read / write tool 一覧を確認 (policy-as-data �
 
 ## 秘書 Skill を install する
 
-Phase 12 で導入した 14 件の秘書 Skill は Phase 14 完了時点でも同じく [`docs/skills/<name>/SKILL.md`](docs/skills/) を opshub SSOT として保持しています（[ADR-0004 §決定 (c)](docs/adr/0004-agent-runtime-boundary.md)）。`@ozzylabs/skills` Renovate preset 経由の配布は引き続き Phase 15+ に defer されているため、当面はホスト側に手動 copy します:
-
-```bash
-# Claude Code（ユーザー単位）
-cp -r path/to/opshub/docs/skills/* ~/.claude/skills/
-
-# Codex CLI / GitHub Copilot CLI（ユーザー単位）
-cp -r path/to/opshub/docs/skills/* ~/.agents/skills/
-
-# プロジェクト単位（任意のホスト）
-cp -r path/to/opshub/docs/skills/* ./.claude/skills/   # または ./.agents/skills/
-```
-
-Skill description に日本語トリガが含まれるため、「今日のまとめ」「会議準備」のような自然文でホストが該当 Skill を発火します。最新の install 手順と Phase 15+ の配布完成計画は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 (セットアップ) を参照。
+Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) で 14 件の秘書 Skill の配信経路を opshub package 同梱 + `opshub skills install` に確定しました (SSOT 位置は引き続き opshub `docs/skills/<name>/SKILL.md`)。実装本体は Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で着地します。最新の install 手順は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 (Phase 16-B 着地までは opshub repo を clone して `docs/skills/<name>/SKILL.md` を host loader 配下に手動 copy する経路を維持) を参照してください。
 
 ## LLM backend の設定（任意）
 

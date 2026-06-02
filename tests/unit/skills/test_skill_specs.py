@@ -1,8 +1,10 @@
 """Format / boundary tests for secretary skill specs under ``docs/skills/``.
 
-The skills live in ``docs/skills/<name>/SKILL.md`` as the reference
-spec referenced from ``docs/secretary-agent.md`` (ADR-0004 改訂,
-Phase 12 H1 — SSOT moved into opshub itself, distribution deferred).
+The skills live in ``docs/skills/<name>/SKILL.md`` as the SSOT
+referenced from ``docs/secretary-agent.md`` (ADR-0004 改訂, Phase
+12 H1 — SSOT moved into opshub itself; Phase 16-A ADR-0029 confirmed
+the distribution channel as opshub package bundling +
+``opshub skills install``, with the SSOT location unchanged).
 These tests pin five invariants the Phase 10 plan §3-D / §4-D DoD
 requires:
 

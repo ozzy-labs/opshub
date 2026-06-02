@@ -113,20 +113,7 @@ Full setup (other hosts, encryption, troubleshooting): [`docs/mcp-setup.md`](doc
 
 ## Install the secretary skills
 
-Phase 12 ships **14 secretary skills** under [`docs/skills/<name>/SKILL.md`](docs/skills/) (opshub is the SSOT, [ADR-0004 §決定 (c)](docs/adr/0004-agent-runtime-boundary.md)). The `@ozzylabs/skills` Renovate preset distribution is deferred to Phase 15+ (Phase 13 shipped Google Workspace and Phase 14 shipped Gmail + Google Calendar, neither touched the skills distribution channel); copy the skills into the host loader manually:
-
-```bash
-# Claude Code (user-level)
-cp -r path/to/opshub/docs/skills/* ~/.claude/skills/
-
-# Codex CLI / GitHub Copilot CLI (user-level)
-cp -r path/to/opshub/docs/skills/* ~/.agents/skills/
-
-# Project-local install (any host)
-cp -r path/to/opshub/docs/skills/* ./.claude/skills/   # or ./.agents/skills/
-```
-
-Skill descriptions include Japanese trigger phrases, so asking your agent "今日のまとめ" / "What should I do next?" routes to the right skill automatically. See [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 (セットアップ) for the up-to-date install steps and Phase 15+ distribution outlook.
+Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirmed package bundling + `opshub skills install` as the canonical distribution channel for the 14 secretary skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`). Implementation lands in Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)); see [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 for the current install steps (Phase 16-B 着地までは opshub repo を clone して `docs/skills/<name>/SKILL.md` を host loader 配下に手動 copy する経路を維持).
 
 ## Configure an LLM backend (optional)
 
