@@ -453,7 +453,21 @@ def list_conversations(
                     # left between the listing and the per-row probe
                     # all surface here. Bump the counter and drop just
                     # this row — the other rows of the same type are
-                    # not affected.
+                    # not affected. Per-row debug log carries the
+                    # channel id so an operator running with
+                    # ``--debug`` can map back to which rows were
+                    # dropped (the aggregate warning at call end only
+                    # reports counts, by design — ADR-0027 redaction
+                    # processor strips any token on the off-chance the
+                    # event dict picks one up).
+                    from opshub.core.logging import get_logger
+
+                    get_logger(__name__).debug(
+                        "slack.conversations.history.row_skipped",
+                        channel_id=conversation.id,
+                        error_code=inaccessible.error_code,
+                        conversation_type=conversation.type,
+                    )
                     inaccessible_history_counts[inaccessible.error_code] = (
                         inaccessible_history_counts.get(inaccessible.error_code, 0) + 1
                     )
