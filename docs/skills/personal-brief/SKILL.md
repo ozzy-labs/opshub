@@ -1,6 +1,6 @@
 ---
 name: personal-brief
-description: 「今日のまとめ」「今週どうなってる」「今月の動き」「先週の状況」「先月の振り返り」「最近どうなってる」「状況教えて」「自分の状況」と聞かれたら、opshub MCP の brief (LLM 要約) または recall.search / task.list / inbox.list / decision.list を順に叩いて指定期間 (デフォルト直近 24h) の主要な動きを要約する。期間は ISO 8601 timestamp を physical-column 時間フィルタ (updated_after/before / created_after/before / recorded_after/before) に渡してホスト側で組み立てる。LLM 推論ループは外部ホスト (Claude Code 等) 側、本 skill は手順書のみで実処理を持たない。pair: external-brief (外向き) と対をなす。
+description: '「今日のまとめ」「今週どうなってる」「今月の動き」「先週の状況」「先月の振り返り」「最近どうなってる」「状況教えて」「自分の状況」と聞かれたら、opshub MCP の brief (LLM 要約) または recall.search / task.list / inbox.list / decision.list を順に叩いて指定期間 (デフォルト直近 24h) の主要な動きを要約する。期間は ISO 8601 timestamp を physical-column 時間フィルタ (updated_after/before / created_after/before / recorded_after/before) に渡してホスト側で組み立てる。LLM 推論ループは外部ホスト (Claude Code 等) 側、本 skill は手順書のみで実処理を持たない。pair: external-brief (外向き) と対をなす。'
 ---
 
 # personal-brief — 自分向けの状況サマリを opshub から組み立てて返す

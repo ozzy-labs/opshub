@@ -30,8 +30,10 @@ green path the test always runs against the freshly-built wheel via
 from __future__ import annotations
 
 from importlib import resources
+from typing import cast
 
 import pytest
+import yaml
 
 from opshub._skills_resources import SECRETARY_SKILL_NAMES
 
@@ -53,7 +55,34 @@ def test_package_ships_skill_files(skill_name: str) -> None:
     # name + description (these are what the host loader reads to
     # surface the skill in the menu / trigger description).
     assert text.startswith("---\n"), f"{skill_name}/SKILL.md missing frontmatter opener"
-    assert "name:" in text.split("---\n", 2)[1], f"{skill_name}/SKILL.md missing name: field"
-    assert "description:" in text.split("---\n", 2)[1], (
-        f"{skill_name}/SKILL.md missing description: field"
+    frontmatter = text.split("---\n", 2)[1]
+    assert "name:" in frontmatter, f"{skill_name}/SKILL.md missing name: field"
+    assert "description:" in frontmatter, f"{skill_name}/SKILL.md missing description: field"
+
+    # The host loaders (Claude Code / codex CLI / Copilot CLI) parse the
+    # frontmatter with a strict YAML 1.2 parser. A plain scalar that
+    # contains the forbidden ``": "`` (colon-space) sequence — easy to
+    # introduce when the description mentions ``pair: X`` or other
+    # ``label: value`` phrases — passes the substring checks above but
+    # makes codex CLI bail with ``invalid YAML``. Round-tripping through
+    # :func:`yaml.safe_load` here pins the same constraint the strict
+    # hosts apply, so a regression surfaces in CI instead of on a
+    # downstream user's machine.
+    try:
+        parsed = yaml.safe_load(frontmatter)
+    except yaml.YAMLError as exc:  # pragma: no cover - regression guard
+        pytest.fail(
+            f"{skill_name}/SKILL.md frontmatter is not valid YAML: {exc}. "
+            "If the description contains ``label: value`` phrases (e.g. "
+            "``pair: external-brief``), wrap the whole value in single "
+            "quotes to satisfy YAML 1.2 plain-scalar rules."
+        )
+    assert isinstance(parsed, dict), (
+        f"{skill_name}/SKILL.md frontmatter must parse to a YAML mapping, "
+        f"got {type(parsed).__name__}"
+    )
+    fields = cast(dict[str, object], parsed)
+    assert isinstance(fields.get("name"), str), f"{skill_name}/SKILL.md ``name`` must be a string"
+    assert isinstance(fields.get("description"), str), (
+        f"{skill_name}/SKILL.md ``description`` must be a string"
     )
