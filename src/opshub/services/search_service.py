@@ -61,10 +61,39 @@ operator pastes a function name like ``foo(bar)`` — the parentheses
 would otherwise be parsed as FTS5 grouping. Operators who actually
 want boolean operators can opt into raw syntax via the
 ``raw_query=True`` knob.
+
+Short-query LIKE fallback (Phase 15 S3, ADR-0028 §Decision (b))
+---------------------------------------------------------------
+
+The ``sources_fts`` tokenizer is ``trigram`` (Phase 15 S2, migration
+``0028``). trigram tokenisation builds the inverted index from 3-char
+substrings, which means **inputs shorter than 3 characters never hit
+the index**. For operator UX continuity we route 1-2 character
+queries through a ``LOWER(body) LIKE LOWER(?)`` full scan instead so
+"PR", "依頼", "Q4" surface results consistent with the rest of the
+service. The threshold (≤2) is fixed: a 3-char query produces
+exactly one trigram which the FTS5 path handles natively, so the
+fallback is reserved for the cases the FTS5 path provably cannot
+serve.
+
+The fallback is bypassed when ``raw_query=True`` — operators who
+opt into raw FTS5 syntax own the meaning of their query string,
+including the fact that 1-2 char inputs will produce ``0 hits``.
+Mirroring the fallback into raw mode would silently rewrite the
+operator's MATCH expression, which is the opposite of the contract
+``--raw`` advertises.
+
+Case insensitivity matches the trigram default (case-insensitive at
+the ASCII level via ``LOWER()`` on both sides). Japanese characters
+have no case concept so the ``LOWER`` is a no-op for them. The query
+is NFC-normalised before scanning so an operator pasting a
+canonically-equivalent but byte-different sequence (composed vs
+decomposed) hits the same rows trigram would.
 """
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -84,6 +113,20 @@ __all__ = ["SearchHit", "SearchService"]
 # "higher is more relevant", matching the convention :class:`RecallHit`
 # already established.
 _BM25_FLIP = "-bm25(sources_fts)"
+
+# The trigram tokenizer (Phase 15 S2, migration 0028) indexes 3-char
+# substrings. Inputs shorter than this threshold never match against
+# the FTS5 index, so the service routes them through the LIKE
+# fallback instead. See ADR-0028 §Decision (b) for the rationale and
+# the rejected alternatives (auto-prefix, dual index, etc).
+_MIN_FTS_QUERY_CHARS = 3
+
+# Fixed score for LIKE fallback hits. BM25 is undefined off the FTS
+# path so we return a constant. The CLI sorts by ``observed_at DESC``
+# inside the SQL, not by score, so the constant doesn't perturb
+# ordering — it only keeps the result shape symmetric with the FTS
+# branch (every :class:`SearchHit` carries a numeric score).
+_LIKE_FALLBACK_SCORE = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,11 +224,31 @@ class SearchService:
         Returns
         -------
         list[SearchHit]
-            Hits ordered by ``-bm25(sources_fts)`` descending. Empty
-            list when there are no matches.
+            Hits ordered by ``-bm25(sources_fts)`` descending on the
+            FTS path, or by ``observed_at`` descending on the LIKE
+            fallback path (BM25 is undefined off the FTS path so the
+            constant ``_LIKE_FALLBACK_SCORE`` is returned for those
+            hits). Empty list when there are no matches.
         """
         if not query_text.strip():
             raise ConfigError("search query text must not be empty")
+
+        # Short-query LIKE fallback (Phase 15 S3, ADR-0028 §Decision
+        # (b)). trigram tokenisation does not index < 3-char inputs,
+        # so route 1-2 char queries through ``LOWER(body) LIKE
+        # LOWER(?)`` to keep operator UX continuous. Skip the
+        # fallback for ``raw_query=True`` — that contract gives the
+        # operator full FTS5 authority and a silent rewrite would
+        # break it (see ADR-0028 §Decision (b)). NFC-normalise the
+        # query first so a composed / decomposed paste hits the same
+        # rows the trigram path would.
+        normalised_query = unicodedata.normalize("NFC", query_text).strip()
+        if not raw_query and len(normalised_query) < _MIN_FTS_QUERY_CHARS:
+            return self._search_like_fallback(
+                normalised_query,
+                limit=limit,
+                connector_name=connector_name,
+            )
 
         match_expr = query_text if raw_query else _phrase_quote(query_text)
 
@@ -229,6 +292,84 @@ class SearchService:
                     url=(None if row.url is None else str(row.url)),
                     snippet=str(summary_value),
                     score=float(row.score),
+                )
+            )
+        return hits
+
+    def _search_like_fallback(
+        self,
+        normalised_query: str,
+        *,
+        limit: int,
+        connector_name: str | None,
+    ) -> list[SearchHit]:
+        """Run a substring scan for short queries (≤ 2 chars).
+
+        Phase 15 S3 / ADR-0028 §Decision (b). trigram does not index
+        1-2 character inputs so the FTS5 path would return an empty
+        list. We instead scan ``sources.body`` with ``LOWER(body)
+        LIKE LOWER(?)``, applying the same ``connector_name`` filter
+        and ``limit`` the FTS path applies. Ordering is by
+        ``observed_at DESC`` (the FTS path's BM25 is undefined here)
+        so the operator sees the freshest matches first.
+
+        SQL injection defence relies on the SQLAlchemy parametrised
+        binding (the query and the wrapping ``%`` are bound as a
+        single parameter, never concatenated into the SQL string).
+        LIKE wildcard escaping (``%`` / ``_`` / ``\\`` in the user's
+        query) is applied via an explicit ``ESCAPE`` clause so an
+        operator searching for ``50%`` finds the literal ``50%``
+        rather than every 5-prefixed token in the corpus.
+        """
+        # Escape LIKE wildcards in the query side so operator-typed
+        # ``%`` / ``_`` / ``\`` are matched literally, not as
+        # wildcards. The escape character itself (``\``) is escaped
+        # first to avoid double-escaping the user's other characters.
+        escaped = normalised_query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like_pattern = f"%{escaped}%"
+
+        where_clauses = ["LOWER(sources.body) LIKE LOWER(:pattern) ESCAPE '\\'"]
+        params: dict[str, object] = {"pattern": like_pattern, "limit": limit}
+        if connector_name is not None:
+            where_clauses.append("sources.connector_name = :connector_name")
+            params["connector_name"] = connector_name
+
+        # ``sources.body IS NOT NULL`` guards the NULL-body rows
+        # (Phase 3-9 historicals + ``box_drive`` connector, ADR-0019)
+        # so they cannot pollute the LIKE result set. The FTS path
+        # already filters them out via the empty-document trigger
+        # contract from migration 0019 / 0028; the LIKE path needs
+        # an explicit guard because it bypasses the FTS index.
+        where_clauses.append("sources.body IS NOT NULL")
+
+        sql = (
+            "SELECT sources.id AS id, "
+            "       sources.connector_name AS connector_name, "
+            "       sources.source_type AS source_type, "
+            "       sources.title AS title, "
+            "       sources.url AS url, "
+            "       sources.summary AS summary "
+            "  FROM sources "
+            f" WHERE {' AND '.join(where_clauses)} "
+            " ORDER BY sources.observed_at DESC "
+            " LIMIT :limit"
+        )
+
+        with self._engine.connect() as conn:
+            rows = conn.execute(text(sql).bindparams(**params)).all()
+
+        hits: list[SearchHit] = []
+        for row in rows:
+            summary_value = row.summary or ""
+            hits.append(
+                SearchHit(
+                    entity_id=str(row.id),
+                    connector_name=str(row.connector_name),
+                    source_type=str(row.source_type),
+                    title=str(row.title),
+                    url=(None if row.url is None else str(row.url)),
+                    snippet=str(summary_value),
+                    score=_LIKE_FALLBACK_SCORE,
                 )
             )
         return hits

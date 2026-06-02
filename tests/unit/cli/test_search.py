@@ -226,3 +226,66 @@ def test_search_propagates_raw_flag(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     assert result.exit_code == 0, result.stdout
     assert stub.calls[0]["raw_query"] is True
     assert stub.calls[0]["query"] == "alpha OR beta"
+
+
+# ---- Phase 15 S3 smoke: short / Japanese queries reach the service --------
+#
+# These tests pin the CLI plumbing for the queries Phase 15 S3
+# introduces support for. The service-level branching (FTS5 vs LIKE
+# fallback) is exercised in :mod:`tests.unit.services.test_search_service`
+# and end-to-end in
+# :mod:`tests.integration.test_phase15_search_japanese` — here we
+# only confirm the CLI hands the operator's query through unchanged
+# (no truncation, no normalisation, no double-quoting) so the service
+# can apply its own threshold + NFC normalisation downstream.
+
+
+def test_search_passes_two_char_japanese_query_to_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A 2-char Japanese query (``依頼``) reaches the service intact.
+
+    Phase 15 S3: the operator types ``opshub search "依頼"`` to hit
+    the LIKE fallback path. The CLI MUST forward the string
+    literally — a regression that strips or re-encodes it would
+    surface here.
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    stub = _StubSearchService(
+        hits=[_make_hit(title="依頼確認", connector_name="slack")],
+    )
+    _install_stub_service(monkeypatch, stub)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["search", "依頼"])
+
+    assert result.exit_code == 0, result.stdout
+    assert len(stub.calls) == 1
+    assert stub.calls[0]["query"] == "依頼"
+    assert stub.calls[0]["raw_query"] is False
+
+
+def test_search_passes_run_on_japanese_query_to_service(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``boxの権限`` reaches the service with no modification.
+
+    Phase 15 S3: the flagship case from epic #338 §背景. The CLI
+    passes the operator string straight through; the trigram
+    tokenizer + SearchService phrase-quoting handle the substring
+    match at the SQL layer.
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    stub = _StubSearchService(
+        hits=[_make_hit(title="権限相談", connector_name="slack")],
+    )
+    _install_stub_service(monkeypatch, stub)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["search", "boxの権限", "--connector", "slack"])
+
+    assert result.exit_code == 0, result.stdout
+    assert len(stub.calls) == 1
+    assert stub.calls[0]["query"] == "boxの権限"
+    assert stub.calls[0]["connector_name"] == "slack"
+    assert stub.calls[0]["raw_query"] is False
