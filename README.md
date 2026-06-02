@@ -196,6 +196,7 @@ opshub handoff close <handoff-id> --note "merged"
 opshub connector auth set github                      # store GitHub PAT in OS keychain
 opshub connector sync github                          # incremental sync (OPSHUB_CONNECTOR_GITHUB_REPO=owner/repo)
 opshub connector auth set connector:slack             # store Slack OAuth token in OS keychain (User Token preferred, Bot Token also accepted — ADR-0018)
+opshub connector slack channels                       # discover channel IDs for [connectors.slack] channels (use --format toml to paste)
 opshub connector sync slack                           # incremental sync ([connectors.slack] channels)
 opshub connector auth set connector:ms365             # OAuth paste-code (Microsoft Graph Calendar / OneDrive / Outlook)
 opshub connector sync ms365                           # incremental sync per endpoint
