@@ -93,6 +93,7 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from opshub.connectors.slack._retry import retry_on_rate_limit
 from opshub.core.errors import ConnectorFailedError
 
 if TYPE_CHECKING:
@@ -118,8 +119,12 @@ __all__ = [
 #: number out of :func:`list_conversations`.
 _PAGE_SIZE = 200
 
-#: Retry budget for HTTP 429 responses, matching
-#: :data:`opshub.connectors.slack.fetcher._MAX_RETRIES_ON_RATE_LIMIT`.
+#: Retry budget for ``users.conversations`` / ``conversations.list``
+#: HTTP 429 responses. ``_call_list`` keeps its own retry loop for
+#: now (#377 §Out of scope), but the budget matches
+#: :data:`opshub.connectors.slack._retry.MAX_RETRIES_ON_RATE_LIMIT`
+#: so the listing path can opt into the shared helper later without
+#: changing operator-visible behaviour.
 _MAX_RETRIES_ON_RATE_LIMIT = 3
 
 
@@ -784,17 +789,19 @@ def _call_history_oldest(
 ) -> dict[str, Any]:
     """Call ``conversations.history?limit=1&oldest=<ts>`` with 429 retry.
 
-    Mirrors the budget + Retry-After handling of
-    :meth:`opshub.connectors.slack.fetcher.SlackFetcher._call_history`
-    but is duplicated here (rather than imported) so the discovery
-    module stays decoupled from the sync fetcher's instance state.
+    The 429 + ``Retry-After`` policy lives in
+    :func:`opshub.connectors.slack._retry.retry_on_rate_limit` so the
+    discovery activity probe and the sync fetcher's hot-path history
+    call share one source of truth (#377). This wrapper only spells
+    out the Slack SDK method to dispatch and the call-site-specific
+    non-429 error translation:
 
-    ``missing_scope`` is translated to :class:`_MissingHistoryScopeError`
-    so the listing loop can disable the affected type. All other
-    non-429 errors are mapped to :class:`ConnectorFailedError` with
-    an endpoint-qualified message — same vocabulary as the listing
-    call so operators see one consistent error shape across both
-    Slack endpoints the command touches.
+    * ``missing_scope`` → :class:`_MissingHistoryScopeError` so the
+      listing loop can disable the affected conversation type.
+    * Any other non-429 error → :class:`ConnectorFailedError` with an
+      endpoint-qualified message that names ``conversations.history``
+      (matches the listing-call error vocabulary so operators see one
+      consistent shape across both Slack endpoints).
     """
     from slack_sdk.errors import SlackApiError
 
@@ -816,38 +823,20 @@ def _call_history_oldest(
         "inclusive": False,
     }
 
-    last_error: SlackApiError | None = None
-    for attempt in range(_MAX_RETRIES_ON_RATE_LIMIT):
-        try:
-            response: Any = client.conversations_history(**kwargs)
-        except SlackApiError as exc:
-            response_any = cast(Any, exc.response)
-            status_code = getattr(response_any, "status_code", None)
-            if status_code == 429:
-                last_error = exc
-                headers_obj = getattr(response_any, "headers", None)
-                headers: dict[str, Any] = (
-                    cast(dict[str, Any], headers_obj) if isinstance(headers_obj, dict) else {}
-                )
-                retry_after_raw = headers.get("Retry-After")
-                try:
-                    retry_after = int(retry_after_raw) if retry_after_raw else 2**attempt
-                except (TypeError, ValueError):
-                    retry_after = 2**attempt
-                time.sleep(retry_after)
-                continue
-            error_code = ""
-            needed = ""
-            if response_any is not None:
-                error_code = response_any.get("error") or ""
-                if error_code == "missing_scope":
-                    needed = response_any.get("needed") or ""
-                    raise _MissingHistoryScopeError(needed) from exc
-            raise _to_connector_failed_history(exc) from exc
-        return _as_response_dict(response)
+    def _call() -> Any:
+        return client.conversations_history(**kwargs)
 
-    assert last_error is not None
-    raise _to_connector_failed_history(last_error) from last_error
+    try:
+        response = retry_on_rate_limit(_call)
+    except SlackApiError as exc:
+        response_any = cast(Any, exc.response)
+        if response_any is not None:
+            error_code = response_any.get("error") or ""
+            if error_code == "missing_scope":
+                needed = response_any.get("needed") or ""
+                raise _MissingHistoryScopeError(needed) from exc
+        raise _to_connector_failed_history(exc) from exc
+    return _as_response_dict(response)
 
 
 def _to_connector_failed_history(exc: Any) -> ConnectorFailedError:

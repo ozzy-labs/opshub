@@ -84,10 +84,10 @@ regardless of principal (User Token / Bot Token) per ADR-0018.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
+from opshub.connectors.slack._retry import retry_on_rate_limit
 from opshub.core.errors import ConnectorFailedError
 
 if TYPE_CHECKING:
@@ -98,13 +98,6 @@ if TYPE_CHECKING:
 
 __all__ = ["RawSlackMessage", "SlackFetcher"]
 
-
-#: How many ``conversations.history`` retries to attempt after a 429
-#: before escalating to :class:`ConnectorFailedError`. Per phase-7-plan
-#: §1 #8 the budget is fixed at three attempts with a 1s / 2s / 4s
-#: backoff. Exposed as a module constant so tests can pin the value
-#: without re-reading the magic number out of the implementation.
-_MAX_RETRIES_ON_RATE_LIMIT = 3
 
 #: Final-fallback display name used only when *every* author resolution
 #: path failed (no ``user`` id, no ``bot_id``, no ``bot_profile.name``).
@@ -464,18 +457,18 @@ class SlackFetcher:
     ) -> dict[str, Any]:
         """Call ``conversations.history`` with 429 backoff per phase-7-plan §1 #8.
 
-        Retry budget: three attempts, sleeping ``Retry-After`` seconds
-        between them (falling back to 1s / 2s / 4s if Slack omits the
-        header). On exhaustion we re-raise the final ``SlackApiError``
-        so the caller's ``except SlackApiError`` arm in
-        :meth:`fetch_messages` can map it to
+        Retry policy (3 attempts, ``Retry-After`` honoured, 1s / 2s / 4s
+        exponential fallback) lives in
+        :func:`opshub.connectors.slack._retry.retry_on_rate_limit` so
+        this method and the discovery-side
+        :func:`opshub.connectors.slack.conversations._call_history_oldest`
+        share one source of truth (#377). Non-429
+        :class:`SlackApiError` (and the final 429 after the budget
+        is spent) re-raise to the caller's ``except SlackApiError``
+        arm in :meth:`fetch_messages`, which maps them to
         :class:`ConnectorFailedError` with a channel-scoped message —
         keeping the rate-limit case uniform with other API failures.
         """
-        # Lazy-import the exception class to avoid module-level
-        # ``slack_sdk`` import (cold-start guard).
-        from slack_sdk.errors import SlackApiError
-
         kwargs: dict[str, Any] = {
             "channel": channel_id,
             "limit": limit,
@@ -491,46 +484,10 @@ class SlackFetcher:
         if cursor is not None:
             kwargs["cursor"] = cursor
 
-        last_error: SlackApiError | None = None
-        for attempt in range(_MAX_RETRIES_ON_RATE_LIMIT):
-            try:
-                response: Any = client.conversations_history(**kwargs)
-            except SlackApiError as exc:
-                # ``exc.response`` is the ``SlackResponse`` proxy; cast
-                # to ``Any`` so the documented ``.status_code`` /
-                # ``.headers`` attribute access type-checks under
-                # pyright strict mode.
-                response_any = cast(Any, exc.response)
-                status_code = getattr(response_any, "status_code", None)
-                if status_code != 429:
-                    # Non-429 errors are not retryable per
-                    # phase-3-plan §4 Q3 (fail-fast posture). The
-                    # caller maps these to ConnectorFailedError.
-                    raise
-                last_error = exc
-                # Prefer Slack's own Retry-After hint; fall back to a
-                # documented exponential schedule (1s / 2s / 4s).
-                headers_obj = getattr(response_any, "headers", None)
-                headers: dict[str, Any] = (
-                    cast(dict[str, Any], headers_obj) if isinstance(headers_obj, dict) else {}
-                )
-                retry_after_raw = headers.get("Retry-After")
-                try:
-                    retry_after = int(retry_after_raw) if retry_after_raw else 2**attempt
-                except (TypeError, ValueError):
-                    # Slack's docs only ever return integer Retry-After
-                    # values; this defensive arm covers buggy proxies
-                    # that inject malformed headers.
-                    retry_after = 2**attempt
-                time.sleep(retry_after)
-                continue
-            return _as_response_dict(response)
-        # Retry budget exhausted: re-raise the last 429 so the caller
-        # maps it to ConnectorFailedError with the same code path as
-        # non-rate-limit errors. ``last_error`` is non-None here
-        # because the loop only ``continue``s after assigning it.
-        assert last_error is not None
-        raise last_error
+        def _call() -> Any:
+            return client.conversations_history(**kwargs)
+
+        return _as_response_dict(retry_on_rate_limit(_call))
 
     def _resolve_author_display(self, *, client: Any, raw: dict[str, Any], user_id: str) -> str:
         """Resolve a human-recognisable author name for any message shape.
