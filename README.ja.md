@@ -112,15 +112,14 @@ opshub mcp tools           # read / write tool 一覧を確認 (policy-as-data �
 
 ## 秘書 Skill を install する
 
-Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) で 14 件の秘書 Skill の配信経路を opshub package 同梱 + `opshub skills install` に確定し、Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で CLI を着地させました (SSOT 位置は引き続き opshub `docs/skills/<name>/SKILL.md`)。
+Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) で 14 件の秘書 Skill の配信経路を opshub package 同梱 + `opshub skills install` に確定し、Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で CLI を着地させ、Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) で `opshub init` 統合まで完了しました (SSOT 位置は引き続き opshub `docs/skills/<name>/SKILL.md`)。標準の 2 ステップで MCP server と 14 秘書 Skill が両方セットアップされます:
 
 ```bash
-uv tool install ozzylabs-opshub[mcp]   # 同梱の _skills/ も wheel と一緒に install される
-opshub skills install                  # ~/.claude/skills/ + ~/.agents/skills/ に展開
-opshub skills list                     # installed / missing / modified を skill 単位で確認
+uv tool install ozzylabs-opshub[mcp]
+opshub init   # MCP server 初期化 + 秘書 14 skill install (TTY 時は prompt、非対話は default install)
 ```
 
-flag 詳細 (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 を参照してください。
+`opshub init` は stdin が TTY のとき `rich.prompt.Confirm` で確認 (default = yes) し、非対話 (script や `uv tool install ... && opshub init` の one-liner) では default で install します。`opshub init --install-skills` / `opshub init --no-install-skills` で明示的に上書きできます。後追いの更新 / `--scope project` 切替 / `--skip-existing` で手編集を温存したい場合は `opshub skills install` を直接呼んでください。`opshub skills list` で installed / missing / modified の状態を skill 単位で確認できます。flag 詳細 (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 を参照してください。
 
 ## LLM backend の設定（任意）
 

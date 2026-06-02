@@ -269,13 +269,24 @@ def init(
         "--force",
         help="Overwrite existing config.toml with the starter template.",
     ),
+    install_skills: bool | None = typer.Option(
+        None,
+        "--install-skills/--no-install-skills",
+        help=(
+            "Install the 14 bundled secretary skills to ~/.claude/skills/ + "
+            "~/.agents/skills/ (Phase 16-C, ADR-0029). "
+            "Default: prompt on TTY (default yes), install on non-TTY. "
+            "Use --no-install-skills to skip; use `opshub skills install` "
+            "later to update or switch scopes."
+        ),
+    ),
 ) -> None:
-    """First-time setup: create dirs, write starter config, apply migrations."""
+    """First-time setup: create dirs, write starter config, apply migrations, install skills."""
     # Lazy import: heavy modules (pydantic_settings, alembic) load only when
     # the command actually runs.
     from opshub.cli.init import init_command
 
-    init_command(force=force)
+    init_command(force=force, install_skills=install_skills)
 
 
 @db_app.command("migrate")

@@ -235,7 +235,7 @@ Phase 15+ で symmetric に拡張する候補: Calendar instance 展開 projecti
 ```bash
 # 環境準備
 uv tool install ozzylabs-opshub[mcp]
-opshub init   # 初回のみ
+opshub init   # 初回のみ。MCP server 初期化 + 秘書 14 skill install (TTY 時は prompt、非対話は default install)
 
 # MCP server を stdio で起動 (host が subprocess として spawn する想定)
 opshub mcp serve
@@ -243,13 +243,31 @@ opshub mcp serve
 
 ### 8.2 秘書 Skills 14 件をホストに配布する
 
-Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で `opshub skills install` / `opshub skills list` が着地した。`[tool.hatch.build.force-include]` で `docs/skills/` → `src/opshub/_skills/` を build 時に copy し、wheel に同梱する ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (a))。`opshub init` 連携 (TTY prompt + `--install-skills` / `--no-install-skills` flag、非対話 default = install) は Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) で着地する。
+Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で `opshub skills install` / `opshub skills list` が着地し、Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) で `opshub init` 経由の自動 install (TTY prompt + `--install-skills` / `--no-install-skills` flag、非対話 default = install) が着地した。`[tool.hatch.build.force-include]` で `docs/skills/` → `src/opshub/_skills/` を build 時に copy し、wheel に同梱する ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (a))。
 
-#### `opshub skills install` — install 手順
+#### 推奨手順: `opshub init` で一括セットアップ (Phase 16-C)
 
 ```bash
-uv tool install ozzylabs-opshub[mcp]   # 同梱の _skills/ も一緒に install される
-opshub skills install                  # ~/.claude/skills/ + ~/.agents/skills/ に展開 (default: --host all --scope user)
+uv tool install ozzylabs-opshub[mcp]
+opshub init   # MCP server 初期化 + 秘書 14 skill を ~/.claude/skills/ + ~/.agents/skills/ に install
+```
+
+`opshub init` は次の 3 layer で skill install 判断を行う:
+
+- `--install-skills` 明示: prompt なしで install
+- `--no-install-skills` 明示: prompt なしで skip
+- flag 未指定:
+  - TTY (`sys.stdin.isatty() == True`): `rich.prompt.Confirm` で確認 (default = yes、Enter で install / `n` で skip)
+  - 非対話 (`sys.stdin.isatty() == False`): **install (default = yes)**。`uv tool install ozzylabs-opshub[mcp] && opshub init` の one-liner / script / 新規 shell 経路を救済する設計 ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (d))
+
+`opshub init` 内部は `opshub skills install --host all --scope user` と同等の install を実行する (`--skip-existing` は付かないため SSOT 同期が優先される)。後追いの scope 切替 (e.g. `--scope project` で repo 配下に展開) / install 更新 / `--skip-existing` 付き保守的更新は引き続き `opshub skills install` を直接呼ぶ。
+
+#### `opshub skills install` — 後追い更新 / scope 切替用
+
+```bash
+opshub skills install                  # 既 install 済 host を最新 SSOT に同期 (default: --host all --scope user)
+opshub skills install --scope project  # CWD 配下の ./.claude/skills/ + ./.agents/skills/ に追加 install
+opshub skills install --skip-existing  # 手編集を温存しつつ未 install の skill のみ追加
 ```
 
 flags:

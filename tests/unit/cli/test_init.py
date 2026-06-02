@@ -3,11 +3,29 @@
 Every test isolates the CLI invocation via ``monkeypatch.setenv`` so that
 the user's real ``~/.config/opshub`` / ``~/.local/share/opshub`` directories
 are never touched. All paths point inside ``tmp_path``.
+
+Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384),
+ADR-0029) adds 5 tests pinning the secretary skill install integration:
+
+* ``--install-skills`` / ``--no-install-skills`` explicit flag wins over
+  the TTY probe.
+* TTY-detected prompt path honours both ``y`` (install) and ``n`` (skip)
+  answers from :class:`rich.prompt.Confirm`.
+* Non-TTY fall-through installs by default (ADR-0029 §決定 (d)) —
+  motivated by the ``uv tool install ... && opshub init`` one-liner
+  flow where stdin is never a terminal.
+
+The tests patch
+:func:`opshub.cli.init.install_command` (the lazy-imported reference
+inside :func:`init_command`) rather than the real symbol on
+:mod:`opshub.cli.skills` so the install side-effect is intercepted
+without touching the host's real ``~/.claude/skills/`` directory.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import inspect
@@ -107,3 +125,130 @@ def test_init_force_overwrites_config(monkeypatch: pytest.MonkeyPatch, tmp_path:
     forced = runner.invoke(app, ["init", "--force"])
     assert forced.exit_code == 0, forced.stdout
     assert config_file.read_text(encoding="utf-8") == STARTER_CONFIG_TOML
+
+
+# ---------------------------------------------------------------------------
+# Phase 16-C (#384, ADR-0029) — secretary skill install integration.
+#
+# The 5 tests below patch ``opshub.cli.init.install_command`` to assert the
+# tri-state ``--install-skills`` / ``--no-install-skills`` / unset decision
+# logic without writing into the operator's real ``~/.claude/skills/`` or
+# ``~/.agents/skills/`` directory.
+#
+# Pre-existing tests above (``test_init_creates_dirs_*`` etc.) run in non-TTY
+# (CliRunner.invoke pipes stdin) and therefore go through the non-TTY default
+# = install branch. That side effect lands inside the per-test ``tmp_path``
+# only because :func:`pytest.MonkeyPatch.setenv` re-points ``HOME``-style env
+# vars; for the new tests we go one step further and stub out the install
+# command entirely so we can assert *when* it was called.
+# ---------------------------------------------------------------------------
+
+
+def _patch_install_command(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    """Replace ``install_command`` (looked up lazily inside ``init_command``).
+
+    :func:`opshub.cli.init.init_command` does ``from opshub.cli.skills
+    import install_command`` *inside* the install branch, so the patched
+    symbol must live on the real source module — patching the local name
+    in :mod:`opshub.cli.init` would have no effect because the import
+    has not happened yet at patch time.
+    """
+    mock = MagicMock(return_value=None)
+    monkeypatch.setattr("opshub.cli.skills.install_command", mock)
+    return mock
+
+
+def test_init_install_skills_flag_runs_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--install-skills`` overrides the TTY probe and calls install."""
+    _isolate_env(monkeypatch, tmp_path)
+    install_mock = _patch_install_command(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "--install-skills"])
+
+    assert result.exit_code == 0, result.stdout
+    install_mock.assert_called_once_with(host="all", scope="user", skip_existing=False)
+
+
+def test_init_no_install_skills_flag_skips_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--no-install-skills`` overrides the TTY probe and skips install."""
+    _isolate_env(monkeypatch, tmp_path)
+    install_mock = _patch_install_command(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "--no-install-skills"])
+
+    assert result.exit_code == 0, result.stdout
+    install_mock.assert_not_called()
+
+
+def test_init_tty_prompt_yes_runs_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """TTY + Confirm.ask returns True → install runs.
+
+    ``opshub.cli.init._stdin_is_tty`` is the one-line wrapper around
+    ``sys.stdin.isatty()`` documented at the symbol's source — patching
+    it (rather than ``sys.stdin.isatty`` directly) sidesteps
+    :class:`typer.testing.CliRunner`'s stdin isolation, which swaps in
+    a buffer whose ``isatty()`` always returns ``False`` regardless of
+    upstream monkeypatching.
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    install_mock = _patch_install_command(monkeypatch)
+
+    # Force the TTY branch even though CliRunner pipes stdin.
+    monkeypatch.setattr("opshub.cli.init._stdin_is_tty", lambda: True)
+    # ``rich.prompt.Confirm`` is imported lazily inside ``init_command``;
+    # patch the source class so the lazy import returns the stub.
+    confirm_mock = MagicMock(return_value=True)
+    monkeypatch.setattr("rich.prompt.Confirm.ask", confirm_mock)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0, result.stdout
+    confirm_mock.assert_called_once()
+    install_mock.assert_called_once_with(host="all", scope="user", skip_existing=False)
+
+
+def test_init_tty_prompt_no_skips_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """TTY + Confirm.ask returns False → install is skipped."""
+    _isolate_env(monkeypatch, tmp_path)
+    install_mock = _patch_install_command(monkeypatch)
+
+    monkeypatch.setattr("opshub.cli.init._stdin_is_tty", lambda: True)
+    confirm_mock = MagicMock(return_value=False)
+    monkeypatch.setattr("rich.prompt.Confirm.ask", confirm_mock)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0, result.stdout
+    confirm_mock.assert_called_once()
+    install_mock.assert_not_called()
+
+
+def test_init_non_tty_defaults_to_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Non-TTY + flag unset → install runs (ADR-0029 §決定 (d) motivating flow).
+
+    Explicitly forces the non-TTY branch via the wrapper so this test
+    documents the contract even though :class:`typer.testing.CliRunner`
+    already produces a non-TTY stdin by default.
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    install_mock = _patch_install_command(monkeypatch)
+
+    monkeypatch.setattr("opshub.cli.init._stdin_is_tty", lambda: False)
+    # ``Confirm.ask`` must not be reached on the non-TTY branch.
+    confirm_mock = MagicMock(side_effect=AssertionError("Confirm.ask reached on non-TTY"))
+    monkeypatch.setattr("rich.prompt.Confirm.ask", confirm_mock)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0, result.stdout
+    confirm_mock.assert_not_called()
+    install_mock.assert_called_once_with(host="all", scope="user", skip_existing=False)

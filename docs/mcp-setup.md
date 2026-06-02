@@ -51,7 +51,7 @@ The `*:history` scopes are checked per type: when `--since <when>` is used and o
 
 ## 2. Initialise the database
 
-The MCP server reads the same SQLite store as the CLI, so `opshub init` (or `opshub db migrate` on an existing store) must have run before the agent connects.
+The MCP server reads the same SQLite store as the CLI, so `opshub init` (or `opshub db migrate` on an existing store) must have run before the agent connects. Since Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384), [ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) `opshub init` also installs the 14 secretary skills into `~/.claude/skills/` and `~/.agents/skills/` (prompting on a TTY, defaulting to install otherwise — see §3a). Pass `--no-install-skills` to opt out.
 
 ```sh
 opshub init
@@ -102,7 +102,9 @@ Phase 12 H1 also unified the original 5 skills (`personal-brief`, `next-actions`
 
 ## 3a. Install the 14 secretary skills on the agent host
 
-Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirms **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 14 secretary skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI — `opshub skills install` writes the 14 bundled skills to `~/.claude/skills/` and `~/.agents/skills/`. Flag details (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) and the `opshub skills list` status command live in [`docs/secretary-agent.md`](secretary-agent.md) §8.
+Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirms **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 14 secretary skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI; Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) wired it into `opshub init` so step §2 above also installs the 14 secretary skills (TTY prompt via `rich.prompt.Confirm`, default = yes; non-TTY default = install per ADR-0029 §決定 (d)).
+
+If you ran `opshub init` already, the 14 skills are in place. Override with `opshub init --install-skills` / `opshub init --no-install-skills` for non-interactive scripts that need the explicit choice. Use `opshub skills install` directly to push later SSOT updates, add a `--scope project` install, or pass `--skip-existing` to preserve hand-edits. Flag details (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) and the `opshub skills list` status command live in [`docs/secretary-agent.md`](secretary-agent.md) §8.
 
 The 14 skills are:
 

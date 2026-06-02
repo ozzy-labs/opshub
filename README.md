@@ -113,15 +113,14 @@ Full setup (other hosts, encryption, troubleshooting): [`docs/mcp-setup.md`](doc
 
 ## Install the secretary skills
 
-Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirmed package bundling + `opshub skills install` as the canonical distribution channel for the 14 secretary skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI:
+Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirmed package bundling + `opshub skills install` as the canonical distribution channel for the 14 secretary skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI; Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) wired it into `opshub init` so the standard 2-step setup also installs the 14 secretary skills:
 
 ```bash
-uv tool install ozzylabs-opshub[mcp]   # bundled _skills/ ships with the wheel
-opshub skills install                  # writes to ~/.claude/skills/ + ~/.agents/skills/
-opshub skills list                     # show installed / missing / modified status per skill
+uv tool install ozzylabs-opshub[mcp]
+opshub init   # MCP server init + 14 secretary skills install (TTY prompt; non-interactive default = install)
 ```
 
-See [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 for flag details (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`).
+`opshub init` prompts via `rich.prompt.Confirm` when stdin is a TTY (default = yes); on a non-TTY (script / fresh shell driving `uv tool install ... && opshub init`) it installs by default. Override with `opshub init --install-skills` / `opshub init --no-install-skills`. Use `opshub skills install` directly for follow-up updates, `--scope project` switches, or `--skip-existing` to preserve hand-edits; `opshub skills list` shows per-skill installed / missing / modified status. See [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 for the full flag matrix (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`).
 
 ## Configure an LLM backend (optional)
 
