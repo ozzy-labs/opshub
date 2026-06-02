@@ -5,6 +5,13 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10](https://github.com/ozzy-labs/opshub/compare/v0.2.9...v0.2.10) (2026-06-02)
+
+
+### Fixed
+
+* **skills:** make 'opshub skills install' read from docs/skills/ in editable mode ([#399](https://github.com/ozzy-labs/opshub/issues/399)) ([9c5c490](https://github.com/ozzy-labs/opshub/commit/9c5c49044e60ede7442c5a02a5b2c7c660a11a0f))
+
 ## [0.2.9](https://github.com/ozzy-labs/opshub/compare/v0.2.8...v0.2.9) (2026-06-02)
 
 
