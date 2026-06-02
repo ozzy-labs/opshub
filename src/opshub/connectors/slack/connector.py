@@ -49,6 +49,46 @@ re-ingest cascade documented in issue #339). The pattern mirrors
 keeps its cursor as ``max(observed.updated_at)`` rather than
 trusting iteration order.
 
+Partial-progress checkpoint (issue #339, Bug 2)
+------------------------------------------------
+
+``SourceService.observe`` commits ``SourceObserved`` + ``ItemEnqueued``
+per message inside its own transaction, but the CLI driver only
+writes the resume cursor via ``cursor_set(sync_started=False)``
+**after** :meth:`sync` returns normally. If the fetcher raises
+mid-iteration (e.g. :class:`ConnectorFailedError` on a Slack-side
+``rate_limited`` after the budget is exhausted, or a
+:class:`KeyboardInterrupt` from a manually-aborted run), the cursor
+stays at the prior run's value while a non-zero number of messages
+have already been committed to ``sources`` / ``inbox_items`` — so
+the next sync re-fetches them, re-observes them, and (because
+``ItemEnqueued`` is not deduplicated per source_ref by the projection)
+inflates ``inbox_items`` on every aborted-then-retried run. That is
+the second half of the issue #339 cascade.
+
+We close this gap with a ``try / finally`` around the fetcher loop:
+if the loop exits via exception **after** at least one message was
+observed (i.e. ``cursors`` has advanced relative to the input we
+parsed from ``context.cursor_value``), we persist the partial
+progress via ``cursor_set(sync_started=True)``. The
+:class:`~opshub.projections.connector_cursors.ConnectorCursorsProjection`
+reducer upserts ``cursor_value`` on every ``ConnectorSyncStarted``
+event, so the partial-progress write is immediately visible to the
+next sync — bounding the re-fetch window on retry to "messages that
+threw mid-iteration", not "everything since the last successful
+sync".
+
+The happy path is unchanged: the ``finally`` arm is a no-op when
+the loop completed normally because we set ``completed_normally =
+True`` just before exiting the ``try`` arm, and the CLI driver
+still writes the terminal ``ConnectorSyncCompleted`` event with the
+same JSON value. Idempotency on the failure path: writing the
+same cursor twice (once via the partial checkpoint, once via the
+CLI's ``record_sync_failure`` arm) is safe because
+``record_sync_failure`` itself does not touch the cursor —
+:class:`~opshub.domain.events.ConnectorSyncFailed` is a deliberate
+no-op in the cursor projection (phase-3-plan §4 Q3).
+
 Configuration source
 --------------------
 
@@ -161,30 +201,76 @@ class SlackConnector:
         excludes = load_excludes()
 
         cursors = _load_cursors(context.cursor_value)
+        # Snapshot the entry state so the ``finally`` arm below can
+        # tell "no progress was made (cursors are byte-identical to
+        # the resume point)" apart from "we observed N messages
+        # before crashing (cursors have moved)". Without the
+        # snapshot the partial-progress checkpoint would fire even
+        # on a sync that yielded zero messages and then crashed in
+        # the fetcher's setup path — emitting a redundant
+        # ``ConnectorSyncStarted`` event with a no-op cursor value.
+        cursors_at_entry: dict[str, str | None] = dict(cursors)
         observed_count = 0
-        for channel_id, raw_message, new_cursor in fetcher.fetch_messages(
-            cursor_per_channel=cursors,
-        ):
-            # Defense-in-depth: never let the persisted cursor regress.
-            # The fetcher (post-#339 fix) yields ts-ascending across
-            # pages so ``new_cursor`` is naturally monotonic, but a
-            # future fetcher bug that yields an older ts after a
-            # newer one would otherwise rewind the projection cursor
-            # and cause every subsequent sync to re-ingest the gap
-            # (the regression-cascade documented in issue #339).
-            cursors[channel_id] = _max_ts(cursors.get(channel_id), new_cursor)
-            if excludes.excludes_channel(raw_message.channel_id) or excludes.excludes_sender(
-                raw_message.user_id
+        completed_normally = False
+        try:
+            for channel_id, raw_message, new_cursor in fetcher.fetch_messages(
+                cursor_per_channel=cursors,
             ):
-                continue
-            kwargs = map_message(raw_message)
-            # ``source_service`` is typed as ``Any`` on
-            # :class:`ConnectorContext` (the framework predates the
-            # Phase 3 ``SourceService`` rename); the keyword-only
-            # ``observe`` signature catches argument drift at runtime
-            # via TypeError.
-            context.source_service.observe(**kwargs)
-            observed_count += 1
+                # Defense-in-depth: never let the persisted cursor regress.
+                # The fetcher (post-#339 fix) yields ts-ascending across
+                # pages so ``new_cursor`` is naturally monotonic, but a
+                # future fetcher bug that yields an older ts after a
+                # newer one would otherwise rewind the projection cursor
+                # and cause every subsequent sync to re-ingest the gap
+                # (the regression-cascade documented in issue #339).
+                cursors[channel_id] = _max_ts(cursors.get(channel_id), new_cursor)
+                if excludes.excludes_channel(raw_message.channel_id) or excludes.excludes_sender(
+                    raw_message.user_id
+                ):
+                    continue
+                kwargs = map_message(raw_message)
+                # ``source_service`` is typed as ``Any`` on
+                # :class:`ConnectorContext` (the framework predates the
+                # Phase 3 ``SourceService`` rename); the keyword-only
+                # ``observe`` signature catches argument drift at runtime
+                # via TypeError.
+                context.source_service.observe(**kwargs)
+                observed_count += 1
+            completed_normally = True
+        finally:
+            # Partial-progress checkpoint for issue #339 Bug 2: when the
+            # fetcher loop exits via exception (``ConnectorFailedError``
+            # / ``KeyboardInterrupt`` / unexpected mid-iteration crash),
+            # the CLI driver's ``cursor_set(sync_started=False, ...)``
+            # call never runs — so the projection cursor stays at the
+            # prior run's value even though :meth:`SourceService.observe`
+            # has already committed ``SourceObserved`` + ``ItemEnqueued``
+            # events for the N messages we got through. On retry that
+            # gap is re-fetched and re-enqueued, inflating
+            # ``inbox_items`` per aborted run (the second half of the
+            # cascade documented in issue #339).
+            #
+            # We persist the partial cursor here via
+            # ``cursor_set(sync_started=True)``. The connector_cursors
+            # reducer upserts ``cursor_value`` on every
+            # ``ConnectorSyncStarted`` event (see
+            # :meth:`ConnectorCursorsProjection._apply_started`), so the
+            # next sync resumes from where we got to, not where the
+            # *prior* run got to. We deliberately fire this only on
+            # the abnormal-exit path (``completed_normally is False``
+            # AND we made progress) to keep the happy path's event log
+            # quiet: the CLI's terminal ``ConnectorSyncCompleted``
+            # event already pins the same cursor for the success case.
+            if not completed_normally and cursors != cursors_at_entry:
+                # ``context.source_service`` is the CLI's
+                # ``_ProgressSourceProxy`` (or the raw ``SourceService``
+                # under unit-test fixtures); both forward ``cursor_set``
+                # via ``__getattr__`` so this call is transparent.
+                context.source_service.cursor_set(
+                    self.name,
+                    _dump_cursors(cursors),
+                    sync_started=True,
+                )
 
         new_cursor_value = _dump_cursors(cursors) if cursors else context.cursor_value
         return SyncResult(observed_count=observed_count, new_cursor=new_cursor_value)

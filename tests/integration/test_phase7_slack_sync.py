@@ -834,6 +834,137 @@ def test_slack_sync_first_then_resume_no_duplicate_ingest(
         engine.dispose()
 
 
+# ------------------------------------------- mid-iteration failure recovery (issue #339 Bug 2)
+
+
+def test_slack_sync_resumes_without_duplicates_after_mid_iteration_failure(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """Issue #339 Bug 2: a sync that crashes mid-iteration must not re-ingest
+    on retry.
+
+    Pre-fix the connector's success-path return was the only place
+    that wrote the new cursor, so a fetcher exception left the
+    projection's ``cursor_value`` stuck at the prior run's value
+    while ``observe`` had already committed the N successful
+    messages. The next sync (whether automatic or manual) then
+    re-fetched and re-enqueued the gap, inflating ``inbox_items``
+    by N per aborted-then-retried run — the second half of the
+    cascade described in issue #339.
+
+    Post-fix the ``try / finally`` arm in
+    :meth:`SlackConnector.sync` writes the partial-progress cursor
+    via ``cursor_set(sync_started=True)`` before the exception
+    propagates. The
+    :class:`~opshub.projections.connector_cursors.ConnectorCursorsProjection`
+    reducer upserts ``cursor_value`` on every
+    ``ConnectorSyncStarted`` event, so the next sync's
+    ``oldest=cursor`` Slack request returns only messages strictly
+    newer than the last-committed one — zero duplicates.
+
+    We exercise this end-to-end via the public CLI (``opshub
+    connector sync slack``) so the test would catch any future
+    refactor that moved the cursor write into a place the CLI
+    driver does not invoke on the failure path (e.g. a refactor
+    that pushed the checkpoint into the CLI's ``except`` arm
+    instead of the connector's ``finally`` arm).
+    """
+    # First sync: yield two messages, then raise on the third. We use a
+    # stateful counter rather than ``side_effect=[...]`` because the
+    # connector calls ``fetch_messages`` once and consumes the iterator
+    # — the iterator itself is what raises after the second yield.
+    msg_1 = _raw_message(ts="1700000001.000100", text="first")
+    msg_2 = _raw_message(ts="1700000002.000200", text="second")
+
+    def _first_sync_fetch(
+        *,
+        cursor_per_channel: dict[str, str | None],
+        max_per_channel: int = 100,
+    ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
+        del cursor_per_channel, max_per_channel
+        yield ("C1", msg_1, "1700000001.000100")
+        yield ("C1", msg_2, "1700000002.000200")
+        raise ConnectorFailedError("Slack fetch failed for channel C1: rate_limited")
+
+    from unittest.mock import MagicMock
+
+    first_fetcher_cls = MagicMock()
+    first_fetcher_cls.return_value.fetch_messages.side_effect = _first_sync_fetch
+    monkeypatch.setattr(
+        "opshub.connectors.slack.connector.SlackFetcher",
+        first_fetcher_cls,
+    )
+
+    runner = CliRunner()
+    first = runner.invoke(app, ["connector", "sync", "slack"])
+    # Exit 1 because the fetcher raised; the CLI maps it to
+    # ConnectorSyncFailed + exit code 1.
+    assert first.exit_code == 1, first.stdout
+    assert "ConnectorFailedError" in first.stderr
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        from sqlalchemy import text as sql_text
+
+        # Two messages reached observe before the crash; both
+        # ``sources`` and ``inbox_items`` rows landed.
+        assert _row_count(engine, "sources") == 2
+        assert _row_count(engine, "inbox_items") == 2
+
+        # The cursor was advanced by the partial-progress checkpoint:
+        # the projection now reflects the latest observed ts even
+        # though no ``ConnectorSyncCompleted`` event was emitted (the
+        # sync failed). Pre-fix this would have been NULL (or the
+        # prior-run value), and the next sync would re-fetch from
+        # the beginning.
+        with engine.connect() as conn:
+            cursor_after_failure = (
+                conn.execute(
+                    sql_text(
+                        "SELECT cursor_value FROM connector_cursors WHERE connector_name = 'slack'"
+                    )
+                )
+                .mappings()
+                .one()["cursor_value"]
+            )
+        assert cursor_after_failure is not None
+        assert "1700000002.000200" in cursor_after_failure
+
+        # ---- Second sync: resume with no new messages. The fetcher
+        # patch now yields nothing (Slack-side filter on
+        # ``oldest=cursor`` would return zero messages — we mirror that
+        # by yielding an empty iterator).
+        _patch_slack_fetcher(monkeypatch, yields=[])
+
+        second = runner.invoke(app, ["connector", "sync", "slack"])
+        assert second.exit_code == 0, second.stdout
+
+        # Critical invariant: projection counts unchanged. Pre-fix
+        # these would have grown to 4 each (the two messages
+        # re-fetched and re-enqueued).
+        assert _row_count(engine, "sources") == 2
+        assert _row_count(engine, "inbox_items") == 2
+
+        # The cursor is now sealed by the success run's
+        # ConnectorSyncCompleted event with the same value the
+        # checkpoint wrote.
+        with engine.connect() as conn:
+            cursor_after_resume = (
+                conn.execute(
+                    sql_text(
+                        "SELECT cursor_value FROM connector_cursors WHERE connector_name = 'slack'"
+                    )
+                )
+                .mappings()
+                .one()["cursor_value"]
+            )
+        assert "1700000002.000200" in cursor_after_resume
+    finally:
+        engine.dispose()
+
+
 # ---------------------------------------------------------------------- failure recording
 
 
