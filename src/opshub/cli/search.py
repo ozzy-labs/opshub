@@ -74,8 +74,13 @@ def search_command(
         False,
         "--raw",
         help=(
-            "Treat the query as raw FTS5 syntax (boolean / phrase / "
-            "prefix). Default wraps the query as a literal phrase."
+            "Power-user: pass the query straight to FTS5 (boolean / "
+            "phrase / prefix syntax, e.g. 'box* AND 権限*'). The default "
+            "non-raw mode already handles Japanese substring matches "
+            "via the trigram tokenizer (Phase 15, ADR-0028); 1-2 "
+            "character queries fall back to a body LIKE scan. --raw "
+            "disables that fallback so 1-2 char inputs may return 0 "
+            "hits."
         ),
     ),
     fmt: str = typer.Option(

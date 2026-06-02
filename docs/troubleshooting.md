@@ -157,7 +157,52 @@ sqlite3 ~/.local/share/opshub/db/opshub.sqlite \
 - [ADR-0020 §決定 (f)](adr/0020-full-local-content-retention.md) — summary 側 whitespace 正規化の規約
 - [`src/opshub/core/text_limits.py`](../src/opshub/core/text_limits.py) — `normalise_optional_text` SSOT helper
 
-### 3.6 Slack の channel ID が分からない / `[connectors.slack] channels` に何を書けばよいか
+### 3.6 `opshub search` で日本語自然文がヒットしない / 短クエリで 0 hit になる
+
+`opshub search "boxの権限"` や `opshub search "進捗記入"` のような日本語自然文、あるいは `opshub search "依頼"` / `opshub search "PR"` のような短クエリで結果が 0 件になるケース。
+
+**症状**: `opshub search <日本語自然文>` や 1-2 文字のクエリで `no hits for '<query>'` が返る。同じ本文を含む source が `recall` (semantic) では拾える、あるいは `opshub search "<query>*" --raw` のように prefix 演算子を付けると拾える。
+
+**原因 (Phase 14 以前)**: Phase 10 で導入した `sources_fts` (migration 0019) の tokenizer は `unicode61 remove_diacritics 2` を採用しており、空白や記号で区切られない日本語自然文を 1 つの長いトークンとして固める。このため `boxの権限` のように本文中のトークン中間部分に当たる入力は、prefix `*` を付けない限り 0 hit になる ([epic #338](https://github.com/ozzy-labs/opshub/issues/338) §背景 参照)。
+
+**Phase 15 以降の改善** ([ADR-0028](adr/0028-fts5-japanese-tokenizer.md)、epic [#338](https://github.com/ozzy-labs/opshub/issues/338) / 子 PR [#346](https://github.com/ozzy-labs/opshub/pull/346) [#363](https://github.com/ozzy-labs/opshub/pull/363) [#364](https://github.com/ozzy-labs/opshub/pull/364)、本 PR で closeout):
+
+- `sources_fts` の tokenizer が **FTS5 built-in `trigram`** に張り替わった (migration `0028_rebuild_sources_fts_trigram`)。3 文字以上の substring は default モードで自然にヒットする。`boxの権限` / `進捗記入` / `CDKの` のような日本語自然文も `--raw` / prefix `*` 不要で当たる。
+- SearchService 層に **短クエリ (1-2 文字) の LIKE fallback** が入った。`依頼` / `PR` / `Q4` のような短い入力は `LOWER(body) LIKE LOWER(?)` の full scan path にルーティングされ、index hit はしないが結果が返る。case 比較は ASCII レベルで insensitive、クエリは NFC 正規化される。
+- **`--raw` モードでは fallback 無効** (`--raw` は operator が FTS5 文法を直接書く power-user 契約のため、silent rewrite しない)。`--raw` で 1-2 文字を渡すと従来どおり 0 hit になり得る。
+
+**確認方法**: `opshub db migrate` で migration `0028_rebuild_sources_fts_trigram` まで適用したか確認する。Alembic head が `0028_rebuild_sources_fts_trigram` であること、`sqlite_master` で `sources_fts` の DDL に `tokenize='trigram'` が含まれていることを確認できる:
+
+```bash
+sqlite3 ~/.local/share/opshub/db/opshub.sqlite \
+  "SELECT sql FROM sqlite_master WHERE name = 'sources_fts';"
+# 期待値: 末尾に tokenize='trigram' を含む CREATE VIRTUAL TABLE 文
+```
+
+`[storage] encryption = true` を有効にしている場合は SQLCipher 経由でアクセスする必要がある (§3.4 参照)。
+
+**対応**:
+
+- migration を当てていなければ `opshub db migrate` を実行する (back-fill 自動)
+- 既に当たっているのに hit しない場合、本文 (`sources.body`) に該当文字列が入っているかを §3.5 と同じ要領で `sqlite3` で確認する。`sources.body IS NULL` の source (Phase 3-9 historical 行と `box_drive` / `onedrive_drive` の metadata-only 行、[ADR-0019](adr/0019-local-filesystem-backed-connector.md) §不変条件 (b)) は FTS5 / LIKE どちらの経路でも対象外
+- 3 文字以上で「本文に literal phrase が存在する」のに hit しない場合は **regression なので issue 起票**。`opshub --debug search "<query>"` で再現 + 直近の migration head と DB 暗号化状態を添えて報告する
+
+**動作仕様の補足**:
+
+- `box 権限` のように空白で区切ると 2 token に分割され、それぞれが本文中の独立 token と一致する場合のみ hit する (literal phrase `box 権限` を本文に含む source が必要)。これは FTS5 phrase 検索の仕様であり、Phase 15 でも変わらない
+- `--raw` で `box* AND 権限*` のような FTS5 boolean / prefix 構文は引き続き有効。default モードで日本語が改善された以降も、power user 向けに残してある
+- MCP `search` tool ([ADR-0022](adr/0022-mcp-server-surface.md) §決定 (f)) は `raw_query` を hard-coded `false` で叩くため、秘書 14 Skill (`find-document` / `research` / etc.) 経由でも本改善が透過的に効く
+
+**関連**:
+
+- [ADR-0028 FTS5 Japanese tokenizer (trigram)](adr/0028-fts5-japanese-tokenizer.md) — 本改善の設計根拠
+- [`docs/phase-15-plan.md`](phase-15-plan.md) — Phase 15 全体の plan (sub-issues S1-S4 構成 / 検証手順 / Phase 16+ outlook)
+- [epic #338](https://github.com/ozzy-labs/opshub/issues/338) — Phase 15 親 epic、§背景 に operator 観測の 0 hit 事例表
+- PR [#346](https://github.com/ozzy-labs/opshub/pull/346) (S1 ADR + plan) / [#363](https://github.com/ozzy-labs/opshub/pull/363) (S2 migration 0028) / [#364](https://github.com/ozzy-labs/opshub/pull/364) (S3 SearchService LIKE fallback)
+- [`src/opshub/services/search_service.py`](../src/opshub/services/search_service.py) — `_MIN_FTS_QUERY_CHARS = 3` 閾値と `_search_like_fallback` 実装
+- [`src/opshub/db/migrations/versions/0028_rebuild_sources_fts_trigram.py`](../src/opshub/db/migrations/versions/0028_rebuild_sources_fts_trigram.py) — tokenizer 物理張り替え + back-fill + trigger 再作成
+
+### 3.7 Slack の channel ID が分からない / `[connectors.slack] channels` に何を書けばよいか
 
 Slack connector を有効化するには `opshub.toml` の `[connectors.slack] channels = ["C012345...", ...]` に **channel ID** を列挙する必要がある。Slack Web UI から「リンクをコピー → URL 末尾」を読む手作業はチャネル数が多いワークスペースで現実的でない。
 

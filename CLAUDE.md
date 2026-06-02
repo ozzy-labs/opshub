@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-共通方針は AGENTS.md を参照（Phase 1-14 完了状態の記載含む）。以下は Claude Code 固有の設定。
+共通方針は AGENTS.md を参照（Phase 1-15 完了状態の記載含む）。以下は Claude Code 固有の設定。
 
 ## 基本ルール
 
@@ -59,3 +59,7 @@ opshub は形A (ADR-0004) に基づき秘書 **14 Skill** を提供する。SKIL
 ## トラブルシュート用オプション
 
 全サブコマンドに共通の `-v` / `-q` / `--debug` / `--log-format` / `--log-file` フラグと `OPSHUB_LOG_LEVEL` / `OPSHUB_LOG_FORMAT` / `OPSHUB_DEBUG` / `OPSHUB_LOG_FILE` 環境変数で verbosity を制御できる。トークン / 鍵 / 既知形状の secret は全 verbosity で redaction される ([ADR-0027](docs/adr/0027-observability-and-troubleshooting-logging.md))。手順は [`docs/troubleshooting.md`](docs/troubleshooting.md)。
+
+## `opshub search` の日本語クエリ
+
+Phase 15 ([ADR-0028](docs/adr/0028-fts5-japanese-tokenizer.md)、epic #338) で `sources_fts` の tokenizer を FTS5 built-in `trigram` に張り替え + SearchService に短クエリ LIKE fallback を入れたため、日本語自然文 (`boxの権限` / `進捗記入` / `CDKの`) は default mode で 3 文字以上の substring を hit する。1-2 文字の短クエリ (`依頼` / `PR` / `Q4`) は `LOWER(body) LIKE LOWER(?)` 経路 (full scan、`raw_query=False` 時のみ) で hit する。`--raw` は FTS5 boolean / phrase / prefix を直接書きたい power-user 向けに維持 (例: `box* AND 権限*`)、短クエリ fallback は無効化される。MCP `search` tool ([ADR-0022](docs/adr/0022-mcp-server-surface.md) §決定 (f)) は `raw_query` hard-coded `false` のため秘書 14 Skill (`find-document` / `research` / etc.) も透過的に恩恵を受ける。発火しないときの調査は [`docs/troubleshooting.md`](docs/troubleshooting.md) §3.6 を参照。

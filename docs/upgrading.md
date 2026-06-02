@@ -493,3 +493,60 @@ The keyring slot string (`connector:google_workspace:refresh_token`) and the env
 - New OAuth scope set: 3 fixed scopes (per Phase 14 plan §X.1 — per-connector subset declarations are not supported; disable connectors via `[connectors.<name>] enabled = false` instead).
 - Re-consent is one-time per operator; once the refresh token reflects the new scope set, every subsequent `sync` resumes automatically.
 - Gmail / Calendar connectors land in **Phase 14 G3 / G4** — G2 alone exposes no new CLI subcommand or `source_type`; the G3 / G4 sections of this document will cover those on merge.
+
+## Phase 15: search quality — FTS5 Japanese tokenizer (trigram) + short-query LIKE fallback
+
+Phase 15 ([ADR-0028](adr/0028-fts5-japanese-tokenizer.md), epic [#338](https://github.com/ozzy-labs/opshub/issues/338)) fixes the long-standing 0-hit behaviour of `opshub search` on Japanese natural-text queries. Phase 10's original FTS5 tokenizer (`unicode61 remove_diacritics 2`) treated Japanese run-on text as a single long token, so queries like `boxの権限` / `進捗記入` / `CDKの` could only match via prefix `*` + `--raw`. Phase 15 swaps the tokenizer to FTS5's built-in `trigram` (SQLite 3.34+, no new dependency) and adds a 1-2 character LIKE fallback so `依頼` / `PR` / `Q4` no longer silently return 0 hits.
+
+### Apply the new migration
+
+The change ships as migration `0028_rebuild_sources_fts_trigram`, which drops the three `sources_fts` sync triggers, drops the FTS5 virtual table, recreates it with `tokenize='trigram'`, back-fills from `sources.body`, and re-attaches the triggers in the same shape Phase 10 created them. Migration `0019_create_sources_fts` itself stays immutable (Phase 1 onward 規範); operators converge by running the new revision:
+
+```bash
+uv tool upgrade opshub
+opshub db migrate                # applies 0028_rebuild_sources_fts_trigram
+```
+
+The back-fill is automatic — `opshub embeddings rebuild` is **not** required (Phase 15 does not change the embedding model or `sources.body` itself, only the derived FTS index). Encrypted databases (`[storage] encryption = true`, [ADR-0021](adr/0021-encryption-at-rest.md)) migrate transparently through SQLCipher.
+
+### Behavioural change: Japanese queries hit by substring
+
+After applying migration 0028 and upgrading the CLI, `opshub search` behaves as follows:
+
+| Query example | Before Phase 15 | After Phase 15 |
+|---|---|---|
+| `opshub search "boxの権限"` | 0 hits (tokenizer treats `boxの権限きれてそう` as one token) | hits (trigram indexes 3-char substrings) |
+| `opshub search "進捗記入"` | 0 hits | hits |
+| `opshub search "依頼"` (2 chars) | 0 hits | hits via LIKE fallback (full scan, `LOWER(body) LIKE LOWER(?)`) |
+| `opshub search "PR"` (2 chars) | hits only if `PR` is an isolated token | hits via LIKE fallback |
+| `opshub search "DailyMeeting"` | hits | hits (unchanged, trigram path) |
+| `opshub search "box* AND 権限*" --raw` | hits | hits (unchanged, `--raw` preserves FTS5 syntax) |
+
+The fallback is bypassed under `--raw` so operators who opt into FTS5 boolean / prefix / phrase syntax keep full control — `--raw` queries with 1-2 char inputs still return 0 hits because trigram does not index them. See [`docs/troubleshooting.md`](troubleshooting.md) §3.6 for the diagnostic recipe.
+
+### Downgrade is supported
+
+Migration 0028's `downgrade()` recreates `sources_fts` with the original `unicode61 remove_diacritics 2` tokenizer and re-back-fills from `sources.body`, so operators can roll the tokenizer choice back without losing the `sources` projection itself:
+
+```bash
+ALEMBIC_CONFIG=...alembic.ini uv run alembic downgrade 0019_create_sources_fts
+```
+
+Downgrading reverts the Japanese-substring improvement; the SearchService LIKE fallback still runs for 1-2 char queries (it lives in `src/opshub/services/search_service.py`, not in the DB), so short queries continue to work even after a downgrade.
+
+### `opshub search --help` clarifies `--raw` scope
+
+The `--raw` flag help text now positions raw mode as a power-user contract for FTS5 boolean / prefix / phrase syntax (`box* AND 権限*`), and notes that the LIKE fallback is disabled under `--raw`. The default mode is the recommended path for Japanese natural-text queries.
+
+### MCP `search` tool contract is unchanged
+
+The Phase 12 H1 MCP `search` tool ([ADR-0022](adr/0022-mcp-server-surface.md) §決定 (f)) keeps `raw_query` hard-coded `false` — secretary skills (`find-document` / `personal-brief` / `next-actions` / `meeting-prep` / `research` / etc.) call into SearchService transparently and inherit the trigram + LIKE fallback improvements without any skill-side change.
+
+### Phase 15 specifics
+
+- **DB head** = `0028_rebuild_sources_fts_trigram` (Phase 15). Phase 15 ships one migration.
+- **No new extras** — trigram is a built-in FTS5 tokenizer shipped with SQLite ≥ 3.34 (the mise toolchain ships SQLite ≥ 3.38).
+- **No CLI breaking changes** — `opshub search` argument shape is unchanged; only the `--raw` help text wording is updated.
+- **No new ADRs other than ADR-0028** — Phase 15 = 1 new + 0 revisions (Phase 11 = 1 new + 2 revisions → Phase 12 = 0 + 3 → Phase 13 = 0 + 3 → Phase 14 = 0 + 2 → **Phase 15 = 1 + 0**).
+- **MCP `search` tool contract (ADR-0022 §決定 (f)) is unchanged**.
+- Full plan and rejected alternatives: [`docs/phase-15-plan.md`](phase-15-plan.md). Troubleshooting recipe for Japanese queries that still appear to miss: [`docs/troubleshooting.md`](troubleshooting.md) §3.6.
