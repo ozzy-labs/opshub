@@ -19,12 +19,21 @@ workspace policy denies User Token scopes or audit policy requires an
 explicit bot principal — with a Bot Token, each ingested channel must
 have the bot ``/invite``'d.
 
-Minimum User Token Scopes for the Phase 7 MVP fetcher: ``channels:history``,
-``channels:read``, ``users:read``. Optional scopes (enable per use
-case): ``groups:history`` (private channels), ``im:history`` (DMs),
-``mpim:history`` (group DMs), ``search:read`` (search.messages, User
-Token only), ``files:read`` (files metadata). See
-https://api.slack.com/scopes for the full reference and
+Minimum User Token Scopes for the Phase 7 MVP fetcher (history
+ingestion): ``channels:history``, ``channels:read``, ``users:read``.
+Optional history scopes (enable per use case): ``groups:history``
+(private channels), ``im:history`` (DMs), ``mpim:history`` (group
+DMs), ``search:read`` (search.messages, User Token only),
+``files:read`` (files metadata).
+
+Listing scopes for ``opshub connector slack conversations`` (#366,
+``users.conversations``): ``channels:read`` + ``users:read`` are
+already covered by the MVP set. Add ``groups:read`` to include
+private channels, ``im:read`` to include DMs, ``mpim:read`` to
+include group DMs. ``--types`` selects which kinds the command
+enumerates and the required listing scope follows from that choice.
+
+See https://api.slack.com/scopes for the full reference and
 https://api.slack.com/authentication/token-types for the prefix
 catalogue.
 
