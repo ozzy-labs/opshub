@@ -206,19 +206,27 @@ sqlite3 ~/.local/share/opshub/db/opshub.sqlite \
 
 Slack connector を有効化するには `opshub.toml` の `[connectors.slack] channels = ["C012345...", ...]` に **channel ID** を列挙する必要がある。Slack Web UI から「リンクをコピー → URL 末尾」を読む手作業はチャネル数が多いワークスペースで現実的でない。
 
-**手順** (Phase 14.x [#341](https://github.com/ozzy-labs/opshub/issues/341) で初出、Phase 15+ [#366](https://github.com/ozzy-labs/opshub/issues/366) で `channels` → `conversations` 刷新 = `users.conversations` 切替 + DM/MPIM 統合 + 進捗表示):
+**手順** (Phase 14.x [#341](https://github.com/ozzy-labs/opshub/issues/341) で初出、Phase 15+ [#366](https://github.com/ozzy-labs/opshub/issues/366) で `channels` → `conversations` 刷新 = `users.conversations` 切替 + DM/MPIM 統合 + 進捗表示、[#374](https://github.com/ozzy-labs/opshub/issues/374) で type 別固定ソート + `--since` activity フィルター追加):
 
 ```bash
 opshub connector auth set connector:slack            # 既存。User Token (`xoxp-`) 推奨
-opshub connector slack conversations                 # 表形式で参加中の conversation (channels + DMs) を表示 (default: public + private + im + mpim 4 種)
+opshub connector slack conversations                 # 表形式で参加中の conversation (channels + DMs) を表示 (default: public + private + im + mpim 4 種、public → private → mpim → im の固定順)
 opshub connector slack conversations --format toml   # `[connectors.slack] channels` 用 snippet
 opshub connector slack conversations --filter eng    # name / participant に "eng" を含む conversation のみ
 opshub connector slack conversations --types public,private   # public / private channel のみ (DM/MPIM を除外)
 opshub connector slack conversations --include-archived       # archived channel も対象
 opshub connector slack conversations --all           # workspace 全体 (`conversations.list` 経由、joined 外も含む)
+opshub connector slack conversations --since 30d     # 直近 30 日に最終メッセージがある conversation のみ (per-conv 1 API call、LAST_ACTIVITY 列を追加、activity 降順)
+opshub connector slack conversations --since 2026-05-01 --format toml  # 絶対日付指定 (ISO 8601。YYYY-MM-DD は UTC 0:00 解釈、`+09:00` 付き timezone も可)
 ```
 
-`--format toml` の出力を `~/.config/opshub/config.toml` の `[connectors.slack]` セクションに貼り、不要行を消すだけで sync 対象が確定する。
+`--format toml` の出力を `~/.config/opshub/config.toml` の `[connectors.slack]` セクションに貼り、不要行を消すだけで sync 対象が確定する。`--since` 指定時は TOML コメントにも `# <name> (public, last 2026-05-30)` 形式で activity 日付が付くので、レビュアが「最近動いている channel か」を一目で判断できる。
+
+**`--since` の値**:
+
+- 相対 (`<N>d` = N 日前、`<N>w` = N 週前): 例 `7d`、`2w`、`90d`
+- 絶対 ISO 8601: `2026-05-01` / `2026-05-01T12:00:00+09:00` / `2026-05-01T00:00:00Z`
+- 月・年単位 (`1M` / `1y`) は曖昧性のため非対応 (`30d` / `365d` で代替)、時間・分単位もこのコマンドの粒度に合わないため非対応
 
 **典型エラー**:
 
@@ -226,6 +234,8 @@ opshub connector slack conversations --all           # workspace 全体 (`conver
 - `Error: Slack users.conversations failed: missing_scope (needed: 'groups:read')` → `--types public,private` で private channel を含めるには Slack App の OAuth スコープに `groups:read` を追加し (DM/MPIM listing は `im:read` / `mpim:read`)、再認可後にトークンを `auth set` で更新する ([ADR-0018](adr/0018-slack-token-principal.md) §Decision (7))
 - `Error: Slack users.conversations failed: invalid_auth` → トークンが失効。`opshub connector auth set connector:slack` で再登録する
 - `no conversations matched (filter: '...')` (stderr 出力、exit code 0) → `--filter` 文字列を見直すか、`--types` で対象種別を広げる / `--include-archived` を付ける / `--all` で workspace-wide に切替える
+- `warning: skipping mpim conversations: missing_scope (needed: 'mpim:history')` (stderr、exit code 0) → `--since` 使用時に `conversations.history` の scope が type 単位で欠けると、該当 type 全体を出力から外す + 1 度だけ warning を出す。他 type の結果はそのまま表示される。必要な type の `*:history` scope (`channels:history` / `groups:history` / `im:history` / `mpim:history`) を Slack App に追加するか、`--types` で該当 type を外す
+- `Invalid value for '--since': '<入力>' is not a recognised value` (exit code 2) → 相対は `<N>d` / `<N>w`、絶対は ISO 8601 (`2026-05-01` / `2026-05-01T00:00:00Z`) のみ受け付ける
 
 トークン値・API レスポンス本文はどの出力経路 (stdout / stderr) にも出ない。`--debug` を付けた場合の追加 traceback もサニタイズ済み (§3.1 と同じ redaction processor が効く)。
 

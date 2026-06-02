@@ -775,6 +775,16 @@ def slack_conversations(
             "not return DM/MPIM rows."
         ),
     ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        help=(
+            "Filter by last-message timestamp. Accepts a relative "
+            "duration (e.g. 7d, 2w) or an ISO date (e.g. 2026-05-01). "
+            "Triggers one conversations.history call per conversation; "
+            "requires *:history scopes for the requested --types."
+        ),
+    ),
 ) -> None:
     """List Slack conversations visible to the stored token (#366).
 
@@ -828,6 +838,7 @@ def slack_conversations(
     # top-level surface.
     from opshub.cli._slack_conversations import (
         FORMAT_CHOICES,
+        parse_since,
         parse_types,
         run_conversations_command,
     )
@@ -845,6 +856,11 @@ def slack_conversations(
     # — same UX as the ``--format`` arm above.
     parsed_types = parse_types(types)
 
+    # ``parse_since`` shares the ``typer.BadParameter`` exit-code-2
+    # contract so an unknown duration grammar / malformed ISO string
+    # surfaces the same way as a bad ``--format`` value.
+    parsed_since = parse_since(since) if since is not None else None
+
     normalised_filter: str | None = filter_substring or None
 
     try:
@@ -855,6 +871,7 @@ def slack_conversations(
             types=parsed_types,
             include_archived=include_archived,
             all=all_conversations,
+            since=parsed_since,
         )
     except ConfigError as exc:
         typer.echo(f"Error: {exc}", err=True)
