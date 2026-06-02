@@ -532,3 +532,26 @@ def test_build_source_observed_whitespace_only_summary_normalises_to_none() -> N
         body=None,
     )
     assert event.summary is None
+
+
+def test_build_source_observed_whitespace_only_url_normalises_to_none() -> None:
+    """Issue #343 (PR #355 followup): whitespace-only ``url`` collapses to ``None``.
+
+    Calendar's ``htmlLink`` is server-generated so a whitespace-only
+    candidate is not currently reachable via :func:`map_calendar_event`.
+    This test exercises :func:`_build_source_observed` directly to pin
+    the SSOT helper wiring so a future change to the URL source cannot
+    start leaking whitespace into ``sources.url`` (matches the same
+    treatment PR #355 applied to ``summary``).
+    """
+    event = _build_source_observed(
+        external_id="evt-url-ws",
+        source_type=GOOGLE_CALENDAR_SOURCE_TYPE,
+        title="title",
+        url="   \n\t  ",
+        summary="summary",
+        occurred_at=datetime(2026, 5, 31, 12, 0, 0, tzinfo=UTC),
+        actor=DEFAULT_ACTOR,
+        body=None,
+    )
+    assert event.url is None

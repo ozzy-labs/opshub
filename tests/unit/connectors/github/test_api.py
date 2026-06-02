@@ -298,6 +298,49 @@ def test_list_notifications_normalises_whitespace_only_reason_to_none() -> None:
     assert items[0].summary is None
 
 
+def test_list_notifications_normalises_whitespace_only_url_to_empty_string() -> None:
+    """Issue #343 (PR #355 followup): whitespace-only notification URL → ``""``.
+
+    The notification path builds ``GitHubItem.url`` from
+    ``subject.url or item.url or ""``. A whitespace-only
+    ``subject.url`` previously leaked through into ``GitHubItem.url``
+    (and from there into ``SourceObserved.url`` via the connector) as
+    a visually-empty link. Routing through
+    :func:`opshub.core.text_limits.normalise_optional_text` collapses
+    whitespace-only candidates to the same ``""`` sentinel that
+    :func:`test_normalise_handles_missing_optional_fields` already
+    pins for the "no candidate at all" path — SSOT-uniform with the
+    same treatment PR #355 applied to ``summary``.
+
+    The ``str`` (not ``str | None``) typing on :class:`GitHubItem.url`
+    is intentionally preserved here: widening would ripple through
+    every downstream ``GitHubItem.url`` consumer and is out of scope
+    for this audit followup. The ``""`` sentinel is consistent with
+    the missing-subject test (see
+    :func:`test_normalise_handles_missing_optional_fields`).
+    """
+    payload: list[dict[str, object]] = [
+        {
+            "id": "ws-url-1",
+            "reason": "mention",
+            "subject": {
+                "title": "notification subject",
+                "url": "   \n\t ",
+            },
+            "url": "  ",
+            "updated_at": "2026-05-15T11:00:00Z",
+        }
+    ]
+    routes = {
+        ("GET", "/notifications"): httpx.Response(200, json=payload),
+    }
+    with _client(routes) as client:
+        items = list(list_notifications(token=_TOKEN, client=client))
+
+    assert len(items) == 1
+    assert items[0].url == ""
+
+
 # ---------------------------------------------------------------------------
 # Optional-field normalisation
 # ---------------------------------------------------------------------------

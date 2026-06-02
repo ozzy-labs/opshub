@@ -120,7 +120,16 @@ class GitHubItem:
             ``max_length=500`` Pydantic bound. A clipped title gains a
             trailing ``"…"`` (U+2026) so operators see it was cut.
         url: the canonical web URL (``html_url`` for issues / PRs,
-            constructed from ``subject.url`` for notifications)
+            constructed from ``subject.url`` for notifications). The
+            notification path funnels its candidate through
+            :func:`opshub.core.text_limits.normalise_optional_text` so
+            empty *and* whitespace-only inputs collapse to ``""``
+            (issue #343) — SSOT-uniform with the four helper-based
+            mappers' ``SourceObserved.url`` handling. The empty-string
+            fallback (rather than ``None``) preserves the typed-``str``
+            contract on this field; downstream
+            :class:`SourceObserved.url` is a ``str | None`` Pydantic
+            field, so a future widening here would be straightforward.
         summary: a 1-2 sentence summary derived from the API payload
             (e.g. issue ``body`` first line, or notification reason),
             clamped to :data:`SUMMARY_MAX_CHARS` (200) unicode
@@ -344,7 +353,22 @@ def _normalise_notification(item: dict[str, Any]) -> GitHubItem:
     )
     subject_url = subject.get("url")
     item_url = item.get("url")
-    url: str = subject_url or item_url or ""
+    # Issue #343 (PR #355 followup): the optional ``url`` candidates
+    # are funnelled through :func:`normalise_optional_text` for the
+    # same SSOT reason PR #355 routed ``summary`` through it — a
+    # whitespace-only ``subject.url`` / ``item.url`` would otherwise
+    # land on ``GitHubItem.url`` (and from there on
+    # ``SourceObserved.url`` via :mod:`connector`) as a visually-empty
+    # link. The trailing ``or ""`` keeps the closed-string contract on
+    # ``GitHubItem.url`` (typed ``str``, not ``str | None``) intact:
+    # widening the type would ripple through ``connector.py`` + every
+    # downstream ``GitHubItem.url`` consumer and is intentionally out
+    # of scope for this audit followup. The historical
+    # "url=='' when neither candidate is present" semantics
+    # (asserted by :func:`test_normalise_handles_missing_optional_fields`)
+    # are preserved — whitespace-only candidates now collapse to the
+    # same ``""`` sentinel rather than leaking the whitespace through.
+    url: str = normalise_optional_text(subject_url or item_url) or ""
     subject_title = subject.get("title")
     title: str = subject_title if isinstance(subject_title, str) and subject_title else "(no title)"
     reason = item.get("reason")
