@@ -1,0 +1,964 @@
+"""Tests for ``opshub.connectors.slack.conversations`` (#366).
+
+:func:`list_conversations` walks Slack's ``users.conversations`` API
+(default) — or ``conversations.list`` when called with ``all=True`` —
+to yield :class:`SlackConversation` rows for the discovery CLI. The
+behaviour worth pinning:
+
+1. Default endpoint is ``users.conversations`` (joined-only view);
+   ``all=True`` flips to ``conversations.list`` (workspace-wide).
+2. ``types`` parameter is serialised as a comma-separated list of
+   Slack API tokens (``public_channel,private_channel,im,mpim``) so
+   the request shape is observable in tests.
+3. Multi-page pagination via ``response_metadata.next_cursor`` stitches
+   into one consistent stream.
+4. ``limit`` stops the outer loop as soon as the post-filter count
+   reaches the cap (the API call count is bounded too).
+5. Archived channels are excluded by default; DM/MPIM rows are never
+   gated by the archived flag (Slack does not archive DMs).
+6. ``filter_substring`` matches case-insensitively against ``name`` or
+   ``display_name`` so the operator can filter by either column.
+7. DM (``im``) rows resolve a peer name via ``users.info`` lookup with
+   per-call caching; MPIM (``mpim``) rows resolve participants via
+   ``conversations.members`` + ``users.info``.
+8. ``missing_scope`` failures raise :class:`ConnectorFailedError`
+   with the scope name embedded.
+9. HTTP 429 with ``Retry-After`` is honoured up to three retries
+   before escalating.
+10. An optional :class:`ProgressReporter` is advanced by the raw page
+    size (pre-filter) so the spinner ticks for every Slack-returned
+    row.
+
+The :mod:`slack_sdk` extras (``[connectors-slack]``) may not be
+installed in every environment, so the file-level
+``pytest.importorskip`` gates the whole module.
+"""
+
+from __future__ import annotations
+
+import sys
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+
+pytest.importorskip(
+    "slack_sdk",
+    reason="Slack connector tests require the 'connectors-slack' extras",
+)
+
+from opshub.connectors.slack.auth import SlackAuth
+from opshub.connectors.slack.conversations import (
+    CONVERSATION_TYPES,
+    SlackConversation,
+    _as_response_dict,  # pyright: ignore[reportPrivateUsage]
+    list_conversations,
+)
+from opshub.core.errors import ConnectorFailedError
+
+# ----- shared fixtures ---------------------------------------------------
+
+
+def _auth() -> SlackAuth:
+    """Construct :class:`SlackAuth` with an explicit token (test-only)."""
+    return SlackAuth(token="xoxb-test")
+
+
+def _public_channel(
+    channel_id: str = "C1",
+    *,
+    name: str = "general",
+    is_archived: bool = False,
+    purpose: str | None = "Company-wide announcements",
+) -> dict[str, Any]:
+    """Build a ``conversations.list``-shaped public-channel row."""
+    row: dict[str, Any] = {
+        "id": channel_id,
+        "name": name,
+        "is_channel": True,
+        "is_private": False,
+        "is_archived": is_archived,
+    }
+    if purpose is not None:
+        row["purpose"] = {"value": purpose, "creator": "U-creator", "last_set": 0}
+    return row
+
+
+def _private_channel(
+    channel_id: str = "G1",
+    *,
+    name: str = "leadership",
+    is_archived: bool = False,
+    purpose: str | None = "Leadership only",
+) -> dict[str, Any]:
+    """Build a ``conversations.list``-shaped private-channel row."""
+    row: dict[str, Any] = {
+        "id": channel_id,
+        "name": name,
+        "is_private": True,
+        "is_archived": is_archived,
+    }
+    if purpose is not None:
+        row["purpose"] = {"value": purpose, "creator": "U-creator", "last_set": 0}
+    return row
+
+
+def _im_row(
+    channel_id: str = "D1",
+    *,
+    user: str = "U-alice",
+) -> dict[str, Any]:
+    """Build a ``users.conversations``-shaped ``im`` row.
+
+    Slack returns ``user`` (the peer's id) on every ``im`` row but no
+    ``name`` field — DMs have no Slack-assigned name.
+    """
+    return {
+        "id": channel_id,
+        "is_im": True,
+        "is_private": True,
+        "user": user,
+    }
+
+
+def _mpim_row(channel_id: str = "G-mpim-1") -> dict[str, Any]:
+    """Build a ``users.conversations``-shaped ``mpim`` row.
+
+    Participants are resolved via a separate ``conversations.members``
+    call, so the row itself only carries flags + id.
+    """
+    return {
+        "id": channel_id,
+        "is_mpim": True,
+        "is_private": True,
+    }
+
+
+def _list_response(
+    channels: list[dict[str, Any]],
+    *,
+    next_cursor: str = "",
+) -> dict[str, Any]:
+    """Build a ``users.conversations`` / ``conversations.list`` response dict."""
+    return {
+        "ok": True,
+        "channels": channels,
+        "response_metadata": {"next_cursor": next_cursor},
+    }
+
+
+def _user_info_response(
+    *,
+    display_name: str = "",
+    real_name: str = "",
+    name: str = "",
+) -> dict[str, Any]:
+    """Build a ``users.info`` response with the documented profile shape."""
+    return {
+        "ok": True,
+        "user": {
+            "name": name,
+            "real_name": real_name,
+            "profile": {"display_name": display_name, "real_name": real_name},
+        },
+    }
+
+
+def _members_response(
+    members: list[str],
+    *,
+    next_cursor: str = "",
+) -> dict[str, Any]:
+    """Build a ``conversations.members`` response."""
+    return {
+        "ok": True,
+        "members": members,
+        "response_metadata": {"next_cursor": next_cursor},
+    }
+
+
+def _build_client(
+    *,
+    list_pages: list[dict[str, Any]] | None = None,
+    list_side_effect: Any = None,
+    users_info_responses: dict[str, dict[str, Any]] | None = None,
+    members_responses: dict[str, dict[str, Any]] | None = None,
+    use_conversations_list: bool = False,
+) -> MagicMock:
+    """Construct a :class:`MagicMock` WebClient with documented response shapes.
+
+    ``list_pages`` / ``list_side_effect`` drive whichever endpoint the
+    caller exercises (default = ``users.conversations``;
+    ``use_conversations_list=True`` swaps to ``conversations.list``).
+
+    ``users_info_responses`` is a ``{user_id: response_dict}`` map. The
+    mock side-effect dispatches on the requested user id so a single
+    test can mix multiple users.
+    """
+    client = MagicMock()
+    pages = list_pages or [_list_response([])]
+
+    if use_conversations_list:
+        if list_side_effect is not None:
+            client.conversations_list.side_effect = list_side_effect
+        else:
+            client.conversations_list.side_effect = list(pages)
+    else:
+        if list_side_effect is not None:
+            client.users_conversations.side_effect = list_side_effect
+        else:
+            client.users_conversations.side_effect = list(pages)
+
+    user_responses = users_info_responses or {}
+
+    def _users_info(user: str, **_kwargs: Any) -> dict[str, Any]:
+        return user_responses.get(user, _user_info_response(real_name=user))
+
+    client.users_info.side_effect = _users_info
+
+    member_responses = members_responses or {}
+
+    def _members(channel: str, **_kwargs: Any) -> dict[str, Any]:
+        return member_responses.get(channel, _members_response([]))
+
+    client.conversations_members.side_effect = _members
+    return client
+
+
+def _patch_webclient(monkeypatch: pytest.MonkeyPatch, client: MagicMock) -> MagicMock:
+    """Patch ``slack_sdk.WebClient`` to return ``client``."""
+    import slack_sdk
+
+    factory = MagicMock(return_value=client)
+    monkeypatch.setattr(slack_sdk, "WebClient", factory)
+    return factory
+
+
+# ----- happy path -------------------------------------------------------
+
+
+def test_default_types_set_includes_all_four() -> None:
+    """The exported tuple pins the documented default accept-list."""
+    assert CONVERSATION_TYPES == ("public", "private", "im", "mpim")
+
+
+def test_list_conversations_uses_users_conversations_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default call dispatches to ``users.conversations`` (joined-only).
+
+    The Slack legacy ``conversations.list`` returns everything the
+    token's principal can *see*; ``users.conversations`` returns
+    only conversations the token has *joined*. The default is the
+    joined-only view because that matches what operators expect when
+    they say "show me my Slack".
+    """
+    client = _build_client(list_pages=[_list_response([])])
+    _patch_webclient(monkeypatch, client)
+
+    list(list_conversations(_auth()))
+
+    assert client.users_conversations.call_count == 1
+    assert client.conversations_list.call_count == 0
+
+
+def test_list_conversations_all_flag_switches_to_conversations_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``all=True`` flips the dispatch to ``conversations.list``.
+
+    The workspace-wide path is opt-in because it requires the broader
+    ``channels:read`` + ``groups:read`` scope set and surprises
+    operators who expect "what I see in Slack".
+    """
+    client = _build_client(
+        list_pages=[_list_response([])],
+        use_conversations_list=True,
+    )
+    _patch_webclient(monkeypatch, client)
+
+    list(list_conversations(_auth(), all=True))
+
+    assert client.conversations_list.call_count == 1
+    assert client.users_conversations.call_count == 0
+
+
+def test_list_conversations_default_types_serialise_to_all_four_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default ``types`` → ``"public_channel,private_channel,im,mpim"``.
+
+    The Slack API tokens differ from our short names; pinning the
+    serialisation guards against a future rename that silently drops
+    a type from the request.
+    """
+    client = _build_client(list_pages=[_list_response([])])
+    _patch_webclient(monkeypatch, client)
+
+    list(list_conversations(_auth()))
+
+    call_kwargs = client.users_conversations.call_args.kwargs
+    assert call_kwargs["types"] == "public_channel,private_channel,im,mpim"
+
+
+def test_list_conversations_types_subset_filters_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``types=("public",)`` → ``"public_channel"`` only at the API."""
+    client = _build_client(list_pages=[_list_response([])])
+    _patch_webclient(monkeypatch, client)
+
+    list(list_conversations(_auth(), types=("public",)))
+
+    call_kwargs = client.users_conversations.call_args.kwargs
+    assert call_kwargs["types"] == "public_channel"
+
+
+def test_list_conversations_yields_public_channel_with_full_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Public channel row → :class:`SlackConversation` with type='public'."""
+    page = _list_response([_public_channel("C1", name="general", purpose="Hi")])
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth()))
+
+    assert len(results) == 1
+    row = results[0]
+    assert row.id == "C1"
+    assert row.type == "public"
+    assert row.name == "general"
+    assert row.display_name == "general"
+    assert row.is_private is False
+    assert row.is_archived is False
+    assert row.purpose == "Hi"
+    assert row.participants == ()
+
+
+def test_list_conversations_yields_private_channel_with_private_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Private channel row → ``type='private'`` and ``is_private=True``."""
+    page = _list_response([_private_channel("G1", name="leadership")])
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth()))
+
+    assert results[0].type == "private"
+    assert results[0].is_private is True
+
+
+def test_list_conversations_paginates_via_next_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two pages: the second is fetched using ``next_cursor`` from the first."""
+    page1 = _list_response(
+        [_public_channel("C1", name="general"), _public_channel("C2", name="random")],
+        next_cursor="page2",
+    )
+    page2 = _list_response([_public_channel("C3", name="eng")], next_cursor="")
+    client = _build_client(list_pages=[page1, page2])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth()))
+
+    assert [c.id for c in results] == ["C1", "C2", "C3"]
+    assert client.users_conversations.call_count == 2
+    second_kwargs = client.users_conversations.call_args_list[1].kwargs
+    assert second_kwargs["cursor"] == "page2"
+
+
+def test_list_conversations_excludes_archived_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``is_archived=True`` channel rows are dropped unless ``include_archived=True``."""
+    page = _list_response(
+        [
+            _public_channel("C1", name="live"),
+            _public_channel("C2", name="dead", is_archived=True),
+        ]
+    )
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    default = list(list_conversations(_auth()))
+    assert [c.id for c in default] == ["C1"]
+
+    client.users_conversations.side_effect = [page]
+    with_archived = list(list_conversations(_auth(), include_archived=True))
+    assert [c.id for c in with_archived] == ["C1", "C2"]
+
+
+def test_list_conversations_filter_matches_name_case_insensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``filter_substring`` matches channel ``name`` regardless of case."""
+    page = _list_response(
+        [
+            _public_channel("C1", name="general"),
+            _public_channel("C2", name="eng-backend"),
+            _public_channel("C3", name="design"),
+        ]
+    )
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth(), filter_substring="ENG"))
+
+    assert [c.id for c in results] == ["C2"]
+
+
+def test_list_conversations_filter_matches_dm_display_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``filter_substring`` matches DM ``display_name`` so operators can find DMs by participant.
+
+    DMs have no Slack-assigned ``name`` so the filter must fall
+    through to ``display_name`` (the resolved peer name) — otherwise
+    DM rows would be invisible to ``--filter alice``.
+    """
+    page = _list_response([_im_row("D1", user="U-alice")])
+    client = _build_client(
+        list_pages=[page],
+        users_info_responses={
+            "U-alice": _user_info_response(display_name="alice"),
+        },
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth(), filter_substring="alice"))
+
+    assert [c.id for c in results] == ["D1"]
+    assert results[0].display_name == "alice"
+
+
+def test_list_conversations_limit_stops_outer_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``limit=2`` halts iteration after two yields, even mid-page."""
+    page1 = _list_response(
+        [_public_channel("C1"), _public_channel("C2"), _public_channel("C3")],
+        next_cursor="page2",
+    )
+    client = _build_client(list_pages=[page1])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth(), limit=2))
+
+    assert [c.id for c in results] == ["C1", "C2"]
+    assert client.users_conversations.call_count == 1
+
+
+def test_list_conversations_skips_malformed_and_untyped_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rows missing ``id`` or any type flag are dropped silently.
+
+    A row carrying neither ``is_channel`` nor ``is_private`` nor
+    ``is_im`` nor ``is_mpim`` is uncl assifiable — Slack should never
+    emit one but a thin proxy might. The helper must drop it rather
+    than crash, so a single bad payload does not poison the listing.
+    """
+    page = _list_response(
+        [
+            {"id": "", "is_channel": True},  # no id
+            {"id": "X1"},  # no type flag
+            _public_channel("C-ok", name="ok"),
+        ]
+    )
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth()))
+
+    assert [c.id for c in results] == ["C-ok"]
+
+
+def test_list_conversations_handles_missing_purpose_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rows without a ``purpose`` sub-object fall back to ``purpose=""``."""
+    page = _list_response(
+        [
+            _public_channel("C1", name="general", purpose=None),
+            _public_channel("C2", name="random", purpose=""),
+        ]
+    )
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth()))
+
+    assert [c.purpose for c in results] == ["", ""]
+
+
+def test_list_conversations_drops_types_not_in_requested_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row whose type is not in the requested set is dropped client-side.
+
+    Slack honours the ``types`` API parameter, but some workspaces'
+    response shapes leak adjacent types (a private-channel row arriving
+    on a ``public_channel``-only request because both ``is_private``
+    and ``is_channel`` are set). The client-side re-gate stops the
+    operator-visible accept-list and the API request from drifting.
+    """
+    page = _list_response(
+        [
+            _public_channel("C1", name="general"),
+            _private_channel("G1", name="leadership"),
+        ]
+    )
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth(), types=("public",)))
+
+    assert [c.id for c in results] == ["C1"]
+
+
+# ----- DM / MPIM name resolution ----------------------------------------
+
+
+def test_list_conversations_im_resolves_peer_display_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DM ``im`` row → ``display_name`` populated from ``users.info``."""
+    page = _list_response([_im_row("D1", user="U-alice")])
+    client = _build_client(
+        list_pages=[page],
+        users_info_responses={
+            "U-alice": _user_info_response(display_name="alice"),
+        },
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth()))
+
+    assert len(results) == 1
+    row = results[0]
+    assert row.type == "im"
+    assert row.name is None
+    assert row.display_name == "alice"
+    assert client.users_info.call_count == 1
+
+
+def test_list_conversations_im_falls_back_to_real_name_when_display_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Profile with empty ``display_name`` falls back to ``real_name``."""
+    page = _list_response([_im_row("D1", user="U-bob")])
+    client = _build_client(
+        list_pages=[page],
+        users_info_responses={
+            "U-bob": _user_info_response(display_name="", real_name="Bob Smith"),
+        },
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth()))
+
+    assert results[0].display_name == "Bob Smith"
+
+
+def test_list_conversations_caches_user_info_lookups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeat user ids → single ``users.info`` call per id.
+
+    A multi-user MPIM listing can reference the same user across many
+    rows; caching ensures one API hit per user_id rather than one per
+    appearance.
+    """
+    page = _list_response(
+        [
+            _im_row("D1", user="U-alice"),
+            _im_row("D2", user="U-alice"),
+        ]
+    )
+    client = _build_client(
+        list_pages=[page],
+        users_info_responses={
+            "U-alice": _user_info_response(display_name="alice"),
+        },
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth()))
+
+    assert [r.display_name for r in results] == ["alice", "alice"]
+    assert client.users_info.call_count == 1
+
+
+def test_list_conversations_im_falls_back_to_user_id_on_lookup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``users.info`` API failure → ``display_name`` falls back to the user id.
+
+    DM listing must not fail because one user is no longer resolvable
+    (deactivated account, etc.). The fallback is the raw user id so
+    the operator can still copy the conversation id and act on it.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response([_im_row("D1", user="U-ghost")])
+
+    client = MagicMock()
+    client.users_conversations.side_effect = [page]
+    # Construct a response object the SDK exception expects.
+    err_response = MagicMock()
+    err_response.status_code = 404
+    err_response.get.return_value = "user_not_found"
+    err_response.headers = {}
+    client.users_info.side_effect = SlackApiError(  # type: ignore[no-untyped-call]
+        message="user_not_found", response=err_response
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth()))
+
+    assert results[0].display_name == "U-ghost"
+
+
+def test_list_conversations_mpim_resolves_participants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MPIM row → participants resolved via ``conversations.members`` + ``users.info``."""
+    page = _list_response([_mpim_row("G-mpim-1")])
+    client = _build_client(
+        list_pages=[page],
+        members_responses={
+            "G-mpim-1": _members_response(["U-alice", "U-bob", "U-carol"]),
+        },
+        users_info_responses={
+            "U-alice": _user_info_response(display_name="alice"),
+            "U-bob": _user_info_response(display_name="bob"),
+            "U-carol": _user_info_response(display_name="carol"),
+        },
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth()))
+
+    assert len(results) == 1
+    row = results[0]
+    assert row.type == "mpim"
+    assert row.participants == ("alice", "bob", "carol")
+    assert row.display_name == "alice, bob, carol"
+
+
+def test_list_conversations_mpim_with_no_members_falls_back_to_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty ``conversations.members`` response → ``display_name`` = conversation id.
+
+    A failed members lookup leaves the row visible (so the operator
+    can still paste the id into ``opshub.toml``) with the id itself
+    as the display name.
+    """
+    page = _list_response([_mpim_row("G-mpim-empty")])
+    client = _build_client(
+        list_pages=[page],
+        members_responses={"G-mpim-empty": _members_response([])},
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth()))
+
+    assert results[0].display_name == "G-mpim-empty"
+    assert results[0].participants == ()
+
+
+# ----- progress reporter -------------------------------------------------
+
+
+def test_list_conversations_advances_reporter_by_page_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``reporter.advance(len(page))`` is called for each raw page.
+
+    The advance happens **before** client-side filtering so the
+    operator sees the spinner tick for every Slack-returned row,
+    not only the post-filter survivors — matching ``connector sync``'s
+    "items observed at the API" semantics.
+    """
+    page1 = _list_response(
+        [_public_channel("C1"), _public_channel("C2"), _public_channel("C3")],
+        next_cursor="p2",
+    )
+    page2 = _list_response([_public_channel("C4", is_archived=True)], next_cursor="")
+    client = _build_client(list_pages=[page1, page2])
+    _patch_webclient(monkeypatch, client)
+
+    reporter = MagicMock()
+
+    results = list(list_conversations(_auth(), reporter=reporter))
+
+    # Archived row from page 2 is filtered client-side, but the reporter
+    # still saw it (3 + 1 advances).
+    assert [c.id for c in results] == ["C1", "C2", "C3"]
+    assert [call.args for call in reporter.advance.call_args_list] == [(3,), (1,)]
+
+
+def test_list_conversations_none_reporter_does_not_call_progress_methods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``reporter=None`` keeps the helper caller-agnostic (no AttributeError)."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth(), reporter=None))
+
+    assert [c.id for c in results] == ["C1"]
+
+
+def test_list_conversations_does_not_advance_reporter_on_empty_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty page → no ``reporter.advance`` call (no spurious 0-step ticks)."""
+    page = _list_response([])
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    reporter = MagicMock()
+
+    list(list_conversations(_auth(), reporter=reporter))
+
+    assert reporter.advance.call_count == 0
+
+
+# ----- rate limiting ----------------------------------------------------
+
+
+def test_list_conversations_respects_retry_after_on_429(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 429 with ``Retry-After`` is honoured, then the call succeeds."""
+    from slack_sdk.errors import SlackApiError
+
+    bad_response = MagicMock()
+    bad_response.status_code = 429
+    bad_response.headers = {"Retry-After": "1"}
+    bad_response.get.return_value = "rate_limited"
+    success = _list_response([_public_channel("C1", name="recovered")])
+
+    client = _build_client(
+        list_side_effect=[
+            SlackApiError(message="ratelimited", response=bad_response),  # type: ignore[no-untyped-call]
+            success,
+        ]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    import time as _stdlib_time
+
+    sleep_mock = MagicMock()
+    monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
+
+    results = list(list_conversations(_auth()))
+
+    assert [c.name for c in results] == ["recovered"]
+    sleep_mock.assert_called_once_with(1)
+
+
+def test_list_conversations_exhausts_retries_then_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three consecutive 429s → :class:`ConnectorFailedError` after the budget."""
+    from slack_sdk.errors import SlackApiError
+
+    def _make_429() -> SlackApiError:
+        resp = MagicMock()
+        resp.status_code = 429
+        resp.headers = {}
+        resp.get.return_value = "rate_limited"
+        return SlackApiError(message="ratelimited", response=resp)  # type: ignore[no-untyped-call]
+
+    client = _build_client(list_side_effect=[_make_429(), _make_429(), _make_429()])
+    _patch_webclient(monkeypatch, client)
+
+    import time as _stdlib_time
+
+    sleep_mock = MagicMock()
+    monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
+
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(list_conversations(_auth()))
+
+    assert [call.args for call in sleep_mock.call_args_list] == [(1,), (2,), (4,)]
+    message = str(excinfo.value)
+    assert "rate_limited" in message
+    assert "users.conversations" in message
+    assert "xoxb-test" not in message
+
+
+# ----- non-rate-limit API errors ----------------------------------------
+
+
+def test_list_conversations_raises_on_invalid_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``invalid_auth`` → :class:`ConnectorFailedError` immediately."""
+    from slack_sdk.errors import SlackApiError
+
+    bad_response = MagicMock()
+    bad_response.status_code = 401
+    bad_response.headers = {}
+    bad_response.get.return_value = "invalid_auth"
+
+    client = _build_client(
+        list_side_effect=[
+            SlackApiError(message="not_authed", response=bad_response)  # type: ignore[no-untyped-call]
+        ]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(list_conversations(_auth()))
+
+    message = str(excinfo.value)
+    assert "invalid_auth" in message
+    assert "xoxb-test" not in message
+
+
+def test_list_conversations_raises_with_scope_hint_on_missing_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``missing_scope`` → error message names the ``needed`` scope + ADR-0018."""
+    from slack_sdk.errors import SlackApiError
+
+    bad_response = MagicMock()
+    bad_response.status_code = 200
+
+    def _response_get(key: str, default: object = None) -> object:
+        return {"error": "missing_scope", "needed": "im:read"}.get(key, default)
+
+    bad_response.get.side_effect = _response_get
+    bad_response.headers = {}
+
+    client = _build_client(
+        list_side_effect=[
+            SlackApiError(  # type: ignore[no-untyped-call]
+                message="missing_scope",
+                response=bad_response,
+            )
+        ]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(list_conversations(_auth()))
+
+    message = str(excinfo.value)
+    assert "missing_scope" in message
+    assert "im:read" in message
+    assert "ADR-0018" in message
+    assert "users.conversations" in message
+    assert "xoxb-test" not in message
+
+
+def test_list_conversations_all_path_names_conversations_list_in_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``all=True`` errors mention ``conversations.list`` (not ``users.conversations``).
+
+    The operator sees the endpoint name so they know which scope's
+    docs to consult — important because ``conversations.list`` needs
+    ``channels:read`` / ``groups:read`` while ``users.conversations``
+    additionally needs ``im:read`` / ``mpim:read``.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    bad_response = MagicMock()
+    bad_response.status_code = 401
+    bad_response.headers = {}
+    bad_response.get.return_value = "invalid_auth"
+
+    client = _build_client(
+        list_side_effect=[
+            SlackApiError(message="not_authed", response=bad_response)  # type: ignore[no-untyped-call]
+        ],
+        use_conversations_list=True,
+    )
+    _patch_webclient(monkeypatch, client)
+
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(list_conversations(_auth(), all=True))
+
+    assert "conversations.list" in str(excinfo.value)
+
+
+# ----- cold-start guard --------------------------------------------------
+
+
+def test_conversations_module_does_not_import_slack_sdk_eagerly() -> None:
+    """``opshub.connectors.slack.conversations`` must not import the SDK at module level."""
+    import ast
+    from pathlib import Path
+
+    module_path = Path(sys.modules["opshub.connectors.slack.conversations"].__file__ or "")
+    source = module_path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(module_path))
+
+    offenders: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".", 1)[0] == "slack_sdk":
+                    offenders.append(f"line {node.lineno}: import {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            module = (node.module or "").split(".", 1)[0]
+            if module == "slack_sdk":
+                offenders.append(f"line {node.lineno}: from {node.module} import ...")
+
+    assert not offenders, (
+        "opshub.connectors.slack.conversations imports slack_sdk at module level "
+        "(must be lazy-loaded):\n  - " + "\n  - ".join(offenders)
+    )
+
+
+# ----- private helpers --------------------------------------------------
+
+
+def test_as_response_dict_handles_slack_response_object() -> None:
+    """:func:`_as_response_dict` unwraps SDK ``SlackResponse`` via ``.data``."""
+    response_with_data = MagicMock(spec=["data"])
+    response_with_data.data = {"ok": True, "channels": [{"id": "C1"}]}
+
+    result = _as_response_dict(response_with_data)
+    assert result == {"ok": True, "channels": [{"id": "C1"}]}
+
+    class _DictLike:
+        def keys(self) -> list[str]:
+            return ["ok", "error"]
+
+        def __getitem__(self, key: str) -> object:
+            return {"ok": False, "error": "ratelimited"}[key]
+
+    result_fallback = _as_response_dict(_DictLike())
+    assert result_fallback == {"ok": False, "error": "ratelimited"}
+
+
+def test_slack_conversation_dataclass_round_trip() -> None:
+    """Smoke test the dataclass: tuple participants are frozen by ``slots``."""
+    row = SlackConversation(
+        id="C1",
+        type="public",
+        name="general",
+        display_name="general",
+        is_private=False,
+        is_archived=False,
+        purpose="hi",
+        participants=(),
+    )
+    assert row.id == "C1"
+    assert row.participants == ()
+    # frozen=True: assignment is rejected with FrozenInstanceError
+    # (a subclass of AttributeError on Python 3.13).
+    from dataclasses import FrozenInstanceError
+
+    with pytest.raises(FrozenInstanceError):
+        row.id = "C2"  # type: ignore[misc]
