@@ -238,6 +238,7 @@ opshub connector slack conversations --since 2026-05-01 --format toml  # 絶対�
 - `warning: skipped 3 inaccessible channels (channel_not_found=2, not_in_channel=1). ...` (stderr、exit code 0) → `--since` 使用時に `conversations.history` が一部の行で `channel_not_found` / `not_in_channel` を返した場合、該当行のみを出力から落とし、call 終了時に 1 件だけ aggregate warning を出す ([PR #405](https://github.com/ozzy-labs/opshub/pull/405))。原因マップ:
   - `channel_not_found`: Slack Connect / 外部共有チャネル (一覧には載るが history は外部 workspace の領域)、deactivated user との `im` (DM)、list と probe の間で archive / leave / delete された race、Enterprise Grid の DLP / e-Discovery で history のみブロック。**多くは構造的で operator 側のリカバリ手段なし**
   - `not_in_channel`: principal が private channel から外された / 自身が leave した。Slack UI 上で再 join するか `/invite` で戻すと次回以降の listing で hit する
+  - 該当 channel id を特定する場合は `--debug` (または `-vv`) を付けて再実行する。skip した行ごとに `slack.conversations.history.row_skipped` event が `channel_id` / `error_code` / `conversation_type` を伴って出力される ([PR #407](https://github.com/ozzy-labs/opshub/pull/407))
   - 注意: sync hot path (`opshub connector sync`) は `opshub.toml` で明示指定された channel id を fetch するため、同じ error code を **fail-fast** 扱いする (config drift を検知させる意図)。discovery と sync で error semantics が意図的に非対称なのは、discovery = 動的列挙 / sync = 明示指定の責務差に基づく
 - `Invalid value for '--since': '<入力>' is not a recognised value` (exit code 2) → 相対は `<N>d` / `<N>w`、絶対は ISO 8601 (`2026-05-01` / `2026-05-01T00:00:00Z`) のみ受け付ける
 
