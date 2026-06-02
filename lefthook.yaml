@@ -32,11 +32,14 @@ pre-commit:
     # compared here (ADR-0029 §決定 (h) carve-out).
     #
     # We compare files directly with ``diff -rq`` rather than going via
-    # ``opshub skills install`` / ``opshub skills list`` because the
-    # build-time bundle (``src/opshub/_skills/``) is materialised by
-    # ``uv sync`` and would also be stale until rebuild whenever an
-    # operator edits ``docs/skills/``. Direct diff against the SSOT
-    # avoids that round-trip and keeps the hook fast (no uv invocation).
+    # ``opshub skills install`` / ``opshub skills list`` purely to keep
+    # the pre-commit hook fast (no uv invocation round-trip). The install
+    # CLI itself resolves correctly in editable checkouts —
+    # ``opshub._skills_resources._checkout_docs_skills`` short-circuits
+    # to ``docs/skills/`` when an opshub working tree is detected, so a
+    # stale ``src/opshub/_skills/`` build mirror does not leak into
+    # mirror regeneration. The direct diff stays as the speed
+    # optimisation, not a correctness workaround.
     #
     # The glob covers all three roots so the hook only fires when the
     # commit actually touches skill content — unrelated commits skip
