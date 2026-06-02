@@ -282,6 +282,61 @@ opshub --debug connector sync slack 2> slack-sync-debug.log
 - [`src/opshub/connectors/slack/fetcher.py`](../src/opshub/connectors/slack/fetcher.py) `_resolve_author_display` — author 解決 chain (user → bot_profile.name → bot_id → unknown)
 - [ADR-0022](adr/0022-mcp-server-surface.md) §決定 (f) — MCP `search` tool は `raw_query` hard-coded `false` のため秘書 14 Skill は透過的に新 title format の恩恵を受ける
 
+### 3.9 秘書 14 Skill が host (Claude Code / Codex CLI / Copilot CLI) で発火しない
+
+`personal-brief` / `next-actions` / `find-document` 等の秘書 14 Skill が、Claude Code の `Skill` ツール選択画面や Codex CLI / Copilot CLI の skill catalog に現れない、または自然文 (「今日のまとめ」「次に何やる?」等) を投げても発火しないケース。
+
+**症状**: host を起動しても秘書 14 Skill の description が候補に出ない。host を再起動しても改善しない。`~/.claude/skills/` または `~/.agents/skills/` 配下に SKILL.md が見当たらない。
+
+**原因**: `opshub skills install` (または `opshub init` 経路) が未実行で payload が host 側ローダー directory に展開されていない、または以前 install したあと operator が SKILL.md を hand edit して bundle と drift している ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md))。
+
+**確認手順**:
+
+```bash
+# 1. install 状況を一覧 (host scope = ~/.claude/skills + ~/.agents/skills)
+opshub skills list --host all --scope user
+
+# 期待値: 14 skill すべてが ``installed`` 列を表示
+# - missing  -> SKILL.md が存在しない (install 未実行 or rolled back)
+# - modified -> SKILL.md は存在するが bundle と byte 不一致 (hand edit / 旧版残骸)
+# - installed -> bundle と byte 一致 (正常)
+
+# 2. ローダー directory の物理確認
+ls ~/.claude/skills/    # Claude Code 用 (14 skill dir)
+ls ~/.agents/skills/    # Codex CLI / Copilot CLI 用 (14 skill dir)
+```
+
+**修復手順**:
+
+```bash
+# 1. 再 install (default で上書き、ADR-0029 §決定 (g): SSOT sync wins)
+opshub skills install --host all --scope user
+
+# 2. hand edit を保護したい場合は --skip-existing を付ける
+#    (この場合 modified な skill は残り、missing のみ書き込まれる)
+opshub skills install --host all --scope user --skip-existing
+
+# 3. project scope に install (worktree 内 dogfood、Phase 16-D)
+#    ./.claude/skills/ + ./.agents/skills/ に書き込まれる
+opshub skills install --host all --scope project
+
+# 4. install 内容を事前確認 (dry-run、書き込み 0 byte)
+opshub skills install --dry-run --print-paths
+```
+
+**install 後も発火しない場合**:
+
+- **host を再起動する**。Claude Code / Codex CLI / Copilot CLI は起動時に skill catalog を読み込むため、install 中に host が走っていると新しい SKILL.md は反映されない。
+- `opshub --debug skills install --host all --scope user 2> install-debug.log` で再 install し、`install-debug.log` の `category=skill_install` event に `written` / `skipped` / `overwritten` 数値が出ているか確認する。0 件なら bundle が破損している可能性があり、`uv tool install --reinstall ozzylabs-opshub` で wheel を再 install する。
+- `opshub skills install` 自体が `Error: opshub package is missing the bundled skill payload (_skills/ directory)` で exit 1 する場合、wheel が Phase 16-B build 前のもの。`uv tool install --reinstall ozzylabs-opshub` で最新 wheel に更新する。
+
+**関連**:
+
+- [ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) — 秘書 14 skill 配信経路 (opshub package 同梱)
+- [`src/opshub/cli/skills.py`](../src/opshub/cli/skills.py) — `opshub skills install` / `opshub skills list` 実装
+- [`src/opshub/_skills_resources.py`](../src/opshub/_skills_resources.py) — `SkillResourceError` (wheel 破損時 hint)
+- [docs/secretary-agent.md §8](secretary-agent.md) — setup 手順 (3 host 共通)
+
 ## 4. セキュリティ注意書き
 
 `-v` / `-vv` / `--debug` / `--log-file` を使うときに operator が知っておくこと:

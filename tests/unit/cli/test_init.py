@@ -252,3 +252,34 @@ def test_init_non_tty_defaults_to_install(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert result.exit_code == 0, result.stdout
     confirm_mock.assert_not_called()
     install_mock.assert_called_once_with(host="all", scope="user", skip_existing=False)
+
+
+def test_init_force_and_no_install_skills_combine(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--force --no-install-skills`` overwrites config but skips the skill install.
+
+    Phase 16 audit followup v2 (#395) — the two orthogonal flags must
+    compose cleanly: ``--force`` clobbers the user-edited ``config.toml``
+    while ``--no-install-skills`` (explicit ``False``) short-circuits
+    the TTY probe so ``install_command`` is never reached. Without
+    this pin, a future regression that wired ``--force`` to also bypass
+    ``--no-install-skills`` would silently re-install on every reset.
+    """
+    paths = _isolate_env(monkeypatch, tmp_path)
+    install_mock = _patch_install_command(monkeypatch)
+
+    runner = CliRunner()
+    first = runner.invoke(app, ["init", "--no-install-skills"])
+    assert first.exit_code == 0, first.stdout
+
+    config_file = paths["config_dir"] / "config.toml"
+    config_file.write_text("# clobbered by user\n", encoding="utf-8")
+
+    install_mock.reset_mock()
+    forced = runner.invoke(app, ["init", "--force", "--no-install-skills"])
+    assert forced.exit_code == 0, forced.stdout
+    # config.toml was overwritten back to the starter template ...
+    assert config_file.read_text(encoding="utf-8") == STARTER_CONFIG_TOML
+    # ... but the skill install path was never entered.
+    install_mock.assert_not_called()
