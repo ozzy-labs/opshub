@@ -23,12 +23,12 @@
 
 ### Post-Phase 15 Maintenance
 
-Phase 15 完了 (2026-06-02) 以降の改修は Phase 化されておらず、connector-level の UX 改善 / refactor / audit followup として進行する。時系列順:
+Phase 15 完了 (2026-06-02) 以降の改修は Phase 化されておらず、connector-level の UX 改善 / refactor / audit followup として進行する。新 ADR / 新 projection / 新 connector category を伴う作業は新 Phase で起票、それ以外は本節に追記する。時系列順:
 
 - **Slack `channels` → `conversations` 刷新** ([#366](https://github.com/ozzy-labs/opshub/issues/366) → PR [#369](https://github.com/ozzy-labs/opshub/pull/369)) — `users.conversations` joined-only default + DM/MPIM 統合 + `--types` / `--all` / 進捗表示。`docs(slack)` 整合 PR [#371](https://github.com/ozzy-labs/opshub/pull/371) を追随。
 - **Slack search title 改善** ([#367](https://github.com/ozzy-labs/opshub/issues/367) → PR [#368](https://github.com/ozzy-labs/opshub/pull/368)) — bot/system message fallback + body excerpt 80 字。
 - **Slack `conversations` type 別固定ソート + `--since` activity filter** ([#374](https://github.com/ozzy-labs/opshub/issues/374) → PR [#375](https://github.com/ozzy-labs/opshub/pull/375)) — `public → private → mpim → im` 固定順、`--since 7d` / `--since 2026-05-01` で per-conv `conversations.history?limit=1` + `LAST_ACTIVITY` 列、不足 `*:history` scope は type 単位で skip + 1 warn (`exit 0`)。
-- **Slack 429 retry helper 集約** ([#377](https://github.com/ozzy-labs/opshub/issues/377) → PR [#378](https://github.com/ozzy-labs/opshub/pull/378)、[#379](https://github.com/ozzy-labs/opshub/issues/379) → PR [#380](https://github.com/ozzy-labs/opshub/pull/380)) — `opshub.connectors.slack._retry.retry_on_rate_limit` 1 helper に集約、slack コネクタ内 3 call site (`SlackFetcher._call_history` + `conversations._call_history_oldest` + `conversations._call_list`) が share、policy 改修が 3 箇所同期 → 1 箇所更新で済む。
+- **Slack 429 retry / `Retry-After` backoff helper 集約** ([#377](https://github.com/ozzy-labs/opshub/issues/377) → PR [#378](https://github.com/ozzy-labs/opshub/pull/378)、[#379](https://github.com/ozzy-labs/opshub/issues/379) → PR [#380](https://github.com/ozzy-labs/opshub/pull/380)) — `opshub.connectors.slack._retry.retry_on_rate_limit` 1 helper に集約 (3 attempts、`Retry-After` honoured、fallback 1s / 2s / 4s exponential)、slack コネクタ内 3 call site (`SlackFetcher._call_history` + `conversations._call_history_oldest` + `conversations._call_list`) が share、policy 改修が 3 箇所同期 → 1 箇所更新で済む。
 - **Audit followup: Slack docs drift + test coverage gap closure** (PR [#386](https://github.com/ozzy-labs/opshub/pull/386)) — `CLAUDE.md` / `docs/mcp-setup.md` / `AGENTS.md` / `docs/adr/0026-cli-progress-reporting.md` の `--since` 関連 doc 整合 4 件 + `parse_since` OverflowError / `_call_list all=True` exhaustion / `_render_json` mixed payload / `_retry` headers 防御 / `_fetch_last_activity_ts` 防御 (`ts` 非数値 / `messages` 非 list) / `_sort_rows` 未知 type fallback 計 7 件の test pin。
 
 ## Tech Stack
