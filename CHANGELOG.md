@@ -5,6 +5,24 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8](https://github.com/ozzy-labs/opshub/compare/v0.2.7...v0.2.8) (2026-06-02)
+
+
+### Added
+
+* **connectors/slack,cli:** replace channels command with conversations (users.conversations + DM/MPIM + progress) ([#369](https://github.com/ozzy-labs/opshub/issues/369)) ([48b8eb9](https://github.com/ozzy-labs/opshub/commit/48b8eb9e00147ad4bcfea5946728aa995597f999))
+* **connectors/slack:** include body excerpt in search title + bot/system message fallback ([#368](https://github.com/ozzy-labs/opshub/issues/368)) ([e511db5](https://github.com/ozzy-labs/opshub/commit/e511db5c9cf667f10a7c6448578de52b247cf697))
+
+
+### Fixed
+
+* **connectors/slack:** satisfy mypy strict redundant-cast + unused-ignore in conversations ([#373](https://github.com/ozzy-labs/opshub/issues/373)) ([a8287a0](https://github.com/ozzy-labs/opshub/commit/a8287a0aa9bef4492d6674392d50b93ee2bb660f))
+
+
+### Documentation
+
+* **slack:** align README/architecture/troubleshooting/mcp-setup/CLAUDE/AGENTS with conversations command + DM/MPIM scope ([#371](https://github.com/ozzy-labs/opshub/issues/371)) ([9105a4b](https://github.com/ozzy-labs/opshub/commit/9105a4bed9cbaeb5393841c94f41f8f4bd0e12ca))
+
 ## [0.2.7](https://github.com/ozzy-labs/opshub/compare/v0.2.6...v0.2.7) (2026-06-02)
 
 

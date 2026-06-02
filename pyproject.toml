@@ -11,7 +11,7 @@
 # ``uv tool install ozzylabs-opshub`` and run ``opshub --version`` —
 # same pattern as ripgrep on PyPI (dist ``ripgrep`` / binary ``rg``).
 name = "ozzylabs-opshub"
-version = "0.2.7"
+version = "0.2.8"
 description = "Local-first operational memory and execution hub for humans and AI agents"
 readme = "README.md"
 license = { text = "MIT" }
