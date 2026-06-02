@@ -547,7 +547,7 @@ def _fetch_mpim_members(conversation_id: str, *, client: Any) -> list[str]:
         data = _as_response_dict(response)
         page_obj = data.get("members")
         if isinstance(page_obj, list):
-            members.extend(str(uid) for uid in cast(list[Any], page_obj) if uid)
+            members.extend(str(uid) for uid in cast(list[str], page_obj) if uid)
         response_metadata_obj = data.get("response_metadata")
         if not isinstance(response_metadata_obj, dict):
             return members

@@ -141,11 +141,7 @@ def parse_types(raw: str) -> tuple[ConversationType, ...]:
         if token not in CONVERSATION_TYPES:
             allowed = ", ".join(CONVERSATION_TYPES)
             raise typer.BadParameter(f"unknown --types value {token!r}; choose from {allowed}")
-        # ``token in CONVERSATION_TYPES`` already narrows ``token`` to
-        # :class:`ConversationType` at the type level via the literal
-        # tuple's membership check; cast keeps the static checker happy
-        # across mypy / pyright without a runtime branch.
-        narrowed: ConversationType = token  # type: ignore[assignment]
+        narrowed: ConversationType = token
         if narrowed in seen:
             continue
         seen.add(narrowed)
