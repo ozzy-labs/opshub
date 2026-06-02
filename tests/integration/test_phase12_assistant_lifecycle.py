@@ -1,6 +1,6 @@
-"""Phase 12 end-to-end secretary lifecycle (Sub-issue H6, closeout).
+"""Phase 12 end-to-end assistant lifecycle (Sub-issue H6, closeout).
 
-Pins the Phase 12 14-skill secretary surface end-to-end. opshub follows
+Pins the Phase 12 14-skill assistant surface end-to-end. opshub follows
 Phase 10 形A (ADR-0004 改訂) so it **hosts no LLM runtime of its own** —
 the e2e test substitutes for the agent host by replaying a deterministic
 script of MCP tool calls against the same :class:`ToolSpec` surface a
@@ -9,9 +9,9 @@ client used by reply-draft / proposal generation is replaced with a
 deterministic stub so the test never touches the network.
 
 This test is the Phase 12 H6 successor to
-:mod:`tests.integration.test_phase10_secretary_lifecycle` and
+:mod:`tests.integration.test_phase10_assistant_lifecycle` and
 :mod:`tests.integration.test_phase11_office_lifecycle`. It widens the
-e2e surface to all 14 secretary skills and the 4 new MCP tools added in
+e2e surface to all 14 assistant skills and the 4 new MCP tools added in
 Phase 12 H1 (ADR-0022 改訂 §決定 (f)):
 
 1. **`search` (FTS5, Phase 12 H1)** — body-level full-text search,
@@ -30,8 +30,8 @@ Phase 12 H1 (ADR-0022 改訂 §決定 (f)):
 What this pins
 --------------
 
-The 14 secretary skills route into the MCP surface as documented in
-``docs/secretary-agent.md`` §6 (MCP tool 依存マップ). We don't run the
+The 14 assistant skills route into the MCP surface as documented in
+``docs/assistant-agent.md`` §6 (MCP tool 依存マップ). We don't run the
 SKILL.md files themselves — that is the agent host's responsibility.
 Instead we replay the **tool call patterns** that each skill's
 ``呼び出し順`` section prescribes so a regression that drops or
@@ -58,7 +58,7 @@ Sequence (Phase 12 plan §7.3):
 
 The MCP layer is exercised via the in-process
 :func:`opshub.mcp.server.dispatch_tool_call` wrapper — same as
-:mod:`tests.integration.test_phase10_secretary_lifecycle` and
+:mod:`tests.integration.test_phase10_assistant_lifecycle` and
 :mod:`tests.integration.test_phase11_office_lifecycle`.
 """
 
@@ -328,7 +328,7 @@ class _Phase12Fixture:
 # brief paths hit deterministically:
 # - "Q3 architecture review" — meeting-prep / meeting-followup /
 #   research / personal-brief / external-brief / find-document.
-# - "phase 12 secretary skills" — pr-review / decision-rationale /
+# - "phase 12 assistant skills" — pr-review / decision-rationale /
 #   handoff-draft / announcement-draft.
 _PHASE12_FIXTURES: tuple[_Phase12Fixture, ...] = (
     _Phase12Fixture(
@@ -337,7 +337,7 @@ _PHASE12_FIXTURES: tuple[_Phase12Fixture, ...] = (
         external_id="C0PHASE12:1717200000.000200",
         title="bob in #phase12 — can you ack the H6 closeout?",
         body=(
-            "Hey, the Phase 12 secretary skills lifecycle (14 skills) "
+            "Hey, the Phase 12 assistant skills lifecycle (14 skills) "
             "is almost ready. Can you confirm the H6 closeout DoD before EOD?"
         ),
         provenance_origin="external",
@@ -346,9 +346,9 @@ _PHASE12_FIXTURES: tuple[_Phase12Fixture, ...] = (
         connector_name="github",
         source_type="github_issue",
         external_id="ozzy-labs/opshub#253",
-        title="epic: Phase 12 Secretary Skills 拡張",
+        title="epic: Phase 12 Assistant Skills 拡張",
         body=(
-            "Phase 12 widens the secretary skill catalog from 5 to 14, "
+            "Phase 12 widens the assistant skill catalog from 5 to 14, "
             "exposes search (FTS5) and propose.apply over MCP, and adds "
             "physical-column time filters to the existing 4 list tools."
         ),
@@ -381,7 +381,7 @@ _PHASE12_FIXTURES: tuple[_Phase12Fixture, ...] = (
         title="Q3 architecture review — agenda",
         body=(
             "Agenda for the Q3 architecture review meeting:\n"
-            "1. Phase 12 secretary skills retrospective (alice)\n"
+            "1. Phase 12 assistant skills retrospective (alice)\n"
             "2. Phase 13 outlook (carol)\n"
             "3. Open issues (open)"
         ),
@@ -406,7 +406,7 @@ _PHASE12_FIXTURES: tuple[_Phase12Fixture, ...] = (
         title="q3-review-notes.docx",
         body=(
             "# Q3 architecture review notes\n\n"
-            "Phase 12 secretary skills section: meeting-prep + "
+            "Phase 12 assistant skills section: meeting-prep + "
             "meeting-followup pair, research + decision-rationale standalone."
         ),
         provenance_origin="external",
@@ -420,7 +420,7 @@ _PHASE12_FIXTURES: tuple[_Phase12Fixture, ...] = (
             "## Sheet: capacity\n\n"
             "| component | est. items | notes |\n"
             "|---|---|---|\n"
-            "| secretary skills | 14 | Phase 12 (was 5) |\n"
+            "| assistant skills | 14 | Phase 12 (was 5) |\n"
             "| MCP tools | 17 | read 12 + write 5 |\n"
         ),
         provenance_origin="external",
@@ -432,7 +432,7 @@ _PHASE12_FIXTURES: tuple[_Phase12Fixture, ...] = (
         title="q3-review-deck.pptx",
         body=(
             "# Slide 1: Q3 architecture review\n\n"
-            "## Notes:\nPhase 12 secretary skills are now MCP-direct, "
+            "## Notes:\nPhase 12 assistant skills are now MCP-direct, "
             "with search (FTS5) and propose.apply (HITL idempotent)."
         ),
         provenance_origin="external",
@@ -467,13 +467,13 @@ def _seed_sources(actor: str = "test:phase12_lifecycle") -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_phase12_secretary_lifecycle(
+def test_phase12_assistant_lifecycle(
     isolated_env: _PathsDict,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Phase 12 end-to-end 14-skill lifecycle.
 
-    Walks the platform side of the secretary surface:
+    Walks the platform side of the assistant surface:
 
     1. Seed 9 sources spanning all 7 connectors and the Phase 11
        source_types so the 14 skills have material to recall, search,
@@ -564,7 +564,7 @@ def test_phase12_secretary_lifecycle(
         search_payload = _call_mcp_tool_json(
             specs_by_name,
             "search",
-            {"query": "Phase 12 secretary skills", "limit": 10},
+            {"query": "Phase 12 assistant skills", "limit": 10},
         )
         # FTS5 returns hits across multiple connectors thanks to body
         # retention (ADR-0020 + ADR-0012 改訂 §4). The MCP envelope
@@ -573,7 +573,7 @@ def test_phase12_secretary_lifecycle(
         search_hits = cast("list[dict[str, Any]]", search_payload["items"])
         assert isinstance(search_hits, list), search_payload
         # The Slack message body and the GitHub issue body both mention
-        # "Phase 12 secretary skills"; we should hit at least one of them.
+        # "Phase 12 assistant skills"; we should hit at least one of them.
         assert len(search_hits) >= 1, search_payload
 
         # 4b. ``propose.apply`` idempotency — generate then apply twice

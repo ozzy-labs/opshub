@@ -24,7 +24,7 @@ Phase 13 の目的は、Phase 11 で MS Office (Word / Excel / PowerPoint) の�
 | OQ4 | ADR 構成 | **新規 ADR ゼロ、改訂 3 本（ADR-0010 + ADR-0014 + ADR-0025）**。Phase 11 流の単一改訂路線を踏襲。Google Refresh Token は ADR-0014 (既存 SaaS token storage) §Phase 7 Validation 節の rotation pin リストに `google_workspace` を追加し、ADR-0010 改訂内で「Google = MS365 / Box pattern、Teams pattern とは別系統」を明文化 |
 | OQ5 | cursor 戦略 | **Drive API `changes.list` page token + TTL 失効時 full-pass fallback**。ADR-0010 改訂で契約化 (Teams delta-link と cursor 戦略は同パターン、ただし token lifecycle は MS365 pattern) |
 | OQ6 | scope | **`drive.readonly` 単独**。`drive.metadata.readonly` は `drive.readonly` の subset なので併記しない (operator IT consent UX の改善 + 過剰 scope フラグ回避)。`drive.activity.readonly` も `changes.list` poll のみなら不要 |
-| OQ7 | trashed / Shared with me / removed | trashed=true は archived 相当として保持 (ADR-0020 全保持整合)。`changes.list` の `removed=true` (永続削除) も retain。Shared with me も含む (秘書としての実用性)。詳細 semantics は本 plan §trashed / removed semantics で domain 確認の上確定 |
+| OQ7 | trashed / Shared with me / removed | trashed=true は archived 相当として保持 (ADR-0020 全保持整合)。`changes.list` の `removed=true` (永続削除) も retain。Shared with me も含む (アシスタントとしての実用性)。詳細 semantics は本 plan §trashed / removed semantics で domain 確認の上確定 |
 
 ### Phase 10/11/12 から継承する不変方針
 
@@ -183,7 +183,7 @@ drive 例: `/drive --merge #275 -> #276,#277 -> #278 -> #279`（Wave 2 で G2/G3
 ### G5 — closeout
 
 - [ ] 設計 docs (principles / architecture / repository-structure / decisions-log) 更新済み
-- [ ] ユーザー docs (README ja/en / upgrading / secretary-agent / mcp-setup / SECURITY / 新規 google-workspace-setup) 更新済み
+- [ ] ユーザー docs (README ja/en / upgrading / assistant-agent / mcp-setup / SECURITY / 新規 google-workspace-setup) 更新済み
 - [ ] **`docs/phase-12-plan.md` §9 forecast 整合化済み**（「Phase 13 = Google Workspace 単独に再評価済み」と書き戻し、R2-CROSS-06 教訓）
 - [ ] e2e lifecycle test pass (`test_phase13_google_workspace_lifecycle.py`、rotation シナリオ含む)
 - [ ] M6 guard / `opshub --help` ≤ 300ms 維持、暗号化平文リーク検出 CI 常駐継続
@@ -205,7 +205,7 @@ drive 例: `/drive --merge #275 -> #276,#277 -> #278 -> #279`（Wave 2 で G2/G3
   - §9 Phased Delivery — Phase 13 行追加
 - **`docs/repository-structure.md`**: `src/opshub/connectors/google_workspace/` 5 module 構成を追加
 - **`docs/decisions-log.md`**: ADR-0010 改訂 + ADR-0014 改訂 + ADR-0025 改訂 entry (3 件、G1 で追加)
-- **`docs/secretary-agent.md`**: find-document 表 + source_type 一覧 update (Phase 11 office 3 種 + Phase 13 Google Workspace 3 種 = 計 6 種を秘書 context として利用可能な旨)
+- **`docs/assistant-agent.md`**: find-document 表 + source_type 一覧 update (Phase 11 office 3 種 + Phase 13 Google Workspace 3 種 = 計 6 種をアシスタント context として利用可能な旨)
 
 ---
 
@@ -226,7 +226,7 @@ drive 例: `/drive --merge #275 -> #276,#277 -> #278 -> #279`（Wave 2 で G2/G3
   - paste-code flow (`opshub connector auth set google_workspace` 経由、redirect URL = OOB or localhost)
   - 失効時の再認証手順 (`OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN` env override の使い方含む)
   - 推奨 scope (`drive.readonly` 単独、IT consent UX の説明)
-- **`docs/secretary-agent.md`**: find-document 表 + source_type 一覧 update
+- **`docs/assistant-agent.md`**: find-document 表 + source_type 一覧 update
 - **`docs/mcp-setup.md`**: connector 一覧に `google_workspace` 追加
 
 ---
@@ -295,7 +295,7 @@ drive 例: `/drive --merge #275 -> #276,#277 -> #278 -> #279`（Wave 2 で G2/G3
 
 ## 9. Phase 14+ outlook
 
-> **Phase 14 再評価メモ (2026-05-31)**: 本節は Phase 13 完了時点の forecast。Phase 14 着手時 (2026-05-31、epic #292) に **「Phase 14 = Gmail + Google Calendar コネクタ」** に再評価し、Phase 13 plan §9 で Phase 14 候補としていた「画像 OCR」「Drive Comments / Suggestions 取り込み」は **Phase 15+ へ移送** した。理由 = (a) opshub の秘書 use case で MS365 (Outlook + Calendar) 対称性の最大欠落が Gmail + Calendar 未対応であり、operator が Google 派なら秘書として体感価値が最大、(b) Phase 13 で Google OAuth refresh token rotation + paste-code flow + httpx 経路が確立しているため auth.py は scope 拡張のみで再利用可能 (1 回 re-consent)、(c) Outlook の mapper / cursor / source_type が前例として存在し symmetric に実装することで mapper / skill 側 logic を分岐させずに済む、(d) 画像 OCR は ADR-0025 拡張 + tesseract システム依存が必要で性質が異なる、Drive Comments も別データモデルで分割が綺麗、(e) Phase 13 / Phase 11 流の単一カテゴリ集中パターンに揃う。Phase 14 完了時点 (2026-05-31、PR #298 / #300 / #301 / #303 / G5 closeout PR) で本節を書き戻し済 — Phase 13 audit R2-CROSS-06 (forecast 取り残し) 同型ミス防止のため、再評価時の docs 書き戻しを規律化した。
+> **Phase 14 再評価メモ (2026-05-31)**: 本節は Phase 13 完了時点の forecast。Phase 14 着手時 (2026-05-31、epic #292) に **「Phase 14 = Gmail + Google Calendar コネクタ」** に再評価し、Phase 13 plan §9 で Phase 14 候補としていた「画像 OCR」「Drive Comments / Suggestions 取り込み」は **Phase 15+ へ移送** した。理由 = (a) opshub のアシスタント use case で MS365 (Outlook + Calendar) 対称性の最大欠落が Gmail + Calendar 未対応であり、operator が Google 派ならアシスタントとして体感価値が最大、(b) Phase 13 で Google OAuth refresh token rotation + paste-code flow + httpx 経路が確立しているため auth.py は scope 拡張のみで再利用可能 (1 回 re-consent)、(c) Outlook の mapper / cursor / source_type が前例として存在し symmetric に実装することで mapper / skill 側 logic を分岐させずに済む、(d) 画像 OCR は ADR-0025 拡張 + tesseract システム依存が必要で性質が異なる、Drive Comments も別データモデルで分割が綺麗、(e) Phase 13 / Phase 11 流の単一カテゴリ集中パターンに揃う。Phase 14 完了時点 (2026-05-31、PR #298 / #300 / #301 / #303 / G5 closeout PR) で本節を書き戻し済 — Phase 13 audit R2-CROSS-06 (forecast 取り残し) 同型ミス防止のため、再評価時の docs 書き戻しを規律化した。
 
 **Phase 14 (完了、2026-05-31)**: Gmail + Google Calendar コネクタ (epic #292、上記再評価で確定)。新規 `connectors/google_mail/` + `connectors/google_calendar/` + shared `connectors/google_auth/` foundation。OAuth scope を `drive.readonly` から `drive.readonly + gmail.readonly + calendar.readonly` の 3-scope 固定 list に拡張、1 Google account = 1 principal を Drive + Gmail + Calendar の 3 connector で共有 (1 回 re-consent)。Gmail = message 単位 (Outlook と symmetric)、Calendar = master event only + override 別 record (MS365 Calendar と symmetric)、本文抽出は Outlook 流継承 (text/plain 優先 → text/html 生保持、markitdown なし、添付 retain なし)。ADR 改訂 2 本 (ADR-0010 §Phase 14 改訂 (i)-(m) + ADR-0014)、新規 ADR ゼロ。詳細は [`docs/phase-14-plan.md`](phase-14-plan.md)。
 
@@ -324,7 +324,7 @@ Google Workspace の trashed / removed / Shared with me の取り込み方針:
 
 - **trashed=true** — Drive API は trashed file を `changes.list` / `files.list` で `trashed=true` flag 付きで返す。**archived 相当として保持** (ADR-0020 全保持原則と整合)。`SourceObserved.summary` に `[trashed]` 注記を含めるかは G3 mapper 実装時に確定 (Phase 11 onedrive_drive で trashed 概念がなかったため domain layer に既存の `archived` / `trashed` 概念があるかを G1 で確認 → G3 で再利用 or 新 column 追加 or existing flag re-use で確定)
 - **`changes.list` の `removed=true`** — Google 側で **永続削除** された file。ADR-0020 全保持原則に従い **retain** (永続削除しない)。`SourceObserved.summary` に `[removed from Google Workspace]` 注記を含めるかは G3 mapper 実装時に確定
-- **Shared with me** — operator が所有していないが共有された file。**含む** (秘書としての実用性 = 業務で共有された Docs / Sheets / Slides を context として扱える)。Drive API `q="sharedWithMe=true"` query で取得、`files.list` / `changes.list` の通常結果に混在
+- **Shared with me** — operator が所有していないが共有された file。**含む** (アシスタントとしての実用性 = 業務で共有された Docs / Sheets / Slides を context として扱える)。Drive API `q="sharedWithMe=true"` query で取得、`files.list` / `changes.list` の通常結果に混在
 - G3 DoD で test 可能な形に整理 (trashed file の取り込み確認 / removed file の retain 確認 / Shared with me file の取り込み確認の 3 test pin)
 
 ---

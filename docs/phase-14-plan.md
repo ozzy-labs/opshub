@@ -6,7 +6,7 @@
 >
 > 本ドキュメントは **planning skeleton** であり、各 sub-issue の詳細設計・不変条件・最終 DoD は着手前に本 plan 内で確定する。実装契約（uow_factory / `EventStore.append` / `Projector.apply` / registry SSOT / cold-start guard / `core/sanitise.sanitise_error_message` / Pluggable backend Protocol freeze / Connector framework / `tests/_secrets.py` 連結ビルド規範 等、Phase 1-13 で確立）は Phase 14 も全て継承する。
 
-Phase 14 の目的は、opshub の秘書射程を **Google 派 operator (Gmail + Google Calendar)** に広げることにある。具体的には Phase 13 で確立した Google OAuth principal + httpx 経路 + paste-code flow を流用し、Gmail (`users.history.list` 経由 delta) + Google Calendar (`events.list(syncToken=...)` 経由 delta) を取り込んで recall / search (FTS5) / personal-brief / meeting-prep / next-actions / reply-draft 系 skill が Gmail / Calendar 由来の情報を一級市民として扱えるようにする。
+Phase 14 の目的は、opshub のアシスタント射程を **Google 派 operator (Gmail + Google Calendar)** に広げることにある。具体的には Phase 13 で確立した Google OAuth principal + httpx 経路 + paste-code flow を流用し、Gmail (`users.history.list` 経由 delta) + Google Calendar (`events.list(syncToken=...)` 経由 delta) を取り込んで recall / search (FTS5) / personal-brief / meeting-prep / next-actions / reply-draft 系 skill が Gmail / Calendar 由来の情報を一級市民として扱えるようにする。
 
 設計の中心は **Outlook 流の継承**: Phase 7 の `ms365_outlook` mapper + Phase 7 の `ms365_calendar` mapper を mirror として Gmail / Calendar mapper を実装することで、host LLM / skill 側に「Outlook と Gmail で挙動が違う」「MS365 Calendar と Google Calendar で挙動が違う」分岐ロジックを増やさず、mapper symmetry で recall を均一に扱える。本文抽出は markitdown 経由を **使わない** (Gmail / Calendar は text-only family、Phase 11 / 13 のバイナリ文書経路 = Office / Workspace export 経由とは別系統)。
 
@@ -18,7 +18,7 @@ Phase 14 の目的は、opshub の秘書射程を **Google 派 operator (Gmail +
 
 | # | 論点 | 決定 |
 |---|---|---|
-| OQ1 | scope shape | **Gmail + Google Calendar 同時取り込み**。Phase 11 (Teams + Office) 流の複合 Phase。OAuth re-consent は 1 回、Outlook と並ぶ「Microsoft 派と Google 派両方の秘書補完」を一気に達成 |
+| OQ1 | scope shape | **Gmail + Google Calendar 同時取り込み**。Phase 11 (Teams + Office) 流の複合 Phase。OAuth re-consent は 1 回、Outlook と並ぶ「Microsoft 派と Google 派両方のアシスタント補完」を一気に達成 |
 | OQ2 | Gmail 単位 | **message 単位 `gmail_message`** (Outlook と symmetric)。threadId は field 保持、replied_to link 化は Phase 15+ defer。event store immutability 整合 |
 | OQ3 | Calendar 単位 | **master event only `google_calendar`** (MS365 `ms365_calendar` と symmetric)。RRULE は field、override (Google API が独立 event として返す) は別 record として取り込む。instance 展開は Phase 15+ で projection 層 |
 | OQ4 | 本文抽出 | **Outlook と完全 symmetric**: Gmail = text/plain 優先 → text/html 生保持、markitdown なし、添付 retain なし。Calendar = summary に `start_iso - end_iso (N attendees)`、attendee email list / 議題 / 会議室は body に追記 |
@@ -193,7 +193,7 @@ drive 例: `/drive --merge #293 -> #294 -> #295,#296 -> #297`（Wave 3 で G3/G4
 ### G5 — closeout
 
 - [ ] 設計 docs (principles / architecture / repository-structure / decisions-log) 更新済み
-- [ ] ユーザー docs (README ja/en / upgrading / secretary-agent / mcp-setup / SECURITY / google-workspace-setup) 更新済み
+- [ ] ユーザー docs (README ja/en / upgrading / assistant-agent / mcp-setup / SECURITY / google-workspace-setup) 更新済み
 - [ ] **`docs/phase-13-plan.md` §9 forecast 整合化済み**（「Phase 14 = Gmail + Google Calendar に再評価済み」と書き戻し、Phase 13 audit R2-CROSS-06 教訓）
 - [ ] e2e lifecycle test pass (`test_phase14_google_mail_calendar_lifecycle.py`、rotation シナリオ + scope 拡張後の 3 connector 並行 sync 含む)
 - [ ] M6 guard / `opshub --help` ≤ 300ms 維持、暗号化平文リーク検出 CI 常駐継続
@@ -214,7 +214,7 @@ drive 例: `/drive --merge #293 -> #294 -> #295,#296 -> #297`（Wave 3 で G3/G4
   - §9 Phased Delivery — Phase 14 行追加
 - **`docs/repository-structure.md`**: `src/opshub/connectors/google_auth/` (G2 採用名) + `google_mail/` + `google_calendar/` 追加
 - **`docs/decisions-log.md`**: ADR-0010 改訂 + ADR-0014 改訂 entry (2 件、G1 で追加)
-- **`docs/secretary-agent.md`**: personal-brief / meeting-prep / next-actions / reply-draft 表に Gmail / Google Calendar source_type 追加 + 全 source_type 一覧 update
+- **`docs/assistant-agent.md`**: personal-brief / meeting-prep / next-actions / reply-draft 表に Gmail / Google Calendar source_type 追加 + 全 source_type 一覧 update
 
 ---
 
@@ -228,7 +228,7 @@ drive 例: `/drive --merge #293 -> #294 -> #295,#296 -> #297`（Wave 3 で G3/G4
 - **`docs/upgrading.md`**: Phase 14 re-consent 手順 (Google scope 拡張で既存 refresh token invalidate、`opshub connector auth set google_workspace` 再実行) + 新 connector enablement (`opshub connector sync google_mail` / `opshub connector sync google_calendar`)
 - **`SECURITY.md`**: Gmail / Calendar 本文 local 保持の含意 (Phase 11 / 13 同型追記)
 - **`docs/google-workspace-setup.md`**: scope 拡張記載 (drive + gmail + calendar)、GCP Console での scope 追加手順、re-consent 必要性
-- **`docs/secretary-agent.md`**: personal-brief / meeting-prep / next-actions / reply-draft 表 + source_type 一覧 update
+- **`docs/assistant-agent.md`**: personal-brief / meeting-prep / next-actions / reply-draft 表 + source_type 一覧 update
 - **`docs/mcp-setup.md`**: connector 一覧に `google_mail` + `google_calendar` 追加 (Phase 13 google_workspace に続く 8 → 10 connector 体制)
 
 ---
@@ -342,7 +342,7 @@ Phase 14 着手時に検討した 3 つの設計選択について、採用案�
 | Google OAuth incremental authorization との整合 | 不要 (1 回で全 scope) | 必要 (incremental scope upgrade の handling 実装) |
 | 過剰 scope への懸念 | 全 read-only scope なので情報漏洩リスクは限定的、IT consent UX も Phase 13 で OK 確認済 | scope 最小化は理想的だが、operator UX 劣化 (re-consent 頻発) を上回るメリットなし |
 
-**採用根拠**: opshub MVP は operator 1 名前提、Google 派 operator は Drive / Gmail / Calendar をセットで使うのが自然な操作モデル (秘書として動かすなら 3 つ全部欲しい)。subset 宣言は overkill。3 scope すべて read-only で外部書き戻し ban (§禁止事項 7) との整合で過剰 scope 懸念も限定的。
+**採用根拠**: opshub MVP は operator 1 名前提、Google 派 operator は Drive / Gmail / Calendar をセットで使うのが自然な操作モデル (アシスタントとして動かすなら 3 つ全部欲しい)。subset 宣言は overkill。3 scope すべて read-only で外部書き戻し ban (§禁止事項 7) との整合で過剰 scope 懸念も限定的。
 
 ### X.2 connector module 命名 (`google_mail` / `google_calendar`) と source_type prefix (`gmail_` / `google_`) の不揃い
 
@@ -356,10 +356,10 @@ Phase 14 着手時に検討した 3 つの設計選択について、採用案�
 |---|---|---|---|
 | Gmail のブランド名性 | Gmail = Google のメール製品のブランド名として独立で認知度が高い、`gmail_message` は operator が直感的 | `google_mail_message` は冗長、operator の自然文 query (「Gmail にあった」) と直接結びつかない | `gmail` module は Calendar と並べた時の Google prefix 統一感が崩れる |
 | MS365 との対比 | `ms365_outlook` ↔ `gmail_message` (両方 vendor brand)、`ms365_calendar` ↔ `google_calendar` (両方 vendor + product) | `ms365_outlook` ↔ `google_mail_message` の対称性が崩れる | `ms365_outlook` (module: `ms365`) ↔ `gmail` の module 命名対比が崩れる |
-| source_type を秘書の自然文 query が拾うか | 「Gmail にあった」query が `gmail_message` source_type を直接 match (自然文と source_type が同語) | 「Gmail にあった」query が `google_mail_message` に直接 match しない (1 hop 必要) | 同採用案 |
+| source_type をアシスタントの自然文 query が拾うか | 「Gmail にあった」query が `gmail_message` source_type を直接 match (自然文と source_type が同語) | 「Gmail にあった」query が `google_mail_message` に直接 match しない (1 hop 必要) | 同採用案 |
 | module 命名の Google エコシステム内整合 | `google_mail` / `google_calendar` / `google_common` / `google_workspace` で Google prefix 統一、cross-connector ナビゲーション容易 | 同採用案 | `gmail` だけ Google prefix を外れる |
 
-**採用根拠**: 「source_type が秘書の自然文 query に直接出やすい location」を優先。operator が「Gmail にあった」「Gmail で来た」と発話するのが自然で、`gmail_` prefix の source_type がその発話を直接受ける。一方 module 命名は repo 内 navigation の頻度が高く、Google prefix 統一による発見性を優先。不揃いの代償 (source_type ↔ module 名が 1 hop ずれる) よりも、両者をそれぞれ最適化したメリットの方が大きい。
+**採用根拠**: 「source_type がアシスタントの自然文 query に直接出やすい location」を優先。operator が「Gmail にあった」「Gmail で来た」と発話するのが自然で、`gmail_` prefix の source_type がその発話を直接受ける。一方 module 命名は repo 内 navigation の頻度が高く、Google prefix 統一による発見性を優先。不揃いの代償 (source_type ↔ module 名が 1 hop ずれる) よりも、両者をそれぞれ最適化したメリットの方が大きい。
 
 ### X.3 `google_common` 命名の仮置き → G2 で `google_auth` に rename 採用
 
@@ -387,11 +387,11 @@ Phase 14 着手時に検討した 3 つの設計選択について、採用案�
 
 ### 1. Phase 14 = 画像 OCR + Drive Comments / Suggestions (Phase 13 §9 forecast 通り)
 
-却下理由: Phase 13 §9 forecast 当時は「Google Workspace 深掘りの自然延長 = OCR + Comments」だったが、Phase 14 着手時に opshub の秘書 use case を再評価した結果、Google 派 operator にとって Gmail + Calendar 未対応が MS365 (Outlook + Calendar) 対称性の最大欠落であり、秘書として体感価値が最大と判断。OCR + Comments は Phase 15+ に再 defer (本 plan §Phase 15+ outlook)、forecast 整合化は G5 で `docs/phase-13-plan.md` §9 に書き戻し (R2-CROSS-06 教訓継承)。
+却下理由: Phase 13 §9 forecast 当時は「Google Workspace 深掘りの自然延長 = OCR + Comments」だったが、Phase 14 着手時に opshub のアシスタント use case を再評価した結果、Google 派 operator にとって Gmail + Calendar 未対応が MS365 (Outlook + Calendar) 対称性の最大欠落であり、アシスタントとして体感価値が最大と判断。OCR + Comments は Phase 15+ に再 defer (本 plan §Phase 15+ outlook)、forecast 整合化は G5 で `docs/phase-13-plan.md` §9 に書き戻し (R2-CROSS-06 教訓継承)。
 
 ### 2. Gmail / Calendar 用に新 keyring slot を追加 (`connector:google_mail:refresh_token` / `connector:google_calendar:refresh_token`)
 
-却下理由: 1 Google account = 1 principal が opshub 秘書 MVP の前提 (ADR-0018 同根拠、operator 1 名スケール)。同一 Google account から Drive / Gmail / Calendar を取り込むのが自然な操作モデルで、3 つの keyring slot を別管理する意味がない (3 つすべてに同じ refresh token を入れることになり冗長)。scope 拡張で 1 slot 3 connector 共有が成立する非対称性は Google OAuth エコシステムの「account 単位の token + scope 拡張」設計に由来。ADR-0010 §Phase 14 改訂 (m) で明文化。
+却下理由: 1 Google account = 1 principal が opshub アシスタント MVP の前提 (ADR-0018 同根拠、operator 1 名スケール)。同一 Google account から Drive / Gmail / Calendar を取り込むのが自然な操作モデルで、3 つの keyring slot を別管理する意味がない (3 つすべてに同じ refresh token を入れることになり冗長)。scope 拡張で 1 slot 3 connector 共有が成立する非対称性は Google OAuth エコシステムの「account 単位の token + scope 拡張」設計に由来。ADR-0010 §Phase 14 改訂 (m) で明文化。
 
 ### 3. Gmail thread 単位の source_type (`gmail_thread`)
 

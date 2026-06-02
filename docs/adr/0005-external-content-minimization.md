@@ -4,7 +4,7 @@
 - Date: 2026-05-16
 - Deciders: ozzy
 
-> **Superseded (2026-05-30, ADR-0020 Full Local Content Retention)**: Phase 10 で opshub を秘書エージェント・プラットフォームへ拡張するにあたり、本 ADR の「summary / metadata / minimal quote のみ保持し full body を持たない」方針を撤回し、外部 connector が取り込んだ本文をローカル保持する方針へ転換した ([ADR-0020](0020-full-local-content-retention.md))。返信下書き生成 / 本文ベース検索が summary では成立しないこと、storage / context 懸念が Phase 4-8 の設計で別解済みであることが転換理由。残る機密・poisoning 懸念は本文を持たないことでの偶発的縮小ではなく、excludes (観測前遮断) と保存時暗号化 ([ADR-0021](0021-encryption-at-rest.md)) と provenance タグ (利用時の信頼度明示) の 3 層で明示的に対処する。以下は転換前の歴史的記録として残す。
+> **Superseded (2026-05-30, ADR-0020 Full Local Content Retention)**: Phase 10 で opshub をアシスタントエージェント・プラットフォームへ拡張するにあたり、本 ADR の「summary / metadata / minimal quote のみ保持し full body を持たない」方針を撤回し、外部 connector が取り込んだ本文をローカル保持する方針へ転換した ([ADR-0020](0020-full-local-content-retention.md))。返信下書き生成 / 本文ベース検索が summary では成立しないこと、storage / context 懸念が Phase 4-8 の設計で別解済みであることが転換理由。残る機密・poisoning 懸念は本文を持たないことでの偶発的縮小ではなく、excludes (観測前遮断) と保存時暗号化 ([ADR-0021](0021-encryption-at-rest.md)) と provenance タグ (利用時の信頼度明示) の 3 層で明示的に対処する。以下は転換前の歴史的記録として残す。
 
 ## Context
 

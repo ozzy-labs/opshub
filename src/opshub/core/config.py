@@ -664,7 +664,7 @@ class GoogleMailConnectorSettings(BaseModel):
     ``initial_window_days`` controls how far back the connector walks
     on first sync (when the cursor is ``None``). Defaults to ``7`` —
     long enough that the operator's recent inbox shows up in the
-    secretary's first ``personal-brief`` / ``next-actions`` run but
+    assistant's first ``personal-brief`` / ``next-actions`` run but
     short enough that the first sync does not download years of
     history (a separate ``opshub source backfill`` workflow lives in
     Phase 15+ for explicit backfills). A value of ``0`` means "skip

@@ -6,7 +6,7 @@
 >
 > 本ドキュメントは **planning skeleton** であり、各 sub-issue の詳細設計・不変条件・最終 DoD は着手前に本 plan 内で確定する。実装契約（uow_factory / `EventStore.append` / `Projector.apply` / registry SSOT / cold-start guard / `core/sanitise.sanitise_error_message` / Pluggable backend Protocol freeze / Connector framework / 7 link_type + reply_draft / `tests/_secrets.py` 連結ビルド規範 等、Phase 1-10 で確立）は Phase 11 も全て継承する。
 
-Phase 11 の目的は、Phase 10 で「動く秘書の枠組み」を完成させた後、**MS Office 環境のデータを秘書の context に統合**することにある。具体的には Teams chat、Outlook 本文、Word/Excel/PowerPoint 文書を `body + provenance` 付きで取り込み、recall / search / reply-draft / meeting-prep 系 skill が MS Office 由来の情報を一級市民として扱えるようにする。
+Phase 11 の目的は、Phase 10 で「動くアシスタントの枠組み」を完成させた後、**MS Office 環境のデータをアシスタントの context に統合**することにある。具体的には Teams chat、Outlook 本文、Word/Excel/PowerPoint 文書を `body + provenance` 付きで取り込み、recall / search / reply-draft / meeting-prep 系 skill が MS Office 由来の情報を一級市民として扱えるようにする。
 
 Office 抽出は markitdown 経由で多形式統一、ローカル FS（Box Drive / OneDrive Desktop）を一級経路として ADR-0019 の §パターン汎化を初実利用する。Teams は Microsoft Graph delta query + User Token principal で取り込み、Slack ADR-0018 / 既存 ms365 connector のパターンに揃える。
 
@@ -183,7 +183,7 @@ drive 例: `/drive #234 -> #235,#236,#238 -> #237 -> #239`（Wave 2 で F2/F3/F5
 ### F6 — closeout
 
 - [ ] 設計 docs（principles / architecture / repository-structure / decisions-log）更新済み
-- [ ] ユーザー docs（README ja/en / upgrading / SECURITY / 新規 onedrive-drive-setup / teams-setup / secretary-agent）更新済み
+- [ ] ユーザー docs（README ja/en / upgrading / SECURITY / 新規 onedrive-drive-setup / teams-setup / assistant-agent）更新済み
 - [ ] e2e lifecycle test pass（test_phase11_office_lifecycle.py）
 - [ ] M6 guard / `opshub --help` ≤ 300ms 維持、暗号化平文リーク検出 CI 常駐継続
 - [ ] AGENTS.md / CLAUDE.md Status 行 Phase 11 complete
@@ -219,7 +219,7 @@ drive 例: `/drive #234 -> #235,#236,#238 -> #237 -> #239`（Wave 2 で F2/F3/F5
 - **`SECURITY.md`**: Office 本文 local 保持の含意 / Teams 取り込みの含意
 - **新規 `docs/onedrive-drive-setup.md`**: mount 設定、`root_path` 設定（Box Drive setup と並ぶ）
 - **新規 `docs/teams-setup.md`**: User Token 取得（Azure Portal app registration）、auth set フロー、permissions scope（Chat.Read 等）
-- **`docs/secretary-agent.md`** 追記: Teams / Outlook 本文 / Office 文書を秘書の文脈源として利用できる旨
+- **`docs/assistant-agent.md`** 追記: Teams / Outlook 本文 / Office 文書をアシスタントの文脈源として利用できる旨
 
 ---
 

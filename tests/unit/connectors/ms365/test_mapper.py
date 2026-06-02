@@ -248,7 +248,7 @@ def test_map_outlook_message_includes_body_and_provenance() -> None:
     """Phase 11 F3: body + external/untrusted provenance ride along on the event.
 
     Reaffirms the Phase 10 ADR-0020 contract from the perspective of
-    the F3 work item — the secretary-skill body retention pattern
+    the F3 work item — the assistant-skill body retention pattern
     applies to Outlook just like Slack / GitHub / Calendar.
     """
     raw = _outlook(raw_body_content="<p>full body</p>")
@@ -261,7 +261,7 @@ def test_map_outlook_message_includes_body_and_provenance() -> None:
 def test_map_outlook_message_html_body_preserved() -> None:
     """HTML bodies are retained verbatim — no tag stripping at the mapper.
 
-    Sanitisation belongs to the secretary skills downstream (the
+    Sanitisation belongs to the assistant skills downstream (the
     provenance tag flags the body as untrusted reference material).
     Stripping at mapper time would irreversibly lose anchor links,
     reply-quote boundaries, and other markup that later passes may

@@ -1,6 +1,6 @@
 """Root-level pytest configuration.
 
-Phase 16-B (ADR-0029 §決定 (a)) — the secretary-skill bundle lives at
+Phase 16-B (ADR-0029 §決定 (a)) — the assistant-skill bundle lives at
 ``opshub/_skills/<name>/`` and is materialised at *build* time by the
 ``[tool.hatch.build.force-include]`` mapping in ``pyproject.toml``
 (``docs/skills/`` → ``src/opshub/_skills/``). Editable installs and
@@ -23,7 +23,7 @@ mirror never leaks into commits, and the directory is materially
 distinct from the (forbidden) hand-edited ``src/opshub/skills/``
 that :mod:`tests.unit.skills.test_core_boundary` already pins.
 
-Phase 16-C (#384) — ``opshub init`` now writes the 14 secretary skills
+Phase 16-C (#384) — ``opshub init`` now writes the 14 assistant skills
 to ``~/.claude/skills/`` and ``~/.agents/skills/`` by default
 (non-interactive default = install per ADR-0029 §決定 (d), as
 explained in :func:`opshub.cli.init._should_install_skills`).
@@ -52,7 +52,7 @@ _BUNDLE_DIR = _REPO_ROOT / "src" / "opshub" / "_skills"
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _mirror_secretary_skill_bundle() -> None:  # pyright: ignore[reportUnusedFunction]
+def _mirror_assistant_skill_bundle() -> None:  # pyright: ignore[reportUnusedFunction]
     """Mirror ``docs/skills/`` into ``src/opshub/_skills/`` for the test run.
 
     Idempotent — every pytest session re-syncs from the SSOT so a
@@ -69,7 +69,7 @@ def _mirror_secretary_skill_bundle() -> None:  # pyright: ignore[reportUnusedFun
         # message beats letting a single test fail with an opaque
         # FileNotFoundError later.
         msg = (
-            f"docs/skills/ is missing at {_DOCS_SKILLS}; the secretary "
+            f"docs/skills/ is missing at {_DOCS_SKILLS}; the assistant "
             "skill bundle cannot be mirrored. Restore the SSOT before "
             "running pytest."
         )
@@ -88,7 +88,7 @@ def _isolate_home_for_skill_install(  # pyright: ignore[reportUnusedFunction]
     """Redirect ``HOME`` / ``USERPROFILE`` to a per-test sandbox.
 
     Phase 16-C (#384) wired ``opshub init`` to also install the 14
-    secretary skills via
+    assistant skills via
     :func:`opshub.cli.init._should_install_skills` (non-interactive
     default = install, per ADR-0029 §決定 (d)). The wide swath of
     existing tests that drive ``opshub init`` through

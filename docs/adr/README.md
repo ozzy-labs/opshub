@@ -102,7 +102,7 @@ NNNN-kebab-case-title.md
 | 0026 | [CLI Progress Reporting for Long-Running Commands](0026-cli-progress-reporting.md) | Accepted |
 | 0027 | [Observability & Troubleshooting Logging](0027-observability-and-troubleshooting-logging.md) | Accepted |
 | 0028 | [FTS5 sources_fts tokenizer choice (trigram + short-query LIKE fallback)](0028-fts5-japanese-tokenizer.md) | Accepted |
-| 0029 | [Distribute Secretary Skills via opshub Package Bundling](0029-distribute-secretary-skills-via-opshub-package.md) | Accepted |
+| 0029 | [Distribute Assistant Skills via opshub Package Bundling](0029-distribute-assistant-skills-via-opshub-package.md) | Accepted |
 | 0030 | [Slack Thread Reply Ingestion Policy](0030-slack-thread-reply-ingestion.md) | Accepted |
 
 ## Open Questions

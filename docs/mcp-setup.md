@@ -51,7 +51,7 @@ The `*:history` scopes are checked per type: when `--since <when>` is used and o
 
 ## 2. Initialise the database
 
-The MCP server reads the same SQLite store as the CLI, so `opshub init` (or `opshub db migrate` on an existing store) must have run before the agent connects. Since Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384), [ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) `opshub init` also installs the 14 secretary skills into `~/.claude/skills/` and `~/.agents/skills/` (prompting on a TTY, defaulting to install otherwise — see §3a). Pass `--no-install-skills` to opt out.
+The MCP server reads the same SQLite store as the CLI, so `opshub init` (or `opshub db migrate` on an existing store) must have run before the agent connects. Since Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384), [ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) `opshub init` also installs the 14 assistant skills into `~/.claude/skills/` and `~/.agents/skills/` (prompting on a TTY, defaulting to install otherwise — see §3a). Pass `--no-install-skills` to opt out.
 
 ```sh
 opshub init
@@ -98,13 +98,13 @@ Step 1 widening (post Phase 10) added the 7 new read tools and the HITL write `p
 * **Physical-column time filters (Phase 12 H1)** — `task.list` accepts `updated_after` / `updated_before` (filters `tasks.updated_at`); `inbox.list` accepts `created_after` / `created_before` (`inbox_items.created_at`); `decision.list` accepts `recorded_after` / `recorded_before` (`decisions.recorded_at`); `source.list` accepts `observed_after` / `observed_before` (`sources.observed_at`). All ISO 8601, optional, `>= after` / `< before` half-open intervals. Physical-column naming (rather than business concepts like `completed_after`) keeps the projection schema and the MCP argument names aligned.
 * **`propose.generate` `mode` argument (Phase 12 H4)** — accepts `inbox_triage` / `source_extract` / `meeting_followup` (the persist-bearing dispatch keys, ADR-0016 §決定 (l)(b)). `mode` is mutually exclusive with `reply_to_source_id`; the implicit `reply_draft` mode is signalled by `reply_to_source_id` alone. `handoff_draft` / `announcement_draft` skills do **not** route through `propose.generate` because they are text-only (no persist boundary, ADR-0016 §決定 (l)(a)).
 
-Phase 12 H1 also unified the original 5 skills (`personal-brief`, `next-actions`, `reply-draft`, `pr-review`, `find-document`) on the MCP surface — they call MCP tools directly instead of falling back to the CLI shell. Phase 12 H2-H5 added 9 new skills on top (see `docs/secretary-agent.md` for the 14-skill catalog).
+Phase 12 H1 also unified the original 5 skills (`personal-brief`, `next-actions`, `reply-draft`, `pr-review`, `find-document`) on the MCP surface — they call MCP tools directly instead of falling back to the CLI shell. Phase 12 H2-H5 added 9 new skills on top (see `docs/assistant-agent.md` for the 14-skill catalog).
 
-## 3a. Install the 14 secretary skills on the agent host
+## 3a. Install the 14 assistant skills on the agent host
 
-Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirms **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 14 secretary skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI; Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) wired it into `opshub init` so step §2 above also installs the 14 secretary skills (TTY prompt via `rich.prompt.Confirm`, default = yes; non-TTY default = install per ADR-0029 §決定 (d)).
+Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) confirms **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 14 assistant skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI; Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) wired it into `opshub init` so step §2 above also installs the 14 assistant skills (TTY prompt via `rich.prompt.Confirm`, default = yes; non-TTY default = install per ADR-0029 §決定 (d)).
 
-If you ran `opshub init` already, the 14 skills are in place. Override with `opshub init --install-skills` / `opshub init --no-install-skills` for non-interactive scripts that need the explicit choice. Use `opshub skills install` directly to push later SSOT updates, add a `--scope project` install, or pass `--skip-existing` to preserve hand-edits. Flag details (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) and the `opshub skills list` status command live in [`docs/secretary-agent.md`](secretary-agent.md) §8.
+If you ran `opshub init` already, the 14 skills are in place. Override with `opshub init --install-skills` / `opshub init --no-install-skills` for non-interactive scripts that need the explicit choice. Use `opshub skills install` directly to push later SSOT updates, add a `--scope project` install, or pass `--skip-existing` to preserve hand-edits. Flag details (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) and the `opshub skills list` status command live in [`docs/assistant-agent.md`](assistant-agent.md) §8.
 
 The 14 skills are:
 
@@ -125,7 +125,7 @@ The 14 skills are:
 | HITL write | `source-extract` (Phase 12 H4) | "この資料から task 抽出" / "<source_id> から候補を" |
 | HITL write | `meeting-followup` (Phase 12 H4) | "会議後の action items" / "議事録から task 抽出" |
 
-The full responsibility map (pair structure / MCP tool dependency matrix / HITL boundary / can-do/can't-do) lives in [docs/secretary-agent.md](secretary-agent.md). Skill descriptions include Japanese trigger phrases, so asking the agent host in natural language routes to the right skill automatically.
+The full responsibility map (pair structure / MCP tool dependency matrix / HITL boundary / can-do/can't-do) lives in [docs/assistant-agent.md](assistant-agent.md). Skill descriptions include Japanese trigger phrases, so asking the agent host in natural language routes to the right skill automatically.
 
 After copying, restart the agent host (or its skill loader if it supports hot reload) so the new skills become visible.
 

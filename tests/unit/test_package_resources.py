@@ -1,11 +1,11 @@
-"""Pin that the opshub wheel ships the 14 bundled secretary skills.
+"""Pin that the opshub wheel ships the 14 bundled assistant skills.
 
 ADR-0029 §不変条件 — the ``[tool.hatch.build.force-include]`` mapping
 in ``pyproject.toml`` copies ``docs/skills/`` to
 ``src/opshub/_skills/`` at wheel build time so
 ``importlib.resources`` lookups succeed for wheel-installed users.
 
-This test asserts that every name in :data:`SECRETARY_SKILL_NAMES`
+This test asserts that every name in :data:`ASSISTANT_SKILL_NAMES`
 resolves to a valid ``SKILL.md`` file inside the wheel-bundle path
 (``opshub/_skills/<name>/SKILL.md`` via :mod:`importlib.resources`).
 The test deliberately bypasses
@@ -24,8 +24,8 @@ introducing such phrases.
 
 A failure here typically means either: (1) ``uv build`` has not run
 yet in a clean checkout (the gitignored ``src/opshub/_skills/`` is
-materialised at build time), or (2) a new secretary skill name was
-added to :data:`SECRETARY_SKILL_NAMES` without authoring
+materialised at build time), or (2) a new assistant skill name was
+added to :data:`ASSISTANT_SKILL_NAMES` without authoring
 ``docs/skills/<name>/SKILL.md``.
 """
 
@@ -37,12 +37,12 @@ from typing import cast
 import pytest
 import yaml
 
-from opshub._skills_resources import SECRETARY_SKILL_NAMES
+from opshub._skills_resources import ASSISTANT_SKILL_NAMES
 
 
-@pytest.mark.parametrize("skill_name", SECRETARY_SKILL_NAMES)
+@pytest.mark.parametrize("skill_name", ASSISTANT_SKILL_NAMES)
 def test_package_ships_skill_files(skill_name: str) -> None:
-    """Every secretary skill resolves to a valid ``SKILL.md`` in the wheel."""
+    """Every assistant skill resolves to a valid ``SKILL.md`` in the wheel."""
     package_root = resources.files("opshub")
     skill_md = package_root.joinpath("_skills", skill_name, "SKILL.md")
     assert skill_md.is_file(), (

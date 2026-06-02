@@ -15,7 +15,7 @@ the subprocess and trades frames:
 * ``tests/unit/mcp/test_logging_redaction.py::
   test_serve_stdio_configures_logging_via_env`` monkey-patches
   :func:`mcp.server.stdio.stdio_server` so the body never runs.
-* ``tests/integration/test_phase12_secretary_lifecycle.py`` calls
+* ``tests/integration/test_phase12_assistant_lifecycle.py`` calls
   :func:`opshub.mcp.server.dispatch_tool_call` **in-process** against
   the in-memory engine, which bypasses the stdio framing entirely.
 
@@ -32,7 +32,7 @@ Invariants pinned
 
 1. **17-tool surface (Phase 12 H1 / ADR-0022 §決定 (f))** — the
    ``tools/list`` reply contains exactly the 12 read + 5 write tools
-   the secretary 14-skill catalog depends on. A regression that
+   the assistant 14-skill catalog depends on. A regression that
    drops or renames any of them surfaces here as a missing-name
    assertion failure before it reaches a real agent host.
 2. **``serverInfo`` schema** — :class:`mcp.types.InitializeResult`
@@ -50,7 +50,7 @@ Invariants pinned
    :class:`SourceService.observe`, then drives ``tools/call search``
    over the real stdio transport and asserts the body-anchored hits
    surface in the response envelope. This pins the path that the
-   ``find-document`` / ``research`` secretary skills rely on when an
+   ``find-document`` / ``research`` assistant skills rely on when an
    agent host connects.
 
 Test runtime budget
@@ -100,7 +100,7 @@ _E2E_TIMEOUT_SECONDS = 30.0
 # Phase 12 H1 MCP tool surface — 12 read + 5 write. The set is pinned
 # verbatim against the names in :func:`opshub.mcp.server
 # .build_tool_specs_for_engine` (the in-process test in
-# :mod:`tests.integration.test_phase12_secretary_lifecycle` pins the
+# :mod:`tests.integration.test_phase12_assistant_lifecycle` pins the
 # same set against the spec list; this module pins it through the
 # real stdio transport so a regression that drops a tool **at the
 # wire layer** also fails).
@@ -226,7 +226,7 @@ def test_mcp_stdio_initialize_and_list_tools_via_subprocess(
        version against its supported range, so an empty / bogus
        value would raise inside :func:`ClientSession.initialize`).
     2. ``capabilities.tools`` is advertised — without it an agent host
-       skips the secretary 14-skill surface entirely.
+       skips the assistant 14-skill surface entirely.
     3. ``tools/list`` carries exactly the 17-tool Phase 12 H1 surface
        defined in :data:`_EXPECTED_TOOL_NAMES`. A regression that
        drops, renames, or accidentally exposes a new tool fails
@@ -239,7 +239,7 @@ def test_mcp_stdio_initialize_and_list_tools_via_subprocess(
             # ran it. Snapshot the negotiated state via the SDK API.
             init = session.get_server_capabilities()
             # ``capabilities.tools`` must be advertised for the host to
-            # auto-discover the secretary tool surface.
+            # auto-discover the assistant tool surface.
             assert init is not None, "server capabilities missing post-initialize"
             assert init.tools is not None, (
                 "ADR-0022 §決定 (a) — MCP server must advertise the ``tools``"
@@ -293,7 +293,7 @@ def _seed_slack_sources(actor: str = "test:mcp_stdio_e2e") -> tuple[str, str]:
     bodies are picked so the FTS5 trigram tokenizer (Phase 15 /
     ADR-0028) returns hits for both an ASCII and a Japanese query —
     that exercises the path the ``find-document`` and ``research``
-    secretary skills rely on at runtime.
+    assistant skills rely on at runtime.
 
     Returns the two minted source ULIDs so callers can correlate the
     seeded rows with the ``tools/call search`` response.
@@ -305,10 +305,10 @@ def _seed_slack_sources(actor: str = "test:mcp_stdio_e2e") -> tuple[str, str]:
         connector_name="slack",
         external_id="C0E2E:1717400000.000100",
         source_type="slack_message",
-        title="alice in #e2e — Phase 12 secretary skills review",
+        title="alice in #e2e — Phase 12 assistant skills review",
         body=(
-            "Phase 12 secretary skills のレビュー方針 — alice posted notes "
-            "on the Phase 12 secretary skills lifecycle review."
+            "Phase 12 assistant skills のレビュー方針 — alice posted notes "
+            "on the Phase 12 assistant skills lifecycle review."
         ),
         provenance_origin="external",
         provenance_trust="untrusted",
@@ -319,7 +319,7 @@ def _seed_slack_sources(actor: str = "test:mcp_stdio_e2e") -> tuple[str, str]:
         source_type="slack_message",
         title="bob in #e2e — レビュー方針メモ",
         body=(
-            "本日のレビュー方針は Phase 12 secretary skills の "
+            "本日のレビュー方針は Phase 12 assistant skills の "
             "lifecycle を MCP stdio 経由で確認することです。"
         ),
         provenance_origin="external",
@@ -338,7 +338,7 @@ def test_mcp_stdio_tools_call_search_against_slack_seeded_db_via_subprocess(
     ``OPSHUB_STORAGE__DB_PATH`` env override), then drives a real
     ``tools/call`` over the stdio transport for two queries:
 
-    1. ``"Phase 12 secretary skills"`` — ASCII body anchor. The
+    1. ``"Phase 12 assistant skills"`` — ASCII body anchor. The
        English-bodied row must appear in the response ``items[]``
        (and we filter to ``connector_name == "slack"`` so a future
        projection that surfaces extra connectors does not poison the
@@ -369,14 +369,14 @@ def test_mcp_stdio_tools_call_search_against_slack_seeded_db_via_subprocess(
             # ---- ASCII query --------------------------------------
             ascii_result = await session.call_tool(
                 "search",
-                {"query": "Phase 12 secretary skills", "limit": 10},
+                {"query": "Phase 12 assistant skills", "limit": 10},
             )
             assert ascii_result.isError is False, ascii_result
             ascii_payload = cast(
                 "dict[str, Any]",
                 json.loads(_extract_text_payload(ascii_result.content)),
             )
-            assert ascii_payload["query"] == "Phase 12 secretary skills"
+            assert ascii_payload["query"] == "Phase 12 assistant skills"
             ascii_items = cast("list[dict[str, Any]]", ascii_payload["items"])
             slack_hits = [item for item in ascii_items if item.get("connector_name") == "slack"]
             assert slack_hits, (

@@ -191,7 +191,7 @@ sqlite3 ~/.local/share/opshub/db/opshub.sqlite \
 
 - `box 権限` のように空白で区切ると 2 token に分割され、それぞれが本文中の独立 token と一致する場合のみ hit する (literal phrase `box 権限` を本文に含む source が必要)。これは FTS5 phrase 検索の仕様であり、Phase 15 でも変わらない
 - `--raw` で `box* AND 権限*` のような FTS5 boolean / prefix 構文は引き続き有効。default モードで日本語が改善された以降も、power user 向けに残してある
-- MCP `search` tool ([ADR-0022](adr/0022-mcp-server-surface.md) §決定 (f)) は `raw_query` を hard-coded `false` で叩くため、秘書 14 Skill (`find-document` / `research` / etc.) 経由でも本改善が透過的に効く
+- MCP `search` tool ([ADR-0022](adr/0022-mcp-server-surface.md) §決定 (f)) は `raw_query` を hard-coded `false` で叩くため、アシスタント 14 Skill (`find-document` / `research` / etc.) 経由でも本改善が透過的に効く
 
 **関連**:
 
@@ -280,15 +280,15 @@ opshub --debug connector sync slack 2> slack-sync-debug.log
 - issue [#367](https://github.com/ozzy-labs/opshub/issues/367) — Slack search title 改善 (本セクション根拠)
 - [`src/opshub/connectors/slack/mapper.py`](../src/opshub/connectors/slack/mapper.py) `_build_title` / `_truncate_body` — title 組立 SSOT
 - [`src/opshub/connectors/slack/fetcher.py`](../src/opshub/connectors/slack/fetcher.py) `_resolve_author_display` — author 解決 chain (user → bot_profile.name → bot_id → unknown)
-- [ADR-0022](adr/0022-mcp-server-surface.md) §決定 (f) — MCP `search` tool は `raw_query` hard-coded `false` のため秘書 14 Skill は透過的に新 title format の恩恵を受ける
+- [ADR-0022](adr/0022-mcp-server-surface.md) §決定 (f) — MCP `search` tool は `raw_query` hard-coded `false` のためアシスタント 14 Skill は透過的に新 title format の恩恵を受ける
 
-### 3.9 秘書 14 Skill が host (Claude Code / Codex CLI / Copilot CLI) で発火しない
+### 3.9 アシスタント 14 Skill が host (Claude Code / Codex CLI / Copilot CLI) で発火しない
 
-`personal-brief` / `next-actions` / `find-document` 等の秘書 14 Skill が、Claude Code の `Skill` ツール選択画面や Codex CLI / Copilot CLI の skill catalog に現れない、または自然文 (「今日のまとめ」「次に何やる?」等) を投げても発火しないケース。
+`personal-brief` / `next-actions` / `find-document` 等のアシスタント 14 Skill が、Claude Code の `Skill` ツール選択画面や Codex CLI / Copilot CLI の skill catalog に現れない、または自然文 (「今日のまとめ」「次に何やる?」等) を投げても発火しないケース。
 
-**症状**: host を起動しても秘書 14 Skill の description が候補に出ない。host を再起動しても改善しない。`~/.claude/skills/` または `~/.agents/skills/` 配下に SKILL.md が見当たらない。
+**症状**: host を起動してもアシスタント 14 Skill の description が候補に出ない。host を再起動しても改善しない。`~/.claude/skills/` または `~/.agents/skills/` 配下に SKILL.md が見当たらない。
 
-**原因**: `opshub skills install` (または `opshub init` 経路) が未実行で payload が host 側ローダー directory に展開されていない、または以前 install したあと operator が SKILL.md を hand edit して bundle と drift している ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md))。
+**原因**: `opshub skills install` (または `opshub init` 経路) が未実行で payload が host 側ローダー directory に展開されていない、または以前 install したあと operator が SKILL.md を hand edit して bundle と drift している ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md))。
 
 **確認手順**:
 
@@ -332,10 +332,10 @@ opshub skills install --dry-run --print-paths
 
 **関連**:
 
-- [ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) — 秘書 14 skill 配信経路 (opshub package 同梱)
+- [ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md) — アシスタント 14 skill 配信経路 (opshub package 同梱)
 - [`src/opshub/cli/skills.py`](../src/opshub/cli/skills.py) — `opshub skills install` / `opshub skills list` 実装
 - [`src/opshub/_skills_resources.py`](../src/opshub/_skills_resources.py) — `SkillResourceError` (wheel 破損時 hint)
-- [docs/secretary-agent.md §8](secretary-agent.md) — setup 手順 (3 host 共通)
+- [docs/assistant-agent.md §8](assistant-agent.md) — setup 手順 (3 host 共通)
 
 ## 4. セキュリティ注意書き
 

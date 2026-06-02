@@ -69,7 +69,7 @@ First-sync bootstrap
 On the very first sync (``context.cursor_value is None``) the
 connector walks :meth:`GmailClient.list_messages_since` over the
 ``initial_window_days`` window (default 7) so the operator's recent
-inbox shows up in the secretary's first ``personal-brief`` /
+inbox shows up in the assistant's first ``personal-brief`` /
 ``next-actions`` run. After the backfill completes the connector
 bootstraps a fresh ``historyId`` via
 :meth:`GmailClient.get_profile_history_id` and persists it as the

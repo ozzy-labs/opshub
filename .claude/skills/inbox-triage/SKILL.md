@@ -129,4 +129,4 @@ input:
 - PR #231 (MCP `propose.generate` write tool)
 - Phase 12 H1 (`docs/phase-12-plan.md` §3 H1、`propose.apply` 露出 + 時間フィルタ追加)
 - Phase 12 H4 (`docs/phase-12-plan.md` §3 H4、本 skill 含む HITL write 3 skill の追加)
-- docs/secretary-agent.md
+- docs/assistant-agent.md

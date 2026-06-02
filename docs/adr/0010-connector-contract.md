@@ -240,7 +240,7 @@ Teams User Token の運用:
 
 採用理由 (Slack ADR-0018 と同根拠):
 
-- **operator 1 名スケールが OpsHub の前提** — Bot は team-level identity で「個人秘書」境界に合わない、User Token なら operator の own context (自身が参加している channels のみ) を自然に表現
+- **operator 1 名スケールが OpsHub の前提** — Bot は team-level identity で「個人アシスタント」境界に合わない、User Token なら operator の own context (自身が参加している channels のみ) を自然に表現
 - **書き戻し非対応 (Phase 10 改訂 §禁止事項 7) との整合** — User Token は read scope のみ要求すれば足り、write scope を持たないことで「経路の不在」を keyring 設定段階から強制可能
 - **Slack / Outlook / OneDrive と principal パターンが揃う** — Phase 7-11 で全 SaaS connector が User Token principal に揃い、operator のメンタルモデルが 1 つ (consent → keyring 保管 → refresh)
 - **app registration ハードルが高い環境への退路** — Bot Token alternative を docs に明記することで、企業 IT policy で User Token consent が阻まれる operator にも経路を残す (Phase 11 では Bot Token 経路の test pin は不要、code path を Optional に予約)
@@ -464,7 +464,7 @@ Phase 13 改訂 (h) で `connector:google_workspace:refresh_token` keyring slot 
 
 要点:
 
-1. **keyring slot 単一性維持** — `connector:google_workspace:refresh_token` 1 slot を Drive / Gmail / Calendar 3 connector が共有。新 slot 追加なし (`connector:google_mail:refresh_token` / `connector:google_calendar:refresh_token` は **作らない**)。1 Google account = 1 principal が opshub 秘書 MVP の前提
+1. **keyring slot 単一性維持** — `connector:google_workspace:refresh_token` 1 slot を Drive / Gmail / Calendar 3 connector が共有。新 slot 追加なし (`connector:google_mail:refresh_token` / `connector:google_calendar:refresh_token` は **作らない**)。1 Google account = 1 principal が opshub アシスタント MVP の前提
 2. **scope 拡張** — `drive.readonly` から `drive.readonly + gmail.readonly + calendar.readonly` に拡大 (Phase 14 plan OQ6 確定)。`gmail.metadata` / `gmail.modify` 等の追加 scope は要求しない (read-only 3 scope のみ、書き戻し ban § 禁止事項 7 との整合)
 3. **scope 宣言 = `auth.py` 内固定 list** — connector ごとの subset 宣言 (`google_mail` は gmail.readonly のみ要求、等) は **不採用**。固定 list 案を採用 (Phase 14 plan §X §設計選択の trade-off 参照)
 4. **env override 名称はそのまま** — `OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN` (CI / 緊急用) を Drive / Gmail / Calendar 3 connector が共有
@@ -474,7 +474,7 @@ Phase 13 改訂 (h) で `connector:google_workspace:refresh_token` keyring slot 
 
 採用理由 (新 slot 追加せず scope 拡張のみ):
 
-- **1 Google account = 1 principal が opshub 秘書 MVP の前提** — operator 1 名前提 (ADR-0018 同根拠)、同一 Google account から Drive / Gmail / Calendar を取り込むのが自然な操作モデル
+- **1 Google account = 1 principal が opshub アシスタント MVP の前提** — operator 1 名前提 (ADR-0018 同根拠)、同一 Google account から Drive / Gmail / Calendar を取り込むのが自然な操作モデル
 - **scope 拡張は Google OAuth incremental authorization で吸収可能** — 1 回 re-consent で全 scope を取得、operator UX への影響は scope 拡張時の 1 回のみ
 - **connector ごと subset scope 宣言は overkill** — 「Gmail だけ使いたい / Drive だけ使いたい」 use case は connector enable / disable で表現可能、scope 単位の subset 宣言は実利用シーンとマッチしない
 - **shared auth foundation の必然性** — token refresh + rotation 書き戻しを 3 connector に各々実装すると pin test も 3 つ並ぶ、shared 化で 1 本に集約することで「rotation 書き戻し忘れ regression」を構造的に防ぐ

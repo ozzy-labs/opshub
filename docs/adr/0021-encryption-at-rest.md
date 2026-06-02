@@ -89,7 +89,7 @@ SQLCipher native binding (`sqlcipher3-binary` 等) は `[project.optional-depend
 却下理由:
 
 - excludes (ADR-0020 §(b)) は「取り込まない」前段の防御で、取り込んだ本文の保存時保護にはならない。機密判定が完全でない以上、保存時暗号化は別レイヤーとして必須。
-- 本文を保持する以上、保存時暗号化を opt-in で備えること自体が秘書プラットフォームの信頼性要件 (default は §(b) のとおり `encryption = false`、sensitive workload を扱う operator は明示的に opt-in する)。
+- 本文を保持する以上、保存時暗号化を opt-in で備えること自体がアシスタントプラットフォームの信頼性要件 (default は §(b) のとおり `encryption = false`、sensitive workload を扱う operator は明示的に opt-in する)。
 
 ## 関連
 

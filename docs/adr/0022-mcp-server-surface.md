@@ -6,7 +6,7 @@
 
 ## Context
 
-Phase 10 (秘書エージェント・プラットフォーム化、epic #203) は opshub を「人間 → 秘書エージェント → opshub コマンド」の三層モデルへ再定義する (Phase 10 plan §1 #2 / #3 / #3b)。CLI は残るが、秘書エージェント (Claude Code 等の外部ホスト = ②) が ①コア (events / projection / connectors / recall / propose / brief / graph) を叩く経路を別立てで設計する必要がある。ADR-0004 (Agent Runtime Boundary) は **形A** を確定済み — opshub は MCP サーバ (口) と Agent Skills (手順書) のみ提供し、頭脳 (LLM 推論ループ) は外部ホストが担う。本 ADR は形A の「MCP サーバ面」を確定し、Sub-issue D (Agent Skills) と Sub-issue E (返信下書き) が依存する agent-facing contract を pin する。
+Phase 10 (アシスタントエージェント・プラットフォーム化、epic #203) は opshub を「人間 → アシスタントエージェント → opshub コマンド」の三層モデルへ再定義する (Phase 10 plan §1 #2 / #3 / #3b)。CLI は残るが、アシスタントエージェント (Claude Code 等の外部ホスト = ②) が ①コア (events / projection / connectors / recall / propose / brief / graph) を叩く経路を別立てで設計する必要がある。ADR-0004 (Agent Runtime Boundary) は **形A** を確定済み — opshub は MCP サーバ (口) と Agent Skills (手順書) のみ提供し、頭脳 (LLM 推論ループ) は外部ホストが担う。本 ADR は形A の「MCP サーバ面」を確定し、Sub-issue D (Agent Skills) と Sub-issue E (返信下書き) が依存する agent-facing contract を pin する。
 
 MCP (Model Context Protocol、Anthropic 2024) は agent ↔ tool 間の標準プロトコルで、stdio / Streamable HTTP / SSE 等の transport を仕様化している。opshub が MCP サーバとして①コアを露出する設計では、以下の論点が交差する。
 
@@ -14,7 +14,7 @@ MCP (Model Context Protocol、Anthropic 2024) は agent ↔ tool 間の標準プ
 
 第二の論点は **認証情報の境界** である。opshub は Slack / Box / GitHub / MS365 の SaaS トークンを ADR-0014 の keyring 経路で保持している。MCP tool の引数として SaaS トークンを受け取る (token passthrough) 設計は、トークンが LLM の context window・MCP tool 呼び出しログ・agent host の transcript に流れ込み、prompt injection や transcript 流出で漏洩する経路を作る。Anthropic の MCP security best practices (2025) も token passthrough を anti-pattern として明示している。
 
-第三の論点は **read / write tool の分離と自律範囲** (Phase 10 plan §8 Open Q #3b) である。秘書エージェントが読み取り系 tool (recall / search / brief / task list) を自律実行するのは UX の根幹だが、書き込み系 tool (task create / inbox add / propose apply / connector sync) を auto-approve すると tool poisoning 攻撃で durable state が書き換えられる。tool poisoning 研究 (Invariant Labs 2025) は auto-approve 経路での攻撃成功率 84% に対し、human-in-the-loop 経路では <5% という非対称を示している。CLI と同等操作を tool 化する際に、この read / write 境界を tool schema レベルで宣言的に表現する必要がある。
+第三の論点は **read / write tool の分離と自律範囲** (Phase 10 plan §8 Open Q #3b) である。アシスタントエージェントが読み取り系 tool (recall / search / brief / task list) を自律実行するのは UX の根幹だが、書き込み系 tool (task create / inbox add / propose apply / connector sync) を auto-approve すると tool poisoning 攻撃で durable state が書き換えられる。tool poisoning 研究 (Invariant Labs 2025) は auto-approve 経路での攻撃成功率 84% に対し、human-in-the-loop 経路では <5% という非対称を示している。CLI と同等操作を tool 化する際に、この read / write 境界を tool schema レベルで宣言的に表現する必要がある。
 
 第四の論点は **context 効率** である。MCP tool が full body / full payload を返すと agent context window が枯渇し、二次的に data exfiltration の攻撃面も拡大する (返した全文がそのまま transcript 経由で外部に流れうる)。recall (ADR-0012) と brief (ADR-0015) は既に要約・関連抽出で返す設計だが、MCP tool 全般の戻り値設計原則として明文化する必要がある。
 
@@ -237,8 +237,8 @@ write (5): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` /
 却下理由:
 
 - CLI は人間が叩く前提で sub-verb / flag が細かく、agent が組み合わせを学習する負荷が高い。
-- 秘書ユースケース (「今日やること」「返信案」) と粒度がずれ、複数 tool を agent が逐次呼ぶオーバーヘッドが大きい。
-- 採用: **読み取り系は CLI 同等の粒度 (recall / search / brief) + 秘書ユースケース粒度の compound tool は Sub-issue D の Agent Skills で表現**する二段構え。MCP tool は ①コア operation を直接露出し、ユースケース粒度の組み立ては Skills の手順書で行う (Phase 10 plan §C / §D 整合)。
+- アシスタントユースケース (「今日やること」「返信案」) と粒度がずれ、複数 tool を agent が逐次呼ぶオーバーヘッドが大きい。
+- 採用: **読み取り系は CLI 同等の粒度 (recall / search / brief) + アシスタントユースケース粒度の compound tool は Sub-issue D の Agent Skills で表現**する二段構え。MCP tool は ①コア operation を直接露出し、ユースケース粒度の組み立ては Skills の手順書で行う (Phase 10 plan §C / §D 整合)。
 
 ### 7. MCP tool 呼び出しを opshub event log に append
 

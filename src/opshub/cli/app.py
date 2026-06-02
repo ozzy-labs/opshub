@@ -273,7 +273,7 @@ def init(
         None,
         "--install-skills/--no-install-skills",
         help=(
-            "Install the 14 bundled secretary skills to ~/.claude/skills/ + "
+            "Install the 14 bundled assistant skills to ~/.claude/skills/ + "
             "~/.agents/skills/ (Phase 16-C, ADR-0029). "
             "Default: prompt on TTY (default yes), install on non-TTY. "
             "Use --no-install-skills to skip; use `opshub skills install` "

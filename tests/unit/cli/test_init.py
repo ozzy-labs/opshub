@@ -5,7 +5,7 @@ the user's real ``~/.config/opshub`` / ``~/.local/share/opshub`` directories
 are never touched. All paths point inside ``tmp_path``.
 
 Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384),
-ADR-0029) adds 5 tests pinning the secretary skill install integration:
+ADR-0029) adds 5 tests pinning the assistant skill install integration:
 
 * ``--install-skills`` / ``--no-install-skills`` explicit flag wins over
   the TTY probe.
@@ -128,7 +128,7 @@ def test_init_force_overwrites_config(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
 
 # ---------------------------------------------------------------------------
-# Phase 16-C (#384, ADR-0029) — secretary skill install integration.
+# Phase 16-C (#384, ADR-0029) — assistant skill install integration.
 #
 # The 5 tests below patch ``opshub.cli.init.install_command`` to assert the
 # tri-state ``--install-skills`` / ``--no-install-skills`` / unset decision

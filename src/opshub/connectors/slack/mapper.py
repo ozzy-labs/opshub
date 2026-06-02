@@ -103,7 +103,7 @@ SUMMARY_MAX_CHARS = 200
 #: balance between table-rendered search output (CLI ``opshub search``
 #: column widths land in the 100-120 char range, leaving ~30-40 chars
 #: for the ``"{user} in #{ch}: "`` prefix) and context-budget impact
-#: on the secretary 14 Skill surface (~80 char inflation per hit
+#: on the assistant 14 Skill surface (~80 char inflation per hit
 #: multiplied by typical ``find-document`` page size keeps the per-call growth
 #: under ~1 KB — well within the ADR-0022 read tool budget).
 #:

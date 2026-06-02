@@ -8,7 +8,7 @@ The Phase 11 MVP walks Microsoft Graph
 authenticated user can see — personal 1:1 chats, group chats, and
 channel messages — through a single delta-enabled endpoint. This is
 intentionally narrower than enumerating ``/teams/{id}/channels/{id}/messages``
-per channel: the operator-1 secretary model (ADR-0010 §責務) prefers
+per channel: the operator-1 assistant model (ADR-0010 §責務) prefers
 "everything I can see" over "manually-selected channel set" so the
 ingestion side stays a single cursor rather than per-channel state.
 

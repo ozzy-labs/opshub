@@ -130,5 +130,5 @@ text は user に提示するのみ。user は手で Notion / Confluence / docs 
 - ADR-0017 §決定 (graph link_type)
 - ADR-0022 改訂 (MCP Server Surface、physical-column 時間フィルタ)
 - Phase 12 plan (`docs/phase-12-plan.md` §3 H5)
-- docs/secretary-agent.md (Skill catalog SSOT、14 skills 責務マップ)
+- docs/assistant-agent.md (Skill catalog SSOT、14 skills 責務マップ)
 - pair: announcement-draft (告知文、こちらも text-only)

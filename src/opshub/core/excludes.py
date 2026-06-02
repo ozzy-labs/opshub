@@ -16,7 +16,7 @@ File shape
 channels:           # Slack channel ids the connector must skip
   - C0SECRET01
 senders:            # author / sender identifiers (email, slack user id)
-  - secretary@example.com
+  - assistant@example.com
 repos:              # GitHub "owner/repo" the connector must skip
   - acme/secret-vault
 paths:              # fnmatch / gitignore-style globs (box_drive, OneDrive…)

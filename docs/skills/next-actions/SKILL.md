@@ -5,7 +5,7 @@ description: 「次に何をする?」「やること教えて」「タスク何
 
 # next-actions — 「次にやること」を opshub から組み立てる
 
-opshub MCP server (`opshub mcp serve`、ADR-0022) 経由で「次にやること」リストを返す。Phase 10 Sub-issue D / ADR-0004 §(c) で確定した secretary agent skill の 1 つ。
+opshub MCP server (`opshub mcp serve`、ADR-0022) 経由で「次にやること」リストを返す。Phase 10 Sub-issue D / ADR-0004 §(c) で確定した assistant agent skill の 1 つ。
 
 ## 何が起きるか
 
@@ -109,4 +109,4 @@ input:
 - ADR-0010 §改訂 (connector contract、Phase 11 で Teams 追加)
 - ADR-0020 §改訂 (Outlook body deep retention、Phase 11)
 - Phase 11 plan (`docs/phase-11-plan.md`)
-- docs/secretary-agent.md
+- docs/assistant-agent.md

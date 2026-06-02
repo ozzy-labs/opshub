@@ -11,7 +11,7 @@ overwrites an existing ``config.toml`` with the starter template — useful
 when a user wants to reset to defaults.
 
 Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384),
-ADR-0029) wires ``opshub init`` to also install the 14 bundled secretary
+ADR-0029) wires ``opshub init`` to also install the 14 bundled assistant
 skills via :func:`opshub.cli.skills.install_command`, so the documented
 2-step setup (``uv tool install ozzylabs-opshub[mcp]`` → ``opshub init``)
 leaves a fresh host with both the MCP store and the skill loader
@@ -63,7 +63,7 @@ def init_command(*, force: bool = False, install_skills: bool | None = None) -> 
         When ``True``, overwrite an existing ``config.toml`` with the starter
         template. The default ``False`` keeps any user edits intact.
     install_skills:
-        Tri-state secretary skill install decision (Phase 16-C, #384):
+        Tri-state assistant skill install decision (Phase 16-C, #384):
 
         * ``True`` — install unconditionally (no prompt, no TTY probe).
         * ``False`` — skip unconditionally (no prompt, no TTY probe).
@@ -79,7 +79,7 @@ def init_command(*, force: bool = False, install_skills: bool | None = None) -> 
         Install dispatches to
         :func:`opshub.cli.skills.install_command` with
         ``host='all', scope='user', skip_existing=False`` so the same
-        14 secretary skills land in ``~/.claude/skills/`` and
+        14 assistant skills land in ``~/.claude/skills/`` and
         ``~/.agents/skills/`` as a manual ``opshub skills install``
         invocation. The lazy import inside the branch avoids importing
         :mod:`opshub.cli.skills` (and its
@@ -157,7 +157,8 @@ def _should_install_skills(install_skills: bool | None) -> bool:
 
         return bool(
             Confirm.ask(
-                "秘書 14 skill を ~/.claude/skills/ と ~/.agents/skills/ に install しますか?",
+                "アシスタント 14 skill を ~/.claude/skills/ と "
+                "~/.agents/skills/ に install しますか?",
                 default=True,
             )
         )

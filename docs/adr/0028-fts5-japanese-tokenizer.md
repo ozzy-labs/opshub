@@ -72,7 +72,7 @@ migration 0028 で 1 回 back-fill する以外に、`opshub projections rebuild
 
 ### Positive
 
-- operator が日本語自然文を default mode で部分一致 query できるようになる (旧 `"...*" --raw` workaround 不要)。秘書 use case の探索体験が大幅改善。
+- operator が日本語自然文を default mode で部分一致 query できるようになる (旧 `"...*" --raw` workaround 不要)。アシスタント use case の探索体験が大幅改善。
 - find-document / `search` MCP tool 経由の skill (`personal-brief` / `next-actions` / `meeting-prep` / `research` 等) も同じ恩恵を受ける (SearchService 1 箇所改修で全 host LLM が改善を享受)。
 - migration 0019 の immutable 規範を維持しつつ supersede (新 migration 0028) で物理張り替え。alembic round-trip (upgrade → downgrade → upgrade) で元 tokenizer に戻せるため operator も安全に試せる。
 - 新規依存ゼロ (`trigram` は SQLite 3.34+ の built-in)。cold-start guard / `opshub --help` ≤ 300ms に影響なし。

@@ -35,7 +35,7 @@ Pair 2 — Mail (Phase 14 G3 #295)
   (``gmail_message``)
 
 Phase 14 plan §1 OQ4 + ADR-0010 §Phase 14 改訂 (k) commit to
-structural symmetry between Outlook and Gmail so the secretary skills
+structural symmetry between Outlook and Gmail so the assistant skills
 (recall / personal-brief / next-actions / reply-draft) never need an
 "is this Outlook or Gmail?" branch. The tests pin:
 
@@ -308,7 +308,7 @@ def test_mail_summary_format_family() -> None:
     The contract the symmetry test pins is **structural** rather
     than format-identical: both summaries (a) are present, (b) fit
     within the 200-char cap, (c) carry recognition value the
-    secretary skills can scan without an extra projection lookup.
+    assistant skills can scan without an extra projection lookup.
     """
     outlook_event = map_outlook_message(_outlook_fixture())
     gmail_event = map_gmail_message(_gmail_fixture())

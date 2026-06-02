@@ -1,6 +1,6 @@
-"""Phase 10 end-to-end secretary lifecycle (Sub-issue G3, closeout).
+"""Phase 10 end-to-end assistant lifecycle (Sub-issue G3, closeout).
 
-Pins the "人間 → 秘書 (MCP) → コマンド" flow on the platform side.
+Pins the "人間 → アシスタント (MCP) → コマンド" flow on the platform side.
 Because opshub follows Phase 10 形A (ADR-0004 改訂) and **hosts no LLM
 runtime of its own**, the e2e test substitutes for the agent host by
 replaying a deterministic script of MCP tool calls against the same
@@ -312,7 +312,7 @@ _SOURCE_FIXTURES: tuple[_SourceFixture, ...] = (
         title="alice in #phase10 — can you ack?",
         body=(
             "Hey, can you take a look at the phase 10 ship plan? "
-            "I want to confirm the secretary skill catalog before lunch."
+            "I want to confirm the assistant skill catalog before lunch."
         ),
         provenance_origin="external",
     ),
@@ -320,10 +320,10 @@ _SOURCE_FIXTURES: tuple[_SourceFixture, ...] = (
         connector_name="github",
         source_type="github_issue",
         external_id="ozzy-labs/opshub#203",
-        title="epic: Phase 10 Secretary Agent Platform",
+        title="epic: Phase 10 Assistant Agent Platform",
         body=(
             "Phase 10 brings full local body retention, encryption at rest, "
-            "MCP server surface, and the secretary 5 skills (personal-brief, "
+            "MCP server surface, and the assistant 5 skills (personal-brief, "
             "next-actions, reply-draft, pr-review, find-document)."
         ),
         provenance_origin="external",
@@ -331,8 +331,8 @@ _SOURCE_FIXTURES: tuple[_SourceFixture, ...] = (
     _SourceFixture(
         connector_name="box_drive",
         source_type="box_drive_file",
-        external_id="Phase10/secretary-design.md",
-        title="secretary-design.md",
+        external_id="Phase10/assistant-design.md",
+        title="assistant-design.md",
         # box_drive is FS-scan only (ADR-0019); body=None and the
         # FTS5 row is empty. We still seed via SourceService so the
         # round-trip exercises the body=NULL branch end-to-end.
@@ -375,11 +375,11 @@ def _seed_sources(actor: str = "test:phase10_lifecycle") -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def test_phase10_secretary_lifecycle(
+def test_phase10_assistant_lifecycle(
     isolated_env: _PathsDict,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """End-to-end "人間 → 秘書 (MCP) → コマンド" walk.
+    """End-to-end "人間 → アシスタント (MCP) → コマンド" walk.
 
     Sequence (Phase 10 plan §7.3):
 
@@ -459,7 +459,7 @@ def test_phase10_secretary_lifecycle(
         }
 
         # ---- 4. personal-brief script (read-only tool calls) --------------
-        # These are the four read tools the secretary personal-brief and
+        # These are the four read tools the assistant personal-brief and
         # next-actions skills auto-approve (ADR-0022 §(c)). Each call
         # must succeed and return the documented envelope ({items:
         # [...]} for list tools, {hits: [...]} for recall.search). We
@@ -494,13 +494,13 @@ def test_phase10_secretary_lifecycle(
         # ---- 5. find-document cross-connector search ---------------------
         # A query that should hit multiple connectors thanks to body
         # retention. The Slack body and the GitHub body both mention
-        # "Phase 10" / "secretary skills"; we assert that recall.search
+        # "Phase 10" / "assistant skills"; we assert that recall.search
         # returns ≥1 source-class hit and that, joining back to the
         # ``sources`` projection, the hits span more than one connector.
         cross_payload = _call_mcp_tool_json(
             specs_by_name,
             "recall.search",
-            {"query": "secretary skills phase 10", "limit": 10},
+            {"query": "assistant skills phase 10", "limit": 10},
         )
         cross_hits = cast("list[dict[str, Any]]", cross_payload["hits"])
         source_hit_ids: list[str] = [

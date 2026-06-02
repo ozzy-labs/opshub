@@ -171,7 +171,7 @@ def test_search_returns_hits_from_multiple_connectors_when_unfiltered(
     Phase 10 step B2 (Sub-issue B, ADR-0012 改訂版 §4 + ADR-0020):
     the FTS5 index is keyed off ``sources.body`` regardless of which
     connector produced the row. A query for a shared token must
-    surface hits from github + slack + box side-by-side so the secretary
+    surface hits from github + slack + box side-by-side so the assistant
     skill (find-document / personal-brief — Phase 12 H1 renamed)
     can cross-correlate evidence across SaaS sources without
     per-connector fan-out.

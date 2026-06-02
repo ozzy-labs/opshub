@@ -858,7 +858,7 @@ async def test_propose_apply_propagates_unknown_proposal(
 # 4. search MCP tool — real FTS5 end-to-end (H4 audit Cluster B)
 # ---------------------------------------------------------------------------
 #
-# The lifecycle integration test (``tests/integration/test_phase12_secretary_lifecycle``)
+# The lifecycle integration test (``tests/integration/test_phase12_assistant_lifecycle``)
 # covers ``search`` against a fully-migrated SQLite DB, but the
 # unit-level link from the registry's ``build_search_handler`` factory
 # down to the real :class:`SearchService` was only stubbed (see

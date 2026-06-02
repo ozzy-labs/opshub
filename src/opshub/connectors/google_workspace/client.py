@@ -70,7 +70,7 @@ Shared Drives (OQ10)
 --------------------
 
 The Phase 13 MVP **includes** Shared Drives ("Team Drives") so the
-secretary can see business-shared content. Drive requires two query
+assistant can see business-shared content. Drive requires two query
 flags for Shared Drives to participate in ``changes.list``:
 ``supportsAllDrives=true`` and ``includeItemsFromAllDrives=true``.
 We pin both in :data:`_CHANGES_LIST_PARAMS` so a future regression
@@ -227,7 +227,7 @@ class RawDriveItem:
         ``owners[0].displayName``. ``""`` when absent.
     is_shared_with_me:
         Whether the operator received this file via "Shared with me"
-        rather than owning it. Surfaced in the summary so the secretary
+        rather than owning it. Surfaced in the summary so the assistant
         can distinguish own-content from received-content.
     shared:
         Whether the file is shared at all (``True`` if Drive's
@@ -237,7 +237,7 @@ class RawDriveItem:
     last_modifying_user_email:
         ``lastModifyingUser.emailAddress``. Empty when Drive does not
         return a last-modifying user (anonymous edits, system updates).
-        G4 (#278) surfaces this so the secretary can attribute "who
+        G4 (#278) surfaces this so the assistant can attribute "who
         touched this last" without re-reading ``raw``.
     last_modifying_user_display_name:
         ``lastModifyingUser.displayName``. Empty when absent.
