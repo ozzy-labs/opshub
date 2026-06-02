@@ -139,16 +139,16 @@ connector_app.add_typer(auth_app)
 
 
 # ``slack`` is a nested Typer sub-app so per-connector discovery
-# commands (Phase 14 #341 PR2: ``opshub connector slack channels``)
-# stay grouped under the ``connector`` parent without polluting the
-# verb-level surface (``list`` / ``sync`` / ``auth``). Constructing
-# the sub-app at module level matches the ``auth_app`` precedent
-# above — a Typer instance is cheap, with no heavy imports, so the
-# ADR-0001 cold-start budget stays intact (covered by
-# ``tests/integration/test_cli_imports``).
+# commands (``opshub connector slack conversations``, #366; originally
+# ``slack channels`` from #341) stay grouped under the ``connector``
+# parent without polluting the verb-level surface (``list`` / ``sync``
+# / ``auth``). Constructing the sub-app at module level matches the
+# ``auth_app`` precedent above — a Typer instance is cheap, with no
+# heavy imports, so the ADR-0001 cold-start budget stays intact
+# (covered by ``tests/integration/test_cli_imports``).
 slack_app = typer.Typer(
     name="slack",
-    help="Slack connector discovery utilities (channel listing, ...).",
+    help="Slack connector discovery utilities (conversations listing, ...).",
     no_args_is_help=True,
 )
 connector_app.add_typer(slack_app)
@@ -732,8 +732,8 @@ def auth_test(
         typer.echo(f"{k:<{key_width}}  {display}")
 
 
-@slack_app.command("channels")
-def slack_channels(
+@slack_app.command("conversations")
+def slack_conversations(
     output_format: str = typer.Option(
         "table",
         "--format",
@@ -742,90 +742,97 @@ def slack_channels(
     filter_substring: str | None = typer.Option(
         None,
         "--filter",
-        help="Case-insensitive substring match against the channel name.",
+        help=(
+            "Case-insensitive substring match against the conversation "
+            "name or participant display name."
+        ),
     ),
     limit: int | None = typer.Option(
         None,
         "--limit",
-        help="Maximum number of channels to list (default: no limit).",
+        help="Maximum number of conversations to list (default: no limit).",
         min=1,
     ),
-    include_private: bool = typer.Option(
-        False,
-        "--include-private",
-        help=(
-            "Include private channels (requires the 'groups:read' "
-            "scope on the configured Slack token)."
-        ),
+    types: str = typer.Option(
+        # Built from the helper module so the default cannot drift from
+        # the accept-list and the literal tuple :data:`CONVERSATION_TYPES`.
+        # The value is computed at import time (no runtime cost).
+        "public,private,im,mpim",
+        "--types",
+        help=("Comma-separated conversation types: public, private, im, mpim (default: all four)."),
     ),
     include_archived: bool = typer.Option(
         False,
         "--include-archived",
         help="Include archived channels (default: excluded).",
     ),
+    all_conversations: bool = typer.Option(
+        False,
+        "--all",
+        help=(
+            "Use conversations.list (workspace-wide) instead of "
+            "users.conversations (joined-only). conversations.list does "
+            "not return DM/MPIM rows."
+        ),
+    ),
 ) -> None:
-    """List Slack channels visible to the stored token (#341).
+    """List Slack conversations visible to the stored token (#366).
 
     Operators configure the Slack connector via
     ``[connectors.slack] channels = ["C012345...", ...]`` in
-    ``opshub.toml``. Discovering those channel ids by hand (Slack Web
-    UI → "Copy link") is painful in workspaces with hundreds of
-    channels; this command surfaces every channel the configured
-    token can see so the operator can paste the ``--format toml``
-    output straight into the config file.
+    ``opshub.toml``. Discovering those ids by hand (Slack Web UI →
+    "Copy link") is painful in busy workspaces; this command surfaces
+    every conversation the configured token participates in
+    (channels + DMs + MPIMs) so the operator can paste the
+    ``--format toml`` output straight into the config file.
 
-    Calls Slack's ``conversations.list`` API (read-only, minimum
-    scope ``channels:read``; ``groups:read`` is required for
-    ``--include-private``). The token is loaded via the same
-    precedence rule as the rest of opshub
-    (``OPSHUB_CONNECTOR_SLACK_TOKEN`` env var wins over keyring per
-    ADR-0014). The token never appears in any output — error
-    messages surface only the Slack API ``error`` short string
-    (``invalid_auth`` / ``missing_scope`` / ...) and the corresponding
-    scope name for ``missing_scope`` (so the operator can extend
-    their OAuth grant without round-tripping the docs).
+    Calls Slack's ``users.conversations`` API (default; returns
+    conversations the token has *joined*) or ``conversations.list``
+    (``--all``; returns workspace-wide channels but no DM/MPIM).
+    Required scopes: ``channels:read`` + ``groups:read`` +
+    ``im:read`` + ``mpim:read`` to surface all four conversation
+    types. The token is loaded via the same precedence rule as the
+    rest of opshub (``OPSHUB_CONNECTOR_SLACK_TOKEN`` env var wins
+    over keyring per ADR-0014). The token never appears in any
+    output — error messages surface only the Slack API ``error``
+    short string and the ``needed`` scope name for ``missing_scope``.
 
     Exit codes:
 
-    * ``0`` — channels listed (zero matches is **not** an error;
-      the CLI prints an explicit ``no channels matched`` hint on
-      stderr while keeping stdout free for pipelines).
+    * ``0`` — conversations listed (zero matches is **not** an error;
+      a stderr hint surfaces while stdout stays clean for pipelines).
     * ``1`` — config error (no token / wrong prefix / SDK extras
       missing) or runtime API failure (``invalid_auth`` /
-      ``missing_scope`` / exhausted 429 retries). The error message
-      is surfaced on stderr; tokens are never echoed.
-    * ``2`` — usage error (unknown ``--format`` value). Mirrors
-      Typer's convention so scripts can branch on the exit code.
+      ``missing_scope`` / exhausted 429 retries).
+    * ``2`` — usage error (unknown ``--format`` or ``--types``
+      value).
 
     Output formats:
 
-    * ``table`` (default): five columns ``ID NAME PRIVATE ARCHIVED
-      PURPOSE``. Suitable for visual inspection.
+    * ``table`` (default): five columns ``ID TYPE NAME / PARTICIPANTS
+      ARCHIVED PURPOSE``. Suitable for visual inspection.
     * ``toml``: a ``channels = [...]`` snippet ready to paste into
       ``opshub.toml`` under ``[connectors.slack]``. Each id is
-      annotated with a comment carrying the channel name plus any
-      ``(private)`` / ``(archived)`` flags.
-    * ``json``: a JSON array of objects (``id`` / ``name`` /
-      ``is_private`` / ``is_archived`` / ``purpose``). Suitable for
+      annotated with a comment carrying the conversation type and a
+      human-readable label.
+    * ``json``: a JSON array of dataclass objects. Suitable for
       ``jq`` post-processing.
 
-    The token is read lazily (no API call happens until the formatter
-    is selected), so passing ``--help`` does not require a configured
-    Slack token.
+    The token is read lazily, so ``--help`` does not require a
+    configured Slack token.
     """
     # Lazy imports: keep CLI cold start fast (ADR-0001). The private
-    # ``_slack_channels`` helper pulls ``opshub.connectors.slack.*``
+    # ``_slack_conversations`` helper pulls ``opshub.connectors.slack.*``
     # (and through it, ``slack_sdk``) only when this handler runs —
     # the ``test_cli_imports`` static check covers this module's
     # top-level surface.
-    from opshub.cli._slack_channels import FORMAT_CHOICES, run_channels_command
+    from opshub.cli._slack_conversations import (
+        FORMAT_CHOICES,
+        parse_types,
+        run_conversations_command,
+    )
     from opshub.core.errors import ConfigError, ConnectorFailedError
 
-    # Validate ``--format`` against the documented accept-list. Typer
-    # itself does not enforce string Literals at parse time
-    # (str-typed Option means any input is allowed) so we surface
-    # the usage error explicitly with the same exit code (2) Typer
-    # uses for its own option parsing failures.
     if output_format not in FORMAT_CHOICES:
         typer.echo(
             f"unknown --format value {output_format!r}; choose one of {', '.join(FORMAT_CHOICES)}",
@@ -833,36 +840,26 @@ def slack_channels(
         )
         raise typer.Exit(code=2)
 
-    # ``filter_substring`` is normalised to ``None`` for the empty
-    # string here (rather than inside the iterator) so the
-    # ``no channels matched`` hint can distinguish "no filter was set"
-    # from "filter set to empty string" — operators occasionally type
-    # ``--filter ""`` expecting it to be a no-op; surfacing the
-    # difference would be confusing.
+    # ``parse_types`` raises :class:`typer.BadParameter` on unknown /
+    # empty input which Typer maps to exit code 2 with a usage message
+    # — same UX as the ``--format`` arm above.
+    parsed_types = parse_types(types)
+
     normalised_filter: str | None = filter_substring or None
 
     try:
-        run_channels_command(
+        run_conversations_command(
             output_format=output_format,  # pyright: ignore[reportArgumentType]
             filter_substring=normalised_filter,
             limit=limit,
-            include_private=include_private,
+            types=parsed_types,
             include_archived=include_archived,
+            all=all_conversations,
         )
     except ConfigError as exc:
-        # ``ConfigError`` already carries a sanitised message (no token
-        # substrings) per the SlackAuth token-leak invariant. Surface
-        # it verbatim and exit 1 so scripts / CI can branch.
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     except ConnectorFailedError as exc:
-        # ``ConnectorFailedError`` is the uniform error type for
-        # Slack API failures (``invalid_auth`` / ``missing_scope`` /
-        # exhausted 429 retries). The message is constructed by
-        # :func:`opshub.connectors.slack.channels._to_connector_failed`
-        # which surfaces only Slack's documented ``error`` short
-        # string (and for ``missing_scope`` the ``needed`` scope name)
-        # — never the token.
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
