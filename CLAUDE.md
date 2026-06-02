@@ -8,7 +8,10 @@
 
 ## Available Skills
 
-スキル本体は [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) に置き、`@ozzylabs/skills` の Renovate preset 経由で `.claude/skills/` に配布される（[ADR-0016](https://github.com/ozzy-labs/handbook/blob/main/adr/0016-create-skills-repo.md)）。
+スキル配信経路は 2 系統に分かれる:
+
+- **秘書 14 Skill** (`personal-brief` / `next-actions` / ... / `meeting-followup`) は opshub Python package に **同梱** され、`opshub skills install` または `opshub init` 経由で `.claude/skills/` (Claude Code 用) と `.agents/skills/` (Codex CLI / Copilot CLI 用) に展開される（Phase 16-A〜D、[ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)）。SSOT は `docs/skills/<name>/SKILL.md` (ADR-0004 §決定 (c))。
+- **ecosystem 共通スキル** (drive / lint / commit / ship / pr / review / health / implement / phase-issue / topics / commit-conventions / lint-rules / test) は [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) に置かれ、`@ozzylabs/skills` の Renovate preset 経由で配布される（handbook [ADR-0016](https://github.com/ozzy-labs/handbook/blob/main/adr/0016-create-skills-repo.md)）。両系統は名前空間 disjoint で、`opshub skills install` は秘書 14 skill のみを書き込み、ecosystem 共通 skill には触れない (test `test_skills_install_only_writes_14_secretary_skills` で pin)。
 
 ### 開発作業用スキル
 

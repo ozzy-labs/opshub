@@ -308,7 +308,7 @@ opshub 本体リポでは `docs/skills/<name>/SKILL.md` が引き続き **SSOT**
 - 14 skills 全てに per-skill MCP dispatch pin (skill 内 MCP tool 名・引数 schema が opshub MCP surface と整合するか grep + JSON schema validation)
 - HITL boundary test pin (HITL write skill の `propose.apply` annotation = `read_only=false, destructive=false, idempotent=true`)
 - text-only boundary test pin (handoff/announcement-draft が persist 経路を持たない)
-- skill security scan は Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で `opshub skills install` の install 前ゲートとしても再利用予定 ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)、`ozzy-labs/skills` 側 CI への組み込みは ecosystem 共通 skill 経路に限定、秘書 14 skill は opshub 内で scan する)
+- `tools/skill_scan.py` は本リポ内 14 skill spec (`docs/skills/<name>/SKILL.md`) に対し commit 時の test (`tests/unit/skills/test_skill_specs.py`) で適用する。`opshub skills install` の install 前 scan ゲートは現状実装していない (将来検討、[#396](https://github.com/ozzy-labs/opshub/issues/396))。秘書 14 skill の payload (`src/opshub/_skills/<name>/SKILL.md`) は build 時に `docs/skills/` SSOT から `[tool.hatch.build.force-include]` で取り込まれるため、install 経路で外部由来の SKILL.md が混入する余地が構造的になく、install 前 scan の優先度は低い。ecosystem 共通 skill は `ozzy-labs/skills` 側 CI で別途 scan される ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md))
 - 検出ルールは scope 縮小設計 (高 precision / 中 recall)。誤検出は `# skill-scan: allow <category>` コメントで局所的に suppress 可能
 
 ## 10. 関連

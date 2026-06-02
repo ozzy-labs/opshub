@@ -330,3 +330,276 @@ def test_skills_list_shows_install_status(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert "personal-brief  modified" in listed.output
     # Other skills stay installed.
     assert "next-actions  installed" in listed.output
+
+
+# ---------------------------------------------------------------------------
+# Phase 16 audit followup v2 (#395) — additional regression tests.
+#
+# The autouse :func:`_mirror_secretary_skill_bundle` fixture in
+# ``tests/conftest.py`` rebuilds ``src/opshub/_skills/`` from
+# ``docs/skills/`` before every pytest session. That keeps editable
+# installs / wheel installs / CI matrix runners aligned, but it also
+# made the bundle-missing exit-1 branch in
+# :func:`opshub.cli.skills.install_command` untested in practice —
+# the fixture would always re-create ``_skills/`` before the test had
+# a chance to run. The follow-up tests below patch the resource helper
+# directly so the branch is exercised regardless of the autouse mirror,
+# alongside additional coverage for ``--host`` / ``--scope`` validation,
+# structured logging, and the ``--host all --scope project`` combo.
+# ---------------------------------------------------------------------------
+
+
+def test_skills_install_payload_missing_exits_1(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """**Critical regression guard** — wheel without ``_skills/`` exits 1 with reinstall hint.
+
+    The :class:`opshub._skills_resources.SkillResourceError` path in
+    :func:`opshub.cli.skills.install_command` (``src/opshub/cli/skills.py``
+    lines 303-306) is normally false-green because
+    :func:`tests.conftest._mirror_secretary_skill_bundle` re-materialises
+    ``src/opshub/_skills/`` before every session. An sdist build (or any
+    wheel that loses the ``[tool.hatch.build.force-include]`` mapping
+    before Phase 16-B) would expose this branch on operator machines —
+    pin it here by monkeypatching :func:`iter_skill_files` so the
+    install path hits the error handler regardless of the autouse
+    mirror.
+    """
+    _isolate_home(monkeypatch, tmp_path)
+
+    from opshub import _skills_resources
+    from opshub.cli import skills as cli_skills
+
+    sentinel_message = (
+        "opshub package is missing the bundled skill payload "
+        "(_skills/ directory). Reinstall via "
+        "`uv tool install --reinstall ozzylabs-opshub` to pick up "
+        "the Phase 16-B build (ADR-0029)."
+    )
+
+    def _raise_missing(_skill_name: str) -> object:
+        raise _skills_resources.SkillResourceError(sentinel_message)
+
+    # Patch the symbol resolved by the lazy import inside
+    # ``install_command`` (``from opshub._skills_resources import ...
+    # iter_skill_files``) — patching the source module is enough because
+    # the import resolves the name from ``_skills_resources.__dict__``
+    # at call time.
+    monkeypatch.setattr(cli_skills, "iter_skill_files", _raise_missing, raising=False)
+    monkeypatch.setattr(_skills_resources, "iter_skill_files", _raise_missing, raising=False)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["skills", "install", "--host", "claude-code"])
+
+    # Exit code 1 (packaging failure) — distinct from the BadParameter
+    # ``exit 2`` path so operators can branch on the cause.
+    assert result.exit_code == 1, result.output
+    # The actionable reinstall hint surfaces on stderr / stdout (Typer
+    # routes ``typer.echo(..., err=True)`` through the CliRunner output
+    # buffer). The exact wording is part of the contract because
+    # docs/troubleshooting.md §3.9 instructs operators to look for it.
+    combined = result.output + (result.stderr if hasattr(result, "stderr") else "")
+    assert "reinstall" in combined.lower(), combined
+    assert "_skills" in combined or "ozzylabs-opshub" in combined, combined
+
+
+def test_skills_install_invalid_host_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--host garbage`` exits with a BadParameter (exit code 2)."""
+    _isolate_home(monkeypatch, tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["skills", "install", "--host", "garbage"])
+
+    # Typer maps ``typer.BadParameter`` to exit code 2 with the usage
+    # error message printed on stderr.
+    assert result.exit_code == 2, result.output
+    combined = result.output + (result.stderr if hasattr(result, "stderr") else "")
+    assert "garbage" in combined or "Invalid" in combined or "invalid" in combined, combined
+
+
+def test_skills_install_invalid_scope_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--scope garbage`` exits with a BadParameter (exit code 2)."""
+    _isolate_home(monkeypatch, tmp_path)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["skills", "install", "--scope", "garbage"])
+
+    assert result.exit_code == 2, result.output
+    combined = result.output + (result.stderr if hasattr(result, "stderr") else "")
+    assert "garbage" in combined or "Invalid" in combined or "invalid" in combined, combined
+
+
+def test_skills_install_emits_structured_log_category_skill_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``install_command`` emits ``category=skill_install`` with byte counts.
+
+    Pin the ADR-0027 structured-logging contract: every install must
+    emit a single ``event=skill_install_complete`` row with
+    ``category=skill_install`` and the ``written`` / ``skipped`` /
+    ``overwritten`` integer columns so downstream observability
+    (`opshub --log-format json`) can be aggregated without re-parsing
+    the human summary lines.
+    """
+    _isolate_home(monkeypatch, tmp_path)
+
+    from opshub.cli import skills as cli_skills
+
+    # Capture every bound logger call by replacing ``get_logger`` with
+    # a stub that records the ``bind`` kwargs (category / host / scope /
+    # dry_run / skip_existing) and the subsequent ``info(...)`` event
+    # name + kwargs. This sidesteps structlog's stderr cache (capsys
+    # would be flaky) while still pinning the public contract.
+    bound_state: dict[str, object] = {}
+    info_calls: list[tuple[str, dict[str, object]]] = []
+
+    class _StubBound:
+        def info(self, event: str, **kwargs: object) -> None:
+            info_calls.append((event, kwargs))
+
+        def warning(self, event: str, **kwargs: object) -> None:  # pragma: no cover
+            info_calls.append((event, kwargs))
+
+        def error(self, event: str, **kwargs: object) -> None:  # pragma: no cover
+            info_calls.append((event, kwargs))
+
+    class _StubLogger:
+        def bind(self, **kwargs: object) -> _StubBound:
+            bound_state.update(kwargs)
+            return _StubBound()
+
+    def _stub_get_logger(*_args: object, **_kwargs: object) -> _StubLogger:
+        return _StubLogger()
+
+    monkeypatch.setattr("opshub.core.logging.get_logger", _stub_get_logger)
+    # ``install_command`` does ``from opshub.core.logging import
+    # get_logger`` lazily; patch the symbol on the source module so the
+    # lazy resolution picks up the stub.
+
+    cli_skills.install_command(host="claude-code", scope="user", skip_existing=False)
+
+    # bind(...) carried the bookkeeping columns.
+    assert bound_state["category"] == "skill_install", bound_state
+    assert bound_state["host"] == "claude-code", bound_state
+    assert bound_state["scope"] == "user", bound_state
+    assert bound_state["dry_run"] is False, bound_state
+    assert bound_state["skip_existing"] is False, bound_state
+
+    # Exactly one ``skill_install_complete`` event with numeric counts.
+    completes = [(name, kw) for name, kw in info_calls if name == "skill_install_complete"]
+    assert len(completes) == 1, info_calls
+    _name, kwargs = completes[0]
+    assert isinstance(kwargs["written"], int) and kwargs["written"] > 0, kwargs
+    assert isinstance(kwargs["skipped"], int), kwargs
+    assert isinstance(kwargs["overwritten"], int), kwargs
+    # ``distinct_skills`` (14 secretary skills) is emitted alongside
+    # for dashboards that want a per-bundle count.
+    assert kwargs["distinct_skills"] == len(SECRETARY_SKILL_NAMES), kwargs
+
+
+def test_skills_install_host_all_scope_project_writes_both_roots(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--host all --scope project`` writes 14 skills to both CWD roots.
+
+    ADR-0029 §決定 (f) — ``project`` scope rewrites both ``claude-code``
+    and ``codex``/``copilot`` host roots into CWD-relative paths. The
+    ``--host all`` default expands to two distinct directories
+    (``./.claude/skills/`` and ``./.agents/skills/``); pinning the
+    combination here guards the in-repo dogfood pattern
+    (Phase 16-D, ``uv run opshub skills install --scope project``).
+    """
+    _isolate_home(monkeypatch, tmp_path)
+    project = tmp_path / "myrepo"
+    project.mkdir()
+    monkeypatch.chdir(project)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["skills", "install", "--host", "all", "--scope", "project"])
+    assert result.exit_code == 0, result.output
+
+    claude_root = project / ".claude" / "skills"
+    agents_root = project / ".agents" / "skills"
+    assert claude_root.is_dir()
+    assert agents_root.is_dir()
+    for name in SECRETARY_SKILL_NAMES:
+        assert (claude_root / name / "SKILL.md").is_file(), name
+        assert (agents_root / name / "SKILL.md").is_file(), name
+    # The user-scope roots stay untouched.
+    assert not (tmp_path / "home" / ".claude" / "skills").exists()
+    assert not (tmp_path / "home" / ".agents" / "skills").exists()
+
+
+def test_skills_install_host_copilot_uses_agents_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--host copilot`` writes to ``~/.agents/skills/`` only.
+
+    Codex CLI and Copilot CLI both load skills from
+    ``~/.agents/skills/`` per handbook ADR-0016, so ``--host copilot``
+    must resolve to the same directory as ``--host codex`` (and
+    ``--host all`` de-duplicates the two into one root).
+    """
+    home = _isolate_home(monkeypatch, tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(app, ["skills", "install", "--host", "copilot"])
+    assert result.exit_code == 0, result.output
+
+    assert not (home / ".claude" / "skills").exists()
+    assert (home / ".agents" / "skills" / "personal-brief" / "SKILL.md").is_file()
+
+
+def test_skills_install_skip_existing_dry_run_reports_skipped_count(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``--skip-existing --dry-run`` accounts for pre-existing files in skipped.
+
+    Pin the combo to confirm the skipped-counter path runs even when no
+    bytes are written: dry-run still walks the install plan, and
+    ``--skip-existing`` still routes pre-existing destination paths
+    into the ``skipped_paths`` list (visible via the structured log
+    ``skipped`` count).
+    """
+    home = _isolate_home(monkeypatch, tmp_path)
+    target_dir = home / ".claude" / "skills" / "personal-brief"
+    target_dir.mkdir(parents=True)
+    (target_dir / "SKILL.md").write_bytes(b"# pre-existing\n")
+
+    from opshub.cli import skills as cli_skills
+
+    info_calls: list[tuple[str, dict[str, object]]] = []
+
+    class _StubBound:
+        def info(self, event: str, **kwargs: object) -> None:
+            info_calls.append((event, kwargs))
+
+        def warning(self, event: str, **kwargs: object) -> None:  # pragma: no cover
+            info_calls.append((event, kwargs))
+
+        def error(self, event: str, **kwargs: object) -> None:  # pragma: no cover
+            info_calls.append((event, kwargs))
+
+    class _StubLogger:
+        def bind(self, **_kwargs: object) -> _StubBound:
+            return _StubBound()
+
+    def _stub_get_logger(*_args: object, **_kwargs: object) -> _StubLogger:
+        return _StubLogger()
+
+    monkeypatch.setattr("opshub.core.logging.get_logger", _stub_get_logger)
+
+    cli_skills.install_command(host="claude-code", scope="user", skip_existing=True, dry_run=True)
+
+    completes = [(n, kw) for n, kw in info_calls if n == "skill_install_complete"]
+    assert len(completes) == 1, info_calls
+    _name, kwargs = completes[0]
+    # The pre-existing personal-brief/SKILL.md was skipped, so ``skipped >= 1``.
+    assert isinstance(kwargs["skipped"], int) and kwargs["skipped"] >= 1, kwargs
+    # dry-run never overwrites — the overwritten counter stays zero.
+    assert kwargs["overwritten"] == 0, kwargs
+    # Pre-existing bytes survive even though dry-run was the intent.
+    assert (target_dir / "SKILL.md").read_bytes() == b"# pre-existing\n"
