@@ -206,15 +206,16 @@ sqlite3 ~/.local/share/opshub/db/opshub.sqlite \
 
 Slack connector を有効化するには `opshub.toml` の `[connectors.slack] channels = ["C012345...", ...]` に **channel ID** を列挙する必要がある。Slack Web UI から「リンクをコピー → URL 末尾」を読む手作業はチャネル数が多いワークスペースで現実的でない。
 
-**手順** (Phase 14.x、issue [#341](https://github.com/ozzy-labs/opshub/issues/341)):
+**手順** (Phase 14.x [#341](https://github.com/ozzy-labs/opshub/issues/341) で初出、Phase 15+ [#366](https://github.com/ozzy-labs/opshub/issues/366) で `channels` → `conversations` 刷新 = `users.conversations` 切替 + DM/MPIM 統合 + 進捗表示):
 
 ```bash
-opshub connector auth set connector:slack       # 既存。User Token (`xoxp-`) 推奨
-opshub connector slack channels                 # 表形式で channel 一覧を表示
-opshub connector slack channels --format toml   # `[connectors.slack] channels` 用 snippet
-opshub connector slack channels --filter eng    # name に "eng" を含む channel のみ
-opshub connector slack channels --include-private    # private channel も対象 (`groups:read` 要)
-opshub connector slack channels --include-archived   # archived channel も対象
+opshub connector auth set connector:slack            # 既存。User Token (`xoxp-`) 推奨
+opshub connector slack conversations                 # 表形式で参加中の conversation (channels + DMs) を表示 (default: public + private + im + mpim 4 種)
+opshub connector slack conversations --format toml   # `[connectors.slack] channels` 用 snippet
+opshub connector slack conversations --filter eng    # name / participant に "eng" を含む conversation のみ
+opshub connector slack conversations --types public,private   # public / private channel のみ (DM/MPIM を除外)
+opshub connector slack conversations --include-archived       # archived channel も対象
+opshub connector slack conversations --all           # workspace 全体 (`conversations.list` 経由、joined 外も含む)
 ```
 
 `--format toml` の出力を `~/.config/opshub/config.toml` の `[connectors.slack]` セクションに貼り、不要行を消すだけで sync 対象が確定する。
@@ -222,9 +223,9 @@ opshub connector slack channels --include-archived   # archived channel も対�
 **典型エラー**:
 
 - `Error: Slack OAuth token is not configured` → `opshub connector auth set connector:slack` を先に実行する
-- `Error: Slack conversations.list failed: missing_scope (needed: 'groups:read')` → `--include-private` を使うには Slack App の OAuth スコープに `groups:read` を追加し、再認可後にトークンを `auth set` で更新する ([ADR-0018](adr/0018-slack-token-principal.md) §Decision (7))
-- `Error: Slack conversations.list failed: invalid_auth` → トークンが失効。`opshub connector auth set connector:slack` で再登録する
-- `no channels matched (filter: '...')` (stderr 出力、exit code 0) → `--filter` 文字列を見直すか、`--include-private` / `--include-archived` で対象を広げる
+- `Error: Slack users.conversations failed: missing_scope (needed: 'groups:read')` → `--types public,private` で private channel を含めるには Slack App の OAuth スコープに `groups:read` を追加し (DM/MPIM listing は `im:read` / `mpim:read`)、再認可後にトークンを `auth set` で更新する ([ADR-0018](adr/0018-slack-token-principal.md) §Decision (7))
+- `Error: Slack users.conversations failed: invalid_auth` → トークンが失効。`opshub connector auth set connector:slack` で再登録する
+- `no conversations matched (filter: '...')` (stderr 出力、exit code 0) → `--filter` 文字列を見直すか、`--types` で対象種別を広げる / `--include-archived` を付ける / `--all` で workspace-wide に切替える
 
 トークン値・API レスポンス本文はどの出力経路 (stdout / stderr) にも出ない。`--debug` を付けた場合の追加 traceback もサニタイズ済み (§3.1 と同じ redaction processor が効く)。
 

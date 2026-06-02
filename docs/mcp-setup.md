@@ -22,6 +22,20 @@ uv sync --extra mcp --extra encryption --extra connectors-slack
 
 Running `opshub mcp serve` without the extras prints a clear install hint and exits with code 2.
 
+### 1.1 Slack connector token scopes
+
+If the `connectors-slack` extras are enabled and the host will surface Slack data via `find-document` / `search` / `recall.search`, the User Token (`xoxp-...`) must carry the right scopes ([ADR-0018](adr/0018-slack-token-principal.md) §Decision (7)):
+
+| Purpose | Scope | Required for |
+| --- | --- | --- |
+| public channel listing + history | `channels:read` + `channels:history` | `opshub connector sync slack`, `opshub connector slack conversations` (default) |
+| user name lookup | `users:read` | DM / MPIM name resolution in `opshub connector slack conversations` |
+| private channel listing + history | `groups:read` + `groups:history` | `--types public,private` in `opshub connector slack conversations`, private channel sync |
+| DM listing + history | `im:read` + `im:history` | `--types ...,im` in `opshub connector slack conversations`, DM sync |
+| MPIM listing + history | `mpim:read` + `mpim:history` | `--types ...,mpim` in `opshub connector slack conversations`, MPIM sync |
+
+Bot Tokens (`xoxb-...`) work as an alternative principal, but the bot must be `/invite`d into every channel it should see (ADR-0018 §Decision (2)).
+
 ## 2. Initialise the database
 
 The MCP server reads the same SQLite store as the CLI, so `opshub init` (or `opshub db migrate` on an existing store) must have run before the agent connects.
