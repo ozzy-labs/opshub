@@ -36,7 +36,7 @@ soon as the severity-appropriate timeline allows:
 
 ## Scope
 
-OpsHub is a **local-first single-user CLI / secretary agent platform**
+OpsHub is a **local-first single-user CLI / assistant agent platform**
 ([`docs/principles.md`](docs/principles.md) §1 Local-first). The threat model assumes:
 
 - The CLI runs on a workstation the operator trusts and controls
@@ -51,7 +51,7 @@ OpsHub is a **local-first single-user CLI / secretary agent platform**
 
 ### Phase 10 body retention — what changed
 
-Phase 10 ([ADR-0020](docs/adr/0020-full-local-content-retention.md), supersedes ADR-0005) switched OpsHub from "retain summaries only" to **retain full source body locally** (Slack message bodies, GitHub issue / PR bodies, Outlook bodies, Box text extraction). This is the unavoidable backbone of the secretary agent platform — recall, cross-source search, and reply-draft style replication all require body access. The shift carries operator responsibilities:
+Phase 10 ([ADR-0020](docs/adr/0020-full-local-content-retention.md), supersedes ADR-0005) switched OpsHub from "retain summaries only" to **retain full source body locally** (Slack message bodies, GitHub issue / PR bodies, Outlook bodies, Box text extraction). This is the unavoidable backbone of the assistant agent platform — recall, cross-source search, and reply-draft style replication all require body access. The shift carries operator responsibilities:
 
 - **Encryption at rest** (`[storage] encryption = true` in `opshub.toml`, [ADR-0021](docs/adr/0021-encryption-at-rest.md)) is *opt-in*. Operators handling regulated / sensitive bodies should enable it; the SQLCipher backend ships under the `encryption` extras and reuses the keyring path (`db:encryption_key` slot, env override `OPSHUB_DB_ENCRYPTION_KEY`). Without encryption, the DB stores bodies as on-disk plaintext — pinned by `tests/unit/core/test_encryption.py::test_unencrypted_db_leaks_body_as_plaintext` so the regression cannot land silently.
 - **Ingest excludes** (`~/.config/opshub/excludes.yaml`, ADR-0020 §(b)) keep specific channels / senders / repos / paths out of the body store entirely — operators decide what *not* to retain.
@@ -74,9 +74,9 @@ Phase 11 operator responsibilities continue along the same axes as Phase 10:
 - **Office extraction is `content_extraction = true` opt-in** — default-off keeps Phase 9/10 operators on the metadata-only FS scan path. Enabling it pulls only the markitdown sub-deps the extras declare (`mammoth` / `openpyxl` / `python-pptx`), so the cold-install footprint stays small.
 - **External write-back remains forbidden** ([ADR-0010](docs/adr/0010-connector-contract.md) §禁止事項 7). The Teams connector deliberately exposes no `send` / `post` / `reply` callable; reply-draft skill output is local only.
 
-### Phase 12 Secretary skills expansion — what changed
+### Phase 12 Assistant skills expansion — what changed
 
-Phase 12 ([ADR-0004](docs/adr/0004-agent-runtime-boundary.md) revision §決定 (c-2) + [ADR-0022](docs/adr/0022-mcp-server-surface.md) revision §決定 (f) + [ADR-0016](docs/adr/0016-action-loop-and-structured-output.md) revision §決定 (l)) grows the secretary skill catalog from 5 to 14 and widens the MCP surface with 4 new tools (`search` FTS5 + `propose.apply` HITL idempotent + physical-column time filters on the existing 4 read tools). The MCP boundary surface picks up **one carve-out** but no relaxations:
+Phase 12 ([ADR-0004](docs/adr/0004-agent-runtime-boundary.md) revision §決定 (c-2) + [ADR-0022](docs/adr/0022-mcp-server-surface.md) revision §決定 (f) + [ADR-0016](docs/adr/0016-action-loop-and-structured-output.md) revision §決定 (l)) grows the assistant skill catalog from 5 to 14 and widens the MCP surface with 4 new tools (`search` FTS5 + `propose.apply` HITL idempotent + physical-column time filters on the existing 4 read tools). The MCP boundary surface picks up **one carve-out** but no relaxations:
 
 - **`propose.apply` is the first write-class MCP tool to advertise `destructive=false`** ([ADR-0022](docs/adr/0022-mcp-server-surface.md) §決定 (f), `WriteCategory.PROPOSE_APPLY`, `destructive=false` + `idempotent=true`). All other write tools (`task.create` / `inbox.add` / `connector.sync` / `propose.generate`) keep `destructive=true`. The carve-out is admissible because the apply path is idempotent at the handler layer: the handler catches `OpsHubError("already applied" / "already rejected")` from `ProposalService.apply` and normalises the second-call response to `{ok: true, already_applied: true, applied_entity_id}` so retries never throw and never produce a second persist. The annotation honesty contract (`tests/unit/mcp/test_registry_policy`) pins this — a write tool advertising `destructive=false` without an idempotent handler is a regression.
 - **The HITL apply contract is unchanged** ([ADR-0016](docs/adr/0016-action-loop-and-structured-output.md) §決定 (c)). `propose.apply` is still operator-triggered — the host LLM cannot self-dispatch it; the MCP annotation policy continues to require human confirmation on every write tool ([ADR-0022](docs/adr/0022-mcp-server-surface.md) annotation policy, Phase 10).
@@ -112,7 +112,7 @@ Phase 14 operator responsibilities continue along the same axes as Phase 13:
 - **Ingest excludes** extend to both connectors via the existing top-level flat selectors in `~/.config/opshub/excludes.yaml` ([ADR-0020](docs/adr/0020-full-local-content-retention.md) §(b)) — `senders` for Gmail addresses, `paths` / event titles for Calendar.
 - **Token handling** — Gmail / Calendar reuse the existing `connector:google_workspace:refresh_token` keyring slot with `OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN` env override. Phase 14 widens the scope at the OAuth principal layer to the 3-scope fixed list `drive.readonly + gmail.readonly + calendar.readonly` ([ADR-0014](docs/adr/0014-saas-token-storage.md) revision). **One re-consent applies to all three connectors** (1 Google account = 1 principal sharing Drive + Gmail + Calendar). The token-rotation-write-back pattern from Phase 13 ([ADR-0010](docs/adr/0010-connector-contract.md) §Phase 13 改訂 (h)) carries over unchanged; the rotation pin test moved to the shared auth foundation (`tests/unit/connectors/google_auth/`) so a single test covers all three connectors.
 - **External write-back remains forbidden** ([ADR-0010](docs/adr/0010-connector-contract.md) §禁止事項 7). Gmail `send` API and Calendar `events.insert` / `events.patch` / `events.delete` are deliberately not implemented in either connector; reply-draft / handoff / announcement skill output is local only. The `forbidden_callables` structural guard in the lifecycle integration tests covers both new connectors too.
-- **Gmail / Calendar push notification (`users.watch` / `events.watch`) is forbidden** ([ADR-0010](docs/adr/0010-connector-contract.md) §Phase 14 改訂 (i)). Both connectors poll only — `watch` would inject server-driven activity into opshub and break form-A. Re-enabling requires a new ADR + opt-in + form-A revisit (Phase 15+ proactive-secretary work re-evaluates Drive / Gmail / Calendar push notifications together).
+- **Gmail / Calendar push notification (`users.watch` / `events.watch`) is forbidden** ([ADR-0010](docs/adr/0010-connector-contract.md) §Phase 14 改訂 (i)). Both connectors poll only — `watch` would inject server-driven activity into opshub and break form-A. Re-enabling requires a new ADR + opt-in + form-A revisit (Phase 15+ proactive-assistant work re-evaluates Drive / Gmail / Calendar push notifications together).
 - **Mapper symmetry** is mechanically verified by `tests/unit/connectors/test_mapper_symmetry.py` — Outlook ↔ Gmail (8 cases) and ms365_calendar ↔ google_calendar (6 cases), 14 cases total. The symmetry stops mapper drift from creating asymmetric body shapes that would surprise downstream skills (e.g. `find-document` filtering by source_type).
 
 ### In scope
@@ -152,7 +152,7 @@ We treat the following as security issues:
   `tests/unit/mcp/test_registry_policy`.
 - **External write-back path appearing** — any code that posts to Slack /
   GitHub / Box / MS365 / writes back to SaaS ([ADR-0010](docs/adr/0010-connector-contract.md)
-  §禁止事項 7, Phase 10 Sub-issue E). The secretary deliberately drafts only;
+  §禁止事項 7, Phase 10 Sub-issue E). The assistant deliberately drafts only;
   the operator sends. A future PR adding a `send` / `post` / `comment_create`
   connector method without a separate ADR + opt-in is a security regression.
 

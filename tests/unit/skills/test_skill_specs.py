@@ -1,14 +1,14 @@
-"""Format / boundary tests for secretary skill specs under ``docs/skills/``.
+"""Format / boundary tests for assistant skill specs under ``docs/skills/``.
 
 The skills live in ``docs/skills/<name>/SKILL.md`` as the SSOT
-referenced from ``docs/secretary-agent.md`` (ADR-0004 改訂, Phase
+referenced from ``docs/assistant-agent.md`` (ADR-0004 改訂, Phase
 12 H1 — SSOT moved into opshub itself; Phase 16-A ADR-0029 confirmed
 the distribution channel as opshub package bundling +
 ``opshub skills install``, with the SSOT location unchanged).
 These tests pin five invariants the Phase 10 plan §3-D / §4-D DoD
 requires:
 
-1. All five existing secretary skills exist (personal-brief /
+1. All five existing assistant skills exist (personal-brief /
    next-actions / reply-draft / pr-review / find-document — the
    Phase 12 H1 rename targets, see ``docs/phase-12-plan.md`` §3 H1-c).
 2. Each file is a valid Anthropic SKILL.md — leading YAML frontmatter
@@ -36,7 +36,7 @@ from pathlib import Path
 import pytest
 from tools.skill_scan import parse_frontmatter, scan_skill_file
 
-# The secretary skill catalog as of Phase 12 H4.
+# The assistant skill catalog as of Phase 12 H4.
 #
 # Phase 12 H1 renamed the original brief / lookup pair to
 # ``personal-brief`` and ``find-document``; ``next-actions`` /
@@ -94,7 +94,7 @@ _BODY_WORD_CEILING = 5000
 @pytest.mark.parametrize("name", _REQUIRED_SKILLS)
 def test_skill_spec_exists(name: str) -> None:
     path = _SKILLS_DIR / name / "SKILL.md"
-    assert path.is_file(), f"missing secretary skill spec: {path}"
+    assert path.is_file(), f"missing assistant skill spec: {path}"
 
 
 # ---------------------------------------------------------------------------

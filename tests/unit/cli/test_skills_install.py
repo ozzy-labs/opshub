@@ -1,6 +1,6 @@
 """Tests for ``opshub skills install`` / ``opshub skills list`` (Phase 16-B).
 
-ADR-0029 §決定 (a)〜(h) — the 14 secretary skills bundled inside the
+ADR-0029 §決定 (a)〜(h) — the 14 assistant skills bundled inside the
 opshub wheel under ``opshub/_skills/`` are distributed to the host
 agent loader directories (``~/.claude/skills/`` and
 ``~/.agents/skills/``) by ``opshub skills install``. Every test
@@ -32,7 +32,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from opshub._skills_resources import SECRETARY_SKILL_NAMES, load_skill
+from opshub._skills_resources import ASSISTANT_SKILL_NAMES, load_skill
 from opshub.cli.app import app
 
 
@@ -223,19 +223,19 @@ def test_skills_install_creates_parent_dirs(
     assert (home / ".claude" / "skills" / "personal-brief").is_dir()
 
 
-def test_skills_install_only_writes_14_secretary_skills(
+def test_skills_install_only_writes_14_assistant_skills(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """**Critical regression guard** — install never clobbers ecosystem skills.
 
-    ADR-0029 §決定 (h) + §不変条件 2 — the 14 secretary skill names
+    ADR-0029 §決定 (h) + §不変条件 2 — the 14 assistant skill names
     must be disjoint from the ecosystem-common skill names
     (drive / lint / commit / ship / pr / review / health / implement /
     phase-issue / topics / commit-conventions / lint-rules / test).
     Pre-populating an ecosystem-common skill at the target before
     running install proves that ``opshub skills install`` leaves it
     alone — the install only writes the 14 names listed in
-    :data:`SECRETARY_SKILL_NAMES`.
+    :data:`ASSISTANT_SKILL_NAMES`.
     """
     home = _isolate_home(monkeypatch, tmp_path)
     skills_root = home / ".claude" / "skills"
@@ -272,10 +272,10 @@ def test_skills_install_only_writes_14_secretary_skills(
         body = (skills_root / name / "SKILL.md").read_bytes()
         assert body == sentinel, f"ecosystem skill {name!r} was clobbered"
 
-    # Every secretary skill was written.
-    for name in SECRETARY_SKILL_NAMES:
+    # Every assistant skill was written.
+    for name in ASSISTANT_SKILL_NAMES:
         assert (skills_root / name / "SKILL.md").is_file()
-        # And the secretary skill names truly are disjoint from the
+        # And the assistant skill names truly are disjoint from the
         # ecosystem-common names (this is the structural invariant).
         assert name not in ecosystem_names
 
@@ -298,9 +298,9 @@ def test_skills_install_print_paths_outputs_targets(
     lines = [line for line in result.output.splitlines() if line.startswith(str(expected_root))]
     # 14 skills x 1 SKILL.md per skill = 14 lines (current bundle has
     # no reference/ subdirs yet).
-    assert len(lines) >= len(SECRETARY_SKILL_NAMES)
-    # Every secretary skill name appears in the printed paths.
-    for name in SECRETARY_SKILL_NAMES:
+    assert len(lines) >= len(ASSISTANT_SKILL_NAMES)
+    # Every assistant skill name appears in the printed paths.
+    for name in ASSISTANT_SKILL_NAMES:
         assert any(f"/{name}/" in line for line in lines), f"missing {name} path"
 
 
@@ -312,14 +312,14 @@ def test_skills_list_shows_install_status(monkeypatch: pytest.MonkeyPatch, tmp_p
     # 1) Pristine — every skill is ``missing``.
     listed = runner.invoke(app, ["skills", "list", "--host", "claude-code"])
     assert listed.exit_code == 0, listed.output
-    for name in SECRETARY_SKILL_NAMES:
+    for name in ASSISTANT_SKILL_NAMES:
         assert f"{name}  missing" in listed.output
 
     # 2) After install — every skill is ``installed``.
     runner.invoke(app, ["skills", "install", "--host", "claude-code"])
     listed = runner.invoke(app, ["skills", "list", "--host", "claude-code"])
     assert listed.exit_code == 0, listed.output
-    for name in SECRETARY_SKILL_NAMES:
+    for name in ASSISTANT_SKILL_NAMES:
         assert f"{name}  installed" in listed.output
 
     # 3) Hand-edit one skill — it flips to ``modified``.
@@ -335,7 +335,7 @@ def test_skills_list_shows_install_status(monkeypatch: pytest.MonkeyPatch, tmp_p
 # ---------------------------------------------------------------------------
 # Phase 16 audit followup v2 (#395) — additional regression tests.
 #
-# The autouse :func:`_mirror_secretary_skill_bundle` fixture in
+# The autouse :func:`_mirror_assistant_skill_bundle` fixture in
 # ``tests/conftest.py`` rebuilds ``src/opshub/_skills/`` from
 # ``docs/skills/`` before every pytest session. That keeps editable
 # installs / wheel installs / CI matrix runners aligned, but it also
@@ -357,7 +357,7 @@ def test_skills_install_payload_missing_exits_1(
     The :class:`opshub._skills_resources.SkillResourceError` path in
     :func:`opshub.cli.skills.install_command` (``src/opshub/cli/skills.py``
     lines 303-306) is normally false-green because
-    :func:`tests.conftest._mirror_secretary_skill_bundle` re-materialises
+    :func:`tests.conftest._mirror_assistant_skill_bundle` re-materialises
     ``src/opshub/_skills/`` before every session. An sdist build (or any
     wheel that loses the ``[tool.hatch.build.force-include]`` mapping
     before Phase 16-B) would expose this branch on operator machines —
@@ -496,9 +496,9 @@ def test_skills_install_emits_structured_log_category_skill_install(
     assert isinstance(kwargs["written"], int) and kwargs["written"] > 0, kwargs
     assert isinstance(kwargs["skipped"], int), kwargs
     assert isinstance(kwargs["overwritten"], int), kwargs
-    # ``distinct_skills`` (14 secretary skills) is emitted alongside
+    # ``distinct_skills`` (14 assistant skills) is emitted alongside
     # for dashboards that want a per-bundle count.
-    assert kwargs["distinct_skills"] == len(SECRETARY_SKILL_NAMES), kwargs
+    assert kwargs["distinct_skills"] == len(ASSISTANT_SKILL_NAMES), kwargs
 
 
 def test_skills_install_host_all_scope_project_writes_both_roots(
@@ -526,7 +526,7 @@ def test_skills_install_host_all_scope_project_writes_both_roots(
     agents_root = project / ".agents" / "skills"
     assert claude_root.is_dir()
     assert agents_root.is_dir()
-    for name in SECRETARY_SKILL_NAMES:
+    for name in ASSISTANT_SKILL_NAMES:
         assert (claude_root / name / "SKILL.md").is_file(), name
         assert (agents_root / name / "SKILL.md").is_file(), name
     # The user-scope roots stay untouched.

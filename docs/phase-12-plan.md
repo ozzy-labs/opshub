@@ -1,16 +1,16 @@
 # Phase 12 Implementation Plan
 
-> Status: Phase 12 complete (2026-05-31). Last reviewed: 2026-05-31. Scope: **Secretary Skills 拡張** = 14 skills 体制（既存 5 + 新規 9）+ 既存 5 のうち 2 件 rename（daily-brief → personal-brief / file-lookup → find-document）+ 4 新 MCP tools 露出（search FTS5 / propose.apply / 既存 4 read tools の **physical column ベース時間フィルタ**）+ 既存 5 SKILL.md の MCP 直接呼び化（CLI fallback 廃止）。Phase 10 で築いた MCP + Skills の枠の上に、Phase 11 で取り込んだ Office + Teams + Outlook データを「秘書らしい体感価値」に変換する。形A（runtime なし）・能動性なし・外部書き戻しなしを Phase 10/11 から継承。実装は Wave 1 (H1 foundation #262 merged) → Wave 2 (H2 #265 / H3 #264 / H4 #266 / H5 #263 が 4 並列 merged) → Wave 3 (H6 #259 closeout) + hotfix 2 件 (#267 ruff format / #268 mypy strict) で完了。
+> Status: Phase 12 complete (2026-05-31). Last reviewed: 2026-05-31. Scope: **Assistant Skills 拡張** = 14 skills 体制（既存 5 + 新規 9）+ 既存 5 のうち 2 件 rename（daily-brief → personal-brief / file-lookup → find-document）+ 4 新 MCP tools 露出（search FTS5 / propose.apply / 既存 4 read tools の **physical column ベース時間フィルタ**）+ 既存 5 SKILL.md の MCP 直接呼び化（CLI fallback 廃止）。Phase 10 で築いた MCP + Skills の枠の上に、Phase 11 で取り込んだ Office + Teams + Outlook データを「アシスタントらしい体感価値」に変換する。形A（runtime なし）・能動性なし・外部書き戻しなしを Phase 10/11 から継承。実装は Wave 1 (H1 foundation #262 merged) → Wave 2 (H2 #265 / H3 #264 / H4 #266 / H5 #263 が 4 並列 merged) → Wave 3 (H6 #259 closeout) + hotfix 2 件 (#267 ruff format / #268 mypy strict) で完了。
 >
-> **Audit corrections (2026-05-31)**：pre-implementation audit で 5 件の補正を反映：(1) 時間フィルタ field 名を tool 別 physical column ベース化（task=`updated_after/before` 等）/ (2) `propose.apply` 冪等性 semantics 明示（handler 層で OpsHubError catch → `{ok, already_applied}` 正規化）/ (3) `search` MCP の `raw_query` flag を CLI 専用扱いで schema 除外 / (4) ADR-0016 §決定 (l) Draft 系統一方針として独立条文化（mode 引数射程 + triage 射程 + Candidate union 凍結明示）/ (5) rename 戦略具体化（git mv + sed + 歴史記録 ADR/decisions-log/phase-10-plan は注釈方式で除外）+ secretary-agent.md 10 § 構成案。
+> **Audit corrections (2026-05-31)**：pre-implementation audit で 5 件の補正を反映：(1) 時間フィルタ field 名を tool 別 physical column ベース化（task=`updated_after/before` 等）/ (2) `propose.apply` 冪等性 semantics 明示（handler 層で OpsHubError catch → `{ok, already_applied}` 正規化）/ (3) `search` MCP の `raw_query` flag を CLI 専用扱いで schema 除外 / (4) ADR-0016 §決定 (l) Draft 系統一方針として独立条文化（mode 引数射程 + triage 射程 + Candidate union 凍結明示）/ (5) rename 戦略具体化（git mv + sed + 歴史記録 ADR/decisions-log/phase-10-plan は注釈方式で除外）+ assistant-agent.md 10 § 構成案。
 >
 > Sub-issue は **H1〜H6 の6つ**（親 epic #253、子 #254〜#259）。新規 ADR ゼロ、改訂 3本（ADR-0004 / ADR-0022 / ADR-0016）に縮退（Phase 10 の 3 新規 + 4 改訂 → Phase 11 の 1 新規 + 2 改訂 → Phase 12 の 0 新規 + 3 改訂、と縮退継続）。本 plan が SSOT であり、各 sub-issue body は要点抜粋。
 >
 > 本ドキュメントは **planning skeleton** であり、各 sub-issue の詳細設計・不変条件・最終 DoD は着手前に本 plan 内で確定する。実装契約（uow_factory / `EventStore.append` / `Projector.apply` / registry SSOT / cold-start guard / `core/sanitise.sanitise_error_message` / Pluggable backend Protocol freeze / Connector framework / 7 link_type + reply_draft / `tests/_secrets.py` 連結ビルド規範 等、Phase 1-11 で確立）は Phase 12 も全て継承する。
 
-Phase 12 の目的は、Phase 10 で完成させた「動く秘書の枠組み」と Phase 11 で広げた「MS Office データの取り込み」を踏まえ、**秘書として使える Skill レパートリーを 5 → 14 に拡張**することにある。同時に既存 5 Skill の `opshub` CLI fallback を MCP 直接呼びに統一し、`search`(FTS5) と `propose.apply` を MCP に露出することで、host LLM が opshub の能力を一貫した surface で叩けるようにする。
+Phase 12 の目的は、Phase 10 で完成させた「動くアシスタントの枠組み」と Phase 11 で広げた「MS Office データの取り込み」を踏まえ、**アシスタントとして使える Skill レパートリーを 5 → 14 に拡張**することにある。同時に既存 5 Skill の `opshub` CLI fallback を MCP 直接呼びに統一し、`search`(FTS5) と `propose.apply` を MCP に露出することで、host LLM が opshub の能力を一貫した surface で叩けるようにする。
 
-Phase 11 で取り込んだ Teams / Outlook / Word / Excel / PowerPoint 由来の context は、新 skills（meeting-prep / research / meeting-followup / source-extract 等）が直接消費する経路に乗る。Phase 12 はデータ層を増やさず、Skill 層で「秘書らしさ」を一段階引き上げる phase。
+Phase 11 で取り込んだ Teams / Outlook / Word / Excel / PowerPoint 由来の context は、新 skills（meeting-prep / research / meeting-followup / source-extract 等）が直接消費する経路に乗る。Phase 12 はデータ層を増やさず、Skill 層で「アシスタントらしさ」を一段階引き上げる phase。
 
 ---
 
@@ -25,8 +25,8 @@ Phase 11 で取り込んだ Teams / Outlook / Word / Excel / PowerPoint 由来�
 | OQ3 | 既存 5 Skills MCP 整合化 | **A**: 全面 MCP 直接呼び化（CLI fallback 廃止）+ `search`(FTS5) MCP tool 追加 + personal-brief / next-actions の description 拡張で期間指定対応 |
 | OQ4 | MCP tool 追加範囲 | **A 包括的（4 項目）**：`search`(FTS5) + `propose.apply` + 既存 4 read tools に **physical column ベースの時間フィルタ** 追加（task.list=`updated_after/before` / inbox.list=`created_after/before` / decision.list=`recorded_after/before` / source.list=`observed_after/before`、ISO 8601 optional）。tool 別の独立命名は audit findings (2026-05-31) を反映、業務時刻と物理列の混線回避 |
 | OQ5 | ozzy-labs/skills 配布 | **C**: 配布せず、opshub `docs/skills/` を SSOT、host install は README 手動手順、配信機構（ozzy-labs/skills CI + Renovate preset）は Phase 14+ で別途検討 (Phase 12 当時の plan では「Phase 13+」と書いていたが、Phase 13 は Google Workspace コネクタが優先され配信機構は touch されなかったため、Phase 13 audit 2026-05-31 で表記を Phase 14+ に統一) |
-| OQ6 | 新 Skills e2e 品質確認 | **A**: 統合 1 本（`test_phase12_secretary_lifecycle.py`）+ per-skill MCP dispatch pin（`tests/unit/skills/test_skill_specs.py` 拡張で skill 内 MCP tool 名・引数 schema を pin） |
-| OQ7 | ADR 構成 | **B**: 新規 ADR ゼロ、**改訂 3 本**（ADR-0004 / ADR-0022 / ADR-0016）。Skill catalog（14 skills 責務マップ）は ADR ではなく `docs/secretary-agent.md` を SSOT |
+| OQ6 | 新 Skills e2e 品質確認 | **A**: 統合 1 本（`test_phase12_assistant_lifecycle.py`）+ per-skill MCP dispatch pin（`tests/unit/skills/test_skill_specs.py` 拡張で skill 内 MCP tool 名・引数 schema を pin） |
+| OQ7 | ADR 構成 | **B**: 新規 ADR ゼロ、**改訂 3 本**（ADR-0004 / ADR-0022 / ADR-0016）。Skill catalog（14 skills 責務マップ）は ADR ではなく `docs/assistant-agent.md` を SSOT |
 
 ### Phase 10/11 から継承する不変方針
 
@@ -39,7 +39,7 @@ Phase 11 で取り込んだ Teams / Outlook / Word / Excel / PowerPoint 由来�
 
 ### Phase 番号
 
-**Phase 12**（top-level）。Skill 拡張 9 + 既存 5 rename + 4 新 MCP tools 追加を伴うが、新 ADR ゼロ・新 connector ゼロ・新 projection ゼロのため Phase 11.x 枠でも理論上可能。しかし「秘書としての使用感を体感価値に引き上げる」という方針転換に近い量の変更（14 skills 体制、既存 rename を伴う）であり、メモリ方針 [[phase-numbering-new-arch-pattern]] に整合させ Phase 12 として独立。
+**Phase 12**（top-level）。Skill 拡張 9 + 既存 5 rename + 4 新 MCP tools 追加を伴うが、新 ADR ゼロ・新 connector ゼロ・新 projection ゼロのため Phase 11.x 枠でも理論上可能。しかし「アシスタントとしての使用感を体感価値に引き上げる」という方針転換に近い量の変更（14 skills 体制、既存 rename を伴う）であり、メモリ方針 [[phase-numbering-new-arch-pattern]] に整合させ Phase 12 として独立。
 
 ### 14 Skills 最終命名一覧
 
@@ -64,11 +64,11 @@ HITL write（propose.generate + apply・4 件）:
 
 ## 2. 改訂 ADR
 
-> 新規 ADR ゼロ。改訂 3本のみ。Skill catalog（14 skills 責務マップ）は `docs/secretary-agent.md` を SSOT として扱う（ADR 化しない理由：skill 追加・rename で頻繁更新される性質、ADR の「決定の根拠」性と相性悪い）。
+> 新規 ADR ゼロ。改訂 3本のみ。Skill catalog（14 skills 責務マップ）は `docs/assistant-agent.md` を SSOT として扱う（ADR 化しない理由：skill 追加・rename で頻繁更新される性質、ADR の「決定の根拠」性と相性悪い）。
 
 | ADR | 種別 | タイトル | 主な改訂内容 |
 |---|---|---|---|
-| **ADR-0004** | 改訂 | Agent Runtime Boundary | §決定 (c) の「Agent Skills は `ozzy-labs/skills` preset 配布」を「**Skills は opshub `docs/skills/` を SSOT、配信機構（ozzy-labs/skills CI + Renovate preset）は Phase 14+ で別途検討**」に修正（OQ5=C 反映、Phase 12 当時の plan は「Phase 13+」と書いていたが、Phase 13 audit 2026-05-31 で表記を Phase 14+ に統一）。新規 §決定：Skill catalog は `docs/secretary-agent.md` を SSOT として 14 skills 責務マップ・HITL boundary・MCP tool 依存マップ・pair structure を維持。Phase 10 改訂時の前提（ozzy-labs/skills 配布完成）を意図的に backout する形で文書化 |
+| **ADR-0004** | 改訂 | Agent Runtime Boundary | §決定 (c) の「Agent Skills は `ozzy-labs/skills` preset 配布」を「**Skills は opshub `docs/skills/` を SSOT、配信機構（ozzy-labs/skills CI + Renovate preset）は Phase 14+ で別途検討**」に修正（OQ5=C 反映、Phase 12 当時の plan は「Phase 13+」と書いていたが、Phase 13 audit 2026-05-31 で表記を Phase 14+ に統一）。新規 §決定：Skill catalog は `docs/assistant-agent.md` を SSOT として 14 skills 責務マップ・HITL boundary・MCP tool 依存マップ・pair structure を維持。Phase 10 改訂時の前提（ozzy-labs/skills 配布完成）を意図的に backout する形で文書化 |
 | **ADR-0022** | 改訂 | MCP Server Surface | 既存 7（Phase 10 Sub C）+ Step 1 widening 8（PR #231）に **Phase 12 で 4 追加** を明記：(a) `search`(FTS5、`ReadCategory.SEARCH` 新設、phrase quote default、`raw_query` flag は CLI 専用で MCP schema からは除外) / (b) `propose.apply`(`WriteCategory.PROPOSE_APPLY`、`read_only=false, destructive=false, idempotent=true`、handler 層で `ProposalService.apply` の `OpsHubError("already applied/rejected")` を catch → `{ok:true, already_applied:true, applied_entity_id:...}` に正規化して idempotent semantics を成立させる) / (c)(d)(e)(f) 既存 4 read tools 入力 schema 拡張で **physical column ベースの時間フィルタ** 追加（task.list=`updated_after/before`、inbox.list=`created_after/before`、decision.list=`recorded_after/before`、source.list=`observed_after/before`、ISO 8601 optional）。annotation policy 維持（read 自律 / write 確認）。MCP 引数名 → 各 projection 物理列の写像表を ADR-0022 §決定 に追加 |
 | **ADR-0016** | 改訂 | Action Loop and Structured Output | §決定 (i)/(j)/(k) の reply_draft（Phase 10 改訂）に加え、**新規 §決定 (l) Draft 系統一方針** を独立条文として追記。要点：(a) **persist 境界は「返信元 source の有無」で切る**：reply-draft は `propose.generate` + `propose.apply` で persist (`reply_to_source_id` が natural key)、handoff-draft / announcement-draft は **text 返却のみ persist しない**（自発生成で natural key なし、OQ2=B 反映） / (b) **mode 引数の射程**：Phase 12 で導入される `propose.generate` の `mode` 引数（`inbox_triage` / `source_extract` / `meeting_followup`）は **persist 経路を持つ structured-output dispatch key** に限定。handoff/announcement は `propose.generate` を経由せず host LLM が `brief` / `recall.search` / `source.get` / `decision.list` の read tool を合成して text を組み立てる / (c) **triage は reply_draft 文脈のみ**：§決定 (j) の 3 値 triage は draft 系全体ではなく reply_draft 専用 signal、handoff/announcement は射程外 / (d) **Candidate discriminated union 凍結**：`task | decision | reply_draft` の 3 kind で凍結、新 candidate kind 追加なし / (e) 理由：使用頻度の現実主義 + schema 拡張コスト回避、将来 persist 需要顕在化時に §決定 (f) schema versioning パターンで `HandoffDraftCandidatePayload` を v3 として追加可能（in-place migration なし、新 ADR or 本 ADR 改訂で対応） |
 
@@ -76,7 +76,7 @@ HITL write（propose.generate + apply・4 件）:
 
 ## 3. Commit 順序（Sub-issue 骨子）
 
-> 各 sub-issue を 1〜複数 PR に割る。詳細 PR 分割と DoD は着手前に確定。依存順に並べる。Skill catalog（14 skills 責務マップ）は H6 closeout で `docs/secretary-agent.md` に集約。
+> 各 sub-issue を 1〜複数 PR に割る。詳細 PR 分割と DoD は着手前に確定。依存順に並べる。Skill catalog（14 skills 責務マップ）は H6 closeout で `docs/assistant-agent.md` に集約。
 
 ### Sub-issue H1: foundation (#254)
 
@@ -84,7 +84,7 @@ ADR 改訂 3 本 + 既存 5 rename + MCP 整合化 + 4 新 MCP tools 露出 + sk
 
 **PR H1-a** `docs(adr): adr-0004 + 0022 + 0016 改訂 (phase 12)`
 
-- ADR-0004 改訂（Skills SSOT in opshub docs/skills/、配信機構 Phase 14+ defer + Skill catalog refers to docs/secretary-agent.md）
+- ADR-0004 改訂（Skills SSOT in opshub docs/skills/、配信機構 Phase 14+ defer + Skill catalog refers to docs/assistant-agent.md）
 - ADR-0022 改訂（4 新 MCP tools 契約化、annotation policy 維持）
 - ADR-0016 改訂（draft 系統一方針：reply persist / handoff,announcement text-only）
 - `docs/decisions-log.md` entries（3 件）
@@ -129,7 +129,7 @@ rename 戦略（audit 2026-05-31 で確定）：
 - find-document description 拡張で `search`(FTS5) MCP tool 利用に変更
 - `tools/skill_scan.py` 改修（必要に応じて）
 - `tests/unit/skills/test_skill_specs.py` 拡張：14 skills 全てに per-skill MCP dispatch pin（skill 内 MCP tool 名・引数 schema が opshub の MCP surface と整合するか grep + jsonschema validation）+ 関数名 rename
-- AGENTS.md / CLAUDE.md / README.md / README.ja.md / docs/mcp-setup.md / docs/secretary-agent.md / docs/architecture.md / docs/repository-structure.md の本文置換
+- AGENTS.md / CLAUDE.md / README.md / README.ja.md / docs/mcp-setup.md / docs/assistant-agent.md / docs/architecture.md / docs/repository-structure.md の本文置換
 
 ### Sub-issue H2: info gathering skills (#255)
 
@@ -180,7 +180,7 @@ rename 戦略（audit 2026-05-31 で確定）：
 
 - 設計 docs 一括（§5）
 - ユーザー docs 一括（§6）
-- `docs/secretary-agent.md` 大幅更新（Skill catalog SSOT として 14 skills 責務マップ・HITL boundary・MCP tool 依存マップ・pair structure を集約）
+- `docs/assistant-agent.md` 大幅更新（Skill catalog SSOT として 14 skills 責務マップ・HITL boundary・MCP tool 依存マップ・pair structure を集約）
 - e2e lifecycle test（§7.3）
 - guard 確認（§7.4）
 - AGENTS.md / CLAUDE.md Status 行 Phase 12 complete
@@ -254,9 +254,9 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
 ### H6 — closeout
 
 - [ ] 設計 docs（principles / architecture / repository-structure / decisions-log）更新済み
-- [ ] ユーザー docs（README ja/en / mcp-setup / secretary-agent）更新済み + host への手動 install 手順記載
-- [ ] **`docs/secretary-agent.md` が Skill catalog SSOT として 14 skills 責務マップを集約**
-- [ ] e2e lifecycle test pass（`test_phase12_secretary_lifecycle.py`）
+- [ ] ユーザー docs（README ja/en / mcp-setup / assistant-agent）更新済み + host への手動 install 手順記載
+- [ ] **`docs/assistant-agent.md` が Skill catalog SSOT として 14 skills 責務マップを集約**
+- [ ] e2e lifecycle test pass（`test_phase12_assistant_lifecycle.py`）
 - [ ] M6 guard / `opshub --help` ≤ 300ms 維持、暗号化平文リーク検出 CI 常駐継続
 - [ ] AGENTS.md / CLAUDE.md Status 行 Phase 12 complete
 - [ ] **`docs/phase-12-plan.md` Status header を `Phase 12 complete (YYYY-MM-DD)` に更新**（Phase 11 audit R2-CROSS-06 教訓継承）
@@ -270,7 +270,7 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
   - §4 Skills 数 5 → 14 + 区分（read 自律 OK 10 / HITL write 4）追記
   - §9 Phase 12 行追加
 - **`docs/architecture.md`**:
-  - §Secretary Agent Layer 拡張：14 skills 全リスト + HITL boundary + MCP tool 依存マップ + pair structure
+  - §Assistant Agent Layer 拡張：14 skills 全リスト + HITL boundary + MCP tool 依存マップ + pair structure
   - §MCP Server Surface：新 4 tools（search / propose.apply / 時間フィルタ）追記
   - §9 Phase 12 行追加
 - **`docs/repository-structure.md`**: `docs/skills/` 配下の新規追加 9 + rename 2 を反映、`tools/skill_scan.py` 強化分も記載
@@ -288,12 +288,12 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
 - **`docs/mcp-setup.md`**:
   - 新 4 MCP tools（search / propose.apply / 時間フィルタ）追記
   - host への docs/skills/ コピー手順 + 各 host (Claude Code / Codex CLI / Copilot CLI) での Skills 取り込み方法
-- **`docs/secretary-agent.md` 大幅更新（Skill catalog SSOT）** — audit 2026-05-31 で構成案確定：
+- **`docs/assistant-agent.md` 大幅更新（Skill catalog SSOT）** — audit 2026-05-31 で構成案確定：
 
   既存構造（§形A 責務分担 / §依頼例 / §Skills 一覧（5 × 2 表）/ §できること・できないこと / §セットアップ / §skill security / §関連）を以下の 10 § 構成に拡張：
 
   1. **§形A 責務分担**（既存維持、「14 skills」と数値更新のみ）
-  2. **§秘書への依頼例**（14 行表に拡張、自然文トリガ + 発火 skill）
+  2. **§アシスタントへの依頼例**（14 行表に拡張、自然文トリガ + 発火 skill）
   3. **§Skill catalog**（新規、read 10 / HITL write 4 の 2 ブロック分割、表の縦長化を回避）
   4. **§Pair structure**（新規、4 pair の対比、向き・タイミング・粒度の軸）
   5. **§HITL boundary**（新規、read 自律 OK / write は propose.generate + apply の 2 段ゲート、auto-apply 禁止の集約）
@@ -326,14 +326,14 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
 
 ### 7.2 結合テスト（integration）
 
-> 実装時に当初想定の 3 個別ファイル（`test_phase12_mcp_search.py` / `test_phase12_propose_apply_mcp.py` / `test_phase12_time_filter.py`）は、**e2e lifecycle 1 本 (`tests/integration/test_phase12_secretary_lifecycle.py`) + handlers 1 本 (`tests/unit/mcp/test_phase12_handlers.py`) の 2 本に統合された**。新 4 tools の境界動作 (search FTS5 / propose.apply HITL idempotent / 4 read tools の physical column ベース時間フィルタ) は handlers 単体テストで pin し、lifecycle 経由でも end-to-end 結合を確認している（重複しないよう lifecycle 側は呼び出し列の整合性に集中）。
+> 実装時に当初想定の 3 個別ファイル（`test_phase12_mcp_search.py` / `test_phase12_propose_apply_mcp.py` / `test_phase12_time_filter.py`）は、**e2e lifecycle 1 本 (`tests/integration/test_phase12_assistant_lifecycle.py`) + handlers 1 本 (`tests/unit/mcp/test_phase12_handlers.py`) の 2 本に統合された**。新 4 tools の境界動作 (search FTS5 / propose.apply HITL idempotent / 4 read tools の physical column ベース時間フィルタ) は handlers 単体テストで pin し、lifecycle 経由でも end-to-end 結合を確認している（重複しないよう lifecycle 側は呼び出し列の整合性に集中）。
 
 - **`tests/unit/mcp/test_phase12_handlers.py`** (handlers 単体): 新 search(FTS5) MCP tool が既存 FTS5 と同等の hit を返すこと + `raw_query` flag が schema に存在しない (CLI 専用扱い) こと + propose.apply MCP tool が既存 CLI と同等の persist を持つこと + idempotent semantics (同 `(proposal_id, candidate_index)` への 2 回目呼び出しが `OpsHubError` を投げずに `{ok:true, already_applied:true, applied_entity_id}` を返す) + 4 read tools 全てで physical column ベース時間フィルタの境界動作 (task.list=`updated_after/before` / inbox.list=`created_after/before` / decision.list=`recorded_after/before` / source.list=`observed_after/before`、半開区間 `>= after` / `< before`、ISO 8601 timezone 解釈、空集合返却、UTC vs offset 一致) を pin
-- **`tests/integration/test_phase12_secretary_lifecycle.py`** (§7.3 参照): 上記 4 tools を含む 14 skills 統合シナリオを台本 MCP クライアントで再現
+- **`tests/integration/test_phase12_assistant_lifecycle.py`** (§7.3 参照): 上記 4 tools を含む 14 skills 統合シナリオを台本 MCP クライアントで再現
 
 ### 7.3 e2e lifecycle テスト
 
-- **`tests/integration/test_phase12_secretary_lifecycle.py`**: **14 skills 統合シナリオ** を台本 MCP クライアントで再現。形A につき opshub 内に頭脳はないので **MCP クライアントが台本どおりツール呼び出し列を再現** して MCP 面と ①コアを検証（実エージェント・実 LLM は不要）
+- **`tests/integration/test_phase12_assistant_lifecycle.py`**: **14 skills 統合シナリオ** を台本 MCP クライアントで再現。形A につき opshub 内に頭脳はないので **MCP クライアントが台本どおりツール呼び出し列を再現** して MCP 面と ①コアを検証（実エージェント・実 LLM は不要）
   1. 複数コネクタから sample 取り込み（Phase 11 e2e fixture 再利用：Teams + Outlook + Office docs）
   2. MCP 経由で 14 skill の代表的呼び出し列を実行：
      - **read 自律 OK 10 件**: personal-brief / next-actions / pr-review / find-document / meeting-prep / research / external-brief / decision-rationale / handoff-draft / announcement-draft
@@ -385,7 +385,7 @@ drive 例: `/drive --merge #254 -> #255,#256,#257,#258 -> #259`（Wave 2 で H2/
 ## 関連
 
 - principles.md §4 (Skills 体系) / §9 (Phased Delivery)
-- architecture.md §Secretary Agent Layer / §MCP Server Surface / §9 (Phased Delivery)
+- architecture.md §Assistant Agent Layer / §MCP Server Surface / §9 (Phased Delivery)
 - ADR-0004 (Agent Runtime Boundary、本 phase で改訂)
 - ADR-0010 (Connector Contract、Phase 11 で改訂、本 phase での変更なし)
 - ADR-0014 (SaaS Token Storage)

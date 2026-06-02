@@ -334,9 +334,9 @@ def test_map_drive_item_omits_editor_marker_when_drive_omitted_field() -> None:
 
 
 def test_map_drive_item_preserves_web_view_link_in_url() -> None:
-    """``webViewLink`` lands on ``event.url`` — the Google Doc URL the secretary surfaces.
+    """``webViewLink`` lands on ``event.url`` — the Google Doc URL the assistant surfaces.
 
-    The Phase 13 plan's find-document story requires the secretary
+    The Phase 13 plan's find-document story requires the assistant
     to quote a clickable URL pointing back at the Doc / Sheet /
     Slides. ``url`` is the canonical field that carries that.
     """
@@ -364,7 +364,7 @@ def test_mapped_trashed_item_carries_trashed_marker() -> None:
     Drive surfaces ``trashed=true`` for files the operator (or someone
     with edit access) moved to the trash. ADR-0020 retains them as
     ``trashed``-equivalent rather than deleting the projection row;
-    the secretary uses the marker to scope find-document / recall
+    the assistant uses the marker to scope find-document / recall
     answers (a "trashed but recoverable" file is still useful context
     for "did I work on that?" queries). Pinning the full
     :class:`SourceObserved` shape here means the connector tests above
@@ -414,7 +414,7 @@ def test_mapped_shared_with_me_item_carries_marker() -> None:
 
     Drive's ``sharedWithMeTime`` (lifted to ``RawDriveItem.is_shared_with_me``)
     distinguishes files the operator received from files they own.
-    The secretary's find-document story benefits from the distinction
+    The assistant's find-document story benefits from the distinction
     — "the spec Alice shared with me last week" vs "the spec I drafted
     myself" route to different mental buckets. Pinning the marker here
     means a future mapper refactor cannot silently drop it without

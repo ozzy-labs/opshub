@@ -15,7 +15,7 @@ The recall handler intentionally goes through
 embedder + vector store from settings — covering it here would
 duplicate the recall-service tests without adding signal. The
 end-to-end recall MCP call is exercised by
-:mod:`tests.integration.test_phase10_secretary_lifecycle`.
+:mod:`tests.integration.test_phase10_assistant_lifecycle`.
 
 The tests are ``async def`` because the handlers themselves are async
 (``ToolHandler = Callable[..., Awaitable[str]]``) and ``asyncio_mode =
@@ -136,20 +136,20 @@ async def test_decision_list_handler_uses_recorded_at_not_created_at(engine: Eng
     The Phase 10 Sub C handler initially queried ``created_at`` which
     raises ``AttributeError`` on the SQLAlchemy column collection —
     the e2e lifecycle test in
-    :mod:`tests.integration.test_phase10_secretary_lifecycle`
+    :mod:`tests.integration.test_phase10_assistant_lifecycle`
     discovered this, and the closeout PR pins it with a unit-level
     test against the real handler.
     """
     _seed_decision(
         engine,
         decision_id="01HDECISION0000000000000000",
-        decision_text="adopt phase 10 secretary platform",
+        decision_text="adopt phase 10 assistant platform",
     )
     handler = build_decision_list_handler(engine)
     payload = _parse(await handler({"limit": 10}))
     rows = cast("list[dict[str, Any]]", payload["items"])
     assert len(rows) == 1
-    assert rows[0]["text"] == "adopt phase 10 secretary platform"
+    assert rows[0]["text"] == "adopt phase 10 assistant platform"
     # ``decisions.recorded_at`` is the authoritative timestamp on the
     # projection (ADR-0002 immutability). Pin the response field name
     # so a future rename has to update this test alongside.

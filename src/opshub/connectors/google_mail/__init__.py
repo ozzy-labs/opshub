@@ -5,7 +5,7 @@ level** Gmail data (per Phase 14 plan §1 OQ2: thread-level rollups are
 deferred to a Phase 15+ projection because thread aggregation conflicts
 with event-store immutability). Body extraction follows the Outlook
 recipe exactly — text/plain preferred, falling back to text/html kept
-verbatim, no markitdown, no attachment retention — so the secretary
+verbatim, no markitdown, no attachment retention — so the assistant
 skills (recall / personal-brief / next-actions / reply-draft) treat
 Gmail and Outlook messages symmetrically (Phase 14 plan §1 OQ4 +
 ADR-0010 §Phase 14 改訂 (k)).

@@ -1,7 +1,7 @@
 """Full-text search service over the ``sources_fts`` virtual table.
 
 Phase 10 step B2 (Sub-issue B, ADR-0012 改訂版 §4 + ADR-0020) ships
-hybrid search across the secretary's body store. Vector recall
+hybrid search across the assistant's body store. Vector recall
 (:class:`~opshub.services.recall_service.RecallService`) handles
 paraphrase / semantic neighbours; this service handles exact-token
 queries (function names, channel IDs, URLs, ticket strings) by going

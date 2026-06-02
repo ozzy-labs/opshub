@@ -1,6 +1,6 @@
-"""Read-only access to the bundled secretary skill payload.
+"""Read-only access to the bundled assistant skill payload.
 
-Phase 16-B (ADR-0029 §決定 (a)) — the 14 secretary skills (`personal-brief`,
+Phase 16-B (ADR-0029 §決定 (a)) — the 14 assistant skills (`personal-brief`,
 `next-actions`, `pr-review`, `find-document`, `meeting-prep`, `research`,
 `external-brief`, `decision-rationale`, `handoff-draft`,
 `announcement-draft`, `reply-draft`, `inbox-triage`, `source-extract`,
@@ -29,14 +29,14 @@ Resolution strategy:
   writing the returned bytes through ``Path.write_bytes`` (see
   :func:`opshub.cli.skills.install`).
 
-The 14 secretary skill names are the authoritative catalogue. Tests
+The 14 assistant skill names are the authoritative catalogue. Tests
 (`tests/unit/test_package_resources.py`) pin that every name resolves
 to an `SKILL.md` file inside the bundle. The ecosystem-common skill
 names (drive / lint / commit / ...) are intentionally NOT in this list
 — they ship via the ``@ozzylabs/skills`` Renovate preset path
 (ADR-0029 §決定 (h) scope carve-out) and `opshub skills install` MUST
 NOT touch them. The disjoint-namespace invariant is pinned by
-`tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_14_secretary_skills`.
+`tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_14_assistant_skills`.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import cast
 
 __all__ = [
-    "SECRETARY_SKILL_NAMES",
+    "ASSISTANT_SKILL_NAMES",
     "SkillBundleEntry",
     "SkillResourceError",
     "iter_skill_files",
@@ -58,24 +58,24 @@ __all__ = [
 ]
 
 
-# Canonical list of the 14 secretary skill identifiers. The order is
-# stable (matches `docs/secretary-agent.md` §1's mapping table) so that
+# Canonical list of the 14 assistant skill identifiers. The order is
+# stable (matches `docs/assistant-agent.md` §1's mapping table) so that
 # ``opshub skills list`` output is deterministic across runs and across
 # operating systems (`os.scandir` order is filesystem-dependent and
 # would otherwise leak through).
 #
-# Adding a new secretary skill requires updating:
+# Adding a new assistant skill requires updating:
 #   1. This tuple (callers iterate it directly).
 #   2. ``docs/skills/<name>/SKILL.md`` (SSOT — ADR-0004 §決定 (c)).
 #   3. ``tests/unit/test_package_resources.py``
 #      (`test_package_ships_skill_files` iterates this tuple).
-#   4. ``docs/secretary-agent.md`` §1 (catalog) and CLAUDE.md / AGENTS.md.
+#   4. ``docs/assistant-agent.md`` §1 (catalog) and CLAUDE.md / AGENTS.md.
 #
 # Removal is symmetric. The ecosystem-common skill namespace
 # (drive / lint / commit / ship / pr / review / health / implement /
 # phase-issue / topics / commit-conventions / lint-rules / test) MUST
 # stay disjoint from this set (ADR-0029 §決定 (h) + §不変条件 2).
-SECRETARY_SKILL_NAMES: tuple[str, ...] = (
+ASSISTANT_SKILL_NAMES: tuple[str, ...] = (
     "personal-brief",
     "next-actions",
     "pr-review",
@@ -106,7 +106,7 @@ class SkillResourceError(RuntimeError):
        silently install zero skills.
     2. The bundled payload exists but is missing one of the 14
        expected skill names (caller asked for a skill that was added
-       to :data:`SECRETARY_SKILL_NAMES` but not yet authored under
+       to :data:`ASSISTANT_SKILL_NAMES` but not yet authored under
        ``docs/skills/``). This is a packaging bug, not an operator
        error, but we surface it the same way for a uniform UX.
     """
@@ -184,7 +184,7 @@ def _checkout_docs_skills() -> Path | None:
 
 
 def _skills_root() -> Traversable:
-    """Return the resource root for the 14 bundled secretary skills.
+    """Return the resource root for the 14 bundled assistant skills.
 
     Resolution order:
 
@@ -251,16 +251,16 @@ def _iter_files_recursive(
 def iter_skill_files(skill_name: str) -> Iterator[SkillBundleEntry]:
     """Yield every bundled file for ``skill_name``.
 
-    Validates that ``skill_name`` is in :data:`SECRETARY_SKILL_NAMES`
+    Validates that ``skill_name`` is in :data:`ASSISTANT_SKILL_NAMES`
     before touching resources so a typo surfaces as a clear error rather
     than an empty iteration result. Each yielded entry carries the file
     bytes preloaded — small SKILL.md / reference Markdown payloads make
     this cheap and avoids juggling Traversable lifetimes at the caller.
     """
-    if skill_name not in SECRETARY_SKILL_NAMES:
+    if skill_name not in ASSISTANT_SKILL_NAMES:
         raise SkillResourceError(
-            f"{skill_name!r} is not one of the 14 secretary skills "
-            f"({', '.join(SECRETARY_SKILL_NAMES)})"
+            f"{skill_name!r} is not one of the 14 assistant skills "
+            f"({', '.join(ASSISTANT_SKILL_NAMES)})"
         )
 
     bundle = _skills_root()
@@ -281,15 +281,15 @@ def iter_skill_files(skill_name: str) -> Iterator[SkillBundleEntry]:
 
 
 def iter_skills() -> Iterator[tuple[str, list[SkillBundleEntry]]]:
-    """Yield ``(skill_name, entries)`` for the 14 secretary skills.
+    """Yield ``(skill_name, entries)`` for the 14 assistant skills.
 
     Convenience wrapper: install / list both want to iterate every
     skill, and this materialises the per-skill file list eagerly so
     the caller can compute counts (`len(entries)`) without a second
-    pass. Skill names are yielded in :data:`SECRETARY_SKILL_NAMES`
+    pass. Skill names are yielded in :data:`ASSISTANT_SKILL_NAMES`
     order for deterministic UX.
     """
-    for name in SECRETARY_SKILL_NAMES:
+    for name in ASSISTANT_SKILL_NAMES:
         yield name, list(iter_skill_files(name))
 
 

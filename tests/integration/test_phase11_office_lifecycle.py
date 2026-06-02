@@ -4,13 +4,13 @@ Pins the Phase 11 data-pipeline shape on the platform side: Teams chat
 bodies, Outlook deep bodies, and Word/Excel/PowerPoint bodies all land
 in the same ``sources`` projection, are indexed by FTS5 + body-based
 embeddings, surface through the same MCP read tools that drive the
-secretary skills, and the write-back path remains structurally absent.
+assistant skills, and the write-back path remains structurally absent.
 
 Phase 11 ships **no new MCP tools** — the existing read surface
 (``recall.search`` + ``source.list`` + ``source.get`` + the personal-brief
 tools) automatically widens to the new ``source_type`` discriminators
 because the projection is the SSOT. This test follows the
-:mod:`test_phase10_secretary_lifecycle` pattern: an in-process MCP
+:mod:`test_phase10_assistant_lifecycle` pattern: an in-process MCP
 dispatch wrapper replays the agent host's tool calls against a hermetic
 engine + deterministic stub embedder, with **no** Microsoft Graph /
 markitdown / network calls.
@@ -29,7 +29,7 @@ What this pins
 3. **Office source_type discriminators** — the 3 ADR-0025 §決定 (d)
    source_types (``word_document`` / ``excel_spreadsheet`` /
    ``powerpoint_slide_deck``) are observable via ``source.list`` and
-   the underlying projection, so secretary skills can filter on them
+   the underlying projection, so assistant skills can filter on them
    when desired (e.g. "PPT only" find-document).
 4. **Write-back path absence** — the 2 new connector packages
    (``teams`` / ``onedrive_drive``) and the Phase 11-extended
@@ -47,7 +47,7 @@ The MCP layer is exercised via the in-process
 :func:`opshub.mcp.server.dispatch_tool_call` wrapper. That wrapper is
 identical to what runs inside ``serve_stdio`` — we just skip the stdio
 transport so the test stays hermetic. Mirrors
-:mod:`tests.integration.test_phase10_secretary_lifecycle` to keep the
+:mod:`tests.integration.test_phase10_assistant_lifecycle` to keep the
 two e2e tests structurally aligned (a future refactor can lift shared
 helpers without surprising either).
 """

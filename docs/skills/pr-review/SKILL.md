@@ -125,4 +125,4 @@ input:
 - ADR-0020 §改訂 (Outlook body deep retention、Phase 11)
 - ADR-0025 (Office 文書本文抽出)
 - Phase 11 plan (`docs/phase-11-plan.md`)
-- docs/secretary-agent.md
+- docs/assistant-agent.md

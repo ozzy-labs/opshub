@@ -19,7 +19,7 @@ Phase 13 G3 scope (metadata only, ``body=None``) → G4 (body + provenance)
   :class:`SourceObserved` with the right provenance stamps.
 * Provenance tags stay ``provenance_origin="external"`` /
   ``provenance_trust="untrusted"`` — matches the rest of the SaaS
-  connector family (MS365 / Box / Teams) and tells the secretary
+  connector family (MS365 / Box / Teams) and tells the assistant
   skills + LLM prompts to treat the body as untrusted reference
   material (ADR-0015 §決定 (f) do-not-follow preamble).
 
@@ -35,7 +35,7 @@ Google's mimeTypes map to opshub ``source_type`` discriminators as:
   ``google_workspace_file`` (the generic catch-all)
 
 The three Workspace native types are the find-document targets the
-secretary skill cares about; the catch-all keeps the connector
+assistant skill cares about; the catch-all keeps the connector
 emitting events for every observed file so projection coverage stays
 complete (ADR-0020 retain-everything).
 
@@ -217,7 +217,7 @@ def map_drive_item(
       ``[removed]`` when applicable (ADR-0020 retains both — the
       marker is the cue downstream consumers use to distinguish).
       G4 (#278) adds an ``[edited by ...]`` marker when
-      ``lastModifyingUser`` differs from the owner so the secretary
+      ``lastModifyingUser`` differs from the owner so the assistant
       can attribute the most recent change.
     * ``occurred_at`` ← parsed ``raw.modified_time_iso`` (tz-aware
       UTC).
@@ -307,7 +307,7 @@ def _build_summary(raw: RawDriveItem) -> str:
     The bracketed markers are emitted only when the corresponding flag
     is set so a regular owned doc renders as just
     ``"<owner> (<email>) — <mimeType>"``. The owner email is included
-    so the secretary skill can surface "who shared this with me" without
+    so the assistant skill can surface "who shared this with me" without
     re-reading ``raw``. G4 (#278) adds:
 
     * ``[shared]`` — Drive's outbound-share boolean (someone other
@@ -315,7 +315,7 @@ def _build_summary(raw: RawDriveItem) -> str:
       ``[shared with me]`` (the receiving end).
     * ``[edited by <name>]`` — ``lastModifyingUser.displayName`` when
       it differs from the owner (or owner display name is missing),
-      so the secretary can attribute the most recent change. We do
+      so the assistant can attribute the most recent change. We do
       **not** include the editor's email here to keep the cap
       under :data:`SUMMARY_MAX_CHARS`; full identity lives on
       :attr:`RawDriveItem.last_modifying_user_email` for callers

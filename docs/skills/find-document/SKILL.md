@@ -156,5 +156,5 @@ input:
 - Phase 12 plan (`docs/phase-12-plan.md` §3 H1)
 - Phase 13 plan (`docs/phase-13-plan.md` §3 G1-G5、Google Workspace 8 番目の connector)
 - Phase 14 plan (`docs/phase-14-plan.md`、Gmail + Google Calendar 9・10 番目の connector)
-- docs/secretary-agent.md (Skill catalog SSOT)
+- docs/assistant-agent.md (Skill catalog SSOT)
 - docs/google-workspace-setup.md (Google OAuth + Drive API setup、Gmail / Calendar scope は Phase 14 で追加)

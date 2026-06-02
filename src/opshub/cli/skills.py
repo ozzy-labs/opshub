@@ -1,7 +1,7 @@
 """``opshub skills ...`` subcommands.
 
 Phase 16-B (ADR-0029) ships ``opshub skills install`` and
-``opshub skills list`` to distribute the 14 secretary skills (SSOT
+``opshub skills list`` to distribute the 14 assistant skills (SSOT
 ``docs/skills/<name>/SKILL.md``, Phase 12 H1 / ADR-0004 §決定 (c))
 bundled inside the opshub wheel under ``opshub/_skills/`` to the host
 agent's skill loader directories (``~/.claude/skills/`` for Claude
@@ -16,11 +16,11 @@ the structlog logger and the resource-loading helpers are imported
 inside each command callback. The ecosystem-common skill namespace
 (drive / lint / commit / ...) is disjoint from this command's payload
 (ADR-0029 §決定 (h)) — pinned by
-``tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_14_secretary_skills``.
+``tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_14_assistant_skills``.
 
 CLI surface:
 
-* ``opshub skills install`` — copy the 14 bundled secretary skills to
+* ``opshub skills install`` — copy the 14 bundled assistant skills to
   the host skill loader directory. Flags:
 
   * ``--host {claude-code,codex,copilot,all}`` (default ``all``) —
@@ -74,7 +74,7 @@ __all__ = ["install_command", "skills_app"]
 # inside the command callbacks below.
 skills_app = typer.Typer(
     name="skills",
-    help="Install or inspect the 14 bundled secretary skills (ADR-0029).",
+    help="Install or inspect the 14 bundled assistant skills (ADR-0029).",
     no_args_is_help=True,
 )
 
@@ -197,7 +197,7 @@ def install(
         help="Emit one target path per line on stdout (pipeline-friendly).",
     ),
 ) -> None:
-    """Install the 14 bundled secretary skills to the host loader directory.
+    """Install the 14 bundled assistant skills to the host loader directory.
 
     Thin Typer wrapper around :func:`install_command` — see that
     function's docstring for the full semantics. The wrapper exists so
@@ -223,7 +223,7 @@ def install_command(
     dry_run: bool = False,
     print_paths: bool = False,
 ) -> None:
-    """Install the 14 bundled secretary skills to the host loader directory.
+    """Install the 14 bundled assistant skills to the host loader directory.
 
     Reads bundled bytes from ``importlib.resources.files('opshub') /
     _skills/<name>/...`` (populated at build time by
@@ -233,16 +233,16 @@ def install_command(
     ``./.claude/skills/`` / ``./.agents/skills/`` (project scope).
 
     The ecosystem-common skill names (drive / lint / commit / ...) are
-    intentionally NOT touched — only the 14 secretary names listed in
-    :data:`opshub._skills_resources.SECRETARY_SKILL_NAMES` are written
+    intentionally NOT touched — only the 14 assistant names listed in
+    :data:`opshub._skills_resources.ASSISTANT_SKILL_NAMES` are written
     (ADR-0029 §決定 (h) scope carve-out). A regression that adds any
     other name to that tuple would silently start clobbering
     ecosystem-common skills, so the disjoint invariant is pinned by
-    ``test_skills_install_only_writes_14_secretary_skills``.
+    ``test_skills_install_only_writes_14_assistant_skills``.
 
     Phase 16-C (#384) added :func:`opshub.cli.init.init_command` as an
     internal caller so the documented ``uv tool install ozzylabs-opshub[mcp]
-    && opshub init`` 2-step setup also installs the 14 secretary
+    && opshub init`` 2-step setup also installs the 14 assistant
     skills. The extraction from the Typer wrapper (:func:`install`)
     follows the same pattern as
     :func:`opshub.cli.init.init_command` / :func:`opshub.cli.db.migrate_command`:
@@ -264,7 +264,7 @@ def install_command(
     # Lazy imports — keep cold start fast (ADR-0001) and satisfy
     # ``test_cli_imports`` (no ``opshub.core`` at module level).
     from opshub._skills_resources import (
-        SECRETARY_SKILL_NAMES,
+        ASSISTANT_SKILL_NAMES,
         SkillResourceError,
         iter_skill_files,
     )
@@ -298,7 +298,7 @@ def install_command(
                 name,
                 [(entry.relative_path, entry.data) for entry in iter_skill_files(name)],
             )
-            for name in SECRETARY_SKILL_NAMES
+            for name in ASSISTANT_SKILL_NAMES
         ]
     except SkillResourceError as exc:
         logger.error("skill_install_payload_missing", error=str(exc))
@@ -373,7 +373,7 @@ def list_skills(
         help="Scope: user (default) or project.",
     ),
 ) -> None:
-    """Show the 14 secretary skills with install status per host directory.
+    """Show the 14 assistant skills with install status per host directory.
 
     Each row prints the host directory + skill name + status:
 
@@ -391,13 +391,13 @@ def list_skills(
     ``--skip-existing`` (preserve it).
     """
     # Lazy imports preserve the cold-start budget.
-    from opshub._skills_resources import SECRETARY_SKILL_NAMES, load_skill
+    from opshub._skills_resources import ASSISTANT_SKILL_NAMES, load_skill
 
     install_dirs = _resolve_install_dirs(host=host, scope=scope)
 
     # Header row keeps the output greppable: ``<dir> <skill> <status>``.
     for target_dir in install_dirs:
-        for skill_name in SECRETARY_SKILL_NAMES:
+        for skill_name in ASSISTANT_SKILL_NAMES:
             expected = load_skill(skill_name)
             skill_dir = target_dir / skill_name
             status = _compute_skill_status(skill_dir=skill_dir, expected=expected)

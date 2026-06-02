@@ -484,7 +484,7 @@ Phase 10 Sub-issue E で `reply_draft` を Phase 6 の propose の枠外に独�
 - Phase 6 で確立した propose lifecycle (generate → review → apply / reject) と triage / HITL / 既存 service 経由の apply / idempotent key / schema versioning が **そっくり再利用可能**。reply_draft は Candidate kind を 1 つ追加するだけで成立し、独立 sub-system はコード重複と CLI 表面の肥大化を招く
 - 「下書きを **apply で durable state に書く** + **外部送信は ADR-0010 改訂で当面 scope 外**」境界は ADR-0016 §決定 (c) HITL の自然延長で、新 ADR で再定義する価値が薄い
 - 独立 projection (`reply_drafts` テーブル) は `proposals.candidates[i]` の JSON で代替可能。Phase 6 の `proposals` projection と join しても `(proposal_id, candidate_index)` natural key で reply_draft の `pending / applied / rejected` 状態が表現できる
-- propose 側に集約することで `opshub propose generate --reply-to <source_id>` 1 経路に統一でき、操作の mental model が小さい (Phase 10 Sub-issue D 秘書 Skill 表で `reply-draft skill → opshub propose generate --reply-to <source_id>` のマッピングと整合)
+- propose 側に集約することで `opshub propose generate --reply-to <source_id>` 1 経路に統一でき、操作の mental model が小さい (Phase 10 Sub-issue D アシスタント Skill 表で `reply-draft skill → opshub propose generate --reply-to <source_id>` のマッピングと整合)
 
 ### 9. Triage を separate API / separate event にする (Phase 10 改訂で **却下**)
 

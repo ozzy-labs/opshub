@@ -240,16 +240,16 @@ opshub embeddings rebuild
 - New connectors: `teams` (Microsoft Graph chat delta) / `onedrive_drive` (OneDrive Desktop FS scan).
 - New `source_type` discriminators: `teams_message` / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`.
 - No CLI breaking changes. `opshub connector sync teams` / `... onedrive_drive` are the new sync targets.
-- External write-back is **still forbidden** (ADR-0010 §禁止事項 7). The secretary drafts only; the operator sends.
+- External write-back is **still forbidden** (ADR-0010 §禁止事項 7). The assistant drafts only; the operator sends.
 
-## Phase 12: Secretary skills expansion
+## Phase 12: Assistant skills expansion
 
-Phase 12 ([ADR-0004](adr/0004-agent-runtime-boundary.md) revision §決定 (c-2) + [ADR-0022](adr/0022-mcp-server-surface.md) revision §決定 (f) + [ADR-0016](adr/0016-action-loop-and-structured-output.md) revision §決定 (l)) grows the secretary skill repertoire from **5 to 14** and widens the MCP surface with 4 new tools. **No DB schema changes**, **no breaking CLI changes**, and the **external write-back ban remains in force** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7).
+Phase 12 ([ADR-0004](adr/0004-agent-runtime-boundary.md) revision §決定 (c-2) + [ADR-0022](adr/0022-mcp-server-surface.md) revision §決定 (f) + [ADR-0016](adr/0016-action-loop-and-structured-output.md) revision §決定 (l)) grows the assistant skill repertoire from **5 to 14** and widens the MCP surface with 4 new tools. **No DB schema changes**, **no breaking CLI changes**, and the **external write-back ban remains in force** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7).
 
 ### New MCP tools (4)
 
 - **`search`** — FTS5 cross-connector full-text search ([ADR-0022](adr/0022-mcp-server-surface.md) §決定 (f), `ReadCategory.SEARCH`). Phrase-quoted by default; the CLI-only `--raw-query` flag is intentionally absent from the MCP schema so host LLMs cannot smuggle raw MATCH syntax through.
-- **`propose.apply`** — HITL idempotent apply path (`WriteCategory.PROPOSE_APPLY`, `destructive=false` + `idempotent=true`). The handler catches `OpsHubError("already applied" / "already rejected")` from the underlying service and normalises it to `{ok: true, already_applied: true, applied_entity_id}` so retries never throw. The `destructive=false` carve-out is documented in [SECURITY.md](../SECURITY.md#phase-12-secretary-skills-expansion--what-changed) (every other write tool stays `destructive=true`).
+- **`propose.apply`** — HITL idempotent apply path (`WriteCategory.PROPOSE_APPLY`, `destructive=false` + `idempotent=true`). The handler catches `OpsHubError("already applied" / "already rejected")` from the underlying service and normalises it to `{ok: true, already_applied: true, applied_entity_id}` so retries never throw. The `destructive=false` carve-out is documented in [SECURITY.md](../SECURITY.md#phase-12-assistant-skills-expansion--what-changed) (every other write tool stays `destructive=true`).
 - **Physical-column time filters on the existing 4 read tools** — `task.list.updated_after/before` (`tasks.updated_at`) / `inbox.list.created_after/before` (`inbox_items.created_at`) / `decision.list.recorded_after/before` (`decisions.recorded_at`) / `source.list.observed_after/before` (`sources.observed_at`). ISO 8601, half-open interval (`>= after` / `< before`). Tool-specific names (not a shared `since/until`) keep business-time vs physical-column semantics from drifting.
 
 ### New `propose generate --mode` flag
@@ -258,7 +258,7 @@ Phase 12 ([ADR-0004](adr/0004-agent-runtime-boundary.md) revision §決定 (c-2)
 
 ### Skill catalog — 5 → 14
 
-The secretary skill catalog grows to **14 skills** = **10 read (host-LLM-autonomous)** + **4 HITL write** ([`docs/secretary-agent.md`](secretary-agent.md) is the SSOT for the responsibility map, pair structure, HITL boundary, and MCP-tool dependency matrix):
+The assistant skill catalog grows to **14 skills** = **10 read (host-LLM-autonomous)** + **4 HITL write** ([`docs/assistant-agent.md`](assistant-agent.md) is the SSOT for the responsibility map, pair structure, HITL boundary, and MCP-tool dependency matrix):
 
 - **read (10)**: `personal-brief` (renamed from `daily-brief`) / `next-actions` / `pr-review` / `find-document` (renamed from `file-lookup`) / `meeting-prep` / `research` / `external-brief` / `decision-rationale` / `handoff-draft` / `announcement-draft` (the last two are **text-only** — no persist path, no `propose apply` route)
 - **HITL write (4)**: `reply-draft` / `inbox-triage` / `source-extract` / `meeting-followup`
@@ -267,9 +267,9 @@ Two existing skills were renamed (`daily-brief` → `personal-brief`, `file-look
 
 ### Skill install on the host
 
-Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirmed **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 14 secretary skills (the **opshub repo `docs/skills/<name>/SKILL.md`** remains the SSOT, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI — operators install the 14 skills by running `opshub skills install` after `uv tool install ozzylabs-opshub[mcp]`. Flag details (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) and the `opshub skills list` status command live in [`docs/secretary-agent.md`](secretary-agent.md) §8.
+Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) confirmed **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 14 assistant skills (the **opshub repo `docs/skills/<name>/SKILL.md`** remains the SSOT, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI — operators install the 14 skills by running `opshub skills install` after `uv tool install ozzylabs-opshub[mcp]`. Flag details (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) and the `opshub skills list` status command live in [`docs/assistant-agent.md`](assistant-agent.md) §8.
 
-The pre-existing 5 skills' SKILL.md were rewritten to call MCP directly (the previous CLI fallback was dropped); the MCP server (`opshub mcp serve`, Phase 10) is now a hard dependency for the secretary skills.
+The pre-existing 5 skills' SKILL.md were rewritten to call MCP directly (the previous CLI fallback was dropped); the MCP server (`opshub mcp serve`, Phase 10) is now a hard dependency for the assistant skills.
 
 ### Phase 12 specifics
 
@@ -354,7 +354,7 @@ Four new `source_type` discriminators land in `sources` ([ADR-0025](adr/0025-off
 | `application/vnd.google-apps.spreadsheet` | `google_sheets` | xlsx export → markitdown |
 | anything else (Workspace folder, uploaded PDF, etc.) | `google_workspace_file` | metadata-only (no export) |
 
-The first three discriminators flow through the same `find-document` / `search` / `recall.search` paths as Phase 11 Office bodies — secretary skills can filter on them when desired (e.g. "Google Sheets only" find-document).
+The first three discriminators flow through the same `find-document` / `search` / `recall.search` paths as Phase 11 Office bodies — assistant skills can filter on them when desired (e.g. "Google Sheets only" find-document).
 
 ### Phase 13 specifics
 
@@ -532,7 +532,7 @@ The `--raw` flag help text now positions raw mode as a power-user contract for F
 
 ### MCP `search` tool contract is unchanged
 
-The Phase 12 H1 MCP `search` tool ([ADR-0022](adr/0022-mcp-server-surface.md) §決定 (f)) keeps `raw_query` hard-coded `false` — secretary skills (`find-document` / `personal-brief` / `next-actions` / `meeting-prep` / `research` / etc.) call into SearchService transparently and inherit the trigram + LIKE fallback improvements without any skill-side change.
+The Phase 12 H1 MCP `search` tool ([ADR-0022](adr/0022-mcp-server-surface.md) §決定 (f)) keeps `raw_query` hard-coded `false` — assistant skills (`find-document` / `personal-brief` / `next-actions` / `meeting-prep` / `research` / etc.) call into SearchService transparently and inherit the trigram + LIKE fallback improvements without any skill-side change.
 
 ### Phase 15 specifics
 

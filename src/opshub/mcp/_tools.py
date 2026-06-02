@@ -444,7 +444,7 @@ def build_brief_handler(engine: Engine) -> ToolHandler:
 # Translate the MCP-side direction labels to LinkService's internal
 # ``Literal["outgoing", "incoming", "both"]`` vocabulary. The MCP
 # surface uses ``outbound`` / ``inbound`` because that's the wording
-# already documented in ``docs/secretary-agent.md`` and the natural
+# already documented in ``docs/assistant-agent.md`` and the natural
 # language hosts will favour ("which entities point to this thing?").
 _DIRECTION_MCP_TO_SERVICE: dict[str, str] = {
     "both": "both",

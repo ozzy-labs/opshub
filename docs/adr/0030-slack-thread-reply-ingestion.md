@@ -10,7 +10,7 @@
 
 ### Claude Code / Codex CLI ユーザー視点の失敗モード
 
-opshub MCP 経由で秘書 14 Skill を使うとき、構造的に取りこぼしが発生する:
+opshub MCP 経由でアシスタント 14 Skill を使うとき、構造的に取りこぼしが発生する:
 
 | Skill | 失敗モード |
 |---|---|
@@ -123,7 +123,7 @@ active channel × thread 比率次第で API call が増える可能性に対し
 「親 + 全返信を 1 source row に集約した `slack_thread` source_type を新設する」案を **不採用** とする。理由:
 
 - event store immutability と摩擦 (返信 append 毎に thread record を再書きすると event log が無限増殖)、上記 §設計上の制約と同根
-- Gmail (`gmail_message`、ADR-0010 §Phase 14 改訂 (k) 不変条件 3) / Outlook (`ms365_outlook`) と非対称になり、秘書 14 Skill 側で source_type 別に分岐 logic を増やす必要が出る (recall を均一に扱えなくなる)
+- Gmail (`gmail_message`、ADR-0010 §Phase 14 改訂 (k) 不変条件 3) / Outlook (`ms365_outlook`) と非対称になり、アシスタント 14 Skill 側で source_type 別に分岐 logic を増やす必要が出る (recall を均一に扱えなくなる)
 - 動的集約は projection 層の責務として後続 Phase に置けば、`sources` projection を touch せず追加実装できる
 
 詳細は §採用しなかった代替 §2 を参照。
@@ -142,7 +142,7 @@ active channel × thread 比率次第で API call が増える可能性に対し
 
 ### Positive
 
-- **Gmail / Outlook との対称性回復** — message 単位 + thread field 保持の 3 connector 統一が成立。秘書 14 Skill 側で source_type 別に分岐 logic を増やす必要なし
+- **Gmail / Outlook との対称性回復** — message 単位 + thread field 保持の 3 connector 統一が成立。アシスタント 14 Skill 側で source_type 別に分岐 logic を増やす必要なし
 - **`find-document` / `recall.search` / `search` で thread 子返信が hit** (本 ADR 受諾 + §(f) 実装 Phase 完了後) — operator の「#foo であの議論」相当の Skill リクエストが thread 内容まで到達
 - **`reply-draft` の文脈精度向上** — 兄弟返信 (同 `thread_ts` の他の子返信) を `recall.search` 経由で参照できるようになる
 - **`sources` projection schema 不変** — migration 不要、Phase 17 候補時の実装コストが下がる
@@ -166,7 +166,7 @@ active channel × thread 比率次第で API call が増える可能性に対し
     - late reply (親 ingest 後に追加 reply が来ても resume cursor が advance しない確認)
     - rate limit (`conversations.replies` 側の 429 が helper 経由で retry される確認)
 6. **`--max-threads-per-sync` cap 検討** — per-sync で `conversations.replies` を叩く上限。命名と数値は実装 Phase で決定
-7. **Docs 同期** — `docs/secretary-agent.md` の Slack 取り込み単位記述に「thread reply も対象」を反映 (本 ADR の doc 同期 §では Post-Phase 15 Maintenance 追記のみで、詳細は実装 PR で追加)
+7. **Docs 同期** — `docs/assistant-agent.md` の Slack 取り込み単位記述に「thread reply も対象」を反映 (本 ADR の doc 同期 §では Post-Phase 15 Maintenance 追記のみで、詳細は実装 PR で追加)
 
 ## 採用しなかった代替
 
@@ -176,7 +176,7 @@ active channel × thread 比率次第で API call が増える可能性に対し
 
 - Gmail / Outlook との対称性が崩れたまま (本 ADR §Context 「Gmail との不均衡」)
 - `reply-draft` が thread 内文脈を取りこぼし続け、operator の「これに返信案考えて」要求に応えられない構造的失敗が固定化
-- `find-document` / `recall.search` で「#foo で議論したあの件」が hit しないため、秘書 14 Skill のうち read 自律 OK の Skill 群 (10 件中、Slack 経由情報を扱うすべて) の質が下がる
+- `find-document` / `recall.search` で「#foo で議論したあの件」が hit しないため、アシスタント 14 Skill のうち read 自律 OK の Skill 群 (10 件中、Slack 経由情報を扱うすべて) の質が下がる
 - opshub の pre-userbase スタンス ([AGENTS.md §設計判断のスタンス](../../AGENTS.md)) を踏まえても、実ユーザー獲得時に必ず再起票される問題で、defer する利益が小さい
 
 ### 2. `slack_thread` source_type を新設して親 + 全返信を 1 record に集約
@@ -185,7 +185,7 @@ active channel × thread 比率次第で API call が増える可能性に対し
 
 - event store immutability と摩擦 — 返信 append 毎に thread record を再書きすると event log が無限増殖、`SourceObserved` の append-only 契約と相容れない ([ADR-0002](0002-event-sourced-architecture.md))
 - Gmail [ADR-0010 §Phase 14 改訂 (k) 不変条件 3](0010-connector-contract.md#phase-14-改訂-k--本文抽出契約-outlook-流継承-gmail--calendar) (`gmail_thread` は作らない、message 単位で固定) と非対称
-- 秘書 14 Skill (`find-document` / `research` / `reply-draft` / etc.) が source_type 別に分岐 logic を持つ必要が出る (`gmail_message` は message 単位だが `slack_thread` は集約、等)
+- アシスタント 14 Skill (`find-document` / `research` / `reply-draft` / etc.) が source_type 別に分岐 logic を持つ必要が出る (`gmail_message` は message 単位だが `slack_thread` は集約、等)
 - thread 単位の動的集約は projection 層の責務として後続 Phase で切れば、`sources` projection / event schema を touch せず追加実装できる (本 ADR §(a) + §(c) で defer)
 
 ### 3. Bolt / Slack Events API で push 経路を張る

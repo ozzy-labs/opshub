@@ -7,14 +7,14 @@
 
 [English](README.md) | 日本語
 
-**ローカルファーストな秘書エージェント・プラットフォーム — 人間と AI エージェントが共有する監査可能な operational memory。**
+**ローカルファーストなアシスタントエージェント・プラットフォーム — 人間と AI エージェントが共有する監査可能な operational memory。**
 
-OpsHub は **ローカルファーストな秘書エージェント・プラットフォーム** です。append-only な event log を基盤にした operational memory を持ち、外部のエージェント host (Claude Code / Codex CLI / Gemini CLI / GitHub Copilot CLI) があなたの代わりにそれを叩きます。「次に何をやる?」「あの Slack スレッドに返信案を書いて」と自然文で頼むと、agent が MCP 経由で OpsHub を呼び、recall / 要約 / 提案を行います。状態をクラウドに送らずに済みます。
+OpsHub は **ローカルファーストなアシスタントエージェント・プラットフォーム** です。append-only な event log を基盤にした operational memory を持ち、外部のエージェント host (Claude Code / Codex CLI / Gemini CLI / GitHub Copilot CLI) があなたの代わりにそれを叩きます。「次に何をやる?」「あの Slack スレッドに返信案を書いて」と自然文で頼むと、agent が MCP 経由で OpsHub を呼び、recall / 要約 / 提案を行います。状態をクラウドに送らずに済みます。
 
 三層モデル ([ADR-0004](docs/adr/0004-agent-runtime-boundary.md)):
 
 1. **あなた (人間)** — 自然文で頼む。
-2. **秘書エージェント** — エディタ / ターミナル (Claude Code 等) で動く。OpsHub は **MCP server (`opshub mcp serve`) + Agent Skills (SKILL.md)** だけを提供し、LLM 推論ループ自体は持ちません。頭脳はホスト側。
+2. **アシスタントエージェント** — エディタ / ターミナル (Claude Code 等) で動く。OpsHub は **MCP server (`opshub mcp serve`) + Agent Skills (SKILL.md)** だけを提供し、LLM 推論ループ自体は持ちません。頭脳はホスト側。
 3. **OpsHub コア (CLI)** — append-only な event log + projection + 本文ストア + connector。同じ面を CLI から直接叩くことも、エージェント経由で叩くこともできます。
 
 ## インストール
@@ -64,11 +64,11 @@ opshub propose apply <proposal-id> 0                  # オペレーター承認
 状態はすべて XDG ディレクトリ配下に保存されます。`OPSHUB_*` 環境変数で上書
 き可能です（例: `OPSHUB_STORAGE__DB_PATH=/custom/path.sqlite`）。
 
-## 秘書に頼む
+## アシスタントに頼む
 
-エージェント host を MCP 経由で繋ぐと（[エージェント host を接続する (MCP)](#エージェント-host-を接続する-mcp) を参照）、自然文で秘書に頼めるようになります。エージェントが裏で適切な OpsHub コマンドを呼びます。
+エージェント host を MCP 経由で繋ぐと（[エージェント host を接続する (MCP)](#エージェント-host-を接続する-mcp) を参照）、自然文でアシスタントに頼めるようになります。エージェントが裏で適切な OpsHub コマンドを呼びます。
 
-Phase 12（2026-05-31）で秘書 Skill レパートリーを 5 → **14** に拡張しました（read 自律 OK 10 / HITL write 4）。下表は代表的な発火例で、責務マップ全体は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。
+Phase 12（2026-05-31）でアシスタント Skill レパートリーを 5 → **14** に拡張しました（read 自律 OK 10 / HITL write 4）。下表は代表的な発火例で、責務マップ全体は [`docs/assistant-agent.md`](docs/assistant-agent.md) を参照。
 
 | こう頼むと | 発火する Skill | 何をするか |
 |---|---|---|
@@ -87,7 +87,7 @@ Phase 12（2026-05-31）で秘書 Skill レパートリーを 5 → **14** に�
 | 「引き継ぎ書作って」「handoff 書く」 | `handoff-draft` (Phase 12) | task.list (in_progress) + decision.list + recall + graph から引き継ぎ書 text を構成（persist なし、text-only） |
 | 「リリース告知文書いて」「announcement 作って」 | `announcement-draft` (Phase 12) | recall + decision + brief で告知文 text を構成（persist なし、text-only） |
 
-14 件の秘書 Skill は [`docs/skills/<name>/SKILL.md`](docs/skills/) を SSOT として保持しています（Phase 12 H1 で opshub を SSOT に確定、ADR-0004 §決定 (c)）。既存 5 件のうち 2 件を rename（`daily-brief` → `personal-brief` / `file-lookup` → `find-document`）し、新規 9 件を Phase 12 H2-H5 で追加しました。配信経路は Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) で **opshub Python package 同梱 + `opshub skills install`** に確定し、Phase 16-B/C/D で着地済みです（[秘書 Skill を install する](#秘書-skill-を-install-する) 参照）。`@ozzylabs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit 等) を引き続き担当し、秘書 14 skill 経路から carve out されます（名前空間 disjoint、ADR-0029 §決定 (h)）。Skills カタログ（責務マップ / MCP tool 依存マップ / pair structure / HITL boundary）と「できること / できないこと」（外部書き戻し / 常駐 / auto-apply はしない）の詳細は [`docs/secretary-agent.md`](docs/secretary-agent.md) を参照。
+14 件のアシスタント Skill は [`docs/skills/<name>/SKILL.md`](docs/skills/) を SSOT として保持しています（Phase 12 H1 で opshub を SSOT に確定、ADR-0004 §決定 (c)）。既存 5 件のうち 2 件を rename（`daily-brief` → `personal-brief` / `file-lookup` → `find-document`）し、新規 9 件を Phase 12 H2-H5 で追加しました。配信経路は Phase 16-A ([ADR-0029](docs/adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub Python package 同梱 + `opshub skills install`** に確定し、Phase 16-B/C/D で着地済みです（[アシスタント Skill を install する](#アシスタント-skill-を-install-する) 参照）。`@ozzylabs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit 等) を引き続き担当し、アシスタント 14 skill 経路から carve out されます（名前空間 disjoint、ADR-0029 §決定 (h)）。Skills カタログ（責務マップ / MCP tool 依存マップ / pair structure / HITL boundary）と「できること / できないこと」（外部書き戻し / 常駐 / auto-apply はしない）の詳細は [`docs/assistant-agent.md`](docs/assistant-agent.md) を参照。
 
 ## エージェント host を接続する (MCP)
 
@@ -110,16 +110,16 @@ opshub mcp tools           # read / write tool 一覧を確認 (policy-as-data �
 
 詳細（他ホスト / 暗号化 / トラブルシュート）: [`docs/mcp-setup.md`](docs/mcp-setup.md)。
 
-## 秘書 Skill を install する
+## アシスタント Skill を install する
 
-Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) で 14 件の秘書 Skill の配信経路を opshub package 同梱 + `opshub skills install` に確定し、Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で CLI を着地させ、Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) で `opshub init` 統合まで完了しました (SSOT 位置は引き続き opshub `docs/skills/<name>/SKILL.md`)。標準の 2 ステップで MCP server と 14 秘書 Skill が両方セットアップされます:
+Phase 16-A ([ADR-0029](docs/adr/0029-distribute-assistant-skills-via-opshub-package.md)) で 14 件のアシスタント Skill の配信経路を opshub package 同梱 + `opshub skills install` に確定し、Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で CLI を着地させ、Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) で `opshub init` 統合まで完了しました (SSOT 位置は引き続き opshub `docs/skills/<name>/SKILL.md`)。標準の 2 ステップで MCP server と 14 アシスタント Skill が両方セットアップされます:
 
 ```bash
 uv tool install ozzylabs-opshub[mcp]
-opshub init   # MCP server 初期化 + 秘書 14 skill install (TTY 時は prompt、非対話は default install)
+opshub init   # MCP server 初期化 + アシスタント 14 skill install (TTY 時は prompt、非対話は default install)
 ```
 
-`opshub init` は stdin が TTY のとき `rich.prompt.Confirm` で確認 (default = yes) し、非対話 (script や `uv tool install ... && opshub init` の one-liner) では default で install します。`opshub init --install-skills` / `opshub init --no-install-skills` で明示的に上書きできます。後追いの更新 / `--scope project` 切替 / `--skip-existing` で手編集を温存したい場合は `opshub skills install` を直接呼んでください。`opshub skills list` で installed / missing / modified の状態を skill 単位で確認できます。flag 詳細 (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 を参照してください。
+`opshub init` は stdin が TTY のとき `rich.prompt.Confirm` で確認 (default = yes) し、非対話 (script や `uv tool install ... && opshub init` の one-liner) では default で install します。`opshub init --install-skills` / `opshub init --no-install-skills` で明示的に上書きできます。後追いの更新 / `--scope project` 切替 / `--skip-existing` で手編集を温存したい場合は `opshub skills install` を直接呼んでください。`opshub skills list` で installed / missing / modified の状態を skill 単位で確認できます。flag 詳細 (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) は [`docs/assistant-agent.md`](docs/assistant-agent.md) §8 を参照してください。
 
 ## LLM backend の設定（任意）
 
@@ -153,13 +153,13 @@ Phase 1–8 を出荷済み（2026-05-17, v0.1.0）。Phase 9 出荷 2026-05-23�
 | 7 | Connectors wave 2 | Slack + Microsoft 365 + Box |
 | 8 | Knowledge graph | `links` projection + 自動抽出 + `graph` + `--expand-graph` |
 | 9 | Local-FS connectors | `box_drive` (Box Drive デスクトップ → ローカル FS scan、ADR-0019) |
-| 10 | Secretary agent platform | 本文ローカル保持 (ADR-0020) + 保存時暗号化 (ADR-0021) + MCP server (ADR-0022) + `opshub search` (FTS5) + `opshub mcp serve` + 秘書 5 Skills (Phase 12 H1 で `personal-brief` / `next-actions` / `reply-draft` / `pr-review` / `find-document` に rename 済) + reply-draft (ADR-0016 §決定 (i)) + ADR-0004 改訂 (形A: runtime をコアに持たない) + ADR-0010 改訂 (write-back 禁止) + ADR-0017 改訂 (reply_draft link types) |
+| 10 | Assistant agent platform | 本文ローカル保持 (ADR-0020) + 保存時暗号化 (ADR-0021) + MCP server (ADR-0022) + `opshub search` (FTS5) + `opshub mcp serve` + アシスタント 5 Skills (Phase 12 H1 で `personal-brief` / `next-actions` / `reply-draft` / `pr-review` / `find-document` に rename 済) + reply-draft (ADR-0016 §決定 (i)) + ADR-0004 改訂 (形A: runtime をコアに持たない) + ADR-0010 改訂 (write-back 禁止) + ADR-0017 改訂 (reply_draft link types) |
 | 11 | MS Office 深掘り | Office 文書本文抽出 (ADR-0025、markitdown 経路で `.docx`/`.xlsx`/`.pptx`、50 MB / 500K chars cap、fail-safe) + ADR-0019 改訂 (`content_extraction` opt-in 例外節 + `onedrive_drive` パターン汎化) + ADR-0010 改訂 (Teams connector + 本文抽出契約 + delta-link cursor + 失効時 full-pass fallback + Teams User Token principal) + 新 `teams` connector (Microsoft Graph chat delta + `Chat.Read`) + 新 `onedrive_drive` connector (FS scan、WSL2 `/mnt/onedrive` / macOS `~/OneDrive`) + `box_drive` の Office 抽出 hook + Outlook 本文 deep retention |
-| 12 | Secretary Skills 拡張 | 秘書 Skill レパートリーを 5 → **14** に拡張 (read 自律 OK 10 / HITL write 4)。新規 9 = `meeting-prep` / `research` / `inbox-triage` / `external-brief` / `decision-rationale` / `handoff-draft` / `announcement-draft` / `meeting-followup` / `source-extract`、rename 2 = `daily-brief` → `personal-brief` / `file-lookup` → `find-document`。4 新 MCP tools (`search` (FTS5) + `propose.apply` (HITL idempotent) + 既存 4 read tools の物理列ベース時間フィルタ = `task.list` / `inbox.list` / `decision.list` / `source.list`)。既存 5 SKILL.md を MCP 直接呼びに統一 (CLI fallback 廃止)。ADR-0004 改訂 (Skills SSOT を opshub `docs/skills/` に移管、配布は Phase 15+ defer → Phase 16-A で opshub package 同梱経路に確定、[ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) + ADR-0022 改訂 (4 新 MCP tools 契約化) + ADR-0016 改訂 (draft 系統一方針: persist 境界 = 返信元 source の有無 / `mode` 引数射程 / triage 射程 / Candidate union freeze)。`docs/secretary-agent.md` を 14 skills 責務マップ SSOT に拡張（責務マップ / HITL boundary / MCP tool 依存マップ / pair structure） |
+| 12 | Assistant Skills 拡張 | アシスタント Skill レパートリーを 5 → **14** に拡張 (read 自律 OK 10 / HITL write 4)。新規 9 = `meeting-prep` / `research` / `inbox-triage` / `external-brief` / `decision-rationale` / `handoff-draft` / `announcement-draft` / `meeting-followup` / `source-extract`、rename 2 = `daily-brief` → `personal-brief` / `file-lookup` → `find-document`。4 新 MCP tools (`search` (FTS5) + `propose.apply` (HITL idempotent) + 既存 4 read tools の物理列ベース時間フィルタ = `task.list` / `inbox.list` / `decision.list` / `source.list`)。既存 5 SKILL.md を MCP 直接呼びに統一 (CLI fallback 廃止)。ADR-0004 改訂 (Skills SSOT を opshub `docs/skills/` に移管、配布は Phase 15+ defer → Phase 16-A で opshub package 同梱経路に確定、[ADR-0029](docs/adr/0029-distribute-assistant-skills-via-opshub-package.md)) + ADR-0022 改訂 (4 新 MCP tools 契約化) + ADR-0016 改訂 (draft 系統一方針: persist 境界 = 返信元 source の有無 / `mode` 引数射程 / triage 射程 / Candidate union freeze)。`docs/assistant-agent.md` を 14 skills 責務マップ SSOT に拡張（責務マップ / HITL boundary / MCP tool 依存マップ / pair structure） |
 | 13 | Google Workspace コネクタ | 新規 `google_workspace` connector が Google Docs / Slides / Sheets を Drive API v3 (`changes.list` cursor + 失効時 full-pass fallback) + OAuth Refresh Token (offline access + 自前 refresh + rotation 書き戻し = MS365 / Box pattern、Teams pattern (verbatim user token) とは別系統である旨を ADR-0010 §Phase 13 改訂 (e)-(h) で明文化) で取り込み。Workspace native 本文 (`google_doc` / `google_slides` / `google_sheets`) は Drive API `files.export` で MS Office mediatype (`.docx` / `.pptx` / `.xlsx`) として取得し、Phase 11 で確立した markitdown 経路 (`core/document_extract.extract_workspace_export(bytes, source_type)`、ADR-0025 §決定 (d') + (j)) に流して本文抽出。ADR 改訂 3 本 (ADR-0010 + ADR-0014 + ADR-0025)、新 ADR ゼロ (Phase 11 → 12 → 13 で「1 新規 + 2 改訂 → 0 新規 + 3 改訂 → 0 新規 + 3 改訂」と縮退継続)。Drive `files.watch` push notification は禁止 (`changes.list` poll のみで形 A 整合 = 能動性なし)。新 extras `connectors-google-workspace` (httpx) + 新 setup doc `docs/google-workspace-setup.md` |
 | 14 | Gmail + Google Calendar コネクタ | 新規 `google_mail` connector が Gmail API v1 (`users.messages.list` 初回 + `users.history.list` delta + 7 日 TTL 失効時 full-pass fallback) で、新規 `google_calendar` connector が Calendar API v3 (`events.list(syncToken=...)` delta + `410 GONE` 失効時 full-pass + `timeMin`/`timeMax` window fallback) で取り込み。両者は Phase 13 の Google OAuth principal を新規 shared `connectors/google_auth/` foundation 経由で共有 — 1 Google account = 1 principal が `drive.readonly + gmail.readonly + calendar.readonly` の 3-scope 固定 list を Drive + Gmail + Calendar の 3 connector で共有（1 回の再 consent で 3 connector 全てに反映）。Mapper は MS365 Outlook / Calendar mapper (Phase 7 + Phase 11) と**意図的に symmetric**: Gmail = message 単位 `gmail_message`、text/plain 優先 → text/html 生保持 / markitdown なし / 添付 retain なし / `[Labels: ...]` prepend / `[gmail body truncated]` tag / threadId field。Calendar = master event only `google_calendar`、override は別 record として emit / summary = `start_iso - end_iso (N attendees)` / RRULE field / attendee list を body 埋め込み。Push notification (`watch` / `events.watch`) は禁止 — poll のみで形 A 整合。Symmetry は `tests/unit/connectors/test_mapper_symmetry.py` で機械検証。ADR 改訂 2 本 (ADR-0010 + ADR-0014)、新 ADR ゼロ（単一改訂路線を継続）。新 extras なし — Gmail / Calendar は `connectors-google-workspace` (httpx) を流用 |
 
-次は **Phase 16+ 候補** — multi-machine sync / 能動性段階 1-4 (cron 委譲 / 記憶キュレーション / 通知 / filewatch / Gmail push / Calendar push 再評価) / 画像 OCR (PPT 内画像 / Office 図表、Phase 13 → 14 から繰り越し) / Drive Comments / Suggestions 取り込み (Phase 13 follow-up) / Gmail / Calendar 添付の本文抽出 (markitdown 経路、ADR-0025 拡張) / 追加コネクタ (Notion / Jira / Linear / Confluence、Phase 13 から繰り越し) / 外部書き戻し (Teams / Drive / Gmail 返信送信 + Calendar event create + HITL、要 新 ADR) / Calendar instance 展開 projection (ms365 / google 両方同時) / 形態素 tokenizer 採用 (Lindera / SudachiPy / MeCab、Phase 15 から繰り越し)。秘書 14 Skill の配信経路は Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) で opshub Python package 同梱 + `opshub skills install` に切り替え済 (Phase 16-B/C/D で着地)。phase ごとの詳細は [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery) に。
+次は **Phase 16+ 候補** — multi-machine sync / 能動性段階 1-4 (cron 委譲 / 記憶キュレーション / 通知 / filewatch / Gmail push / Calendar push 再評価) / 画像 OCR (PPT 内画像 / Office 図表、Phase 13 → 14 から繰り越し) / Drive Comments / Suggestions 取り込み (Phase 13 follow-up) / Gmail / Calendar 添付の本文抽出 (markitdown 経路、ADR-0025 拡張) / 追加コネクタ (Notion / Jira / Linear / Confluence、Phase 13 から繰り越し) / 外部書き戻し (Teams / Drive / Gmail 返信送信 + Calendar event create + HITL、要 新 ADR) / Calendar instance 展開 projection (ms365 / google 両方同時) / 形態素 tokenizer 採用 (Lindera / SudachiPy / MeCab、Phase 15 から繰り越し)。アシスタント 14 Skill の配信経路は Phase 16-A ([ADR-0029](docs/adr/0029-distribute-assistant-skills-via-opshub-package.md)) で opshub Python package 同梱 + `opshub skills install` に切り替え済 (Phase 16-B/C/D で着地)。phase ごとの詳細は [`docs/architecture.md`](docs/architecture.md) §9 (Phased Delivery) に。
 
 ## コマンド
 
@@ -294,7 +294,7 @@ verbosity でも redaction processor で marker 化される。手順は
 
 - [`docs/principles.md`](docs/principles.md) — 設計原則 (local-first, event-sourced, 本文ローカル保持)
 - [`docs/architecture.md`](docs/architecture.md) — 階層アーキテクチャの概観
-- [`docs/secretary-agent.md`](docs/secretary-agent.md) — Phase 10 秘書エージェント層の使い方 (Skill カタログ・できること/できないこと)
+- [`docs/assistant-agent.md`](docs/assistant-agent.md) — Phase 10 アシスタントエージェント層の使い方 (Skill カタログ・できること/できないこと)
 - [`docs/mcp-setup.md`](docs/mcp-setup.md) — Phase 10 エージェント host 向け MCP セットアップ
 - [`docs/adr/`](docs/adr/README.md) — Architecture Decision Records
 - [`docs/box-drive-setup.md`](docs/box-drive-setup.md) — Phase 9 `box_drive` connector setup (WSL2 / macOS)

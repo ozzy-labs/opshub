@@ -130,7 +130,7 @@ class SourceObserved(DomainEvent):
       §Phase 15+ outlook). Body extraction follows the Outlook recipe
       (text/plain preferred → text/html fallback, kept verbatim, no
       markitdown, no attachment retention; Phase 14 plan §1 OQ4 +
-      ADR-0010 §Phase 14 改訂 (k)) so secretary skills treat Gmail
+      ADR-0010 §Phase 14 改訂 (k)) so assistant skills treat Gmail
       and Outlook messages symmetrically.
 
     ``title`` is the human-readable label. ``url`` and ``summary`` are

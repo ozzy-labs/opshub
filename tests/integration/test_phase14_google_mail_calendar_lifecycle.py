@@ -4,7 +4,7 @@ Pins the Phase 14 data-pipeline shape: Gmail (``gmail_message``) and
 Google Calendar (``google_calendar`` master + override-as-separate-record)
 bodies land in the same ``sources`` projection as the Phase 7 / 11 / 13
 connectors, are indexed by FTS5 over the same body store, surface
-through the same MCP read tools that drive the secretary skills, and
+through the same MCP read tools that drive the assistant skills, and
 the write-back path remains structurally absent for both new connectors
 (ADR-0010 §禁止事項 7 + §Phase 14 改訂 (i) 禁止事項拡張 = Gmail
 ``users.watch`` + Calendar ``events.watch`` も禁止).
@@ -51,7 +51,7 @@ What this pins
    filtered to ``source_type="gmail_message"`` (Phase 12 H1
    ``observed_after`` / ``observed_before`` physical-column path)
    returns only Gmail rows even when other connectors share the
-   ``observed_at`` window, so the secretary skills can target Gmail
+   ``observed_at`` window, so the assistant skills can target Gmail
    without bleeding Outlook / Drive rows into the result.
 
 5. **Write-back path absence (Gmail + Calendar)** — neither

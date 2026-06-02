@@ -154,4 +154,4 @@ input:
 - PR #231 (MCP `propose.generate` + `source.get` widening)
 - Phase 12 H1 (`docs/phase-12-plan.md` §3 H1)
 - Phase 12 H4 (`docs/phase-12-plan.md` §3 H4)
-- docs/secretary-agent.md
+- docs/assistant-agent.md

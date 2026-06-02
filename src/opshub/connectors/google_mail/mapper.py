@@ -16,7 +16,7 @@ The mapper is deliberately a structural twin of
 * Body extraction: **text/plain preferred, text/html as fallback,
   kept verbatim**. No markitdown, no HTML stripping, no attachment
   retention. Phase 14 plan §1 OQ4 makes the symmetric choice
-  explicit so the secretary skills do not need an "is this Outlook
+  explicit so the assistant skills do not need an "is this Outlook
   or Gmail?" branch.
 * Body cap: hard ceiling at :data:`MAX_GMAIL_BODY_CHARS` (500_000),
   the **same value as Outlook**. Phase 14 plan §1 OQ10 picked the
@@ -34,7 +34,7 @@ The mapper is deliberately a structural twin of
 * Labels prepended as ``[Labels: INBOX, IMPORTANT, ...]`` at the
   body head — Outlook has no direct analogue but the structural
   shape (single-line marker stanza at the top of the body) matches
-  the secretary skills' expectation that "headline metadata" lives
+  the assistant skills' expectation that "headline metadata" lives
   early in the body. Phase 14 plan §1 OQ4 + ADR-0010 §Phase 14 改訂 (k)
   pin the label-prepend contract.
 * Summary format: ``"from: <sender>, subject: <subject>"`` — a
@@ -392,7 +392,7 @@ def _build_source_observed(
         body=body,
         # External SaaS body — same provenance shape as the Outlook /
         # Google Workspace / Teams / Box mappers. Treated as untrusted
-        # reference material by the secretary skills' do-not-follow
+        # reference material by the assistant skills' do-not-follow
         # preamble (ADR-0015 §決定 (f)).
         provenance_origin="external",
         provenance_trust="untrusted",

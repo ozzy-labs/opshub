@@ -1,8 +1,8 @@
-# Secretary Agent — opshub の秘書層を使う
+# Assistant Agent — opshub のアシスタント層を使う
 
-opshub は Phase 10 (秘書エージェント・プラットフォーム化) で「人間 → 秘書エージェント → opshub コマンド」の三層モデルへ拡張され、Phase 12 (Secretary Skills 拡張) で秘書 Skill レパートリーを **5 → 14** に拡張した。本 doc は秘書エージェントの使い方を、Skill catalog SSOT として 10 § 構成で集約する。
+opshub は Phase 10 (アシスタントエージェント・プラットフォーム化) で「人間 → アシスタントエージェント → opshub コマンド」の三層モデルへ拡張され、Phase 12 (Assistant Skills 拡張) でアシスタント Skill レパートリーを **5 → 14** に拡張した。本 doc はアシスタントエージェントの使い方を、Skill catalog SSOT として 10 § 構成で集約する。
 
-本 doc は [ADR-0004 §決定 (c-2)](adr/0004-agent-runtime-boundary.md) で **Skill catalog SSOT** として明示された (Phase 12 H1)。14 skills 体制の責務マップ / HITL boundary / MCP tool 依存マップ / pair structure をここで一元管理する。Skill 配信機構は Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地)、Skill 本体 (SKILL.md) は引き続き opshub `docs/skills/<name>/SKILL.md` を SSOT として保持する。
+本 doc は [ADR-0004 §決定 (c-2)](adr/0004-agent-runtime-boundary.md) で **Skill catalog SSOT** として明示された (Phase 12 H1)。14 skills 体制の責務マップ / HITL boundary / MCP tool 依存マップ / pair structure をここで一元管理する。Skill 配信機構は Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地)、Skill 本体 (SKILL.md) は引き続き opshub `docs/skills/<name>/SKILL.md` を SSOT として保持する。
 
 設計の根拠は [ADR-0004 Agent Runtime Boundary](adr/0004-agent-runtime-boundary.md) (形A: opshub は MCP + Agent Skills のみ提供、runtime は外部ホスト) と [ADR-0022 MCP Server Surface](adr/0022-mcp-server-surface.md) (MCP tool 面) と [ADR-0016 §決定 (l)](adr/0016-action-loop-and-structured-output.md) (Phase 12 H1 で追加された draft 系統一方針: persist 境界 / `mode` 引数射程 / triage 射程 / Candidate union freeze)。
 
@@ -12,17 +12,17 @@ opshub 本体が提供するもの:
 
 1. **operational memory (①コア)** — events / projections / connectors / recall / propose / brief / graph
 2. **MCP サーバ (口)** — `opshub mcp serve` (stdio)。エージェント host が ①コアを叩く経路。Phase 12 H1 で `search` (FTS5) と `propose.apply` (HITL idempotent) と既存 4 read tools の physical column ベース時間フィルタを追加し、計 17 tools (read 12 + write 5) を公開
-3. **Agent Skills (手順書)** — SKILL.md 標準。本 doc が catalog する **14 Skill** (Phase 12 H2-H5 で 9 新規 + Phase 12 H1 で rename 2 を含む)。`docs/skills/<name>/SKILL.md` を opshub SSOT、配信機構は Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地)
+3. **Agent Skills (手順書)** — SKILL.md 標準。本 doc が catalog する **14 Skill** (Phase 12 H2-H5 で 9 新規 + Phase 12 H1 で rename 2 を含む)。`docs/skills/<name>/SKILL.md` を opshub SSOT、配信機構は Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地)
 4. **skill security scan** — `tools/skill_scan.py` (4 カテゴリ + frontmatter 隠し命令検出)、`tests/unit/skills/test_skill_specs.py` が 14 skills 全てに対して per-skill MCP dispatch pin + scan を実行
 
 opshub 本体が **持たない** もの:
 
 - LLM 推論ループ / ReAct ループ / LangGraph state machine — 外部ホスト (Claude Code / Codex CLI / Gemini CLI / GitHub Copilot CLI) の責務
-- 秘書の人格 / 常駐プロセス / 能動的な push / cron 内包 — 外部ホスト or OS-level scheduler の責務
+- アシスタントの人格 / 常駐プロセス / 能動的な push / cron 内包 — 外部ホスト or OS-level scheduler の責務
 - 外部 SaaS への書き戻し (返信送信 / コメント投稿 / ファイル upload) — Phase 12 でも実装しない (ADR-0010 §禁止事項 7、緊張点③)
 - handoff/announcement-draft の persist 経路 — ADR-0016 §決定 (l)(a) で「返信元 source の有無」で persist 境界を切る方針が pin された。reply-draft は persist (`reply_to_source_id` が natural key)、handoff/announcement は text-only で persist しない
 
-## 2. 秘書への依頼例
+## 2. アシスタントへの依頼例
 
 外部ホスト (Claude Code 等) に対して以下のように頼むと、対応する skill が発火する。Phase 12 で 14 行に拡張。
 
@@ -75,7 +75,7 @@ host LLM が user 確認必須 (`propose.generate` で候補生成 → user 確�
 | [source-extract](skills/source-extract/SKILL.md) | ↔ inbox-triage | 「この資料から task 抽出」「これに含まれる decisions 教えて」「<source_id> から候補を」 | `source.get` + `propose.generate` (`mode=source_extract`) + `propose.apply` (HITL) | 1 source から抽出された task / decision / reply_draft 候補、user 個別承認分のみ保存 |
 | [meeting-followup](skills/meeting-followup/SKILL.md) | ↔ meeting-prep | 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」 | `source.list` (`source_type=ms365_calendar` または `google_calendar` + `observed_after/before`、Phase 14 で Google Calendar も対象) + `source.get` + `recall.search` + `propose.generate` (`mode=meeting_followup`) + `propose.apply` (HITL) | 会議からの task / decision 候補、user 個別承認分のみ保存 |
 
-skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。配布は Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (Phase 16-B 着地後、[§8 セットアップ](#8-セットアップ) 参照)。`@ozzylabs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit 等、名前空間 disjoint) を引き続き担当し、秘書 14 skill 経路から carve out される ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (h))。
+skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。配布は Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (Phase 16-B 着地後、[§8 セットアップ](#8-セットアップ) 参照)。`@ozzylabs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit 等、名前空間 disjoint) を引き続き担当し、アシスタント 14 skill 経路から carve out される ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md) §決定 (h))。
 
 ## 4. Pair structure
 
@@ -115,7 +115,7 @@ auto-apply 経路は構造的に存在しない (ADR-0016 §決定 (c))。`opshu
 
 ### 5.3 外部書き戻し非存在 (構造的禁止)
 
-- すべての connector package で `send` / `post` / `write` / `comment_create` callable を持たない (ADR-0010 §禁止事項 7、`tests/integration/test_phase11_office_lifecycle.py` + Phase 12 H6 e2e test (`tests/integration/test_phase12_secretary_lifecycle.py`) で構造的に pin)
+- すべての connector package で `send` / `post` / `write` / `comment_create` callable を持たない (ADR-0010 §禁止事項 7、`tests/integration/test_phase11_office_lifecycle.py` + Phase 12 H6 e2e test (`tests/integration/test_phase12_assistant_lifecycle.py`) で構造的に pin)
 - reply-draft / handoff-draft / announcement-draft は draft text を生成するだけで、SaaS への送信経路を持たない。ユーザーが手で SaaS に貼り付ける
 - 将来 SaaS 書き戻しが必要になっても、新 ADR + ADR-0004 revisit + ADR-0016 §決定 (c) 整合の 3 要件すべてを要求する (ADR-0010 §禁止事項 7 改訂は引き続き保持)
 
@@ -196,20 +196,20 @@ Phase 15+ で symmetric に拡張する候補: Calendar instance 展開 projecti
 - 過去の decision / task / proposal / event を踏まえた **文脈付き** の応答 (`--expand-graph` で知識グラフ拡張、ADR-0017)
 - 返信下書きを「自分の過去送信 event」の文体を recall して再現 (ADR-0016 §決定 (k))
 - 複数 agent host (Claude Code / Codex CLI / Gemini CLI / GitHub Copilot CLI) から **同一の MCP 面** を叩いて同じ記憶を共有
-- Phase 11 で追加された **MS Office 由来の文脈**を秘書の素材として使う (14 skills 全てが `source.body` ベースで透過的に対応):
+- Phase 11 で追加された **MS Office 由来の文脈**をアシスタントの素材として使う (14 skills 全てが `source.body` ベースで透過的に対応):
   - **Teams chat 本文** (`teams_message`、Microsoft Graph delta query 経由、[Teams setup](teams-setup.md))
   - **Outlook 本文 deep retention** (Phase 10 で取り込み始めた summary に加え、Phase 11 で本文も `sources.body` に persist)
   - **Office 文書本文** (`.docx`/`.xlsx`/`.pptx`、markitdown 経由、`box_drive` / `onedrive_drive` の `content_extraction = true` opt-in、[ADR-0025](adr/0025-office-document-content-extraction.md))
-- Phase 13 で追加された **Google Workspace 由来の文脈**を秘書の素材として使う (14 skills 全てが `source.body` ベースで透過的に対応):
+- Phase 13 で追加された **Google Workspace 由来の文脈**をアシスタントの素材として使う (14 skills 全てが `source.body` ベースで透過的に対応):
   - **Google Docs 本文** (`google_doc`、Drive API `files.export(fileId, mimeType=docx)` → markitdown、`google_workspace` の `content_extraction = true` opt-in、[Google Workspace setup](google-workspace-setup.md))
   - **Google Slides 本文** (`google_slides`、Drive API export → pptx → markitdown)
   - **Google Sheets 本文** (`google_sheets`、Drive API export → xlsx → markitdown)
   - **Google Workspace metadata only** (`google_workspace_file` catch-all = Workspace 非 native ファイル / フォルダ、metadata のみ persist。Phase 13 G3 default 挙動)
-- Phase 14 で追加された **Gmail / Google Calendar 由来の文脈**を秘書の素材として使う (14 skills 全てが `source.body` ベースで透過的に対応、Outlook / ms365_calendar と symmetric):
+- Phase 14 で追加された **Gmail / Google Calendar 由来の文脈**をアシスタントの素材として使う (14 skills 全てが `source.body` ベースで透過的に対応、Outlook / ms365_calendar と symmetric):
   - **Gmail 本文** (`gmail_message`、Gmail API v1 `users.messages.get(format=full)` 経由、text/plain 優先 → text/html 生保持、markitdown なし、添付 retain なし、`[Labels: ...]` prepend、message 単位 = thread 単位ではなく threadId は field 保持。[Google Workspace setup](google-workspace-setup.md) §Gmail 節参照)
   - **Google Calendar 本文** (`google_calendar`、Calendar API v3 `events.list(syncToken=...)` 経由、master event only + RRULE field 保持、override は別 record として emit + body に back-pointer、summary = `start_iso - end_iso (N attendees)`、attendee email list / 議題 / 会議室は body に追記。[Google Workspace setup](google-workspace-setup.md) §Calendar 節参照)
   - Gmail 添付 / Calendar 添付の本文抽出は Phase 15+ で markitdown 経路追加 (ADR-0025 拡張)
-- Phase 12 で追加された **秘書らしいユースケース** に対応 (5 → 14 skills 拡張):
+- Phase 12 で追加された **アシスタントらしいユースケース** に対応 (5 → 14 skills 拡張):
   - 「会議準備 / 会議後フォロー」(`meeting-prep` ↔ `meeting-followup`)
   - 「トピック横断調査」(`research`、recall + FTS5 + graph 拡張 + brief 統合)
   - 「外向きまとめ」(`external-brief`、外向き tone)
@@ -235,21 +235,21 @@ Phase 15+ で symmetric に拡張する候補: Calendar instance 展開 projecti
 ```bash
 # 環境準備
 uv tool install ozzylabs-opshub[mcp]
-opshub init   # 初回のみ。MCP server 初期化 + 秘書 14 skill install (TTY 時は prompt、非対話は default install)
+opshub init   # 初回のみ。MCP server 初期化 + アシスタント 14 skill install (TTY 時は prompt、非対話は default install)
 
 # MCP server を stdio で起動 (host が subprocess として spawn する想定)
 opshub mcp serve
 ```
 
-### 8.2 秘書 Skills 14 件をホストに配布する
+### 8.2 アシスタント Skills 14 件をホストに配布する
 
-Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で `opshub skills install` / `opshub skills list` が着地し、Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) で `opshub init` 経由の自動 install (TTY prompt + `--install-skills` / `--no-install-skills` flag、非対話 default = install) が着地した。`[tool.hatch.build.force-include]` で `docs/skills/` → `src/opshub/_skills/` を build 時に copy し、wheel に同梱する ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (a))。
+Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で `opshub skills install` / `opshub skills list` が着地し、Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) で `opshub init` 経由の自動 install (TTY prompt + `--install-skills` / `--no-install-skills` flag、非対話 default = install) が着地した。`[tool.hatch.build.force-include]` で `docs/skills/` → `src/opshub/_skills/` を build 時に copy し、wheel に同梱する ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md) §決定 (a))。
 
 #### 推奨手順: `opshub init` で一括セットアップ (Phase 16-C)
 
 ```bash
 uv tool install ozzylabs-opshub[mcp]
-opshub init   # MCP server 初期化 + 秘書 14 skill を ~/.claude/skills/ + ~/.agents/skills/ に install
+opshub init   # MCP server 初期化 + アシスタント 14 skill を ~/.claude/skills/ + ~/.agents/skills/ に install
 ```
 
 `opshub init` は次の 3 layer で skill install 判断を行う:
@@ -258,7 +258,7 @@ opshub init   # MCP server 初期化 + 秘書 14 skill を ~/.claude/skills/ + ~
 - `--no-install-skills` 明示: prompt なしで skip
 - flag 未指定:
   - TTY (`sys.stdin.isatty() == True`): `rich.prompt.Confirm` で確認 (default = yes、Enter で install / `n` で skip)
-  - 非対話 (`sys.stdin.isatty() == False`): **install (default = yes)**。`uv tool install ozzylabs-opshub[mcp] && opshub init` の one-liner / script / 新規 shell 経路を救済する設計 ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (d))
+  - 非対話 (`sys.stdin.isatty() == False`): **install (default = yes)**。`uv tool install ozzylabs-opshub[mcp] && opshub init` の one-liner / script / 新規 shell 経路を救済する設計 ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md) §決定 (d))
 
 `opshub init` 内部は `opshub skills install --host all --scope user` と同等の install を実行する (`--skip-existing` は付かないため SSOT 同期が優先される)。後追いの scope 切替 (e.g. `--scope project` で repo 配下に展開) / install 更新 / `--skip-existing` 付き保守的更新は引き続き `opshub skills install` を直接呼ぶ。
 
@@ -273,8 +273,8 @@ opshub skills install --skip-existing  # 手編集を温存しつつ未 install 
 flags:
 
 - `--host {claude-code,codex,copilot,all}` (default `all`) — 配布先 host を選択。`claude-code` は `~/.claude/skills/`、`codex` と `copilot` は `~/.agents/skills/` (handbook ADR-0016 で codex / copilot は同じ loader を共有するため、`all` は 2 directory にだけ展開する)。
-- `--scope {user,project}` (default `user`) — `user` は `~/.claude/skills/` / `~/.agents/skills/`、`project` は CWD 配下の `./.claude/skills/` / `./.agents/skills/` ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (f))。`project` scope は repo の pyproject.toml の有無を問わない (operator の明示的選択を尊重する設計)。
-- `--skip-existing` — 既存 `SKILL.md` を温存する。default は SSOT 同期を優先して **上書き** する ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (g))。手編集を残したい operator は明示的に opt-in する。
+- `--scope {user,project}` (default `user`) — `user` は `~/.claude/skills/` / `~/.agents/skills/`、`project` は CWD 配下の `./.claude/skills/` / `./.agents/skills/` ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md) §決定 (f))。`project` scope は repo の pyproject.toml の有無を問わない (operator の明示的選択を尊重する設計)。
+- `--skip-existing` — 既存 `SKILL.md` を温存する。default は SSOT 同期を優先して **上書き** する ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md) §決定 (g))。手編集を残したい operator は明示的に opt-in する。
 - `--dry-run` — filesystem に書かずに「どこに何を書くか」を表示する。default 上書きの破壊性を予め確認したいときに使う。
 - `--print-paths` — 書き込み先 path 一覧を stdout に 1 行 1 path で emit する (pipeline 用、`xargs ls` 等と組み合わせて使える)。
 
@@ -292,9 +292,9 @@ status の意味:
 - `missing` — host loader 配下に file が無い (一度も `opshub skills install` を実行していない / 別 scope を使った)
 - `modified` — file は存在するが SSOT と byte 差分がある (operator が手編集した、または stale な install を再 sync する必要あり)
 
-#### scope 境界 (秘書 14 skill vs ecosystem 共通 skill)
+#### scope 境界 (アシスタント 14 skill vs ecosystem 共通 skill)
 
-opshub 本体リポでは `docs/skills/<name>/SKILL.md` が引き続き **SSOT** として置かれる ([ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)、Phase 16-A 改訂後も位置は不変、wheel 同梱経路に切り替わったのみ)。`ozzy-labs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit / 等) を引き続き担当し、秘書 14 skill 経路と名前空間 disjoint に分担する ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (h))。`opshub skills install` は 14 secretary skill 名のみを touch するため、`@ozzylabs/skills` で配信される ecosystem 共通 skill を clobber することはない (この不変条件は `tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_14_secretary_skills` で pin されている)。
+opshub 本体リポでは `docs/skills/<name>/SKILL.md` が引き続き **SSOT** として置かれる ([ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)、Phase 16-A 改訂後も位置は不変、wheel 同梱経路に切り替わったのみ)。`ozzy-labs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit / 等) を引き続き担当し、アシスタント 14 skill 経路と名前空間 disjoint に分担する ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md) §決定 (h))。`opshub skills install` は 14 assistant skill 名のみを touch するため、`@ozzylabs/skills` で配信される ecosystem 共通 skill を clobber することはない (この不変条件は `tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_14_assistant_skills` で pin されている)。
 
 ### 8.3 ホストから skill を呼ぶ
 
@@ -308,7 +308,7 @@ opshub 本体リポでは `docs/skills/<name>/SKILL.md` が引き続き **SSOT**
 - 14 skills 全てに per-skill MCP dispatch pin (skill 内 MCP tool 名・引数 schema が opshub MCP surface と整合するか grep + JSON schema validation)
 - HITL boundary test pin (HITL write skill の `propose.apply` annotation = `read_only=false, destructive=false, idempotent=true`)
 - text-only boundary test pin (handoff/announcement-draft が persist 経路を持たない)
-- `tools/skill_scan.py` は本リポ内 14 skill spec (`docs/skills/<name>/SKILL.md`) に対し commit 時の test (`tests/unit/skills/test_skill_specs.py`) で適用する。`opshub skills install` の install 前 scan ゲートは現状実装していない (将来検討、[#396](https://github.com/ozzy-labs/opshub/issues/396))。秘書 14 skill の payload (`src/opshub/_skills/<name>/SKILL.md`) は build 時に `docs/skills/` SSOT から `[tool.hatch.build.force-include]` で取り込まれるため、install 経路で外部由来の SKILL.md が混入する余地が構造的になく、install 前 scan の優先度は低い。ecosystem 共通 skill は `ozzy-labs/skills` 側 CI で別途 scan される ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md))
+- `tools/skill_scan.py` は本リポ内 14 skill spec (`docs/skills/<name>/SKILL.md`) に対し commit 時の test (`tests/unit/skills/test_skill_specs.py`) で適用する。`opshub skills install` の install 前 scan ゲートは現状実装していない (将来検討、[#396](https://github.com/ozzy-labs/opshub/issues/396))。アシスタント 14 skill の payload (`src/opshub/_skills/<name>/SKILL.md`) は build 時に `docs/skills/` SSOT から `[tool.hatch.build.force-include]` で取り込まれるため、install 経路で外部由来の SKILL.md が混入する余地が構造的になく、install 前 scan の優先度は低い。ecosystem 共通 skill は `ozzy-labs/skills` 側 CI で別途 scan される ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md))
 - 検出ルールは scope 縮小設計 (高 precision / 中 recall)。誤検出は `# skill-scan: allow <category>` コメントで局所的に suppress 可能
 
 ## 10. 関連
@@ -321,5 +321,5 @@ opshub 本体リポでは `docs/skills/<name>/SKILL.md` が引き続き **SSOT**
 - [docs/mcp-setup.md](mcp-setup.md)
 - [Phase 10 Implementation Plan](phase-10-plan.md)
 - [Phase 12 Implementation Plan](phase-12-plan.md)
-- [ADR-0029 Distribute Secretary Skills via opshub Package Bundling (Phase 16-A)](adr/0029-distribute-secretary-skills-via-opshub-package.md) — 秘書 14 skill 配信経路、`ozzy-labs/skills` Renovate preset 経路からの scope carve-out
-- handbook ADR-0016 (skills repo `ozzy-labs/skills` 配布機構、ecosystem 共通 skill 経路として継続。秘書 14 skill 経路は ADR-0029 で carve out)
+- [ADR-0029 Distribute Assistant Skills via opshub Package Bundling (Phase 16-A)](adr/0029-distribute-assistant-skills-via-opshub-package.md) — アシスタント 14 skill 配信経路、`ozzy-labs/skills` Renovate preset 経路からの scope carve-out
+- handbook ADR-0016 (skills repo `ozzy-labs/skills` 配布機構、ecosystem 共通 skill 経路として継続。アシスタント 14 skill 経路は ADR-0029 で carve out)

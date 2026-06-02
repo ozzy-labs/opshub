@@ -17,9 +17,9 @@ hook itself is the SSOT — abstracting would invite the helper and the
 hook to drift, defeating the test's purpose.
 
 If this test fails, inspect ``lefthook.yaml:44-64`` and the temporary
-fixture below for shape changes. The 14 secretary skill names listed
-in :data:`opshub._skills_resources.SECRETARY_SKILL_NAMES` and the
-shell ``$secretary_skills`` variable in the hook must stay in sync —
+fixture below for shape changes. The 14 assistant skill names listed
+in :data:`opshub._skills_resources.ASSISTANT_SKILL_NAMES` and the
+shell ``$assistant_skills`` variable in the hook must stay in sync —
 the test pins that invariant indirectly (a fresh skill name added to
 the bundle but not to the hook would surface as a missing drift
 report here too).
@@ -33,11 +33,11 @@ from pathlib import Path
 
 import pytest
 
-# The 14 secretary skill names — hard-coded from
-# ``opshub._skills_resources.SECRETARY_SKILL_NAMES`` to keep this test
+# The 14 assistant skill names — hard-coded from
+# ``opshub._skills_resources.ASSISTANT_SKILL_NAMES`` to keep this test
 # free of an import dependency on the source module (the hook itself
 # does not import opshub Python, by design).
-_SECRETARY_SKILL_NAMES: tuple[str, ...] = (
+_ASSISTANT_SKILL_NAMES: tuple[str, ...] = (
     "personal-brief",
     "next-actions",
     "pr-review",
@@ -56,15 +56,15 @@ _SECRETARY_SKILL_NAMES: tuple[str, ...] = (
 
 # Verbatim copy of the ``skills-sync-check`` hook body in
 # ``lefthook.yaml:49-64``. Update both at the same time. The long
-# single-quoted ``secretary_skills`` line and the two trailing ``echo``
+# single-quoted ``assistant_skills`` line and the two trailing ``echo``
 # lines exceed Ruff's E501 budget but are intentionally verbatim against
 # the YAML shell payload — splitting them would change the byte-level
 # equality the hook contract relies on. The lines are tagged ``noqa:
 # E501`` so the test stays a true SSOT mirror of ``lefthook.yaml``.
 _HOOK_SHELL = """\
-secretary_skills='personal-brief next-actions pr-review find-document meeting-prep research external-brief decision-rationale handoff-draft announcement-draft reply-draft inbox-triage source-extract meeting-followup'
+assistant_skills='personal-brief next-actions pr-review find-document meeting-prep research external-brief decision-rationale handoff-draft announcement-draft reply-draft inbox-triage source-extract meeting-followup'
 drift=0
-for name in $secretary_skills; do
+for name in $assistant_skills; do
   for mirror in .claude/skills .agents/skills; do
     if ! diff -rq "docs/skills/$name" "$mirror/$name" >/dev/null 2>&1; then
       echo "  drift: $mirror/$name vs docs/skills/$name"
@@ -94,7 +94,7 @@ def _seed_pristine_mirror(workdir: Path, repo_root: Path) -> None:
     for mirror in (".claude/skills", ".agents/skills"):
         mirror_root = workdir / mirror
         mirror_root.mkdir(parents=True, exist_ok=True)
-        for name in _SECRETARY_SKILL_NAMES:
+        for name in _ASSISTANT_SKILL_NAMES:
             src = docs_skills / name
             dst = mirror_root / name
             if dst.exists():
@@ -182,15 +182,15 @@ def test_lefthook_skills_sync_check_detects_missing_mirror_dir(
     assert ".agents/skills/research" in result.stdout, result.stdout
 
 
-@pytest.mark.parametrize("skill_name", _SECRETARY_SKILL_NAMES)
-def test_lefthook_skills_sync_check_covers_every_secretary_skill(
+@pytest.mark.parametrize("skill_name", _ASSISTANT_SKILL_NAMES)
+def test_lefthook_skills_sync_check_covers_every_assistant_skill(
     tmp_path: Path, skill_name: str
 ) -> None:
-    """The hook's ``$secretary_skills`` list covers all 14 names.
+    """The hook's ``$assistant_skills`` list covers all 14 names.
 
-    Iterates every skill name in :data:`_SECRETARY_SKILL_NAMES`, drifts
+    Iterates every skill name in :data:`_ASSISTANT_SKILL_NAMES`, drifts
     one mirror copy at a time, and confirms the hook flags it. If a
-    future PR adds a 15th secretary skill but forgets to update
+    future PR adds a 15th assistant skill but forgets to update
     ``lefthook.yaml:50``, this parametrised test would flag the missing
     entry (the new skill's drift would not be detected).
     """

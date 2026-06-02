@@ -1,10 +1,10 @@
-"""Boundary tests for the ①core vs ②secretary-layer split (ADR-0004 §(a)).
+"""Boundary tests for the ①core vs ②assistant-layer split (ADR-0004 §(a)).
 
 Phase 10 form-A pins that opshub does **not** hold any agent runtime
-code. The 14 secretary skills live in ``docs/skills/`` as the SSOT
+code. The 14 assistant skills live in ``docs/skills/`` as the SSOT
 ([ADR-0004 §決定 (c)](docs/adr/0004-agent-runtime-boundary.md), Phase
-12 H1). Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md))
-revised the distribution channel: the 14 secretary skills are bundled
+12 H1). Phase 16-A ([ADR-0029](docs/adr/0029-distribute-assistant-skills-via-opshub-package.md))
+revised the distribution channel: the 14 assistant skills are bundled
 into the opshub Python package (`[tool.hatch.build.force-include]`
 copies ``docs/skills`` → ``src/opshub/_skills`` at build time) and
 shipped via ``opshub skills install``. SSOT location is unchanged;
@@ -46,13 +46,13 @@ def test_core_has_no_agent_runtime_module() -> None:
 
     ADR-0004 §(a) — opshub does not host an agent runtime.
     """
-    forbidden = ("agent", "runtime", "secretary")
+    forbidden = ("agent", "runtime", "assistant")
     for entry in _PACKAGE_ROOT.iterdir():
         if not entry.is_dir():
             continue
         assert entry.name not in forbidden, (
             f"forbidden ①core module dir found: {entry} — "
-            f"agent / runtime / secretary code must not live inside src/opshub/ (ADR-0004 §(a))"
+            f"agent / runtime / assistant code must not live inside src/opshub/ (ADR-0004 §(a))"
         )
 
 
@@ -111,11 +111,11 @@ def test_core_has_no_thread_or_scheduler_daemon_module() -> None:
 
 
 def test_skill_specs_live_in_docs_not_src() -> None:
-    """The 14 secretary skill SKILL.md files live under ``docs/skills/``.
+    """The 14 assistant skill SKILL.md files live under ``docs/skills/``.
 
     ADR-0004 §(c) (Phase 12 H1, revised by Phase 16-A) — ``docs/skills/``
-    is the SSOT for the 14 secretary skill specs. Phase 16-A
-    ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md))
+    is the SSOT for the 14 assistant skill specs. Phase 16-A
+    ([ADR-0029](docs/adr/0029-distribute-assistant-skills-via-opshub-package.md))
     introduces a build-time copy from ``docs/skills/`` to
     ``src/opshub/_skills/`` for package bundling — that bundle path
     is checked by ``test_skills_payload_contains_no_python`` below.
@@ -128,9 +128,9 @@ def test_skill_specs_live_in_docs_not_src() -> None:
     docs_skills = _REPO_ROOT / "docs" / "skills"
     src_skills = _PACKAGE_ROOT / "skills"
 
-    assert docs_skills.is_dir(), "docs/skills/ is the SSOT for secretary skill specs"
+    assert docs_skills.is_dir(), "docs/skills/ is the SSOT for assistant skill specs"
     assert not src_skills.exists(), (
-        "src/opshub/skills/ must not exist — secretary skill SSOT lives under "
+        "src/opshub/skills/ must not exist — assistant skill SSOT lives under "
         "docs/skills/ and is bundled into src/opshub/_skills/ at build time "
         "(ADR-0029 §決定 (a))."
     )

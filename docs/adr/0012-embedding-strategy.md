@@ -239,7 +239,7 @@ projection と JOIN できる前提を活かし、**vector + SQL filter の hybr
 
 採用根拠:
 
-- 秘書エージェント (Phase 10) の返信下書き / 本文検索ユースケースでは summary 経由 embedding では recall が不十分 (細部・固有名詞・依頼の機微が summary で抜け落ちる)。本文から embed することで semantic recall の精度が上がり、SQLite FTS5 (Sub-issue B2) の全文検索と組み合わせた hybrid search が成立する。
+- アシスタントエージェント (Phase 10) の返信下書き / 本文検索ユースケースでは summary 経由 embedding では recall が不十分 (細部・固有名詞・依頼の機微が summary で抜け落ちる)。本文から embed することで semantic recall の精度が上がり、SQLite FTS5 (Sub-issue B2) の全文検索と組み合わせた hybrid search が成立する。
 - 「保管は summary のみ」は ADR-0020 で見直され、本文も `sources.body` に保管する。embed 元 text と保管 text は同じ `body` 列 (NULL の場合 `summary`) で fallback 統一する。
 - Embedding payload に「実本文」が混入することによる context bloat 懸念は ADR-0020 §Consequences で別解 (recall で絞り込んで agent context に断片のみ流す) が用意済み。
 

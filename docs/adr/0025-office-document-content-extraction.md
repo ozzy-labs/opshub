@@ -225,7 +225,7 @@ Google mimeType (application/vnd.google-apps.*)
 
 ### Positive
 
-1. **Office 文書が秘書 context の一級市民になる** — Word/Excel/PPT の本文が `sources.body` に乗ることで Phase 4 semantic recall / Phase 5 brief / Phase 6 propose (含む reply_draft) / Phase 8 link traversal が Office 由来の context を automatic に活用できる
+1. **Office 文書がアシスタント context の一級市民になる** — Word/Excel/PPT の本文が `sources.body` に乗ることで Phase 4 semantic recall / Phase 5 brief / Phase 6 propose (含む reply_draft) / Phase 8 link traversal が Office 由来の context を automatic に活用できる
 2. **markitdown 1 本で形式分岐を吸収** — `core/document_extract.py` の API は `extract(path) -> ExtractResult` の 1 経路に統一され、caller (FS scanner / mapper) は形式を意識しない
 3. **fail-safe で scan が止まらない** — 1 file の破損が Box Drive 数万 file の scan を塞き止めない (§決定 (c))
 4. **既存 connector への影響ゼロ** — `[office]` extras + `content_extraction = false` default で Phase 9 box_drive を含む既存 connector の挙動は 1 byte たりとも変わらない (operator が明示 opt-in しない限り)

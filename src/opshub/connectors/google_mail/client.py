@@ -158,7 +158,7 @@ class RawGmailMessage:
         Gmail label identifiers stamped on the message (``INBOX`` /
         ``IMPORTANT`` / ``CATEGORY_PERSONAL`` / user labels). The
         mapper prepends these to the body as ``[Labels: ...]`` so
-        the secretary skills can see priority cues without an extra
+        the assistant skills can see priority cues without an extra
         column.
     history_id:
         The mailbox-level ``historyId`` Gmail reported when this
@@ -735,7 +735,7 @@ def _iter_message_ids(record: dict[str, Any]) -> Iterator[str]:
     dedup; the mapper distinguishes "this run was a label change
     only" vs "new content" via the ``[Labels: ...]`` prepend so
     emitting a re-observation on label changes is the right shape
-    for the secretary recall path.
+    for the assistant recall path.
 
     ``messagesDeleted`` is **deliberately skipped** — fetching those
     ids via ``users.messages.get`` would return 404 on every entry

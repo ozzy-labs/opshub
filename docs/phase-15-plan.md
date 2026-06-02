@@ -6,7 +6,7 @@
 >
 > 本ドキュメントは **planning skeleton** であり、各 sub-issue の詳細設計・不変条件・最終 DoD は着手前に本 plan 内で確定する。実装契約 (uow_factory / `EventStore.append` / `Projector.apply` / registry SSOT / cold-start guard / `core/sanitise.sanitise_error_message` / Pluggable backend Protocol freeze / Connector framework / `tests/_secrets.py` 連結ビルド規範 等、Phase 1-14 で確立) は Phase 15 も全て継承する。**immutable migration 規範** = migration 0019 を遡及書き換えしない、新 migration 0028 で物理張り替え。
 
-Phase 15 の目的は、opshub の秘書 use case で頻出する「日本語キーワード検索」体験を operator 直感に揃えることにある。具体的には Phase 10 で導入した `opshub search` (FTS5 `sources_fts`) が日本語自然文 (例: 「boxの権限」「進捗記入」「依頼」) で 0 hit になる問題を、`sources_fts` の tokenizer を built-in `trigram` に張り替え + SearchService 短クエリ LIKE fallback を入れて根治する。MCP `search` tool 経由で動く秘書 14 Skill (`find-document` / `personal-brief` / `next-actions` / `meeting-prep` / `research` / etc.) も同じ恩恵を受ける (SearchService 1 箇所改修)。
+Phase 15 の目的は、opshub のアシスタント use case で頻出する「日本語キーワード検索」体験を operator 直感に揃えることにある。具体的には Phase 10 で導入した `opshub search` (FTS5 `sources_fts`) が日本語自然文 (例: 「boxの権限」「進捗記入」「依頼」) で 0 hit になる問題を、`sources_fts` の tokenizer を built-in `trigram` に張り替え + SearchService 短クエリ LIKE fallback を入れて根治する。MCP `search` tool 経由で動くアシスタント 14 Skill (`find-document` / `personal-brief` / `next-actions` / `meeting-prep` / `research` / etc.) も同じ恩恵を受ける (SearchService 1 箇所改修)。
 
 設計の中心は **scope を絞った 2 点改修**: (i) migration 0028 で tokenizer 物理張り替え、(ii) SearchService 短クエリ LIKE fallback。形態素 tokenizer (Lindera / SudachiPy / MeCab) や dual index (unicode61 + trigram) は overkill のため不採用 (ADR-0028 §Alternatives で却下記録)。MCP `search` tool 契約 (ADR-0022) も触らない。
 

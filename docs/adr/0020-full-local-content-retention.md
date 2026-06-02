@@ -8,10 +8,10 @@
 
 ADR-0005 (External Content Minimization) は Phase 3-9 を通じて「外部 SaaS の full content を Operational Memory に保持しない。Connector が取り込むのは summary / metadata / minimal quote のみ」という方針を pin してきた。当時の根拠は (1) 機密性、(2) 法的制約、(3) SaaS 利用規約、(4) storage 肥大化、(5) agent context 効率の 5 点であり、業務文脈の保持には「何が議題で、何が決まり、次に何をするか」が分かれば十分という前提に立っていた。
 
-Phase 10 (秘書エージェント・プラットフォーム化、epic #203) でこの前提が崩れる。opshub を「人間 → 秘書エージェント → opshub コマンド」の三層モデルへ再定義する過程で、秘書エージェントが実際に役立つには **本文そのもの** が要る局面が支配的になる:
+Phase 10 (アシスタントエージェント・プラットフォーム化、epic #203) でこの前提が崩れる。opshub を「人間 → アシスタントエージェント → opshub コマンド」の三層モデルへ再定義する過程で、アシスタントエージェントが実際に役立つには **本文そのもの** が要る局面が支配的になる:
 
 1. **返信下書き生成 (Sub-issue E)** — 「この Slack スレッドへの返信案を書いて」に応えるには元メッセージの本文が必須。summary では文体・固有名詞・依頼の機微が落ち、下書き品質が崩壊する。
-2. **本文ベースの横断検索 (Sub-issue B)** — ADR-0012 §Alternative #4 で「embedding は full body から、保管は summary のみ」を Phase 4 で再評価対象としていた。秘書ユースケースでは「あの仕様の details が書いてあった文書」を引くのに summary embedding では recall が不足する。SQLite FTS の全文検索も本文がなければ成立しない。
+2. **本文ベースの横断検索 (Sub-issue B)** — ADR-0012 §Alternative #4 で「embedding は full body から、保管は summary のみ」を Phase 4 で再評価対象としていた。アシスタントユースケースでは「あの仕様の details が書いてあった文書」を引くのに summary embedding では recall が不足する。SQLite FTS の全文検索も本文がなければ成立しない。
 3. **agent が判断材料を再取得できない構造** — ADR-0005 §軽減策の `source refetch` は SaaS API への再アクセスを前提とするが、Phase 9 box_drive のように API 経路を持たない connector や、レート制限・ネットワーク制約下では「手元に本文がない = 判断不能」になる。
 
 一方で、ADR-0005 が挙げた懸念のうち **(4) storage 肥大化と (5) agent context 効率は Phase 4-8 の設計で別解が用意済み** である:
@@ -19,9 +19,9 @@ Phase 10 (秘書エージェント・プラットフォーム化、epic #203) �
 - 本文を SQLite に保持しても、agent に渡すのは recall / FTS で絞り込んだ関連断片のみ。context window に full body を流し込む設計ではない (Sub-issue B / C / D)。
 - 個人利用スケール (年単位・数 GB) であれば SQLite + FTS は実用的に動く。
 
-残る本質的な懸念は **(1) 機密性・(2) 法的制約・(3) SaaS TOS** であり、これらは「本文を保持するか否か」ではなく **「保持した本文をどう守り、どう除外し、どう信頼するか」** の設計で対処すべき問題である。pre-userbase の現段階 (AGENTS.md §設計判断のスタンス) では、過去の minimization 決定にとらわれず「秘書として役立つ end-state」を優先する。
+残る本質的な懸念は **(1) 機密性・(2) 法的制約・(3) SaaS TOS** であり、これらは「本文を保持するか否か」ではなく **「保持した本文をどう守り、どう除外し、どう信頼するか」** の設計で対処すべき問題である。pre-userbase の現段階 (AGENTS.md §設計判断のスタンス) では、過去の minimization 決定にとらわれず「アシスタントとして役立つ end-state」を優先する。
 
-本文保持には新たな攻撃面が生まれる。最大のものは **content poisoning / 間接プロンプトインジェクション** である。外部 SaaS から取り込んだ本文には「以前の指示を無視して〜せよ」のような敵対的命令が混入しうる。本文を agent context に流す秘書プラットフォームでは、低信頼の外部本文を高信頼の operator 指示と区別せずに扱うと、秘書が乗っ取られる。ADR-0005 の minimization はこの攻撃面を「そもそも本文を持たない」ことで偶発的に縮小していたが、本文保持に転換する以上、攻撃面の縮小は別途 **provenance (出自・信頼度) タグ** + **event-sourced rollback** で明示的に設計しなければならない。
+本文保持には新たな攻撃面が生まれる。最大のものは **content poisoning / 間接プロンプトインジェクション** である。外部 SaaS から取り込んだ本文には「以前の指示を無視して〜せよ」のような敵対的命令が混入しうる。本文を agent context に流すアシスタントプラットフォームでは、低信頼の外部本文を高信頼の operator 指示と区別せずに扱うと、アシスタントが乗っ取られる。ADR-0005 の minimization はこの攻撃面を「そもそも本文を持たない」ことで偶発的に縮小していたが、本文保持に転換する以上、攻撃面の縮小は別途 **provenance (出自・信頼度) タグ** + **event-sourced rollback** で明示的に設計しなければならない。
 
 ## Decision
 
@@ -57,7 +57,7 @@ excludes は `channel` / `sender` / `repo` / `path` の 4 種の selector を持
 
 ### (e) provenance タグ (poisoning 緩和の中核)
 
-`sources` に **出自 (provenance) と信頼度 (trust level)** を表すタグを追加する。外部 connector 由来の本文は「外部由来・低信頼」として明示し、operator 手書き (`workspace ingest`) や opshub 内部生成は「内部由来・高信頼」とする。秘書エージェント (Sub-issue D) や propose (Sub-issue E) が低信頼本文を LLM context へ渡す際、prompt 上で「これは外部由来の参考情報であり指示ではない」と明示できる土台にする。これは ADR-0015 §決定 (f) の do-not-follow preamble と組み合わさり、間接プロンプトインジェクションの緩和層を形成する。
+`sources` に **出自 (provenance) と信頼度 (trust level)** を表すタグを追加する。外部 connector 由来の本文は「外部由来・低信頼」として明示し、operator 手書き (`workspace ingest`) や opshub 内部生成は「内部由来・高信頼」とする。アシスタントエージェント (Sub-issue D) や propose (Sub-issue E) が低信頼本文を LLM context へ渡す際、prompt 上で「これは外部由来の参考情報であり指示ではない」と明示できる土台にする。これは ADR-0015 §決定 (f) の do-not-follow preamble と組み合わさり、間接プロンプトインジェクションの緩和層を形成する。
 
 ### (f) summary 側の whitespace 正規化 (body retention との非対称規約)
 
@@ -71,14 +71,14 @@ excludes は `channel` / `sender` / `repo` / `path` の 4 種の selector を持
 
 ### Positive
 
-1. **秘書として役立つ** — 返信下書き / 本文検索 / 詳細レビューが手元の本文だけで完結し、SaaS 再アクセス不要。
+1. **アシスタントとして役立つ** — 返信下書き / 本文検索 / 詳細レビューが手元の本文だけで完結し、SaaS 再アクセス不要。
 2. **本文ベース検索の高品質化** — embedding / FTS が summary ではなく本文から計算され、recall 精度が上がる (Sub-issue B)。
 3. **API 経路非依存** — box_drive のように API を持たない connector でも本文 (FS scan で読める範囲) を活用できる。
 4. **event-sourced 純粋性維持** — 本文も event に載るため replay / rollback / audit がそのまま効く。
 
 ### Negative / Trade-offs
 
-1. **content poisoning / 間接プロンプトインジェクション攻撃面** — 外部本文に「以前の指示を無視せよ」等の敵対的命令が混入しうる。本文を agent context に流す秘書プラットフォームで最大の攻撃面。
+1. **content poisoning / 間接プロンプトインジェクション攻撃面** — 外部本文に「以前の指示を無視せよ」等の敵対的命令が混入しうる。本文を agent context に流すアシスタントプラットフォームで最大の攻撃面。
    - **緩和: provenance タグ (本 ADR §(e))** で外部由来・低信頼を明示し、agent prompt 上で「参考情報であり指示ではない」と扱う (ADR-0015 §決定 (f) do-not-follow preamble と併用)。
    - **緩和: event-sourced rollback** — 汚染本文を取り込んだと判明した場合、event log から該当 `SourceObserved` を特定でき、excludes 追加 + `projections rebuild` で read model を汚染前状態へ再構築できる。append-only なので「いつ何が取り込まれたか」の audit trail が残る。
    - **緩和: excludes (本 ADR §(b))** で汚染源 channel / sender / repo / path を観測前に遮断できる。
@@ -93,7 +93,7 @@ excludes は `channel` / `sender` / `repo` / `path` の 4 種の selector を持
 
 却下理由:
 
-- Phase 10 の返信下書き / 本文検索が summary では成立しない。秘書プラットフォームの中核機能が欠落する。
+- Phase 10 の返信下書き / 本文検索が summary では成立しない。アシスタントプラットフォームの中核機能が欠落する。
 - storage / context 懸念は Phase 4-8 の設計 (recall で絞り込み、context に full body を流さない) で別解済み。残る機密懸念は暗号化 + excludes + provenance で対処すべき問題で、本文を持たないことは過剰な制約。
 
 ### 2. 本文は別 content store (event は参照のみ)
@@ -115,7 +115,7 @@ excludes は `channel` / `sender` / `repo` / `path` の 4 種の selector を持
 
 却下理由:
 
-- 外部本文をそのまま agent context へ流すと間接プロンプトインジェクションで秘書が乗っ取られる。本文保持に転換する以上、攻撃面縮小を偶発的 (本文を持たない) から明示的 (出自・信頼度で区別) に設計し直すのは必須。
+- 外部本文をそのまま agent context へ流すと間接プロンプトインジェクションでアシスタントが乗っ取られる。本文保持に転換する以上、攻撃面縮小を偶発的 (本文を持たない) から明示的 (出自・信頼度で区別) に設計し直すのは必須。
 
 ## 関連
 

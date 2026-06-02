@@ -442,7 +442,7 @@ def test_body_preserves_japanese_kanji_in_description() -> None:
     client as a Python ``str`` (Calendar API returns JSON-encoded
     UTF-8, which Python's JSON parser decodes natively) and is
     appended into the body as-is. This test pins that the kanji
-    code points are preserved end-to-end so the secretary skills
+    code points are preserved end-to-end so the assistant skills
     can search / match on the original characters.
 
     Calendar-side symmetric coverage of the Gmail-side

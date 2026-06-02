@@ -1,6 +1,6 @@
 """Security scanner for Anthropic Agent Skills (SKILL.md) — ADR-0004 §(c).
 
-Phase 10 Sub-issue D adds secretary Agent Skills distributed via the
+Phase 10 Sub-issue D adds assistant Agent Skills distributed via the
 ``ozzy-labs/skills`` preset. ADR-0004 §(c) commits opshub to keeping a
 **skill security scan** that the ``ozzy-labs/skills`` CI lint and this
 repo's own skill-spec tests both rely on. The Phase 10 plan §3-D pins

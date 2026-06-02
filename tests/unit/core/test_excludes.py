@@ -31,7 +31,7 @@ def test_loads_all_four_selectors(tmp_path: Path) -> None:
         "channels:\n"
         "  - C0SECRET01\n"
         "senders:\n"
-        "  - secretary@example.com\n"
+        "  - assistant@example.com\n"
         "repos:\n"
         "  - acme/secret-vault\n"
         "paths:\n"
@@ -42,7 +42,7 @@ def test_loads_all_four_selectors(tmp_path: Path) -> None:
     rules = load_excludes(config_dir=tmp_path)
     assert rules.excludes_channel("C0SECRET01")
     assert not rules.excludes_channel("C0PUBLIC02")
-    assert rules.excludes_sender("secretary@example.com")
+    assert rules.excludes_sender("assistant@example.com")
     assert rules.excludes_repo("acme/secret-vault")
     assert not rules.excludes_repo("acme/public-repo")
 

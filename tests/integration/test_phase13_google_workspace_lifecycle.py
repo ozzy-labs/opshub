@@ -5,7 +5,7 @@ Docs / Slides / Sheets bodies (extracted via Drive API ``files.export``
 + markitdown) and Google Workspace metadata-only catch-all rows
 (``google_workspace_file``) all land in the same ``sources`` projection,
 are indexed by FTS5 + body-based embeddings, surface through the same
-MCP read tools that drive the secretary skills, and the write-back path
+MCP read tools that drive the assistant skills, and the write-back path
 remains structurally absent.
 
 Phase 13 ships **no new MCP tools** — the existing read surface
@@ -34,7 +34,7 @@ What this pins
    ``excel_spreadsheet`` / ``powerpoint_slide_deck`` and Phase 13
    ``google_doc`` / ``google_slides`` / ``google_sheets`` are both
    observable via ``source.list`` and the underlying projection, so
-   secretary skills can filter on a mix of them (e.g.
+   assistant skills can filter on a mix of them (e.g.
    ``find-document`` 自然文 query "Word and Google Sheets").
 4. **Write-back path absence** — the new ``google_workspace`` connector
    package exposes no ``send`` / ``post`` / ``write`` /
@@ -52,8 +52,8 @@ What this pins
    round-trip through the projection.
 6. **Shared with me / trashed / removed semantics** — the Phase 13
    trashed semantics ("retain as archived per ADR-0020 §全保持") and
-   Shared with me ("retain for secretary utility") are observable via
-   ``source.list`` so secretary skills can surface them when desired.
+   Shared with me ("retain for assistant utility") are observable via
+   ``source.list`` so assistant skills can surface them when desired.
 7. **Refresh token rotation cursor continuation** — after a token
    rotation write-back (Phase 13 plan §7.3 step 5 = rotation シナリオ),
    the next ``changes.list`` round-trip resumes from the same
@@ -285,7 +285,7 @@ _PHASE13_FIXTURES: tuple[_Phase13Fixture, ...] = (
         title="[shared] Vendor roadmap doc (Shared with me)",
         # Shared with me semantics (Phase 13 plan §trashed / removed
         # semantics): operator does not own this file but it was
-        # shared with them; the connector retains it for secretary
+        # shared with them; the connector retains it for assistant
         # utility. Body content stays in scope of "Q4 platform
         # planning" recall.
         body=(
@@ -442,7 +442,7 @@ def test_phase13_google_workspace_lifecycle(
         # data alongside Phase 11. (Strict cross-connector ordering is
         # left to deterministic vector tests in tests/unit/; here we
         # pin that Google Workspace bodies *do* surface through the
-        # same MCP read tool that drives the secretary skills.)
+        # same MCP read tool that drives the assistant skills.)
         cross_payload = _call_mcp_tool_json(
             specs_by_name,
             "recall.search",

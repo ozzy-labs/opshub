@@ -366,7 +366,7 @@ def test_workspace_export_roundtrip_persists_body_with_provenance(
     # or reformat what the extractor handed it (ADR-0025 §決定 (b-2)).
     assert event.body == result.body
     # Provenance stamps match the SaaS family invariant — ADR-0020 §(e)
-    # tells the secretary / LLM prompts to treat the body as reference
+    # tells the assistant / LLM prompts to treat the body as reference
     # material under the do-not-follow preamble (ADR-0015 §決定 (f)).
     assert event.provenance_origin == "external"
     assert event.provenance_trust == "untrusted"

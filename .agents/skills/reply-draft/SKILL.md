@@ -129,4 +129,4 @@ apply は durable state を変える (`ProposalApplied` event を発行)。ホ�
 - Phase 12 H1 (MCP `propose.apply` write tool、idempotent semantics)
 - Phase 11 plan (`docs/phase-11-plan.md`)
 - Phase 12 plan (`docs/phase-12-plan.md` §3 H1)
-- docs/secretary-agent.md (Skill catalog SSOT、14 skills 責務マップ)
+- docs/assistant-agent.md (Skill catalog SSOT、14 skills 責務マップ)

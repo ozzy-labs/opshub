@@ -1,14 +1,14 @@
 # Phase 10 Implementation Plan
 
-> Status: Phase 10 complete (2026-05-31). Sub-issue F deferred to Phase 11. Last reviewed: 2026-05-31. Scope: **Secretary Agent Platform — 秘書コア (Sub-issue A〜E)**。opshub を「ローカルファーストな秘書エージェント・プラットフォーム」へ拡張する。三層モデル（人間 → 秘書エージェント → opshub コマンド）の確立、エージェント向けツール面（MCP）の新設、秘書 Agent Skills の追加（形A＝runtime なし）、本文ローカル保持への転換（ADR-0005 見直し）、横断検索、返信下書き生成。**既存コネクタ（Slack/Box/GitHub/MS365 一部）の上で「動く秘書」を完成させる**ことが Phase 10 の到達点。
+> Status: Phase 10 complete (2026-05-31). Sub-issue F deferred to Phase 11. Last reviewed: 2026-05-31. Scope: **Assistant Agent Platform — アシスタントコア (Sub-issue A〜E)**。opshub を「ローカルファーストなアシスタントエージェント・プラットフォーム」へ拡張する。三層モデル（人間 → アシスタントエージェント → opshub コマンド）の確立、エージェント向けツール面（MCP）の新設、アシスタント Agent Skills の追加（形A＝runtime なし）、本文ローカル保持への転換（ADR-0005 見直し）、横断検索、返信下書き生成。**既存コネクタ（Slack/Box/GitHub/MS365 一部）の上で「動くアシスタント」を完成させる**ことが Phase 10 の到達点。
 >
-> **MS Office 深掘り（Teams 新コネクタ＋Word/Excel/PowerPoint 文書抽出 = Sub-issue F）は Phase 11 に分離**（コネクタ拡張波・Phase 7 と同性質）。秘書の枠組みを先に作る方が Office を載せる受け皿が整い手戻りが少ないため。Phase 11 は Phase 10 完了直後に続ける前提。
+> **MS Office 深掘り（Teams 新コネクタ＋Word/Excel/PowerPoint 文書抽出 = Sub-issue F）は Phase 11 に分離**（コネクタ拡張波・Phase 7 と同性質）。アシスタントの枠組みを先に作る方が Office を載せる受け皿が整い手戻りが少ないため。Phase 11 は Phase 10 完了直後に続ける前提。
 >
 > 本ドキュメントは **planning skeleton** であり、各 sub-issue の詳細設計・不変条件・DoD は着手前に本 plan 内で確定する。実装契約（uow_factory / `EventStore.append` / `Projector.apply` / registry SSOT / cold-start guard 等、Phase 1-9 で確立）は Phase 10 も全て継承する。
 
-Phase 10 の目的は、Phase 1-9 で築いた「記憶（event store）＋道具（connectors / recall / propose / brief / graph）＋ローカルファースト」という基盤の上に、**それらを束ねて人間の秘書として振る舞うエージェント層**と、**エージェントが安定して道具を呼ぶための口（MCP）**を載せ、opshub の正体を「人間と AI が対等に叩く operational memory」から「ローカルファーストな秘書エージェント・プラットフォーム」へ再定義することにある。
+Phase 10 の目的は、Phase 1-9 で築いた「記憶（event store）＋道具（connectors / recall / propose / brief / graph）＋ローカルファースト」という基盤の上に、**それらを束ねて人間のアシスタントとして振る舞うエージェント層**と、**エージェントが安定して道具を呼ぶための口（MCP）**を載せ、opshub の正体を「人間と AI が対等に叩く operational memory」から「ローカルファーストなアシスタントエージェント・プラットフォーム」へ再定義することにある。
 
-CLI は廃止しない。人間も従来どおり CLI を叩けるが、基本フローは 人間 → 秘書エージェント → コマンド とする（同じコアの二つの口 = CLI と MCP）。
+CLI は廃止しない。人間も従来どおり CLI を叩けるが、基本フローは 人間 → アシスタントエージェント → コマンド とする（同じコアの二つの口 = CLI と MCP）。
 
 ---
 
@@ -16,13 +16,13 @@ CLI は廃止しない。人間も従来どおり CLI を叩けるが、基本�
 
 着手前に確定済みの方針。各 ADR の前提として用いる。
 
-1. **拡張であって新規プロダクトではない**: opshub を拡張する。理由は秘書の中核（読む→記憶→検索→提案）が既存サブシステムでほぼ実装済みで、不足は全て積層 or 既存拡張、コア置換を要さないため。pre-userbase につき互換維持のフォークは不要。
-2. **三層モデル**: 人間 → 秘書エージェント（②）→ opshub コマンド（①）。CLI は残す。
-3. **層配置**: 秘書エージェントの頭脳層（オーケストレーション＋Agent Skills＋将来の能動性）は **opshub と同一リポ内で層を分けて**配置（別リポのサイトル製品にはしない）。①コア（記憶＋コネクタ＋CLI＋MCP）はクリーンに保ち、②の常駐・能動・状態持ちのコードを混ぜない。
-3b. **秘書の正体 = 形A**: opshub は **MCP サーバ（口）と Agent Skills（手順書）だけ**を提供する。頭脳（LLM 推論ループ）は Claude Code 等の **外部エージェントホストが担い、opshub 自身はエージェント runtime を持たない**。→ Sub-issue D は「Skills を書く＋MCP を出す」に縮退し、エージェント runtime 実装は不要。
+1. **拡張であって新規プロダクトではない**: opshub を拡張する。理由はアシスタントの中核（読む→記憶→検索→提案）が既存サブシステムでほぼ実装済みで、不足は全て積層 or 既存拡張、コア置換を要さないため。pre-userbase につき互換維持のフォークは不要。
+2. **三層モデル**: 人間 → アシスタントエージェント（②）→ opshub コマンド（①）。CLI は残す。
+3. **層配置**: アシスタントエージェントの頭脳層（オーケストレーション＋Agent Skills＋将来の能動性）は **opshub と同一リポ内で層を分けて**配置（別リポのサイトル製品にはしない）。①コア（記憶＋コネクタ＋CLI＋MCP）はクリーンに保ち、②の常駐・能動・状態持ちのコードを混ぜない。
+3b. **アシスタントの正体 = 形A**: opshub は **MCP サーバ（口）と Agent Skills（手順書）だけ**を提供する。頭脳（LLM 推論ループ）は Claude Code 等の **外部エージェントホストが担い、opshub 自身はエージェント runtime を持たない**。→ Sub-issue D は「Skills を書く＋MCP を出す」に縮退し、エージェント runtime 実装は不要。
 4. **緊張点① 本文保持**: ADR-0005 を見直し、**本文をローカルに保持する**。検索も本文ベースに。安全策をセットで作る = (a) 取り込み除外設定（excludes）、(b) 保存時の暗号化、(c) 認証情報の本文からの分離。
 5. **緊張点② 能動性**: 現時点は**能動機能を作らない＝リクエスト駆動のみ**（ユーザーがセッションで聞いた時に応答）。常駐・定期実行（cron / systemd timer / launchd / Win タスク / 常駐プロセス / filewatch / webhook）は将来フェーズ。ただし将来に備え、タスク/受信箱に「期限」を持たせるのは安価で有効（データは①コア）。
-6. **緊張点③ 返信案・書き戻し**: **返信下書きの生成は作る**（`propose` に reply-draft 種類を追加、①コア内で完結・外送信なしで低リスク）。**外部サービスへの書き戻し/投稿は当面作らない**（秘書は下書きを見せるまで、ユーザーが手で送る）。
+6. **緊張点③ 返信案・書き戻し**: **返信下書きの生成は作る**（`propose` に reply-draft 種類を追加、①コア内で完結・外送信なしで低リスク）。**外部サービスへの書き戻し/投稿は当面作らない**（アシスタントは下書きを見せるまで、ユーザーが手で送る）。
 7. **初期サポート対象コネクタ**: Slack / Box（Box Drive 含む）/ GitHub / MS Office（Teams・Outlook・Word・Excel・PowerPoint）。将来拡張前提。MS365 コネクタ（Calendar/OneDrive/Outlook）と Box Drive の FS-scan パターンが Office 深掘りの土台。
 8. **Phase 番号**: Phase 10（top-level）。新 ADR 群 + projection schema 変更 + 新レイヤ（MCP / agent）のため Phase 9.x 枠にしない。
 
@@ -74,10 +74,10 @@ CLI は廃止しない。人間も従来どおり CLI を叩けるが、基本�
 - 認証情報を tool に露出しない境界
 - エージェント（Claude Code 等）からの接続手順
 
-### Sub-issue D: 秘書 Agent Skills（ADR-0004 改訂、形A＝runtime なし）
+### Sub-issue D: アシスタント Agent Skills（ADR-0004 改訂、形A＝runtime なし）
 
 - **SKILL.md 標準（Anthropic Agent Skills 形式）を採用**（デファクト、独自形式を発明しない）。本文は「どの MCP tool をどの順で呼ぶか」の薄い手順書（≤5k tokens）、詳細は `references/` へ。progressive disclosure: L1 description 常時 / L2 本文発火時 / **L3＝MCP tool・CLI 呼び出し**
-- 秘書 5 Skill と MCP tool マッピング（**エージェント runtime は実装しない**、外部ホストが頭脳）:
+- アシスタント 5 Skill と MCP tool マッピング（**エージェント runtime は実装しない**、外部ホストが頭脳）:
 
   | skill | description トリガー | 使う MCP tool | 自律範囲 |
   |---|---|---|---|
@@ -143,9 +143,9 @@ CLI は廃止しない。人間も従来どおり CLI を叩けるが、基本�
 - [ ] read 系 / 書き込み系 tool が分離され、認証情報は露出しない
 - [ ] ネットワークに listen しない（ローカルファースト invariant）
 
-### D — 秘書エージェント層
+### D — アシスタントエージェント層
 
-- [ ] 秘書 Skill が SKILL.md 標準（frontmatter＋本文 ≤5k tokens）に準拠
+- [ ] アシスタント Skill が SKILL.md 標準（frontmatter＋本文 ≤5k tokens）に準拠
 - [ ] ②が①を MCP 経由でのみ呼ぶ（直接 import しない）境界の確認
 - [ ] 代表 Agent Skill（daily-brief / reply-draft / pr-review / file-lookup）が動作
 - [ ] **skill security scan を `ozzy-labs/skills` CI に追加**（4カテゴリ＋frontmatter 隠し命令検出）
@@ -182,28 +182,28 @@ CLI は廃止しない。人間も従来どおり CLI を叩けるが、基本�
   - §Open Questions — 該当項目（能動性・multi-machine sync）の状態更新
 - **`docs/architecture.md`**:
   - 新 §2.x MCP Server Layer
-  - 新 §2.x Secretary Agent Layer
+  - 新 §2.x Assistant Agent Layer
   - §8.1 External Content Retention — 全面改訂
   - §2.1 Connector Layer — Office 深掘り / Teams 追記
   - §9 Phased Delivery — Phase 10 追記
 - **`docs/repository-structure.md`**: 新モジュール（mcp / agent / content store / office 抽出）
 - **`docs/decisions-log.md`**: ADR-0020〜0025 + ADR-0005/0010 改訂の entry
-- **`AGENTS.md`** / **`CLAUDE.md`**: Status 行、Available Skills（秘書 Skills 追加なら）
+- **`AGENTS.md`** / **`CLAUDE.md`**: Status 行、Available Skills（アシスタント Skills 追加なら）
 
 ---
 
 ## 6. ユーザー向けドキュメント更新計画
 
 - **`README.md` / `README.ja.md`**:
-  - 製品定義を「秘書エージェント・プラットフォーム」に再フレーム（冒頭文）
-  - 「ユーザー目線でできること」を *秘書への依頼例*（「次に何を?」「今日やること?」「返信案考えて」「PR レビューして」「Box のファイル確認して」）で書き直す
+  - 製品定義を「アシスタントエージェント・プラットフォーム」に再フレーム（冒頭文）
+  - 「ユーザー目線でできること」を *アシスタントへの依頼例*（「次に何を?」「今日やること?」「返信案考えて」「PR レビューして」「Box のファイル確認して」）で書き直す
   - エージェント接続（MCP）のセットアップ手順
   - 新コマンド（`search` / reply-draft / MCP サーバ起動）
   - オプション依存関係の更新（Office 抽出・暗号化・MCP 用 extras）
   - 「OpsHub に今あるもの」表に Phase 10 行追加
 - **`docs/upgrading.md`**: 本文保持への挙動変更（pre-userbase でも挙動変化として記載）、暗号化の有効化手順
 - **`SECURITY.md`**: 本文ローカル保持の含意、保存時暗号化、機密データ取扱いのユーザー責任範囲
-- **新規 `docs/secretary-agent.md`**: 秘書エージェントの使い方（依頼例・Skills 一覧・できること/できないこと）
+- **新規 `docs/assistant-agent.md`**: アシスタントエージェントの使い方（依頼例・Skills 一覧・できること/できないこと）
 - **新規 `docs/mcp-setup.md`**: エージェント（Claude Code 等）から MCP 経由で opshub を使う手順
 - **既存 setup docs**: `docs/box-drive-setup.md` / MS Office 関連 setup の追補
 
@@ -225,9 +225,9 @@ CLI は廃止しない。人間も従来どおり CLI を叩けるが、基本�
 - MCP サーバ起動 → tool 呼び出し → ①コア操作 → 結果返却
 - 暗号化 DB の round-trip
 
-### 7.3 e2e lifecycle テスト（`tests/integration/test_phase10_secretary_lifecycle.py`）
+### 7.3 e2e lifecycle テスト（`tests/integration/test_phase10_assistant_lifecycle.py`）
 
-- 一連の「人間 → 秘書（MCP）→ コマンド」フローを pin。**形A** につき opshub 内に頭脳はないので、e2e は **MCP クライアントがエージェントのツール呼び出し列を台本どおり再現**して MCP 面と①コアを検証する（実エージェント・実 LLM は不要）:
+- 一連の「人間 → アシスタント（MCP）→ コマンド」フローを pin。**形A** につき opshub 内に頭脳はないので、e2e は **MCP クライアントがエージェントのツール呼び出し列を台本どおり再現**して MCP 面と①コアを検証する（実エージェント・実 LLM は不要）:
   1. 複数コネクタからサンプル本文を取り込み（tmp dir / fixture）
   2. MCP 経由で「今日やること」を要求 → brief / next-actions が生成される
   3. MCP 経由で reply-draft 要求 → 返信下書きが生成され、apply で保存（外送信なしを確認）
@@ -249,12 +249,12 @@ CLI は廃止しない。人間も従来どおり CLI を叩けるが、基本�
 
 1. **本文の格納先** — event に本文を載せる（event-sourced の純粋性）か、別 content store（event は参照のみ、本文は再構築可能な別表）か。ADR-0020 で確定。
 2. **暗号化方式** — SQLCipher（DB 丸ごと）か、アプリ層で本文列のみ暗号化か。鍵は OS keychain。性能とのトレードオフ。ADR-0021 で確定。
-3. **MCP tool の粒度** — CLI コマンド 1:1 で tool 化するか、秘書ユースケース単位（「今日やること」等）の粗粒度 tool にするか、両建てか。ADR-0022 で確定。
-3b. **秘書の自律範囲** — 読み取り系ツールは自律実行 OK、書き込み系（task 作成 / 下書き保存 / connector sync）は人の確認を促す、という境界をどう MCP tool に表現するか（tool の annotation / 命名規約 / 確認フラグ）。ADR-0022 で確定。
+3. **MCP tool の粒度** — CLI コマンド 1:1 で tool 化するか、アシスタントユースケース単位（「今日やること」等）の粗粒度 tool にするか、両建てか。ADR-0022 で確定。
+3b. **アシスタントの自律範囲** — 読み取り系ツールは自律実行 OK、書き込み系（task 作成 / 下書き保存 / connector sync）は人の確認を促す、という境界をどう MCP tool に表現するか（tool の annotation / 命名規約 / 確認フラグ）。ADR-0022 で確定。
 4. **Agent Skills の配布** — opshub 同梱か `ozzy-labs/skills` 配布（handbook ADR-0016 の skills repo 機構）か。ADR-0004 改訂で確定。
 5. **Office 抽出ライブラリ** — markitdown 等。ライセンス・依存サイズ・抽出品質。ADR-0025 で確定。
 6. **reply-draft の apply 先** — 下書きをどこに保存するか（新 entity か、task の付随物か、workspace ファイルか）。ADR-0016 改訂で確定。
-7. **Sub-issue の Phase 分割** — **確定（2026-05-30）**: Phase 10 = A〜E（秘書コア）、Phase 11 = F（MS Office 深掘り）。closeout(G) は Phase 10 の A〜E に対して行う。
+7. **Sub-issue の Phase 分割** — **確定（2026-05-30）**: Phase 10 = A〜E（アシスタントコア）、Phase 11 = F（MS Office 深掘り）。closeout(G) は Phase 10 の A〜E に対して行う。
 
 ---
 
@@ -283,14 +283,14 @@ CLI は廃止しない。人間も従来どおり CLI を叩けるが、基本�
 
 ## 10. 外部設計調査の反映（2026-05-30、関連プロダクト並列調査）
 
-秘書エージェント領域の主要プロダクトを並列調査し、market 活性度でなく**設計・コンセプトの取り込み**観点で抽出した結論。
+アシスタントエージェント領域の主要プロダクトを並列調査し、market 活性度でなく**設計・コンセプトの取り込み**観点で抽出した結論。
 
 ### positioning（中核の打ち出し）
 
 - **形A（runtime を持たず MCP＋Agent Skills を出す）は業界の主流構成と一致**し validated。runtime レイヤ（LangGraph / OpenAI Agents SDK / Claude Agent SDK / Microsoft Agent Framework / CrewAI / AgentScope）は資本と本番実績で固まりつつあり後発が勝つ領域ではない。MCP は Linux Foundation 配下に移管され事実上の標準。調査した全フレームワークが MCP クライアント＝opshub の MCP サーバは競合でなく補完。
 - **最大の差別化＝イベントソース型 operational memory（append-only・監査可能・決定的再構築・本文ローカル保持）**。競合の記憶は素朴な Markdown ファイル / lossy な reflection memory / vector-graph の agent-memory API のいずれかで、**event-sourced＋監査可能＋ローカルは空白**。中核 positioning を「lossy な agent memory ではなく監査可能な system of record」に据える（README/principles 改訂方針に反映）。
 - **記憶レイヤ境界**（LangGraph の checkpointer/Store 分離に学ぶ）: 短期の実行・会話 state は外部ホスト（runtime）に委ね、長期 operational memory（真実の源）が opshub の責務。形Aの境界を補強（ADR-0004 改訂）。
-- **名乗りは「operational memory / 秘書」を維持**、「Chief of Staff / Work OS」マーケ語は採らない。
+- **名乗りは「operational memory / アシスタント」を維持**、「Chief of Staff / Work OS」マーケ語は採らない。
 
 ### 明確に採らないもの（アンチパターンの言語化）
 

@@ -187,7 +187,7 @@ build-backend = "hatchling.build"
 packages = ["src/opshub"]
 artifacts = ["src/opshub/markdown/templates/*.j2"]
 
-# Phase 16-B (ADR-0029 §決定 (a)) — bundle the 14 secretary skills' SKILL.md
+# Phase 16-B (ADR-0029 §決定 (a)) — bundle the 14 assistant skills' SKILL.md
 # (SSOT lives under ``docs/skills/<name>/SKILL.md``, Phase 12 H1 / ADR-0004
 # §決定 (c)) into the wheel under ``src/opshub/_skills/<name>/SKILL.md`` so
 # ``opshub skills install`` can copy them to ``~/.claude/skills/`` /
@@ -213,7 +213,7 @@ artifacts = ["src/opshub/markdown/templates/*.j2"]
 include = [
   "src/opshub",
   "docs/skills",
-  "docs/adr/0029-distribute-secretary-skills-via-opshub-package.md",
+  "docs/adr/0029-distribute-assistant-skills-via-opshub-package.md",
   "pyproject.toml",
   "README.md",
   "LICENSE",

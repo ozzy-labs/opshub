@@ -245,7 +245,7 @@ def map_outlook_message(raw: RawOutlookMessage, *, actor: str = DEFAULT_ACTOR) -
     ``contentType`` Microsoft reports) is preserved verbatim onto
     ``SourceObserved.body``. HTML is **not** stripped here — the
     untrusted provenance tags (``external`` / ``untrusted``) downstream
-    treat the content as reference material, and the secretary skills
+    treat the content as reference material, and the assistant skills
     decide on rendering / sanitisation. Stripping at mapper time would
     irreversibly lose markup that later passes might need (anchor
     links, embedded reply-quote boundaries).
@@ -288,7 +288,7 @@ def _body_from_raw(raw: dict[str, Any]) -> str | None:
     Phase 10 (ADR-0020 Full Local Content Retention): Graph returns the
     body as ``{"contentType": "html"|"text", "content": "..."}``. We
     keep the raw content verbatim (HTML or text) — Sub-issue B / the
-    secretary skills decide on rendering. An empty / missing body
+    assistant skills decide on rendering. An empty / missing body
     normalises to ``None`` so the projection stores ``NULL``.
     """
     body = raw.get("body")
@@ -328,7 +328,7 @@ def _truncate_outlook_body(body: str | None, *, message_id: str) -> str | None:
     :func:`opshub.core.document_extract.extract_document`. Keeping the
     marker inside the body itself (rather than a sidecar field) means
     every consumer that reads ``SourceObserved.body`` — projection,
-    recall, secretary skills — sees the truncation cue without needing
+    recall, assistant skills — sees the truncation cue without needing
     extra plumbing.
 
     Emits a structured warning (``mapper.outlook.body_truncated``) with
