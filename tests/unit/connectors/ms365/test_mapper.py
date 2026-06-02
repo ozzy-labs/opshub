@@ -376,6 +376,33 @@ def test_map_onedrive_item_whitespace_only_path_normalises_to_none() -> None:
     assert event.summary is None
 
 
+def test_map_outlook_message_whitespace_only_web_link_normalises_url_to_none() -> None:
+    """Issue #343 (PR #355 followup): whitespace-only ``webLink`` → ``url=None``.
+
+    The pre-followup ``url=url if url else None`` check normalised the
+    empty string but let whitespace-only values (``" "`` / ``"\\n\\t"``)
+    leak through into ``sources.url`` as visually-empty preview links.
+    Funnelling through
+    :func:`opshub.core.text_limits.normalise_optional_text` collapses
+    those to ``None`` consistently with the same treatment PR #355
+    applied to ``summary``.
+    """
+    event = map_outlook_message(_outlook(web_link="   \n\t "))
+    assert event.url is None
+
+
+def test_map_calendar_event_whitespace_only_web_link_normalises_url_to_none() -> None:
+    """Issue #343 (PR #355 followup): whitespace-only Calendar ``webLink`` → ``url=None``."""
+    event = map_calendar_event(_calendar(web_link="  \t "))
+    assert event.url is None
+
+
+def test_map_onedrive_item_whitespace_only_web_url_normalises_url_to_none() -> None:
+    """Issue #343 (PR #355 followup): whitespace-only OneDrive ``webUrl`` → ``url=None``."""
+    event = map_onedrive_item(_onedrive(web_url="   \n "))
+    assert event.url is None
+
+
 def test_mapper_parses_offset_iso_8601() -> None:
     """A ``+00:00`` offset (without ``Z``) parses identically to ``...Z``.
 

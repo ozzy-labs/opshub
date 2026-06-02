@@ -354,13 +354,14 @@ def _build_source_observed(
     """Assemble a :class:`SourceObserved` from the mapper's inputs.
 
     Centralising the construction here guarantees every event carries
-    the same provenance stamps + normalisation rules. The optional
-    ``summary`` field is routed through
+    the same provenance stamps + normalisation rules. Both the
+    optional ``summary`` *and* ``url`` fields are routed through
     :func:`opshub.core.text_limits.normalise_optional_text` so empty
-    *and* whitespace-only previews collapse to ``None`` (issue #343
-    — SSOT semantics across the connector family). Mirrors the
-    helper shape in the Outlook + Google Workspace mappers so future
-    audit passes can diff the three side by side.
+    *and* whitespace-only inputs collapse to ``None`` (issue #343 —
+    SSOT semantics across the connector family; PR #355 covered
+    ``summary``, this extends the same SSOT helper to ``url``).
+    Mirrors the helper shape in the Outlook + Google Workspace
+    mappers so future audit passes can diff the three side by side.
     """
     # Lazy import keeps the module-load cost off ``opshub.core.ids``
     # for callers that only need the literals (`map_gmail_message` /
@@ -376,7 +377,11 @@ def _build_source_observed(
         external_id=external_id,
         source_type=source_type,
         title=title,
-        url=url if url else None,
+        # Issue #343 (PR #355 followup): route the optional ``url``
+        # through the same SSOT helper so whitespace-only synthesised
+        # Gmail web-links collapse to ``None`` (matches the same
+        # treatment PR #355 applied to ``summary``).
+        url=normalise_optional_text(url),
         # Issue #343: SSOT-uniform optional-summary normalisation via
         # :func:`opshub.core.text_limits.normalise_optional_text`.
         # Empty *and* whitespace-only summaries collapse to ``None`` so

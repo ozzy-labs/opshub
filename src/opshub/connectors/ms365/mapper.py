@@ -371,12 +371,14 @@ def _build_source_observed(
     Centralising the construction here keeps the three public mapper
     functions free of repetition and guarantees the same defensive
     checks (non-empty natural keys, ``None``-on-empty for optional
-    fields) fire for every endpoint group. The optional ``summary``
-    field is routed through
+    fields) fire for every endpoint group. Both the optional
+    ``summary`` *and* ``url`` fields are routed through
     :func:`opshub.core.text_limits.normalise_optional_text` so empty
-    *and* whitespace-only previews (e.g. HTML-strip residue on
-    Outlook ``bodyPreview``) collapse to ``None`` consistently with
-    the rest of the connector family (issue #343).
+    *and* whitespace-only inputs (e.g. HTML-strip residue on Outlook
+    ``bodyPreview``, or a malformed Graph ``webLink`` that resolves to
+    whitespace) collapse to ``None`` consistently with the rest of the
+    connector family (issue #343; PR #355 covered ``summary``, this
+    extends the same SSOT helper to ``url``).
 
     Raises
     ------
@@ -413,7 +415,11 @@ def _build_source_observed(
         # Empty strings on optional fields would still pass Pydantic
         # but provide no recognition value — normalise to ``None`` so
         # downstream projections / templates can branch cleanly.
-        url=url if url else None,
+        # Issue #343 (PR #355 followup): whitespace-only is also
+        # normalised to ``None`` via the SSOT helper so the
+        # ``sources.url`` column never holds a visually-empty link
+        # (matches the same treatment PR #355 applied to ``summary``).
+        url=normalise_optional_text(url),
         # Issue #343: whitespace-only summary is also normalised to
         # ``None`` (in addition to empty) via
         # :func:`opshub.core.text_limits.normalise_optional_text`, so

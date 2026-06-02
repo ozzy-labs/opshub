@@ -25,6 +25,7 @@ Coverage map:
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -35,9 +36,11 @@ from opshub.connectors.google_mail.client import (
     _normalise_message,  # pyright: ignore[reportPrivateUsage]
 )
 from opshub.connectors.google_mail.mapper import (
+    DEFAULT_ACTOR,
     GMAIL_SOURCE_TYPE,
     MAX_GMAIL_BODY_CHARS,
     SUMMARY_MAX_CHARS,
+    _build_source_observed,  # pyright: ignore[reportPrivateUsage]
     map_gmail_message,
 )
 from opshub.core.errors import ConnectorFailedError
@@ -210,6 +213,31 @@ def test_summary_whitespace_only_snippet_normalises_to_none() -> None:
     )
     event = map_gmail_message(raw)
     assert event.summary is None
+
+
+def test_build_source_observed_whitespace_only_url_normalises_to_none() -> None:
+    """Issue #343 (PR #355 followup): whitespace-only ``url`` collapses to ``None``.
+
+    Gmail's ``url`` is synthesised from the ``message_id`` so a
+    whitespace-only candidate is not currently reachable via
+    :func:`map_gmail_message`. This test exercises
+    :func:`_build_source_observed` directly to pin the SSOT helper
+    wiring so a future ``_synthesise_web_link`` refactor cannot start
+    leaking whitespace into ``sources.url`` (matches the same
+    treatment PR #355 applied to ``summary``, plus the workspace /
+    calendar / MS365 / GitHub-notification mappers).
+    """
+    event = _build_source_observed(
+        external_id="m-url-ws",
+        source_type=GMAIL_SOURCE_TYPE,
+        title="title",
+        url="   \n\t  ",
+        summary="summary",
+        occurred_at=datetime(2026, 5, 31, 12, 0, 0, tzinfo=UTC),
+        actor=DEFAULT_ACTOR,
+        body=None,
+    )
+    assert event.url is None
 
 
 # ----- title --------------------------------------------------------------

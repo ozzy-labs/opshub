@@ -528,3 +528,27 @@ def test_build_source_observed_whitespace_only_summary_normalises_to_none() -> N
         body=None,
     )
     assert event.summary is None
+
+
+def test_build_source_observed_whitespace_only_url_normalises_to_none() -> None:
+    """Issue #343 (PR #355 followup): whitespace-only ``url`` collapses to ``None``.
+
+    Drive's ``webViewLink`` is an Apps-side URL so a whitespace-only
+    candidate is not currently reachable via :func:`map_drive_item`,
+    but pinning the SSOT helper wiring here keeps the wiring identical
+    to the same treatment PR #355 applied to ``summary``. A future
+    refactor cannot start leaking whitespace into ``sources.url``
+    without this assertion failing first (matches the Slack / Teams /
+    MS365 / Gmail / Calendar / GitHub-notification mappers).
+    """
+    event = _build_source_observed(
+        external_id="F-url-ws",
+        source_type=GENERIC_FILE_SOURCE_TYPE,
+        title="title",
+        url="   \n\t  ",
+        summary="summary",
+        occurred_at=datetime(2026, 5, 31, 12, 0, 0, tzinfo=UTC),
+        actor=DEFAULT_ACTOR,
+        body=None,
+    )
+    assert event.url is None

@@ -374,12 +374,13 @@ def _build_source_observed(
 
     Centralising the construction here keeps :func:`map_drive_item`
     readable and guarantees every event carries the same provenance
-    stamps + normalisation rules. The optional ``summary`` field is
-    routed through
+    stamps + normalisation rules. Both the optional ``summary`` *and*
+    ``url`` fields are routed through
     :func:`opshub.core.text_limits.normalise_optional_text` so empty
-    *and* whitespace-only previews collapse to ``None`` (issue #343
-    — SSOT semantics across the Slack / Teams / MS365 / Gmail /
-    Calendar / GitHub-notification connectors).
+    *and* whitespace-only inputs collapse to ``None`` (issue #343 —
+    SSOT semantics across the Slack / Teams / MS365 / Gmail /
+    Calendar / GitHub-notification connectors; PR #355 covered
+    ``summary``, this extends the same SSOT helper to ``url``).
     """
     # Lazy import keeps the module-load cost off ``opshub.core.ids``
     # for callers that only need the literals (`source_type_for_mime_type`
@@ -394,7 +395,11 @@ def _build_source_observed(
         external_id=external_id,
         source_type=source_type,
         title=title,
-        url=url if url else None,
+        # Issue #343 (PR #355 followup): route the optional ``url``
+        # through the SSOT helper so whitespace-only ``webViewLink``
+        # values also collapse to ``None`` (matches the same treatment
+        # PR #355 applied to ``summary``).
+        url=normalise_optional_text(url),
         # Issue #343: route the optional summary through
         # :func:`opshub.core.text_limits.normalise_optional_text` so
         # whitespace-only previews (e.g. HTML-strip residue) collapse
