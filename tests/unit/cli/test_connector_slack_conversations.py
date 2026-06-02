@@ -1103,12 +1103,13 @@ def test_conversations_since_json_drops_only_none_rows_in_mixed_payload(
     assert result.exit_code == 0
     payload = _json.loads(result.stdout)
     assert len(payload) == 2
-    # Sort order is activity-desc; the populated row comes first.
-    populated, defensive = payload[0], payload[1]
-    assert populated["id"] == "C-pop"
-    assert populated["last_activity_ts"] == 1_717_200_000.0
-    assert defensive["id"] == "C-none"
-    assert "last_activity_ts" not in defensive
+    # Key by id so the assertion does not couple to ``_sort_rows``
+    # tie-break behaviour — a separate test pins the sort order, and
+    # this test only cares about the per-row ``last_activity_ts``
+    # pop logic.
+    by_id = {row["id"]: row for row in payload}
+    assert by_id["C-pop"]["last_activity_ts"] == 1_717_200_000.0
+    assert "last_activity_ts" not in by_id["C-none"]
 
 
 def test_sort_rows_unknown_type_falls_to_tail_bucket() -> None:
