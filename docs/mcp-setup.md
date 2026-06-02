@@ -100,20 +100,9 @@ Step 1 widening (post Phase 10) added the 7 new read tools and the HITL write `p
 
 Phase 12 H1 also unified the original 5 skills (`personal-brief`, `next-actions`, `reply-draft`, `pr-review`, `find-document`) on the MCP surface — they call MCP tools directly instead of falling back to the CLI shell. Phase 12 H2-H5 added 9 new skills on top (see `docs/secretary-agent.md` for the 14-skill catalog).
 
-## 3a. Install the 14 secretary skills on the agent host (Phase 12)
+## 3a. Install the 14 secretary skills on the agent host
 
-Phase 12 ships **14 secretary skills** as opshub-resident SKILL.md files under `docs/skills/<name>/SKILL.md` (SSOT, ADR-0004 §決定 (c)). The `@ozzylabs/skills` Renovate preset distribution is deferred to Phase 15+ (Phase 13 shipped Google Workspace, Phase 14 shipped Gmail + Google Calendar, not the skills distribution channel); copy them into each host's skill loader manually:
-
-```sh
-# Claude Code (user-level)
-cp -r path/to/opshub/docs/skills/* ~/.claude/skills/
-
-# Codex CLI / GitHub Copilot CLI (user-level)
-cp -r path/to/opshub/docs/skills/* ~/.agents/skills/
-
-# Project-local install (any host)
-cp -r path/to/opshub/docs/skills/* ./.claude/skills/   # or ./.agents/skills/
-```
+Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) confirms **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 14 secretary skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Implementation lands in Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)). The up-to-date install steps live in [`docs/secretary-agent.md`](secretary-agent.md) §8. Until Phase 16-B lands, clone the opshub repo and copy `docs/skills/<name>/SKILL.md` into the host loader manually (historical procedure, retained on the interim).
 
 The 14 skills are:
 

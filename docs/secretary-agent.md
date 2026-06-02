@@ -2,7 +2,7 @@
 
 opshub は Phase 10 (秘書エージェント・プラットフォーム化) で「人間 → 秘書エージェント → opshub コマンド」の三層モデルへ拡張され、Phase 12 (Secretary Skills 拡張) で秘書 Skill レパートリーを **5 → 14** に拡張した。本 doc は秘書エージェントの使い方を、Skill catalog SSOT として 10 § 構成で集約する。
 
-本 doc は [ADR-0004 §決定 (c-2)](adr/0004-agent-runtime-boundary.md) で **Skill catalog SSOT** として明示された (Phase 12 H1)。14 skills 体制の責務マップ / HITL boundary / MCP tool 依存マップ / pair structure をここで一元管理する。ADR-0004 改訂のうち Skill 配信機構 (`ozzy-labs/skills` CI + Renovate preset) は Phase 15+ に defer され (Phase 13 では Google Workspace コネクタが、Phase 14 では Gmail + Google Calendar コネクタが優先された)、Skill 本体 (SKILL.md) は opshub `docs/skills/<name>/SKILL.md` を SSOT として保持する。
+本 doc は [ADR-0004 §決定 (c-2)](adr/0004-agent-runtime-boundary.md) で **Skill catalog SSOT** として明示された (Phase 12 H1)。14 skills 体制の責務マップ / HITL boundary / MCP tool 依存マップ / pair structure をここで一元管理する。Skill 配信機構は Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地)、Skill 本体 (SKILL.md) は引き続き opshub `docs/skills/<name>/SKILL.md` を SSOT として保持する。
 
 設計の根拠は [ADR-0004 Agent Runtime Boundary](adr/0004-agent-runtime-boundary.md) (形A: opshub は MCP + Agent Skills のみ提供、runtime は外部ホスト) と [ADR-0022 MCP Server Surface](adr/0022-mcp-server-surface.md) (MCP tool 面) と [ADR-0016 §決定 (l)](adr/0016-action-loop-and-structured-output.md) (Phase 12 H1 で追加された draft 系統一方針: persist 境界 / `mode` 引数射程 / triage 射程 / Candidate union freeze)。
 
@@ -12,7 +12,7 @@ opshub 本体が提供するもの:
 
 1. **operational memory (①コア)** — events / projections / connectors / recall / propose / brief / graph
 2. **MCP サーバ (口)** — `opshub mcp serve` (stdio)。エージェント host が ①コアを叩く経路。Phase 12 H1 で `search` (FTS5) と `propose.apply` (HITL idempotent) と既存 4 read tools の physical column ベース時間フィルタを追加し、計 17 tools (read 12 + write 5) を公開
-3. **Agent Skills (手順書)** — SKILL.md 標準。本 doc が catalog する **14 Skill** (Phase 12 H2-H5 で 9 新規 + Phase 12 H1 で rename 2 を含む)。`docs/skills/<name>/SKILL.md` を opshub SSOT、配信機構 (`ozzy-labs/skills` CI + Renovate preset) は Phase 15+ に defer (Phase 13 では Google Workspace コネクタ、Phase 14 では Gmail + Google Calendar コネクタを優先)
+3. **Agent Skills (手順書)** — SKILL.md 標準。本 doc が catalog する **14 Skill** (Phase 12 H2-H5 で 9 新規 + Phase 12 H1 で rename 2 を含む)。`docs/skills/<name>/SKILL.md` を opshub SSOT、配信機構は Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地)
 4. **skill security scan** — `tools/skill_scan.py` (4 カテゴリ + frontmatter 隠し命令検出)、`tests/unit/skills/test_skill_specs.py` が 14 skills 全てに対して per-skill MCP dispatch pin + scan を実行
 
 opshub 本体が **持たない** もの:
@@ -75,7 +75,7 @@ host LLM が user 確認必須 (`propose.generate` で候補生成 → user 確�
 | [source-extract](skills/source-extract/SKILL.md) | ↔ inbox-triage | 「この資料から task 抽出」「これに含まれる decisions 教えて」「<source_id> から候補を」 | `source.get` + `propose.generate` (`mode=source_extract`) + `propose.apply` (HITL) | 1 source から抽出された task / decision / reply_draft 候補、user 個別承認分のみ保存 |
 | [meeting-followup](skills/meeting-followup/SKILL.md) | ↔ meeting-prep | 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」 | `source.list` (`source_type=ms365_calendar` または `google_calendar` + `observed_after/before`、Phase 14 で Google Calendar も対象) + `source.get` + `recall.search` + `propose.generate` (`mode=meeting_followup`) + `propose.apply` (HITL) | 会議からの task / decision 候補、user 個別承認分のみ保存 |
 
-skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。実際の配布は opshub からの **手動 install** ([§8 セットアップ](#8-セットアップ) 参照)。`@ozzylabs/skills` Renovate preset 経由の配布は Phase 15+ に defer (Phase 13 では Google Workspace コネクタを、Phase 14 では Gmail + Google Calendar コネクタを優先、ADR-0004 §決定 (c) backout)。
+skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。配布は Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (Phase 16-B 着地後、[§8 セットアップ](#8-セットアップ) 参照)。`@ozzylabs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit 等、名前空間 disjoint) を引き続き担当し、秘書 14 skill 経路から carve out される ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (h))。
 
 ## 4. Pair structure
 
@@ -241,26 +241,22 @@ opshub init   # 初回のみ
 opshub mcp serve
 ```
 
-### 8.2 秘書 Skills 14 件をホストに配布する (Phase 12: 手動 install)
+### 8.2 秘書 Skills 14 件をホストに配布する
 
-Phase 12 では `ozzy-labs/skills` 経由の配布機構が未整備のため、opshub リポから host の skill loader 配下に手動 copy する。
+Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) で配信経路を opshub package 同梱 + `opshub skills install` に切り替える方針を確定した。実装本体 (`[tool.hatch.build.force-include]` で `docs/skills` → `src/opshub/_skills` 同梱 + `opshub skills install` / `opshub skills list` CLI) は Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で着地、`opshub init` 連携 (TTY prompt + `--install-skills` / `--no-install-skills` flag、非対話 default = install) は Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) で着地する。
 
-Claude Code (`.claude/skills/`):
-
-```bash
-# opshub リポを clone 済の前提
-cp -r opshub/docs/skills/* ~/.claude/skills/
-```
-
-Codex CLI / GitHub Copilot CLI (`.agents/skills/`):
+Phase 16-B 着地後の手順 (案):
 
 ```bash
-cp -r opshub/docs/skills/* ~/.agents/skills/
+uv tool install ozzylabs-opshub[mcp]   # 同梱の _skills/ も一緒に install される
+opshub skills install                  # ~/.claude/skills/ + ~/.agents/skills/ に展開
 ```
 
-プロジェクト単位で導入する場合は project root の `.claude/skills/` / `.agents/skills/` に同じパターンで copy する。`@ozzylabs/skills` Renovate preset 経由の自動配布は Phase 15+ に defer (ADR-0004 §決定 (c) backout)。
+`--scope project` で project 単位、`--host {claude-code,codex,copilot,all}` で host 別、`--skip-existing` で手編集を保持できる ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (d)〜(g))。
 
-opshub 本体リポでは `docs/skills/<name>/SKILL.md` が **SSOT** として置かれている (Phase 12 H1 で確定、ADR-0004 §決定 (c))。
+Phase 16-B 着地までの interim は opshub リポを clone して `docs/skills/<name>/SKILL.md` を host loader 配下に手動 copy する経路を維持する (Phase 12 〜 Phase 15 と同じ手順、historical 手順は [Phase 12 plan](phase-12-plan.md) §3 H6 にも記載)。
+
+opshub 本体リポでは `docs/skills/<name>/SKILL.md` が引き続き **SSOT** として置かれる ([ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)、Phase 16-A 改訂後も位置は不変)。`ozzy-labs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit / 等) を引き続き担当し、秘書 14 skill 経路と名前空間 disjoint に分担する ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (h))。
 
 ### 8.3 ホストから skill を呼ぶ
 
@@ -274,7 +270,7 @@ opshub 本体リポでは `docs/skills/<name>/SKILL.md` が **SSOT** として�
 - 14 skills 全てに per-skill MCP dispatch pin (skill 内 MCP tool 名・引数 schema が opshub MCP surface と整合するか grep + JSON schema validation)
 - HITL boundary test pin (HITL write skill の `propose.apply` annotation = `read_only=false, destructive=false, idempotent=true`)
 - text-only boundary test pin (handoff/announcement-draft が persist 経路を持たない)
-- `ozzy-labs/skills` 側 CI への組み込みは Phase 15+ で配布機構整備時に対応 (ADR-0004 §決定 (c) backout)
+- skill security scan は Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で `opshub skills install` の install 前ゲートとしても再利用予定 ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)、`ozzy-labs/skills` 側 CI への組み込みは ecosystem 共通 skill 経路に限定、秘書 14 skill は opshub 内で scan する)
 - 検出ルールは scope 縮小設計 (高 precision / 中 recall)。誤検出は `# skill-scan: allow <category>` コメントで局所的に suppress 可能
 
 ## 10. 関連
@@ -287,4 +283,5 @@ opshub 本体リポでは `docs/skills/<name>/SKILL.md` が **SSOT** として�
 - [docs/mcp-setup.md](mcp-setup.md)
 - [Phase 10 Implementation Plan](phase-10-plan.md)
 - [Phase 12 Implementation Plan](phase-12-plan.md)
-- handbook ADR-0016 (skills repo `ozzy-labs/skills` 配布機構、Phase 15+ で配布完成予定)
+- [ADR-0029 Distribute Secretary Skills via opshub Package Bundling (Phase 16-A)](adr/0029-distribute-secretary-skills-via-opshub-package.md) — 秘書 14 skill 配信経路、`ozzy-labs/skills` Renovate preset 経路からの scope carve-out
+- handbook ADR-0016 (skills repo `ozzy-labs/skills` 配布機構、ecosystem 共通 skill 経路として継続。秘書 14 skill 経路は ADR-0029 で carve out)
