@@ -50,6 +50,14 @@ node_modules/
 dist/
 build/
 
+# Phase 16-B (ADR-0029) — ``[tool.hatch.build.force-include]`` materialises
+# ``docs/skills/`` → ``src/opshub/_skills/`` only at wheel/sdist build time.
+# Tests that run via ``importlib.resources`` need the directory present in
+# editable installs too, so ``tests/conftest.py`` mirrors the SSOT into
+# ``src/opshub/_skills/`` at pytest collection. The mirror is a derived
+# artefact; the SSOT stays under ``docs/skills/``.
+src/opshub/_skills/
+
 # Logs
 *.log
 

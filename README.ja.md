@@ -112,7 +112,15 @@ opshub mcp tools           # read / write tool 一覧を確認 (policy-as-data �
 
 ## 秘書 Skill を install する
 
-Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) で 14 件の秘書 Skill の配信経路を opshub package 同梱 + `opshub skills install` に確定しました (SSOT 位置は引き続き opshub `docs/skills/<name>/SKILL.md`)。実装本体は Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で着地します。最新の install 手順は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 (Phase 16-B 着地までは opshub repo を clone して `docs/skills/<name>/SKILL.md` を host loader 配下に手動 copy する経路を維持) を参照してください。
+Phase 16-A ([ADR-0029](docs/adr/0029-distribute-secretary-skills-via-opshub-package.md)) で 14 件の秘書 Skill の配信経路を opshub package 同梱 + `opshub skills install` に確定し、Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で CLI を着地させました (SSOT 位置は引き続き opshub `docs/skills/<name>/SKILL.md`)。
+
+```bash
+uv tool install ozzylabs-opshub[mcp]   # 同梱の _skills/ も wheel と一緒に install される
+opshub skills install                  # ~/.claude/skills/ + ~/.agents/skills/ に展開
+opshub skills list                     # installed / missing / modified を skill 単位で確認
+```
+
+flag 詳細 (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) は [`docs/secretary-agent.md`](docs/secretary-agent.md) §8 を参照してください。
 
 ## LLM backend の設定（任意）
 

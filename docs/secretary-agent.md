@@ -243,20 +243,40 @@ opshub mcp serve
 
 ### 8.2 秘書 Skills 14 件をホストに配布する
 
-Phase 16-A ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md)) で配信経路を opshub package 同梱 + `opshub skills install` に切り替える方針を確定した。実装本体 (`[tool.hatch.build.force-include]` で `docs/skills` → `src/opshub/_skills` 同梱 + `opshub skills install` / `opshub skills list` CLI) は Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で着地、`opshub init` 連携 (TTY prompt + `--install-skills` / `--no-install-skills` flag、非対話 default = install) は Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) で着地する。
+Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で `opshub skills install` / `opshub skills list` が着地した。`[tool.hatch.build.force-include]` で `docs/skills/` → `src/opshub/_skills/` を build 時に copy し、wheel に同梱する ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (a))。`opshub init` 連携 (TTY prompt + `--install-skills` / `--no-install-skills` flag、非対話 default = install) は Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) で着地する。
 
-Phase 16-B 着地後の手順 (案):
+#### `opshub skills install` — install 手順
 
 ```bash
 uv tool install ozzylabs-opshub[mcp]   # 同梱の _skills/ も一緒に install される
-opshub skills install                  # ~/.claude/skills/ + ~/.agents/skills/ に展開
+opshub skills install                  # ~/.claude/skills/ + ~/.agents/skills/ に展開 (default: --host all --scope user)
 ```
 
-`--scope project` で project 単位、`--host {claude-code,codex,copilot,all}` で host 別、`--skip-existing` で手編集を保持できる ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (d)〜(g))。
+flags:
 
-Phase 16-B 着地までの interim は opshub リポを clone して `docs/skills/<name>/SKILL.md` を host loader 配下に手動 copy する経路を維持する (Phase 12 〜 Phase 15 と同じ手順、historical 手順は [Phase 12 plan](phase-12-plan.md) §3 H6 にも記載)。
+- `--host {claude-code,codex,copilot,all}` (default `all`) — 配布先 host を選択。`claude-code` は `~/.claude/skills/`、`codex` と `copilot` は `~/.agents/skills/` (handbook ADR-0016 で codex / copilot は同じ loader を共有するため、`all` は 2 directory にだけ展開する)。
+- `--scope {user,project}` (default `user`) — `user` は `~/.claude/skills/` / `~/.agents/skills/`、`project` は CWD 配下の `./.claude/skills/` / `./.agents/skills/` ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (f))。`project` scope は repo の pyproject.toml の有無を問わない (operator の明示的選択を尊重する設計)。
+- `--skip-existing` — 既存 `SKILL.md` を温存する。default は SSOT 同期を優先して **上書き** する ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (g))。手編集を残したい operator は明示的に opt-in する。
+- `--dry-run` — filesystem に書かずに「どこに何を書くか」を表示する。default 上書きの破壊性を予め確認したいときに使う。
+- `--print-paths` — 書き込み先 path 一覧を stdout に 1 行 1 path で emit する (pipeline 用、`xargs ls` 等と組み合わせて使える)。
 
-opshub 本体リポでは `docs/skills/<name>/SKILL.md` が引き続き **SSOT** として置かれる ([ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)、Phase 16-A 改訂後も位置は不変)。`ozzy-labs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit / 等) を引き続き担当し、秘書 14 skill 経路と名前空間 disjoint に分担する ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (h))。
+#### `opshub skills list` — install 状況の確認
+
+```bash
+opshub skills list                     # 全 host x 14 skill の install status を表示 (default: --host all --scope user)
+opshub skills list --host claude-code  # 特定の host のみ
+opshub skills list --scope project     # CWD の ./.claude/skills/ / ./.agents/skills/ を見る
+```
+
+status の意味:
+
+- `installed` — host loader 配下に file が存在し、wheel 同梱の SSOT と byte-equal
+- `missing` — host loader 配下に file が無い (一度も `opshub skills install` を実行していない / 別 scope を使った)
+- `modified` — file は存在するが SSOT と byte 差分がある (operator が手編集した、または stale な install を再 sync する必要あり)
+
+#### scope 境界 (秘書 14 skill vs ecosystem 共通 skill)
+
+opshub 本体リポでは `docs/skills/<name>/SKILL.md` が引き続き **SSOT** として置かれる ([ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)、Phase 16-A 改訂後も位置は不変、wheel 同梱経路に切り替わったのみ)。`ozzy-labs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit / 等) を引き続き担当し、秘書 14 skill 経路と名前空間 disjoint に分担する ([ADR-0029](adr/0029-distribute-secretary-skills-via-opshub-package.md) §決定 (h))。`opshub skills install` は 14 secretary skill 名のみを touch するため、`@ozzylabs/skills` で配信される ecosystem 共通 skill を clobber することはない (この不変条件は `tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_14_secretary_skills` で pin されている)。
 
 ### 8.3 ホストから skill を呼ぶ
 

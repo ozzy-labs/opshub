@@ -187,6 +187,38 @@ build-backend = "hatchling.build"
 packages = ["src/opshub"]
 artifacts = ["src/opshub/markdown/templates/*.j2"]
 
+# Phase 16-B (ADR-0029 §決定 (a)) — bundle the 14 secretary skills' SKILL.md
+# (SSOT lives under ``docs/skills/<name>/SKILL.md``, Phase 12 H1 / ADR-0004
+# §決定 (c)) into the wheel under ``src/opshub/_skills/<name>/SKILL.md`` so
+# ``opshub skills install`` can copy them to ``~/.claude/skills/`` /
+# ``~/.agents/skills/`` via ``importlib.resources``. The source tree keeps
+# ``docs/skills/`` as the only writable copy; ``src/opshub/_skills/`` is a
+# build-time materialised mirror, never hand-edited (the dogfood path is
+# Phase 16-D / #385). The payload stays declarative — SKILL.md frontmatter
+# + reference Markdown only — pinned by
+# ``tests/unit/skills/test_core_boundary.py::test_skills_payload_contains_no_python``
+# (ADR-0029 §不変条件 1).
+[tool.hatch.build.targets.wheel.force-include]
+"docs/skills" = "src/opshub/_skills"
+
+# Sdist needs ``docs/skills/`` inside the tarball so the
+# ``force-include`` mapping above can resolve when an installer
+# rebuilds the wheel from the sdist (``uv pip install --no-binary``,
+# PyPI Trusted Publishers' two-format requirement). Without this
+# explicit include hatchling's sdist defaults would still ship
+# ``docs/skills/`` (the default sdist filter is permissive), but
+# pinning it makes the dependency between the wheel build step and the
+# sdist payload obvious to future maintainers.
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/opshub",
+  "docs/skills",
+  "docs/adr/0029-distribute-secretary-skills-via-opshub-package.md",
+  "pyproject.toml",
+  "README.md",
+  "LICENSE",
+]
+
 [tool.uv]
 package = true
 
