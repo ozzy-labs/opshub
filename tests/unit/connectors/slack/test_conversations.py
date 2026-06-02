@@ -1621,6 +1621,79 @@ def test_list_conversations_since_drops_row_when_history_ts_is_non_numeric(
     assert results == []
 
 
+def test_list_conversations_since_inaccessible_emits_per_row_debug_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``channel_not_found`` で skip した行は per-row debug log に channel id を残す。
+
+    Aggregate warning は count しか出さないため、operator が ``--debug`` 経路で
+    「具体的にどの channel が落ちたか」を後から triage できるよう、skip arm で
+    structlog debug log を発火することを pin する。structlog の ``_TeeWriteLogger``
+    は stdlib :mod:`logging` を経由せず stderr / log file へ直接書くため、
+    ``caplog`` は使えない。代わりに :func:`opshub.core.logging.get_logger` を
+    :class:`MagicMock` に差し替えてその ``debug`` call_args を assert する。
+    """
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response(
+        [
+            _public_channel("C1", name="ok"),
+            _public_channel("C-extern", name="connect"),
+        ]
+    )
+    client = _build_client(list_pages=[page])
+
+    def _make_channel_not_found() -> SlackApiError:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {}
+
+        def _get(key: str, default: object = None) -> object:
+            return {"error": "channel_not_found"}.get(key, default)
+
+        resp.get.side_effect = _get
+        return SlackApiError(  # type: ignore[no-untyped-call]
+            message="channel_not_found", response=resp
+        )
+
+    def _history(*, channel: str, **_kwargs: Any) -> dict[str, Any]:
+        if channel == "C-extern":
+            raise _make_channel_not_found()
+        return _history_response([{"ts": "1717200000.000000"}])
+
+    client.conversations_history.side_effect = _history
+    _patch_webclient(monkeypatch, client)
+
+    # The connector reaches for structlog via a lazy
+    # ``from opshub.core.logging import get_logger`` inside the skip
+    # arm. Patch the attribute on the source module so the lazy import
+    # picks up our mock (cf. ``google_workspace`` / ``google_mail``
+    # connector debug-log patterns).
+    mock_logger = MagicMock()
+    mock_get_logger = MagicMock(return_value=mock_logger)
+    import opshub.core.logging as _logging_module
+
+    monkeypatch.setattr(_logging_module, "get_logger", mock_get_logger)
+
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+
+    # Sibling row still flows; only the offending row is dropped.
+    assert [c.id for c in results] == ["C1"]
+
+    # Exactly one debug log carrying the channel id of the offending
+    # row + the Slack error code + the conversation type. ``--debug``
+    # operators can now map the aggregate count back to specific rows.
+    assert mock_logger.debug.call_count == 1
+    call = mock_logger.debug.call_args
+    assert call.args[0] == "slack.conversations.history.row_skipped"
+    assert call.kwargs["channel_id"] == "C-extern"
+    assert call.kwargs["error_code"] == "channel_not_found"
+    assert call.kwargs["conversation_type"] == "public"
+    # Token must never leak into the event dict (defence-in-depth on
+    # top of the ADR-0027 redaction processor).
+    assert all("xoxb-test" not in str(v) for v in call.kwargs.values())
+
+
 def test_list_conversations_since_drops_row_when_messages_field_is_not_a_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
