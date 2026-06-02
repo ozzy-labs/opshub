@@ -36,10 +36,25 @@ Scope (compared to the legacy helper)
   row that survives the type / archived / filter gates; rows whose
   latest message predates ``since`` are dropped. ``last_activity_ts``
   on the yielded :class:`SlackConversation` carries the actual ts so
-  the CLI can sort / display by activity. ``missing_scope`` on the
-  history call disables the affected conversation type (one warning
-  per type, not per row) without aborting the listing for unaffected
-  types — see ``warnings`` parameter.
+  the CLI can sort / display by activity. Two operator-visible error
+  buckets are skip-able rather than abort-the-call:
+
+  - ``missing_scope`` (type-scoped): disables the affected conversation
+    type (one warning per type, not per row).
+  - ``channel_not_found`` / ``not_in_channel`` (row-scoped): drops just
+    the offending row and accumulates a single aggregate warning at
+    call end. Surfaces for Slack Connect / external shared channels,
+    DMs with deactivated peers, archive / leave races between the
+    listing and the probe, and Enterprise Grid DLP restrictions. The
+    sync hot path (:class:`opshub.connectors.slack.fetcher.SlackFetcher`)
+    keeps the *fail-fast* posture for these codes — sync targets
+    explicit channel ids from ``opshub.toml`` where the same code is
+    a config drift to surface, while discovery enumerates dynamically
+    where the row-skip is operationally what the operator wants. The
+    asymmetry is intentional; do not unify the two.
+
+  Both buckets surface via the ``warnings`` parameter (see
+  :func:`list_conversations`).
 * DM (``im``) and MPIM (``mpim``) rows have no ``name`` — Slack does
   not assign one. The helper resolves a human-readable label via
   ``users.info`` (im) and ``conversations.members`` + ``users.info``
@@ -282,12 +297,23 @@ def list_conversations(
     warnings:
         Optional list the helper appends operator-facing warnings to.
         Used when ``since`` is set and the ``conversations.history``
-        call fails with ``missing_scope`` for a given type: the helper
-        records one warning per affected type (so a 50-row MPIM
-        workspace yields one ``mpim:history`` warning, not 50) and
-        drops the type's rows from the yielded stream. ``None``
-        discards the warnings, which is fine for non-CLI callers that
-        only want the row stream.
+        call fails. Two warning shapes land here:
+
+        * ``missing_scope`` (type-scoped): one
+          ``warning: skipping <type> conversations: missing_scope ...``
+          per affected type (so a 50-row MPIM workspace yields one
+          ``mpim:history`` warning, not 50). The type's rows are
+          dropped from the yielded stream.
+        * ``channel_not_found`` / ``not_in_channel`` (row-scoped): one
+          ``warning: skipped N inaccessible channels
+          (channel_not_found=X, not_in_channel=Y). ...`` appended at
+          call end (after pagination exhaustion or ``--limit`` early
+          return). Counts are grouped by error code so an operator
+          with many Slack Connect channels sees one stderr line, not
+          one per row.
+
+        ``None`` discards the warnings, which is fine for non-CLI
+        callers that only want the row stream.
     reporter:
         Optional :class:`opshub.cli._progress.ProgressReporter`. The
         helper advances it by the raw page size (pre-filter) so the
@@ -348,6 +374,13 @@ def list_conversations(
     # skip the history call (and the warning emits once per type, not
     # once per row).
     disabled_history_types: set[ConversationType] = set()
+
+    # Per-error-code counter for row-scoped ``conversations.history``
+    # misses (``channel_not_found`` / ``not_in_channel``). The listing
+    # drops each offending row inline and emits **one** aggregate
+    # warning at the end of the call so an operator with 50 Slack
+    # Connect channels does not see 50 lines of stderr noise.
+    inaccessible_history_counts: dict[str, int] = {}
 
     yielded = 0
     page_cursor: str | None = None
@@ -414,6 +447,17 @@ def list_conversations(
                             )
                         )
                     continue
+                except _InaccessibleHistoryError as inaccessible:
+                    # Row-scoped skip: Slack Connect external channels,
+                    # DMs with deactivated peers, and rows archived /
+                    # left between the listing and the per-row probe
+                    # all surface here. Bump the counter and drop just
+                    # this row — the other rows of the same type are
+                    # not affected.
+                    inaccessible_history_counts[inaccessible.error_code] = (
+                        inaccessible_history_counts.get(inaccessible.error_code, 0) + 1
+                    )
+                    continue
                 if activity_ts is None:
                     # No message newer than ``since`` — drop.
                     continue
@@ -421,6 +465,10 @@ def list_conversations(
             yield conversation
             yielded += 1
             if limit is not None and yielded >= limit:
+                _flush_inaccessible_history_warning(
+                    counts=inaccessible_history_counts,
+                    warnings=warnings,
+                )
                 return
 
         # Walk to the next page only if Slack signals more data.
@@ -432,6 +480,10 @@ def list_conversations(
         )
         next_cursor = response_metadata.get("next_cursor")
         if not next_cursor:
+            _flush_inaccessible_history_warning(
+                counts=inaccessible_history_counts,
+                warnings=warnings,
+            )
             return
         page_cursor = str(next_cursor)
 
@@ -701,6 +753,70 @@ class _MissingHistoryScopeError(Exception):
         self.needed = needed
 
 
+#: Slack API error codes that mean "history is unreadable for *this* row,
+#: but the rest of the listing is fine". ``channel_not_found`` is the
+#: documented surface for Slack Connect / external shared channels that
+#: list via ``users.conversations`` but block the history API, for DMs
+#: with deactivated peers, and for race conditions where a channel was
+#: archived / left between the listing and the per-row probe.
+#: ``not_in_channel`` covers the User Token / Bot Token cases where the
+#: principal is no longer a member of a private channel at probe time.
+_INACCESSIBLE_HISTORY_ERRORS: frozenset[str] = frozenset({"channel_not_found", "not_in_channel"})
+
+
+class _InaccessibleHistoryError(Exception):
+    """Sentinel raised by :func:`_fetch_last_activity_ts` on a per-row history miss.
+
+    Distinct from :class:`_MissingHistoryScopeError` because the skip is
+    **row-scoped**, not type-scoped: a single ``channel_not_found`` on
+    one external-shared channel must not disable history probing for
+    the rest of the workspace's public channels. The listing loop
+    catches this, drops just the offending row, and bumps a counter so
+    the operator-visible summary warning at the end of the call names
+    the aggregate (``skipped 3 inaccessible channels``) rather than
+    emitting one warning per row.
+    """
+
+    def __init__(self, error_code: str) -> None:
+        super().__init__(error_code)
+        self.error_code = error_code
+
+
+def _flush_inaccessible_history_warning(
+    *,
+    counts: dict[str, int],
+    warnings: list[str] | None,
+) -> str | None:
+    """Append the aggregate row-scoped history-skip warning, if any.
+
+    Called from each terminating ``return`` in :func:`list_conversations`
+    so the operator sees one stderr line summarising every row that the
+    activity probe could not read — even if the loop exited early via
+    the ``--limit`` cap. The warning names the per-error-code counts
+    (``channel_not_found=3`` / ``not_in_channel=1``) so the operator
+    can map back to documented causes (Slack Connect external channels
+    vs. principal-not-member) without re-running with ``--debug``.
+
+    Returns the formatted warning string for tests that prefer to
+    assert against the message directly; the production code path only
+    consumes the side-effect on ``warnings``.
+    """
+    if not counts:
+        return None
+    parts = [f"{code}={counts[code]}" for code in sorted(counts)]
+    total = sum(counts.values())
+    plural = "channel" if total == 1 else "channels"
+    message = (
+        f"warning: skipped {total} inaccessible {plural} "
+        f"({', '.join(parts)}). See ADR-0018 §Decision (7) or "
+        f"https://api.slack.com/methods/conversations.history#errors "
+        f"for the error catalogue."
+    )
+    if warnings is not None:
+        warnings.append(message)
+    return message
+
+
 def _format_missing_scope_warning(
     *,
     conversation_type: ConversationType,
@@ -777,6 +893,11 @@ def _call_history_oldest(
 
     * ``missing_scope`` → :class:`_MissingHistoryScopeError` so the
       listing loop can disable the affected conversation type.
+    * ``channel_not_found`` / ``not_in_channel`` →
+      :class:`_InaccessibleHistoryError` so the listing loop can drop
+      just the offending row (Slack Connect external channels, DMs with
+      deactivated peers, archived-between-list-and-probe races) without
+      aborting the rest of the listing.
     * Any other non-429 error → :class:`ConnectorFailedError` with an
       endpoint-qualified message that names ``conversations.history``
       (matches the listing-call error vocabulary so operators see one
@@ -814,6 +935,8 @@ def _call_history_oldest(
             if error_code == "missing_scope":
                 needed = response_any.get("needed") or ""
                 raise _MissingHistoryScopeError(needed) from exc
+            if error_code in _INACCESSIBLE_HISTORY_ERRORS:
+                raise _InaccessibleHistoryError(error_code) from exc
         raise _to_connector_failed_history(exc) from exc
     return _as_response_dict(response)
 

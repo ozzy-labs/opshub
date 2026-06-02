@@ -28,6 +28,13 @@ behaviour worth pinning:
 10. An optional :class:`ProgressReporter` is advanced by the raw page
     size (pre-filter) so the spinner ticks for every Slack-returned
     row.
+11. ``channel_not_found`` / ``not_in_channel`` on the per-row
+    ``conversations.history`` activity probe skip just the offending
+    row (row-scoped, unlike the type-scoped ``missing_scope``) and
+    accumulate into one aggregate ``warning: skipped N inaccessible
+    channels (channel_not_found=X, not_in_channel=Y) ...`` emitted at
+    listing-call end (both the pagination-end and ``--limit``
+    early-return arms).
 
 The :mod:`slack_sdk` extras (``[connectors-slack]``) may not be
 installed in every environment, so the file-level
@@ -1267,6 +1274,276 @@ def test_list_conversations_since_history_non_429_raises_connector_failed(
 
     assert "conversations.history" in str(excinfo.value)
     assert "xoxb-test" not in str(excinfo.value)
+
+
+def test_list_conversations_since_channel_not_found_skips_row_aggregates_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``channel_not_found`` on history → drop that row, keep the rest, 1 aggregate warning.
+
+    Pins the row-scoped skip behaviour for ``conversations.history``
+    errors that are not type-uniform (a Slack Connect external channel
+    can list via ``users.conversations`` and then fail history with
+    ``channel_not_found`` while sibling public channels on the same
+    token's history scope continue to work). The warning counts the
+    affected rows and names the error code so the operator can map
+    back to the documented Slack causes (Slack Connect / deactivated
+    DM peer / archived-between-list-and-probe) without re-reading the
+    docs.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response(
+        [
+            _public_channel("C1", name="readable"),
+            _public_channel("C-extern", name="slack-connect"),
+            _public_channel("C2", name="also-readable"),
+        ]
+    )
+    client = _build_client(list_pages=[page])
+
+    def _make_channel_not_found() -> SlackApiError:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {}
+
+        def _get(key: str, default: object = None) -> object:
+            return {"error": "channel_not_found"}.get(key, default)
+
+        resp.get.side_effect = _get
+        return SlackApiError(  # type: ignore[no-untyped-call]
+            message="channel_not_found", response=resp
+        )
+
+    def _history(*, channel: str, **_kwargs: Any) -> dict[str, Any]:
+        if channel == "C-extern":
+            raise _make_channel_not_found()
+        return _history_response([{"ts": "1717200000.000000"}])
+
+    client.conversations_history.side_effect = _history
+    _patch_webclient(monkeypatch, client)
+
+    warnings: list[str] = []
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+
+    assert [c.id for c in results] == ["C1", "C2"]
+    # One aggregate warning naming the count + error code (not per-row).
+    assert len(warnings) == 1
+    assert "skipped 1 inaccessible channel" in warnings[0]
+    assert "channel_not_found=1" in warnings[0]
+    # Token never leaks through the warning surface (ADR-0027).
+    assert "xoxb-test" not in warnings[0]
+
+
+def test_list_conversations_since_not_in_channel_skips_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``not_in_channel`` on history → row-scoped skip + aggregate warning.
+
+    Mirrors the ``channel_not_found`` arm but exercises the second
+    documented per-row failure: the principal was removed from a
+    private channel between the listing and the activity probe. The
+    other rows must continue to flow.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response(
+        [
+            _public_channel("C1", name="open"),
+            _private_channel("G-locked", name="kicked-out"),
+        ]
+    )
+    client = _build_client(list_pages=[page])
+
+    def _make_not_in_channel() -> SlackApiError:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {}
+
+        def _get(key: str, default: object = None) -> object:
+            return {"error": "not_in_channel"}.get(key, default)
+
+        resp.get.side_effect = _get
+        return SlackApiError(  # type: ignore[no-untyped-call]
+            message="not_in_channel", response=resp
+        )
+
+    def _history(*, channel: str, **_kwargs: Any) -> dict[str, Any]:
+        if channel == "G-locked":
+            raise _make_not_in_channel()
+        return _history_response([{"ts": "1717200000.000000"}])
+
+    client.conversations_history.side_effect = _history
+    _patch_webclient(monkeypatch, client)
+
+    warnings: list[str] = []
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+
+    assert [c.id for c in results] == ["C1"]
+    assert len(warnings) == 1
+    assert "not_in_channel=1" in warnings[0]
+
+
+def test_list_conversations_since_inaccessible_warning_aggregates_per_error_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multiple per-row history misses across two error codes → one aggregate warning.
+
+    The summary groups by error code (``channel_not_found=2,
+    not_in_channel=1``) so the operator sees one stderr line covering
+    every dropped row regardless of cause. Pins the "one warning per
+    listing call" invariant that protects operators with large Slack
+    Connect / private-channel surface areas from stderr noise.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response(
+        [
+            _public_channel("C1", name="open-one"),
+            _public_channel("C-extern-1", name="connect-1"),
+            _public_channel("C-extern-2", name="connect-2"),
+            _private_channel("G-locked", name="kicked-out"),
+            _public_channel("C2", name="open-two"),
+        ]
+    )
+    client = _build_client(list_pages=[page])
+
+    def _make_error(code: str) -> SlackApiError:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {}
+
+        def _get(key: str, default: object = None) -> object:
+            return {"error": code}.get(key, default)
+
+        resp.get.side_effect = _get
+        return SlackApiError(  # type: ignore[no-untyped-call]
+            message=code, response=resp
+        )
+
+    def _history(*, channel: str, **_kwargs: Any) -> dict[str, Any]:
+        if channel.startswith("C-extern"):
+            raise _make_error("channel_not_found")
+        if channel == "G-locked":
+            raise _make_error("not_in_channel")
+        return _history_response([{"ts": "1717200000.000000"}])
+
+    client.conversations_history.side_effect = _history
+    _patch_webclient(monkeypatch, client)
+
+    warnings: list[str] = []
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+
+    assert [c.id for c in results] == ["C1", "C2"]
+    assert len(warnings) == 1
+    assert "skipped 3 inaccessible channels" in warnings[0]
+    assert "channel_not_found=2" in warnings[0]
+    assert "not_in_channel=1" in warnings[0]
+
+
+def test_list_conversations_since_inaccessible_warning_omitted_when_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No per-row history misses → no aggregate warning is appended.
+
+    The summary warning must not pollute the operator-visible output
+    on a healthy run; the ``warnings`` list stays empty when every
+    history probe succeeds.
+    """
+    page = _list_response(
+        [_public_channel("C1", name="open-one"), _public_channel("C2", name="open-two")]
+    )
+    client = _build_client(list_pages=[page])
+    client.conversations_history.return_value = _history_response([{"ts": "1717200000.000000"}])
+    _patch_webclient(monkeypatch, client)
+
+    warnings: list[str] = []
+    list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+
+    assert warnings == []
+
+
+def test_list_conversations_since_inaccessible_warning_emitted_under_limit_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The aggregate warning fires even when the ``limit`` cap exits the loop early.
+
+    Pins that the summary emission is wired into both ``return`` arms
+    of the listing loop — an operator who hits ``--limit 1`` after a
+    Slack Connect skip still sees the dropped-channel count.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response(
+        [
+            _public_channel("C-extern", name="connect"),
+            _public_channel("C1", name="open-one"),
+            _public_channel("C2", name="open-two"),
+        ]
+    )
+    client = _build_client(list_pages=[page])
+
+    def _make_channel_not_found() -> SlackApiError:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {}
+
+        def _get(key: str, default: object = None) -> object:
+            return {"error": "channel_not_found"}.get(key, default)
+
+        resp.get.side_effect = _get
+        return SlackApiError(  # type: ignore[no-untyped-call]
+            message="channel_not_found", response=resp
+        )
+
+    def _history(*, channel: str, **_kwargs: Any) -> dict[str, Any]:
+        if channel == "C-extern":
+            raise _make_channel_not_found()
+        return _history_response([{"ts": "1717200000.000000"}])
+
+    client.conversations_history.side_effect = _history
+    _patch_webclient(monkeypatch, client)
+
+    warnings: list[str] = []
+    results = list(
+        list_conversations(_auth(), since=_since_dt(days_ago=7), limit=1, warnings=warnings)
+    )
+
+    # Limit 1 + the C-extern skip → only C1 surfaces.
+    assert [c.id for c in results] == ["C1"]
+    assert len(warnings) == 1
+    assert "channel_not_found=1" in warnings[0]
+
+
+def test_list_conversations_since_inaccessible_warnings_none_drops_silently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``warnings=None`` keeps the helper caller-agnostic on inaccessible rows.
+
+    Mirrors the existing ``missing_scope`` "warnings=None" contract:
+    the row is still dropped, no exception escapes, and the helper
+    stays safe for non-CLI callers that only consume the row stream.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response([_public_channel("C-extern", name="connect")])
+    client = _build_client(list_pages=[page])
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.headers = {}
+
+    def _get(key: str, default: object = None) -> object:
+        return {"error": "channel_not_found"}.get(key, default)
+
+    resp.get.side_effect = _get
+    client.conversations_history.side_effect = SlackApiError(  # type: ignore[no-untyped-call]
+        message="channel_not_found", response=resp
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+    assert results == []
 
 
 # ----- audit followup: _call_list `all=True` + activity-probe defensive arms
