@@ -64,7 +64,7 @@ import typer
 if TYPE_CHECKING:
     from pathlib import Path
 
-__all__ = ["skills_app"]
+__all__ = ["install_command", "skills_app"]
 
 
 # Top-level Typer group registered by ``opshub.cli.app``. The sub-app is
@@ -199,6 +199,32 @@ def install(
 ) -> None:
     """Install the 14 bundled secretary skills to the host loader directory.
 
+    Thin Typer wrapper around :func:`install_command` — see that
+    function's docstring for the full semantics. The wrapper exists so
+    that internal callers (notably :func:`opshub.cli.init.init_command`
+    for the Phase 16-C ``opshub init`` integration, #384) can invoke
+    the install logic with plain Python kwargs without going through
+    Typer / Click parsing.
+    """
+    install_command(
+        host=host,
+        scope=scope,
+        skip_existing=skip_existing,
+        dry_run=dry_run,
+        print_paths=print_paths,
+    )
+
+
+def install_command(
+    *,
+    host: str = "all",
+    scope: str = "user",
+    skip_existing: bool = False,
+    dry_run: bool = False,
+    print_paths: bool = False,
+) -> None:
+    """Install the 14 bundled secretary skills to the host loader directory.
+
     Reads bundled bytes from ``importlib.resources.files('opshub') /
     _skills/<name>/...`` (populated at build time by
     ``[tool.hatch.build.force-include]`` from ``docs/skills/``,
@@ -214,13 +240,26 @@ def install(
     ecosystem-common skills, so the disjoint invariant is pinned by
     ``test_skills_install_only_writes_14_secretary_skills``.
 
-    Exit codes:
+    Phase 16-C (#384) added :func:`opshub.cli.init.init_command` as an
+    internal caller so the documented ``uv tool install ozzylabs-opshub[mcp]
+    && opshub init`` 2-step setup also installs the 14 secretary
+    skills. The extraction from the Typer wrapper (:func:`install`)
+    follows the same pattern as
+    :func:`opshub.cli.init.init_command` / :func:`opshub.cli.db.migrate_command`:
+    the Typer-decorated callable owns the flag surface, the
+    plain ``*_command`` function owns the business logic and is safe to
+    call programmatically.
+
+    Exit codes (when invoked from the Typer wrapper):
 
     * ``0`` — every applicable skill was written (or, for ``--dry-run``,
       every target path was printed).
     * ``1`` — packaging failure (bundled ``_skills/`` directory missing
       from the wheel; reinstall hint surfaced). Logged with
-      ``category=skill_install_failed`` for downstream tooling.
+      ``category=skill_install_failed`` for downstream tooling. A
+      :class:`typer.Exit` is raised; in-process callers should catch
+      this if they want to handle the failure differently from a hard
+      process exit.
     """
     # Lazy imports — keep cold start fast (ADR-0001) and satisfy
     # ``test_cli_imports`` (no ``opshub.core`` at module level).

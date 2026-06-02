@@ -22,6 +22,21 @@ reproduced. ``src/opshub/_skills/`` is in ``.gitignore`` so the
 mirror never leaks into commits, and the directory is materially
 distinct from the (forbidden) hand-edited ``src/opshub/skills/``
 that :mod:`tests.unit.skills.test_core_boundary` already pins.
+
+Phase 16-C (#384) — ``opshub init`` now writes the 14 secretary skills
+to ``~/.claude/skills/`` and ``~/.agents/skills/`` by default
+(non-interactive default = install per ADR-0029 §決定 (d), as
+explained in :func:`opshub.cli.init._should_install_skills`).
+Without intervention every test that invokes ``opshub init`` via
+:class:`typer.testing.CliRunner` (`test_decision`, `test_task`,
+``tests/integration/test_lifecycle``, et al.) would clobber the
+developer's real ``~/.claude/skills/`` / ``~/.agents/skills/`` payload.
+The autouse :func:`_isolate_home_for_skill_install` fixture redirects
+``HOME`` (and ``USERPROFILE`` on Windows) into a per-test temporary
+directory so the install lands inside the test sandbox. Tests that
+need a specific HOME (e.g. ``test_skills_install``) still override
+the env explicitly because :class:`pytest.MonkeyPatch` honours the
+most recent ``setenv`` call.
 """
 
 from __future__ import annotations
@@ -63,3 +78,35 @@ def _mirror_secretary_skill_bundle() -> None:  # pyright: ignore[reportUnusedFun
     if _BUNDLE_DIR.exists():
         shutil.rmtree(_BUNDLE_DIR)
     shutil.copytree(_DOCS_SKILLS, _BUNDLE_DIR)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_home_for_skill_install(  # pyright: ignore[reportUnusedFunction]
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Redirect ``HOME`` / ``USERPROFILE`` to a per-test sandbox.
+
+    Phase 16-C (#384) wired ``opshub init`` to also install the 14
+    secretary skills via
+    :func:`opshub.cli.init._should_install_skills` (non-interactive
+    default = install, per ADR-0029 §決定 (d)). The wide swath of
+    existing tests that drive ``opshub init`` through
+    :class:`typer.testing.CliRunner` did not previously care about
+    ``HOME``; without this fixture they would each overwrite the
+    developer's real ``~/.claude/skills/`` / ``~/.agents/skills/``
+    payload as a side-effect of the test run.
+
+    The fixture creates a fresh temp directory per test (so leakage
+    between tests is impossible) and sets both ``HOME`` (POSIX) and
+    ``USERPROFILE`` (Windows) — :meth:`pathlib.Path.home` consults
+    the former on POSIX and the latter on Windows, and we mirror the
+    pattern already used by :func:`tests.unit.cli.test_skills_install._isolate_home`.
+
+    Tests that need a specific HOME still call ``monkeypatch.setenv``
+    on the same variable; pytest applies the most recent setenv, so
+    the explicit per-test value wins over this autouse default.
+    """
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))

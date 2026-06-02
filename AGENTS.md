@@ -36,8 +36,8 @@ Phase 15 完了 (2026-06-02) 以降の改修は Phase 化されておらず、co
 新規 architectural pattern (新 ADR + 配信経路改訂) を伴うため新 Phase で起票。epic [#381](https://github.com/ozzy-labs/opshub/issues/381)。
 
 - **Phase 16-A** ([#382](https://github.com/ozzy-labs/opshub/issues/382)) — ADR-0029 新規 + ADR-0004 §決定 (c) 改訂 + doc 一括更新 (architecture / secretary-agent / README / README.ja / mcp-setup / upgrading / CLAUDE / AGENTS の "cp -r" 手順を pointer 化) + test docstring realignment + `_skills/` payload `.py` 不在 pin (Phase 16-B 着地前は skip)。配信経路を `ozzy-labs/skills` Renovate preset から opshub Python package 同梱 + `opshub skills install` に切り替え (SSOT 位置は opshub `docs/skills/<name>/SKILL.md` で不変)。dogfood 採用 (Phase 16-D で実行)。
-- **Phase 16-B** ([#383](https://github.com/ozzy-labs/opshub/issues/383)) — `[tool.hatch.build.force-include]` で `docs/skills` → `src/opshub/_skills` 同梱 + `opshub skills install` / `opshub skills list` CLI 実装 (`--scope {user,project}` / `--host {claude-code,codex,copilot,all}` / `--skip-existing` / `--install-skills` / `--no-install-skills`)。
-- **Phase 16-C** ([#384](https://github.com/ozzy-labs/opshub/issues/384)) — `opshub init` 連携 (TTY prompt + flag、非対話 default = install)。
+- **Phase 16-B** ([#383](https://github.com/ozzy-labs/opshub/issues/383)) — `[tool.hatch.build.force-include]` で `docs/skills` → `src/opshub/_skills` 同梱 + `opshub skills install` / `opshub skills list` CLI 実装 (`--scope {user,project}` / `--host {claude-code,codex,copilot,all}` / `--skip-existing` / `--dry-run` / `--print-paths`)。
+- **Phase 16-C** ([#384](https://github.com/ozzy-labs/opshub/issues/384)) — `opshub init` 連携 (`--install-skills` / `--no-install-skills` flag、TTY 時は `rich.prompt.Confirm` で確認 (default = yes)、非対話 (`sys.stdin.isatty() == False`) は default = install で `uv tool install ozzylabs-opshub[mcp] && opshub init` 経路を救済 (ADR-0029 §決定 (d)))。`install_command` を `opshub.cli.skills` から `opshub.cli.init` が lazy import で呼び出す構造。
 - **Phase 16-D** ([#385](https://github.com/ozzy-labs/opshub/issues/385)、ADR-0029 §dogfood 採用) — in-repo `.claude/skills/<secretary>/` populate (project scope dogfood)。
 
 ## Tech Stack
