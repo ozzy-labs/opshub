@@ -1333,6 +1333,12 @@ def test_list_conversations_since_channel_not_found_skips_row_aggregates_warning
     assert "channel_not_found=1" in warnings[0]
     # Token never leaks through the warning surface (ADR-0027).
     assert "xoxb-test" not in warnings[0]
+    # Operator can reach the Slack docs errors catalogue from the warning.
+    # The ADR-0018 §(7) reference is intentionally absent: §(7) covers the
+    # MVP scope catalogue (``*:history`` etc.), not per-channel access
+    # failures like Slack Connect / non-member / archive race.
+    assert "api.slack.com/methods/conversations.history" in warnings[0]
+    assert "ADR-0018" not in warnings[0]
 
 
 def test_list_conversations_since_not_in_channel_skips_row(
