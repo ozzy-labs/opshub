@@ -5,6 +5,46 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7](https://github.com/ozzy-labs/opshub/compare/v0.2.6...v0.2.7) (2026-06-02)
+
+
+### Added
+
+* **cli,mcp:** connector sync / MCP の --debug opt-in 経路 (デフォルト型名のみ維持、T3 of [#317](https://github.com/ozzy-labs/opshub/issues/317)) ([#330](https://github.com/ozzy-labs/opshub/issues/330)) ([f3ef9cd](https://github.com/ozzy-labs/opshub/commit/f3ef9cd76c268d465a0c5b1ec21b130ad2dc039b))
+* **cli:** root callback で --verbose / --quiet / --debug / --log-format / --log-file を提供 (T2 of [#317](https://github.com/ozzy-labs/opshub/issues/317)) ([#331](https://github.com/ozzy-labs/opshub/issues/331)) ([2191dba](https://github.com/ozzy-labs/opshub/commit/2191dbaa8883f4906045b7f493bd3d6780ca3dc3))
+* **cli:** show determinate progress for embeddings and projections rebuild ([#325](https://github.com/ozzy-labs/opshub/issues/325)) ([f3b21a6](https://github.com/ozzy-labs/opshub/commit/f3b21a6b032238b8e92e41236c0dc97434878deb))
+* **cli:** show progress indicator during connector sync ([#323](https://github.com/ozzy-labs/opshub/issues/323)) ([ec48b06](https://github.com/ozzy-labs/opshub/commit/ec48b069b9df225bb1f981c6b0ccab84facf135e))
+* **connectors/slack,cli:** add opshub connector slack channels listing command ([#361](https://github.com/ozzy-labs/opshub/issues/361)) ([780206a](https://github.com/ozzy-labs/opshub/commit/780206ad949a36b11ba3c0a647fe7e0308b508b9))
+* **connectors/slack:** add conversations.list discovery helper ([#344](https://github.com/ozzy-labs/opshub/issues/344)) ([44fcfb0](https://github.com/ozzy-labs/opshub/commit/44fcfb0ec5906e32f7d66acee6c31ea633724b0d))
+* **core:** redaction processor + log settings resolver + debug traceback helper (ADR-0027, T1 of [#317](https://github.com/ozzy-labs/opshub/issues/317)) ([#329](https://github.com/ozzy-labs/opshub/issues/329)) ([9323b7a](https://github.com/ozzy-labs/opshub/commit/9323b7af5705ede59acfc64385cad662e7979dbb))
+* **db:** migration 0028 — fts5 tokenizer trigram (Phase 15 S2) ([#363](https://github.com/ozzy-labs/opshub/issues/363)) ([1a62fa5](https://github.com/ozzy-labs/opshub/commit/1a62fa5d363314b2e3008ce54ee3daa36ad031b6))
+* **services/search:** short-query LIKE fallback + japanese e2e (Phase 15 S3) ([#364](https://github.com/ozzy-labs/opshub/issues/364)) ([8350161](https://github.com/ozzy-labs/opshub/commit/8350161b0ba0fd860170ed935cb72fc0aec2922f))
+
+
+### Fixed
+
+* **connectors/slack,services:** treat whitespace-only summary as missing ([#340](https://github.com/ozzy-labs/opshub/issues/340)) ([82e3a25](https://github.com/ozzy-labs/opshub/commit/82e3a25827d5552e64378f70a0f15c77e6396482))
+* **connectors/slack:** advance cursor monotonically across paginated history (PR 1 of [#339](https://github.com/ozzy-labs/opshub/issues/339)) ([#345](https://github.com/ozzy-labs/opshub/issues/345)) ([756410b](https://github.com/ozzy-labs/opshub/commit/756410b7f23c939e30e98b733797ccd4ec2ad962))
+* **connectors/slack:** handle empty-text messages in inbox enqueue ([#336](https://github.com/ozzy-labs/opshub/issues/336)) ([329d3ba](https://github.com/ozzy-labs/opshub/commit/329d3ba3d69801e91cc19678724db6be74d55d4f))
+* **connectors/slack:** track max ts per channel + advance cursor on partial sync ([#362](https://github.com/ozzy-labs/opshub/issues/362)) ([2e2b1f9](https://github.com/ozzy-labs/opshub/commit/2e2b1f9e4e104eaabecde5bbd482a06ef9213996)), closes [#339](https://github.com/ozzy-labs/opshub/issues/339)
+* **connectors/teams:** normalise empty summary to None for symmetry ([#335](https://github.com/ozzy-labs/opshub/issues/335)) ([1b7a5bd](https://github.com/ozzy-labs/opshub/commit/1b7a5bd147a7e4154e1ad396c029f0108b2c2a6a))
+* **connectors/teams:** treat whitespace-only summary as missing ([#342](https://github.com/ozzy-labs/opshub/issues/342)) ([e6c09a0](https://github.com/ozzy-labs/opshub/commit/e6c09a0513765a66a8156eeae674c6a40b518dca))
+* **connectors:** apply normalise_optional_text to url field for whitespace SSOT symmetry ([#357](https://github.com/ozzy-labs/opshub/issues/357)) ([b1f8c44](https://github.com/ozzy-labs/opshub/commit/b1f8c44cb683a7d0914eedbcfb6f3593164017da))
+* **core,cli,docs:** -vv で OPSHUB_DEBUG export + connector sync stderr 訂正 + フラグ衝突 test (epic [#317](https://github.com/ozzy-labs/opshub/issues/317) audit followup) ([#334](https://github.com/ozzy-labs/opshub/issues/334)) ([4431789](https://github.com/ozzy-labs/opshub/commit/443178962c2bb7ececa4fb4af318aef692eb916e))
+* **tests/cli:** isolate test_connector_auth.py from sibling monkeypatch pollution ([#348](https://github.com/ozzy-labs/opshub/issues/348)) ([#351](https://github.com/ozzy-labs/opshub/issues/351)) ([b00c158](https://github.com/ozzy-labs/opshub/commit/b00c158be15edf8a801ef2e68a4cb71eadddb78f))
+
+
+### Documentation
+
+* ADR-0028 (FTS5 Japanese tokenizer trigram) + phase-15-plan + index 追加 ([#346](https://github.com/ozzy-labs/opshub/issues/346)) ([bf88898](https://github.com/ozzy-labs/opshub/commit/bf8889812e12d789ef3b41e2afa8e230b4cf32dd))
+* **adr,core,troubleshooting:** close audit gaps from [#332](https://github.com/ozzy-labs/opshub/issues/332)/[#337](https://github.com/ozzy-labs/opshub/issues/337)/[#343](https://github.com/ozzy-labs/opshub/issues/343) (whitespace normalisation contract) ([#356](https://github.com/ozzy-labs/opshub/issues/356)) ([5ea9469](https://github.com/ozzy-labs/opshub/commit/5ea94699fafb89d2c11ec90be351c72d303c8e20))
+* **architecture,adr:** close epic [#316](https://github.com/ozzy-labs/opshub/issues/316) post-merge audit doc gaps (§2.1 / structlog decision / OPSHUB_PROGRESS values / AGENTS / CLAUDE) ([#327](https://github.com/ozzy-labs/opshub/issues/327)) ([379d0e8](https://github.com/ozzy-labs/opshub/commit/379d0e88b1b790d2cab89bfecbd4a088eefd2598))
+* document CLI progress reporting (ADR-0026) ([#326](https://github.com/ozzy-labs/opshub/issues/326)) ([92d8d72](https://github.com/ozzy-labs/opshub/commit/92d8d724c04c8354b5df248305800025e3dd6d04))
+* fix pre-existing MD033 inline HTML in architecture.md ([#353](https://github.com/ozzy-labs/opshub/issues/353)) ([1b0c162](https://github.com/ozzy-labs/opshub/commit/1b0c16262bf126c99579e2fb5794dea15a7f7638))
+* **phase-15:** closeout — troubleshooting / AGENTS / search --help (Phase 15 S4) ([#365](https://github.com/ozzy-labs/opshub/issues/365)) ([843cc0a](https://github.com/ozzy-labs/opshub/commit/843cc0a48f513e786035708709a54096a6b1cef6))
+* post-merge audit followup for [#344](https://github.com/ozzy-labs/opshub/issues/344)/[#345](https://github.com/ozzy-labs/opshub/issues/345)/[#346](https://github.com/ozzy-labs/opshub/issues/346) (architecture / channels docstring / phase-15-plan / decisions-log) ([#350](https://github.com/ozzy-labs/opshub/issues/350)) ([cb38429](https://github.com/ozzy-labs/opshub/commit/cb3842956c99520dd70c72b087c2e4e4ccd50f41))
+* troubleshooting docs + SECURITY closeout (ADR-0027, T4 of [#317](https://github.com/ozzy-labs/opshub/issues/317)) ([#333](https://github.com/ozzy-labs/opshub/issues/333)) ([465e949](https://github.com/ozzy-labs/opshub/commit/465e9490732e7d8a15166d77d448bc0b132b4e39))
+
 ## [0.2.6](https://github.com/ozzy-labs/opshub/compare/v0.2.5...v0.2.6) (2026-05-31)
 
 
