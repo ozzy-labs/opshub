@@ -9,6 +9,23 @@ mapped, validated, and committed in lock-step with its own cursor
 advance (mirrors the Phase 3 GitHub precedent in
 :mod:`opshub.connectors.github.connector`).
 
+Title shape (issue #367)
+------------------------
+
+The ``title`` carries a short body excerpt so ``opshub search`` results
+are recognisable without joining back to the ``body`` column:
+
+* ordinary message → ``"{user} in #{ch}: {body[:TITLE_BODY_EXCERPT_CHARS]}"``
+* empty body → ``"{user} in #{ch}: (no text)"``
+* ``bot_message`` subtype → ``"{bot_name} in #{ch}: {body[:N]}"``
+* ``me_message`` subtype → ``"* {user} {body[:N]}"``
+* ``channel_join`` / ``channel_leave`` / ``channel_purpose`` /
+  ``channel_topic`` → English system message lines (e.g.
+  ``"{user} joined #{ch}"``)
+
+System-message and ``(no text)`` strings are kept in English to match
+the rest of the CLI / MCP surface (no i18n layer yet).
+
 External Content Minimization (ADR-0005)
 ----------------------------------------
 
@@ -47,13 +64,19 @@ violate ADR-0005 and is therefore forbidden here.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from opshub.connectors.slack.fetcher import RawSlackMessage
 
 
-__all__ = ["SOURCE_TYPE", "SUMMARY_MAX_CHARS", "map_message"]
+__all__ = [
+    "SOURCE_TYPE",
+    "SUMMARY_MAX_CHARS",
+    "TITLE_BODY_EXCERPT_CHARS",
+    "map_message",
+]
 
 
 #: Phase 7 ``source_type`` discriminator for Slack messages. The
@@ -74,6 +97,33 @@ SOURCE_TYPE = "slack_message"
 #: connector boundary or the projection) so the same rule applies
 #: to every Slack source row.
 SUMMARY_MAX_CHARS = 200
+
+#: Maximum body excerpt length (in unicode characters) embedded into
+#: the ``sources.title`` column. Issue #367 selected 80 chars as a
+#: balance between table-rendered search output (CLI ``opshub search``
+#: column widths land in the 100-120 char range, leaving ~30-40 chars
+#: for the ``"{user} in #{ch}: "`` prefix) and context-budget impact
+#: on the secretary 14 Skill surface (~80 char inflation per hit
+#: multiplied by typical ``find-document`` page size keeps the per-call growth
+#: under ~1 KB — well within the ADR-0022 read tool budget).
+#:
+#: Pinned as a module constant so regressions show up at review time
+#: instead of as silent UI noise (and so the docs/troubleshooting
+#: guidance can point at one canonical value).
+TITLE_BODY_EXCERPT_CHARS = 80
+
+#: Placeholder injected into the title when the message body is empty
+#: (Slackbot pings, ``channel_join`` / ``file_share`` notifications,
+#: attachment-only messages, ...). Kept in English to match the rest
+#: of the CLI / MCP surface — opshub has no i18n layer yet and adding
+#: one for a single placeholder would prematurely freeze the surface.
+_EMPTY_BODY_PLACEHOLDER = "(no text)"
+
+#: Pre-compiled whitespace-collapse pattern used by :func:`_truncate_body`.
+#: Matches any run of unicode whitespace (newlines, tabs, contiguous
+#: spaces, ...) and is replaced with a single space so a multi-line
+#: Slack message renders as a clean single-line excerpt in the title.
+_WHITESPACE_RUN_RE = re.compile(r"\s+")
 
 
 def map_message(raw: RawSlackMessage) -> dict[str, Any]:
@@ -105,11 +155,22 @@ def map_message(raw: RawSlackMessage) -> dict[str, Any]:
       config produces no collisions.
     * ``source_type = "slack_message"`` — the Phase 7 discriminator
       (see :data:`SOURCE_TYPE`).
-    * ``title = f"{user_display_name} in #{channel_name}"`` — a short
-      human-recognisable label. Mirrors the GitHub mapper precedent
-      of stuffing the most identifying free-text field into the
-      ``title`` so brief / recall output is legible without an extra
-      lookup.
+    * ``title`` — a short human-recognisable label that **includes a
+      body excerpt** (issue #367). Default format is
+      ``f"{user_display_name} in #{channel_name}: {excerpt}"`` where
+      ``excerpt`` is :func:`_truncate_body` applied to the body
+      (capped at :data:`TITLE_BODY_EXCERPT_CHARS` with whitespace
+      normalised to single spaces and ``"…"`` appended on clip).
+      Empty body collapses to :data:`_EMPTY_BODY_PLACEHOLDER`
+      (``"(no text)"``) so the title is never just
+      ``"alice in #general: "``. The Slack ``subtype`` field
+      (``"bot_message"`` / ``"channel_join"`` / ``"me_message"`` /
+      ``...``) routes the formatter to dedicated branches so a
+      ``channel_join`` event renders as ``"{user} joined #{ch}"``
+      rather than as a misleading author label with empty content.
+      Mirrors the GitHub mapper precedent of stuffing the most
+      identifying free-text field into the ``title`` so brief /
+      recall output is legible without an extra lookup.
     * ``summary = truncated(text, SUMMARY_MAX_CHARS)`` — the first
       200 chars of the message body. Truncation appends a single
       ``"…"`` (U+2026) so an operator can tell at a glance that the
@@ -149,7 +210,7 @@ def map_message(raw: RawSlackMessage) -> dict[str, Any]:
         "connector_name": "slack",
         "external_id": f"{raw.channel_id}:{raw.ts}",
         "source_type": SOURCE_TYPE,
-        "title": f"{raw.user_display_name} in #{raw.channel_name}",
+        "title": _build_title(raw),
         "summary": _truncate(raw.text.strip(), SUMMARY_MAX_CHARS) or None,
         "url": raw.permalink,
         # Phase 10 (ADR-0020): retain the full message text and tag it
@@ -161,6 +222,77 @@ def map_message(raw: RawSlackMessage) -> dict[str, Any]:
         "provenance_origin": "external",
         "provenance_trust": "untrusted",
     }
+
+
+def _build_title(raw: RawSlackMessage) -> str:
+    """Compose the ``sources.title`` string for a Slack message.
+
+    Routes on :attr:`RawSlackMessage.subtype` (issue #367):
+
+    * ``channel_join`` / ``channel_leave`` → ``"{user} joined #{ch}"``
+      / ``"{user} left #{ch}"`` (English system-message lines).
+    * ``channel_purpose`` / ``channel_topic`` → ``"{user} set #{ch}
+      {purpose|topic}: {excerpt}"``. The body of these subtypes
+      already carries the new purpose / topic text, so we surface
+      that as the excerpt verbatim.
+    * ``me_message`` → ``"* {user} {excerpt}"`` (Slack's italicised
+      ``/me ...`` shape).
+    * ``bot_message`` / default → ``"{author} in #{ch}: {excerpt}"``.
+      The author is :attr:`RawSlackMessage.user_display_name` which
+      the fetcher resolves via :meth:`_resolve_author_display` to
+      either the user's display name, the bot's ``bot_profile.name``,
+      ``"bot:{bot_id}"``, or :data:`_UNKNOWN_USER_DISPLAY` as a last
+      resort.
+
+    Excerpts come from :func:`_truncate_body`; empty bodies collapse
+    to :data:`_EMPTY_BODY_PLACEHOLDER` so the title never trails off
+    with ``": "`` and an empty string.
+    """
+    user = raw.user_display_name
+    channel = raw.channel_name
+    excerpt = _truncate_body(raw.text, TITLE_BODY_EXCERPT_CHARS)
+
+    if raw.subtype == "channel_join":
+        return f"{user} joined #{channel}"
+    if raw.subtype == "channel_leave":
+        return f"{user} left #{channel}"
+    if raw.subtype == "channel_purpose":
+        return f"{user} set #{channel} purpose: {excerpt}"
+    if raw.subtype == "channel_topic":
+        return f"{user} set #{channel} topic: {excerpt}"
+    if raw.subtype == "me_message":
+        return f"* {user} {excerpt}"
+    # Default arm covers ordinary user messages, ``bot_message``, and
+    # any unknown / future subtype. Bot identity is already baked into
+    # ``user`` by the fetcher's ``_resolve_author_display`` so this
+    # branch handles both cases uniformly.
+    return f"{user} in #{channel}: {excerpt}"
+
+
+def _truncate_body(body: str, max_chars: int) -> str:
+    """Normalise + truncate ``body`` for embedding into the title.
+
+    Pipeline:
+
+    1. Collapse every run of unicode whitespace (newlines, tabs,
+       contiguous spaces) to a single space so a multi-line Slack
+       message renders as a clean single-line excerpt.
+    2. Strip leading / trailing whitespace.
+    3. If the resulting string is empty, return
+       :data:`_EMPTY_BODY_PLACEHOLDER` (``"(no text)"``) so the
+       title never trails off with ``": "``.
+    4. If the string fits inside ``max_chars`` return it verbatim.
+    5. Otherwise truncate to ``max_chars - 1`` characters and append
+       the single Unicode ellipsis ``"…"`` (U+2026) — same convention
+       as :func:`_truncate` for the summary path so the visual style
+       is consistent across the projection's two excerpt columns.
+    """
+    normalised = _WHITESPACE_RUN_RE.sub(" ", body).strip()
+    if not normalised:
+        return _EMPTY_BODY_PLACEHOLDER
+    if len(normalised) <= max_chars:
+        return normalised
+    return normalised[: max_chars - 1] + "…"
 
 
 def _truncate(text: str, max_chars: int) -> str:

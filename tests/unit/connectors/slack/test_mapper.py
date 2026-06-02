@@ -29,9 +29,13 @@ pytest.importorskip(
 
 from opshub.connectors.slack.fetcher import RawSlackMessage
 from opshub.connectors.slack.mapper import (
+    _EMPTY_BODY_PLACEHOLDER,  # pyright: ignore[reportPrivateUsage]
     SOURCE_TYPE,
     SUMMARY_MAX_CHARS,
+    TITLE_BODY_EXCERPT_CHARS,
+    _build_title,  # pyright: ignore[reportPrivateUsage]
     _truncate,  # pyright: ignore[reportPrivateUsage]
+    _truncate_body,  # pyright: ignore[reportPrivateUsage]
     map_message,
 )
 
@@ -47,6 +51,7 @@ def _raw_message(
     user_id: str = "U1",
     user_display_name: str = "alice",
     permalink: str = "https://acme.slack.com/archives/C123/p1700000000000100",
+    subtype: str | None = None,
 ) -> RawSlackMessage:
     """Build a :class:`RawSlackMessage` with the documented field defaults.
 
@@ -64,6 +69,7 @@ def _raw_message(
         user_display_name=user_display_name,
         permalink=permalink,
         raw={},  # mapper never reads ``raw``; empty dict is enough
+        subtype=subtype,
     )
 
 
@@ -91,7 +97,11 @@ def test_summary_max_chars_is_200() -> None:
 
 
 def test_map_message_basic_shape() -> None:
-    """Short text → every field maps to the documented value verbatim."""
+    """Short text → every field maps to the documented value verbatim.
+
+    Title includes the body excerpt per issue #367 (the search-result
+    title is now self-describing without a join back to ``body``).
+    """
     raw = _raw_message(
         channel_id="C123",
         channel_name="general",
@@ -107,7 +117,7 @@ def test_map_message_basic_shape() -> None:
         "connector_name": "slack",
         "external_id": "C123:1700000000.000100",
         "source_type": "slack_message",
-        "title": "alice in #general",
+        "title": "alice in #general: Hello",
         "summary": "Hello",
         "url": "https://acme.slack.com/archives/C123/p1700000000000100",
         "body": "Hello",
@@ -130,17 +140,17 @@ def test_map_message_external_id_is_channel_id_colon_ts() -> None:
 
 
 def test_map_message_title_uses_hash_prefix_for_channel() -> None:
-    """Title shape: ``f"{user_display_name} in #{channel_name}"``.
+    """Title shape: ``f"{user_display_name} in #{channel_name}: {excerpt}"``.
 
     The ``#`` prefix mirrors Slack's own UI rendering. The channel
     name from the fetcher does NOT carry the prefix (per
     :class:`RawSlackMessage.channel_name` docstring), so the mapper
-    must add it.
+    must add it. Body excerpt is appended per issue #367.
     """
-    raw = _raw_message(user_display_name="bob", channel_name="ops-room")
+    raw = _raw_message(user_display_name="bob", channel_name="ops-room", text="status update")
     kwargs = map_message(raw)
 
-    assert kwargs["title"] == "bob in #ops-room"
+    assert kwargs["title"] == "bob in #ops-room: status update"
 
 
 def test_map_message_preserves_permalink_as_url() -> None:
@@ -195,8 +205,11 @@ def test_map_message_normalises_empty_text_to_none() -> None:
     assert kwargs["summary"] is None
     assert kwargs["body"] is None
     # Other fields keep their normal shape — the empty-text case only
-    # affects ``summary`` / ``body``.
-    assert kwargs["title"] == "alice in #general"
+    # affects ``summary`` / ``body``. The title's excerpt segment
+    # falls back to ``"(no text)"`` per issue #367 so search results
+    # for attachment-only / file_share messages still carry an
+    # identifiable label rather than ``"alice in #general: "``.
+    assert kwargs["title"] == "alice in #general: (no text)"
     assert kwargs["external_id"] == "C123:1700000000.000100"
 
 
@@ -227,8 +240,11 @@ def test_map_message_normalises_whitespace_only_text_to_none() -> None:
     # future "clean both sides" refactor that would lose the forensic
     # record.
     assert kwargs["body"] == "  "
-    # Title / external_id remain populated from metadata.
-    assert kwargs["title"] == "alice in #general"
+    # Title / external_id remain populated from metadata. Excerpt
+    # collapses to the empty-body placeholder (issue #367) because
+    # ``_truncate_body`` normalises whitespace and strips before the
+    # length check, so the title is still recognisable.
+    assert kwargs["title"] == "alice in #general: (no text)"
     assert kwargs["external_id"] == "C123:1700000000.000100"
 
     # Mixed tab / newline whitespace behaves identically.
@@ -236,6 +252,7 @@ def test_map_message_normalises_whitespace_only_text_to_none() -> None:
     kwargs_mixed = map_message(raw_mixed)
     assert kwargs_mixed["summary"] is None
     assert kwargs_mixed["body"] == "\t\n"
+    assert kwargs_mixed["title"] == "alice in #general: (no text)"
 
 
 def test_map_message_truncates_long_text_to_max_chars() -> None:
@@ -303,19 +320,279 @@ def test_map_message_connector_name_is_slack() -> None:
     assert kwargs["connector_name"] == "slack"
 
 
-def test_map_message_uses_fetcher_unknown_display_name_fallback() -> None:
-    """Bot / system messages → ``user_display_name`` = ``"unknown"``.
+def test_map_message_surfaces_unknown_only_as_last_resort() -> None:
+    """Surface the ``"unknown"`` fetcher fallback verbatim — but only when used.
 
-    The fetcher handles the bot-message fallback by setting the
-    display name to ``"unknown"`` (no ``users.info`` call). The
-    mapper must surface the same string in the title without
-    special-casing it — operators see ``"unknown in #general"`` and
-    know the message was authored by a bot.
+    Issue #367 narrowed :data:`_UNKNOWN_USER_DISPLAY` to a final
+    safety net: bot messages now resolve to ``bot_profile.name`` or
+    ``"bot:{bot_id}"`` in the fetcher before falling back. The mapper
+    still surfaces whatever string the fetcher hands it, so this test
+    pins the round-trip for the (rare) case where every fetcher arm
+    failed and produced the literal ``"unknown"``. Operators seeing
+    ``"unknown in #channel: (no text)"`` in search results know the
+    payload was truly malformed.
     """
-    raw = _raw_message(user_id="", user_display_name="unknown", channel_name="alerts")
+    raw = _raw_message(user_id="", user_display_name="unknown", channel_name="alerts", text="")
     kwargs = map_message(raw)
 
-    assert kwargs["title"] == "unknown in #alerts"
+    assert kwargs["title"] == "unknown in #alerts: (no text)"
+
+
+# ---------------------------------------------------------------------- title format (issue #367)
+
+
+def test_title_includes_body_excerpt() -> None:
+    """Default title carries a body excerpt so search results are recognisable.
+
+    Pre-#367 the title was ``"{user} in #{ch}"`` which gave operators
+    no signal beyond "someone said something in #ops". Post-fix the
+    excerpt makes the row identifiable directly from the search hit
+    list.
+    """
+    raw = _raw_message(text="Phase 16 design discussion follow-up")
+    kwargs = map_message(raw)
+
+    assert kwargs["title"] == "alice in #general: Phase 16 design discussion follow-up"
+
+
+def test_title_excerpt_truncates_long_body_with_ellipsis() -> None:
+    """Long body → excerpt is clipped to :data:`TITLE_BODY_EXCERPT_CHARS` chars + ``"…"``.
+
+    The excerpt segment after ``": "`` must be exactly
+    :data:`TITLE_BODY_EXCERPT_CHARS` characters (including the
+    ellipsis), mirroring the :func:`_truncate` summary contract.
+    """
+    long_text = "x" * 500
+    raw = _raw_message(text=long_text)
+    kwargs = map_message(raw)
+
+    title = kwargs["title"]
+    prefix = "alice in #general: "
+    assert title.startswith(prefix)
+    excerpt = title[len(prefix) :]
+    assert len(excerpt) == TITLE_BODY_EXCERPT_CHARS
+    assert excerpt.endswith("…")
+    assert excerpt[:-1] == "x" * (TITLE_BODY_EXCERPT_CHARS - 1)
+
+
+def test_title_excerpt_normalises_whitespace_runs() -> None:
+    """Newlines + contiguous spaces collapse to a single space in the title.
+
+    A multi-line Slack message must not introduce line breaks into
+    the title — the projection's table renderers (CLI ``opshub search``
+    + MCP read tools) expect single-line strings.
+    """
+    raw = _raw_message(text="line one\n\nline   two\tline three")
+    kwargs = map_message(raw)
+
+    assert kwargs["title"] == "alice in #general: line one line two line three"
+
+
+def test_title_bot_message_uses_bot_name_via_subtype() -> None:
+    """``bot_message`` subtype → ``"{bot_name} in #{ch}: {excerpt}"``.
+
+    The fetcher resolves ``user_display_name`` to ``bot_profile.name``
+    for bot messages (see issue #367). The mapper's ``bot_message``
+    arm just keeps the default "author in channel: excerpt" shape;
+    pinning the round-trip here proves bot identity survives the
+    fetcher → mapper boundary.
+    """
+    raw = _raw_message(
+        user_id="",
+        user_display_name="GitHub",
+        channel_name="notifications",
+        text="PR #366 was opened by ozzy-3",
+        subtype="bot_message",
+    )
+    kwargs = map_message(raw)
+
+    assert kwargs["title"] == "GitHub in #notifications: PR #366 was opened by ozzy-3"
+
+
+def test_title_channel_join_subtype_uses_system_message_format() -> None:
+    """``channel_join`` → ``"{user} joined #{ch}"`` (no excerpt suffix).
+
+    System messages (``channel_join`` / ``channel_leave``) carry
+    auto-generated body text like ``"<@U1> has joined the channel"``
+    that adds no information beyond the subtype itself. The mapper
+    renders the human-readable system line and drops the body excerpt
+    entirely.
+    """
+    raw = _raw_message(
+        user_display_name="ozzy",
+        channel_name="eng-frontend",
+        text="<@U1> has joined the channel",
+        subtype="channel_join",
+    )
+    kwargs = map_message(raw)
+
+    assert kwargs["title"] == "ozzy joined #eng-frontend"
+
+
+def test_title_channel_leave_subtype_uses_system_message_format() -> None:
+    """``channel_leave`` → ``"{user} left #{ch}"``."""
+    raw = _raw_message(
+        user_display_name="bob",
+        channel_name="eng-backend",
+        text="<@U2> has left the channel",
+        subtype="channel_leave",
+    )
+    kwargs = map_message(raw)
+
+    assert kwargs["title"] == "bob left #eng-backend"
+
+
+def test_title_channel_purpose_subtype_includes_new_purpose() -> None:
+    """``channel_purpose`` → ``"{user} set #{ch} purpose: {excerpt}"``.
+
+    The body text for these subtypes carries the newly-set purpose
+    string, so the excerpt branch is the right surface for it.
+    """
+    raw = _raw_message(
+        user_display_name="carol",
+        channel_name="design",
+        text="design reviews for the Phase 16 epic",
+        subtype="channel_purpose",
+    )
+    kwargs = map_message(raw)
+
+    assert kwargs["title"] == ("carol set #design purpose: design reviews for the Phase 16 epic")
+
+
+def test_title_channel_topic_subtype_includes_new_topic() -> None:
+    """``channel_topic`` → ``"{user} set #{ch} topic: {excerpt}"``."""
+    raw = _raw_message(
+        user_display_name="dave",
+        channel_name="ops",
+        text="incident response weekly review",
+        subtype="channel_topic",
+    )
+    kwargs = map_message(raw)
+
+    assert kwargs["title"] == "dave set #ops topic: incident response weekly review"
+
+
+def test_title_me_message_subtype_uses_italic_marker() -> None:
+    """``me_message`` → ``"* {user} {excerpt}"`` (mirrors Slack's ``/me`` shape)."""
+    raw = _raw_message(
+        user_display_name="eve",
+        channel_name="random",
+        text="celebrates the Phase 15 ship",
+        subtype="me_message",
+    )
+    kwargs = map_message(raw)
+
+    assert kwargs["title"] == "* eve celebrates the Phase 15 ship"
+
+
+def test_title_unknown_subtype_falls_back_to_default_format() -> None:
+    """Unknown / future subtype → default ``"{author} in #{ch}: {excerpt}"`` arm.
+
+    Slack ships new subtypes over time. The mapper's default arm must
+    stay forward-compatible so an unrecognised subtype still produces
+    a useful title rather than dropping the message into a degenerate
+    format. (No silent ``KeyError``, no fallback to ``"unknown"``.)
+    """
+    raw = _raw_message(
+        user_display_name="frank",
+        channel_name="alerts",
+        text="thread reply",
+        subtype="thread_broadcast",
+    )
+    kwargs = map_message(raw)
+
+    assert kwargs["title"] == "frank in #alerts: thread reply"
+
+
+def test_title_subtype_none_uses_default_format() -> None:
+    """``subtype=None`` (ordinary user message) → default format."""
+    raw = _raw_message(text="ok", subtype=None)
+    kwargs = map_message(raw)
+
+    assert kwargs["title"] == "alice in #general: ok"
+
+
+def test_title_word_unknown_does_not_appear_for_resolved_bot() -> None:
+    """Regression guard: a resolved bot message must never carry ``"unknown"``.
+
+    Pre-#367 the fetcher returned ``"unknown"`` for every bot / system
+    message, masking the real bot identity in the title. The fetcher
+    now resolves ``bot_profile.name`` → ``"bot:{bot_id}"`` first. This
+    test pins the post-fix contract from the mapper side: any title
+    composed with a resolved ``user_display_name`` (i.e. not the
+    literal ``"unknown"`` fallback) must not introduce the string
+    ``"unknown"`` itself.
+    """
+    raw = _raw_message(
+        user_id="",
+        user_display_name="GitHub",  # resolved from bot_profile.name
+        channel_name="notifications",
+        text="PR opened",
+        subtype="bot_message",
+    )
+    kwargs = map_message(raw)
+    assert "unknown" not in kwargs["title"]
+
+
+# ---------------------------------------------------------------------- _truncate_body
+
+
+def test_truncate_body_returns_placeholder_for_empty() -> None:
+    """Empty input → :data:`_EMPTY_BODY_PLACEHOLDER`."""
+    assert _truncate_body("", 80) == _EMPTY_BODY_PLACEHOLDER
+
+
+def test_truncate_body_returns_placeholder_for_whitespace_only() -> None:
+    """Whitespace-only input collapses to the placeholder.
+
+    Mirrors the summary path's whitespace handling (``_truncate``
+    uses a separate strip on the call site); centralising the rule
+    in :func:`_truncate_body` keeps the excerpt branch consistent.
+    """
+    assert _truncate_body("   ", 80) == _EMPTY_BODY_PLACEHOLDER
+    assert _truncate_body("\n\t  \n", 80) == _EMPTY_BODY_PLACEHOLDER
+
+
+def test_truncate_body_passes_short_text_through() -> None:
+    """Text shorter than the cap is returned verbatim."""
+    assert _truncate_body("hi", 80) == "hi"
+
+
+def test_truncate_body_collapses_whitespace_runs() -> None:
+    """Multiple newlines / tabs / spaces collapse to a single space."""
+    assert _truncate_body("a\n\nb", 80) == "a b"
+    assert _truncate_body("a   b\tc", 80) == "a b c"
+
+
+def test_truncate_body_appends_unicode_ellipsis_when_clipped() -> None:
+    """Over-length text is clipped to ``max_chars`` (including the ellipsis)."""
+    text = "a" * 200
+    result = _truncate_body(text, 20)
+
+    assert len(result) == 20
+    assert result.endswith("…")
+    assert result[:-1] == "a" * 19
+
+
+def test_truncate_body_handles_exactly_max_chars() -> None:
+    """A string of exactly ``max_chars`` is returned verbatim — no clipping."""
+    text = "x" * 80
+    assert _truncate_body(text, 80) == text
+
+
+# ---------------------------------------------------------------------- _build_title
+
+
+def test_build_title_uses_subtype_dispatch() -> None:
+    """``_build_title`` routes on :attr:`RawSlackMessage.subtype`.
+
+    Lightweight smoke test that complements the format-by-format
+    tests above — proves the dispatch table is wired and no subtype
+    accidentally falls through.
+    """
+    assert _build_title(_raw_message(text="hi", subtype=None)) == "alice in #general: hi"
+    assert _build_title(_raw_message(text="hi", subtype="bot_message")) == "alice in #general: hi"
+    assert _build_title(_raw_message(text="x", subtype="channel_join")) == "alice joined #general"
 
 
 # ---------------------------------------------------------------------- _truncate

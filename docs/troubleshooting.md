@@ -228,6 +228,49 @@ opshub connector slack channels --include-archived   # archived channel も対�
 
 トークン値・API レスポンス本文はどの出力経路 (stdout / stderr) にも出ない。`--debug` を付けた場合の追加 traceback もサニタイズ済み (§3.1 と同じ redaction processor が効く)。
 
+### 3.8 `opshub search` の Slack 結果 title が `unknown in #channel-name` になる
+
+issue [#367](https://github.com/ozzy-labs/opshub/issues/367) で Slack mapper の title 形式を改善した。新形式は次の通り:
+
+| message 種別 | title 形式 |
+|---|---|
+| 通常メッセージ | `{user} in #{channel}: {本文 80 字抜粋}` |
+| 空 body (attachment only / file_share / Slackbot ping 等) | `{user} in #{channel}: (no text)` |
+| `bot_message` subtype | `{bot_profile.name} in #{channel}: {抜粋}` (なければ `bot:{bot_id}`) |
+| `channel_join` / `channel_leave` | `{user} joined #{channel}` / `{user} left #{channel}` |
+| `channel_purpose` / `channel_topic` | `{user} set #{channel} purpose: {抜粋}` / `topic: {抜粋}` |
+| `me_message` (`/me ...`) | `* {user} {抜粋}` |
+| 上記いずれも該当しない (`user` / `bot_id` / `bot_profile` 全欠落、Slack 仕様逸脱の payload) | `unknown in #{channel}: ...` (最終 fallback、本来到達しない) |
+
+抜粋長は [`src/opshub/connectors/slack/mapper.py`](../src/opshub/connectors/slack/mapper.py) の `TITLE_BODY_EXCERPT_CHARS = 80` で固定。改行 / 連続空白は単一空白に正規化し、80 字超過時は単一 Unicode 省略記号 (`…`、U+2026) を付与する。
+
+**症状**: search 結果 / MCP `find-document` / `research` Skill の title が `unknown in #channel-name` のまま見える、または title に body 抜粋が含まれない。
+
+**原因**: 既存 `sources.title` が #367 以前の古い format (`{user} in #{channel}` 単体、または bot/system message で `unknown`) のまま persist されている。merge 後の最初の sync では新規分のみ新 format で landing するため、過去 row は再生成が必要。
+
+**対処**:
+
+```bash
+# 既存 sources projection を再構築 (titles は SourceObserved event から再 derive される)。
+opshub projections rebuild
+```
+
+`projections rebuild` は event store を保持したまま全 projection を流し直すため、event log は touch されない。embeddings は **body** から生成しており title 変更の影響を受けないので **再生成不要** (`opshub embeddings rebuild` を実行する必要はない)。
+
+**それでも `unknown` が残る場合**: source の `raw` payload に `user` / `bot_id` / `bot_profile` のいずれも含まれていない (Slack 仕様逸脱、または非常に古い custom integration)。最終 fallback として `_UNKNOWN_USER_DISPLAY` (= `"unknown"`) が surface するのは仕様。`--debug` 付きで sync を再実行し、該当メッセージの `raw` 構造を確認する:
+
+```bash
+opshub --debug connector sync slack 2> slack-sync-debug.log
+# slack-sync-debug.log を grep して該当 ts の raw payload を確認
+```
+
+**関連**:
+
+- issue [#367](https://github.com/ozzy-labs/opshub/issues/367) — Slack search title 改善 (本セクション根拠)
+- [`src/opshub/connectors/slack/mapper.py`](../src/opshub/connectors/slack/mapper.py) `_build_title` / `_truncate_body` — title 組立 SSOT
+- [`src/opshub/connectors/slack/fetcher.py`](../src/opshub/connectors/slack/fetcher.py) `_resolve_author_display` — author 解決 chain (user → bot_profile.name → bot_id → unknown)
+- [ADR-0022](adr/0022-mcp-server-surface.md) §決定 (f) — MCP `search` tool は `raw_query` hard-coded `false` のため秘書 14 Skill は透過的に新 title format の恩恵を受ける
+
 ## 4. セキュリティ注意書き
 
 `-v` / `-vv` / `--debug` / `--log-file` を使うときに operator が知っておくこと:
