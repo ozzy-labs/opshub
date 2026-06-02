@@ -26,7 +26,7 @@ pre-commit:
     # dogfood mirrors (``.claude/skills/<name>/`` for Claude Code,
     # ``.agents/skills/<name>/`` for Codex CLI / Copilot CLI). The
     # assistant skill names listed in
-    # :data:`opshub._skills_resources.SECRETARY_SKILL_NAMES` are the
+    # :data:`opshub._skills_resources.ASSISTANT_SKILL_NAMES` are the
     # only ones the install path touches; ecosystem-common skill names
     # (drive / lint / commit / ...) are disjoint and intentionally not
     # compared here (ADR-0029 §決定 (h) carve-out).
