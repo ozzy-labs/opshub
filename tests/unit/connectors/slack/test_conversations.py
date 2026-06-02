@@ -1267,3 +1267,97 @@ def test_list_conversations_since_history_non_429_raises_connector_failed(
 
     assert "conversations.history" in str(excinfo.value)
     assert "xoxb-test" not in str(excinfo.value)
+
+
+# ----- audit followup: _call_list `all=True` + activity-probe defensive arms
+
+
+def test_list_conversations_all_path_exhausts_retries_names_conversations_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``all=True`` + 3 x 429 → ``ConnectorFailedError`` names ``conversations.list``.
+
+    Companion to ``test_list_conversations_exhausts_retries_then_raises`` (which
+    only exercises the default ``users.conversations`` endpoint) and to
+    ``test_list_conversations_all_path_names_conversations_list_in_errors``
+    (which only covers non-429 errors). Pins the post-#380 path where
+    the shared :func:`retry_on_rate_limit` helper re-raises the last
+    429 and ``_call_list``'s outer ``except SlackApiError`` arm maps
+    it via ``_to_connector_failed(exc, all=True)`` — so the endpoint
+    name in the error message reflects the workspace-wide path.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    def _make_429() -> SlackApiError:
+        resp = MagicMock()
+        resp.status_code = 429
+        resp.headers = {}
+        resp.get.return_value = "rate_limited"
+        return SlackApiError(message="ratelimited", response=resp)  # type: ignore[no-untyped-call]
+
+    client = _build_client(
+        list_side_effect=[_make_429(), _make_429(), _make_429()],
+        use_conversations_list=True,
+    )
+    _patch_webclient(monkeypatch, client)
+
+    import time as _stdlib_time
+
+    monkeypatch.setattr(_stdlib_time, "sleep", MagicMock())
+
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(list_conversations(_auth(), all=True))
+
+    message = str(excinfo.value)
+    assert "conversations.list" in message
+    assert "users.conversations" not in message
+    assert "xoxb-test" not in message
+
+
+def test_list_conversations_since_drops_row_when_history_ts_is_non_numeric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-numeric ``ts`` in a ``conversations.history`` row → ``None`` → row dropped.
+
+    Defensive arm: a thin proxy or hostile mock could return a row
+    whose ``ts`` is not a valid float string. The discovery path
+    treats the row as if it had no activity (drops it from the
+    activity-filtered output) rather than crashing the listing.
+    """
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.conversations_history.return_value = {
+        "ok": True,
+        "messages": [{"ts": "not-a-number"}],
+        "has_more": False,
+    }
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+
+    assert results == []
+
+
+def test_list_conversations_since_drops_row_when_messages_field_is_not_a_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``messages`` returned as a non-list (string / dict) → defensive drop.
+
+    A buggy thin proxy could return ``messages`` as a dict or string
+    instead of a list of message objects. The activity probe must
+    silently drop the row in that case rather than raise an
+    ``AttributeError`` or ``TypeError`` that would propagate up and
+    break the entire listing.
+    """
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.conversations_history.return_value = {
+        "ok": True,
+        "messages": "this should be a list",  # malformed shape
+        "has_more": False,
+    }
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+
+    assert results == []

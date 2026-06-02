@@ -26,17 +26,28 @@ Running `opshub mcp serve` without the extras prints a clear install hint and ex
 
 If the `connectors-slack` extras are enabled and the host will surface Slack data via `find-document` / `search` / `recall.search`, the User Token (`xoxp-...`) must carry the right scopes ([ADR-0018](adr/0018-slack-token-principal.md) §Decision (7)):
 
+**Discovery listing (`opshub connector slack conversations`)** uses the `*:read` scopes:
+
 | Purpose | Scope | Required for |
 | --- | --- | --- |
-| public channel listing + history | `channels:read` + `channels:history` | `opshub connector sync slack`, `opshub connector slack conversations` (default) |
+| public channel listing | `channels:read` | `opshub connector slack conversations` (default) |
 | user name lookup | `users:read` | DM / MPIM name resolution in `opshub connector slack conversations` |
-| private channel listing + history | `groups:read` + `groups:history` | `--types public,private` in `opshub connector slack conversations`, private channel sync |
-| DM listing + history | `im:read` + `im:history` | `--types ...,im` in `opshub connector slack conversations`, DM sync |
-| MPIM listing + history | `mpim:read` + `mpim:history` | `--types ...,mpim` in `opshub connector slack conversations`, MPIM sync |
+| private channel listing | `groups:read` | `--types ...,private` in `opshub connector slack conversations`, private channel sync |
+| DM listing | `im:read` | `--types ...,im` in `opshub connector slack conversations`, DM sync |
+| MPIM listing | `mpim:read` | `--types ...,mpim` in `opshub connector slack conversations`, MPIM sync |
+
+**Message sync (`opshub connector sync slack`) and the `--since` activity filter** additionally need the matching `*:history` scopes:
+
+| Purpose | Scope | Required for |
+| --- | --- | --- |
+| public channel message history | `channels:history` | `opshub connector sync slack`, `opshub connector slack conversations --since <when>` for public channels ([#374](https://github.com/ozzy-labs/opshub/issues/374)) |
+| private channel message history | `groups:history` | private channel sync, `--since` for private channels |
+| DM message history | `im:history` | DM sync, `--since` for DMs |
+| MPIM message history | `mpim:history` | MPIM sync, `--since` for MPIMs |
 
 Bot Tokens (`xoxb-...`) work as an alternative principal, but the bot must be `/invite`d into every channel it should see (ADR-0018 §Decision (2)).
 
-The `*:history` scopes are also required when `opshub connector slack conversations --since <when>` is used ([#374](https://github.com/ozzy-labs/opshub/issues/374)): the activity filter calls `conversations.history?limit=1` per row. Missing a per-type scope drops that type from the activity-filtered output and emits one warning per type on stderr; other types continue to surface. The discovery listing itself (no `--since`) only needs the `*:read` scopes.
+The `*:history` scopes are checked per type: when `--since <when>` is used and one of them is missing, that conversation type is dropped from the activity-filtered output and a single warning surfaces on stderr (other types continue to flow, `exit 0`). The discovery listing itself (no `--since`) only needs the `*:read` scopes.
 
 ## 2. Initialise the database
 

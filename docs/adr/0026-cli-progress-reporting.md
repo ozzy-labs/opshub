@@ -8,6 +8,8 @@
 
 いくつかの CLI コマンドは完了まで数十秒〜数分かかるが、実行中は何も出力せず、完了時に一行サマリを出すだけだった。進捗が見えないため「動いているのか / フリーズしたのか」「あとどれくらいか」が operator に分からず、誤った Ctrl-C や二重起動を誘発する UX 問題があった (#316)。対象は `opshub connector sync <name>`（全コネクタ）/ `opshub embeddings rebuild` / `opshub embeddings drain` / `opshub projections rebuild`。
 
+Phase 14.x ([#366](https://github.com/ozzy-labs/opshub/issues/366) で `slack channels` → `slack conversations` 刷新) で `opshub connector slack conversations` も同基盤に乗り、Phase 14.x ([#374](https://github.com/ozzy-labs/opshub/issues/374) で `--since` activity filter 追加) では同じ indeterminate spinner を使いつつ description を `--since` の有無で動的に切り替える運用 (no-`--since` 時 = `"listing conversations"`、`--since` 時 = `"listing conversations + activity"`) で 2 段の作業 (listing pages + per-row `conversations.history?limit=1`) を単一の spinner に集約している。両者とも `_progress.indeterminate(description)` を 1 context で開き、description 文字列で operator に作業相を示す pattern (determinate を 2 段重ねない) を採用。
+
 設計上の制約:
 
 - **ADR-0001 cold-start**: `opshub --help` は ~300ms 以内。`cli/*.py` は重い import をモジュール先頭に置けない（`tests/integration/test_cli_imports.py` が静的に強制、`test_cold_start` が wall-clock を強制）。
@@ -61,3 +63,4 @@
 - [ADR-0001 Python Stack](0001-python-stack.md) — cold-start 予算の出所。
 - [ADR-0010 Connector Contract](0010-connector-contract.md) — 無改修で進捗を載せた `Connector` 契約。
 - Issue #316（対応方針）、PR #323（共通基盤 + connector sync）、#325（embeddings / projections）。
+- Issue [#366](https://github.com/ozzy-labs/opshub/issues/366) (slack conversations を基盤に追加)、Issue [#374](https://github.com/ozzy-labs/opshub/issues/374) / PR [#375](https://github.com/ozzy-labs/opshub/pull/375) (`--since` 経路の 2 段 description 運用)。

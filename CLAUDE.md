@@ -54,7 +54,7 @@ opshub は形A (ADR-0004) に基づき秘書 **14 Skill** を提供する。SKIL
 
 ## 長時間 CLI の進捗表示
 
-長時間 CLI (`opshub connector sync` / `opshub connector slack conversations` / `opshub embeddings rebuild` / `opshub embeddings drain` / `opshub projections rebuild`) は TTY 時に進捗を自動表示し、`--progress` / `--no-progress` フラグまたは `OPSHUB_PROGRESS` 環境変数 (truthy = `1`/`true`/`yes`/`on`、falsy = `0`/`false`/`no`/`off`、case-insensitive) で上書きできる ([ADR-0026](docs/adr/0026-cli-progress-reporting.md))。
+長時間 CLI (`opshub connector sync` / `opshub connector slack conversations` / `opshub embeddings rebuild` / `opshub embeddings drain` / `opshub projections rebuild`) は TTY 時に進捗を自動表示し、`--progress` / `--no-progress` フラグまたは `OPSHUB_PROGRESS` 環境変数 (truthy = `1`/`true`/`yes`/`on`、falsy = `0`/`false`/`no`/`off`、case-insensitive) で上書きできる ([ADR-0026](docs/adr/0026-cli-progress-reporting.md))。`opshub connector slack conversations` は `--since` 指定時に表示説明文が `"listing conversations + activity"` に切り替わり (一つの spinner で listing pages と per-row `conversations.history?limit=1` の両方が tick する)、table 出力にも `LAST_ACTIVITY` 列 (`YYYY-MM-DD` UTC) が追加される ([#374](https://github.com/ozzy-labs/opshub/issues/374))。
 
 ## トラブルシュート用オプション
 
