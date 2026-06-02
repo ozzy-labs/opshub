@@ -36,10 +36,25 @@ Scope (compared to the legacy helper)
   row that survives the type / archived / filter gates; rows whose
   latest message predates ``since`` are dropped. ``last_activity_ts``
   on the yielded :class:`SlackConversation` carries the actual ts so
-  the CLI can sort / display by activity. ``missing_scope`` on the
-  history call disables the affected conversation type (one warning
-  per type, not per row) without aborting the listing for unaffected
-  types — see ``warnings`` parameter.
+  the CLI can sort / display by activity. Two operator-visible error
+  buckets are skip-able rather than abort-the-call:
+
+  - ``missing_scope`` (type-scoped): disables the affected conversation
+    type (one warning per type, not per row).
+  - ``channel_not_found`` / ``not_in_channel`` (row-scoped): drops just
+    the offending row and accumulates a single aggregate warning at
+    call end. Surfaces for Slack Connect / external shared channels,
+    DMs with deactivated peers, archive / leave races between the
+    listing and the probe, and Enterprise Grid DLP restrictions. The
+    sync hot path (:class:`opshub.connectors.slack.fetcher.SlackFetcher`)
+    keeps the *fail-fast* posture for these codes — sync targets
+    explicit channel ids from ``opshub.toml`` where the same code is
+    a config drift to surface, while discovery enumerates dynamically
+    where the row-skip is operationally what the operator wants. The
+    asymmetry is intentional; do not unify the two.
+
+  Both buckets surface via the ``warnings`` parameter (see
+  :func:`list_conversations`).
 * DM (``im``) and MPIM (``mpim``) rows have no ``name`` — Slack does
   not assign one. The helper resolves a human-readable label via
   ``users.info`` (im) and ``conversations.members`` + ``users.info``
@@ -282,12 +297,23 @@ def list_conversations(
     warnings:
         Optional list the helper appends operator-facing warnings to.
         Used when ``since`` is set and the ``conversations.history``
-        call fails with ``missing_scope`` for a given type: the helper
-        records one warning per affected type (so a 50-row MPIM
-        workspace yields one ``mpim:history`` warning, not 50) and
-        drops the type's rows from the yielded stream. ``None``
-        discards the warnings, which is fine for non-CLI callers that
-        only want the row stream.
+        call fails. Two warning shapes land here:
+
+        * ``missing_scope`` (type-scoped): one
+          ``warning: skipping <type> conversations: missing_scope ...``
+          per affected type (so a 50-row MPIM workspace yields one
+          ``mpim:history`` warning, not 50). The type's rows are
+          dropped from the yielded stream.
+        * ``channel_not_found`` / ``not_in_channel`` (row-scoped): one
+          ``warning: skipped N inaccessible channels
+          (channel_not_found=X, not_in_channel=Y). ...`` appended at
+          call end (after pagination exhaustion or ``--limit`` early
+          return). Counts are grouped by error code so an operator
+          with many Slack Connect channels sees one stderr line, not
+          one per row.
+
+        ``None`` discards the warnings, which is fine for non-CLI
+        callers that only want the row stream.
     reporter:
         Optional :class:`opshub.cli._progress.ProgressReporter`. The
         helper advances it by the raw page size (pre-filter) so the

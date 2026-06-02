@@ -28,6 +28,13 @@ behaviour worth pinning:
 10. An optional :class:`ProgressReporter` is advanced by the raw page
     size (pre-filter) so the spinner ticks for every Slack-returned
     row.
+11. ``channel_not_found`` / ``not_in_channel`` on the per-row
+    ``conversations.history`` activity probe skip just the offending
+    row (row-scoped, unlike the type-scoped ``missing_scope``) and
+    accumulate into one aggregate ``warning: skipped N inaccessible
+    channels (channel_not_found=X, not_in_channel=Y) ...`` emitted at
+    listing-call end (both the pagination-end and ``--limit``
+    early-return arms).
 
 The :mod:`slack_sdk` extras (``[connectors-slack]``) may not be
 installed in every environment, so the file-level
