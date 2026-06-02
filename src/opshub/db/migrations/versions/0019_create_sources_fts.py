@@ -70,6 +70,15 @@ toolchain ships a SQLite ≥ 3.38, so the option is always available.
 
 Migrations are intentionally self-contained: no imports from
 ``opshub.domain`` etc.
+
+.. note::
+   Superseded by migration ``0028_rebuild_sources_fts_trigram``
+   (Phase 15, ADR-0028 §Decision (a)). 0028 physically rebuilds
+   ``sources_fts`` with ``tokenize='trigram'`` so Japanese natural-
+   text queries hit by substring rather than only by exact
+   token / prefix. Migration 0019 itself stays immutable per the
+   Phase 1 onward 規範; the tokenizer switch happens in a fresh
+   revision so operator DBs converge by running new migrations.
 """
 
 from __future__ import annotations
