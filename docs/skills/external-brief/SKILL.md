@@ -1,6 +1,6 @@
 ---
 name: external-brief
-description: 「上司向け週次報告」「クライアント向け進捗まとめ」「外向きステータス」「マネージャーに送る report」「お客さんに見せる進捗」と頼まれたら、opshub MCP の task.list (state=completed, updated_after=対象期間開始) と decision.list (recorded_after=対象期間開始) を組み合わせて完了タスク + 意思決定を引き、brief で外向き tone のまとめを返す。persist なし、本 skill は手順書のみで実処理を持たない。pair: personal-brief (自分向け) と対をなす外向き skill。
+description: '「上司向け週次報告」「クライアント向け進捗まとめ」「外向きステータス」「マネージャーに送る report」「お客さんに見せる進捗」と頼まれたら、opshub MCP の task.list (state=completed, updated_after=対象期間開始) と decision.list (recorded_after=対象期間開始) を組み合わせて完了タスク + 意思決定を引き、brief で外向き tone のまとめを返す。persist なし、本 skill は手順書のみで実処理を持たない。pair: personal-brief (自分向け) と対をなす外向き skill。'
 ---
 
 # external-brief — 上司 / クライアント向けの進捗まとめを opshub から組み立てる

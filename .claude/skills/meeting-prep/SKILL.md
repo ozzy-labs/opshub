@@ -1,6 +1,6 @@
 ---
 name: meeting-prep
-description: 「来週の会議準備」「明日のミーティング前確認」「次の会議の context」「<会議名> の準備して」「打ち合わせ前に状況教えて」「Google Calendar の予定」「明日の Google Calendar」と頼まれたら、opshub MCP の source.list (source_type は ms365_calendar または google_calendar、observed_after/before で対象期間) で該当 calendar event を引き、recall.search で過去の関連やりとり、graph.related で関連 decisions / sources を辿って会議準備サマリ (目的 / 過去文脈 / 関連 decisions / 参考 sources) を組み立てる。Phase 14 で Google Calendar (`google_calendar`、`google_calendar` connector) も対象に追加。read-only、persist なし。pair: meeting-followup (会議後) と対をなす。
+description: '「来週の会議準備」「明日のミーティング前確認」「次の会議の context」「<会議名> の準備して」「打ち合わせ前に状況教えて」「Google Calendar の予定」「明日の Google Calendar」と頼まれたら、opshub MCP の source.list (source_type は ms365_calendar または google_calendar、observed_after/before で対象期間) で該当 calendar event を引き、recall.search で過去の関連やりとり、graph.related で関連 decisions / sources を辿って会議準備サマリ (目的 / 過去文脈 / 関連 decisions / 参考 sources) を組み立てる。Phase 14 で Google Calendar (`google_calendar`、`google_calendar` connector) も対象に追加。read-only、persist なし。pair: meeting-followup (会議後) と対をなす。'
 ---
 
 # meeting-prep — 次の会議の context を opshub から組み立てる
