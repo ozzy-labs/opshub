@@ -49,7 +49,62 @@ service imports. It stays import-safe on the M6 cold-start path
 
 from __future__ import annotations
 
-__all__ = ["truncate_with_marker"]
+__all__ = ["normalise_optional_text", "truncate_with_marker"]
+
+
+def normalise_optional_text(text: str | None) -> str | None:
+    """Return ``None`` for ``None``, empty, or whitespace-only ``text``;
+    else return the stripped value.
+
+    Issue #343 promoted this helper out of the per-connector mappers
+    after a cross-cutting audit of #332 / #337 found five SSOT-violating
+    sites (``ms365`` / ``google_workspace`` / ``google_mail`` /
+    ``google_calendar`` mappers + ``github`` notification path) that
+    each open-coded "treat missing / empty summary as ``None``" with
+    subtly different semantics:
+
+    * The four helper-based mappers used
+      ``summary if summary else None`` — empty string normalised to
+      ``None``, but **whitespace-only** strings leaked through into the
+      ``sources.summary`` column as visually-empty previews.
+    * The GitHub notification path called
+      ``_truncate_optional(raw_summary, SUMMARY_MAX_CHARS)`` which
+      preserved both empty and whitespace-only strings.
+    * PR #340 / #342 had already extended Slack / Teams mappers + the
+      ``SourceService.observe`` inbox-side fallback to also catch
+      whitespace-only input, but the four helper-based mappers and
+      GitHub's notification call site were never updated, so the
+      "summary is missing" semantics diverged across connectors.
+
+    Funnelling every connector's optional summary through this single
+    helper makes the rule SSOT-uniform: a summary is considered
+    "missing" iff the input is ``None``, empty, or contains only
+    whitespace (Unicode ``str.strip()`` semantics). The helper returns
+    the **stripped** value rather than the verbatim input — every
+    existing call site that previously open-coded the check fed the
+    output straight into ``SourceObserved.summary`` for preview /
+    briefing surfaces where leading / trailing whitespace adds no
+    recognition value, and PRs #340 / #342 had already adopted
+    ``_truncate(raw.text.strip(), ...)`` so returning the stripped
+    value keeps the cross-connector semantics aligned. The full body
+    retention path (ADR-0020) intentionally preserves whitespace and
+    is **not** routed through this helper.
+
+    Parameters
+    ----------
+    text:
+        The candidate summary string, or ``None``.
+
+    Returns
+    -------
+    str | None
+        ``None`` when ``text`` is ``None``, empty, or whitespace-only;
+        otherwise the leading/trailing-whitespace-stripped value.
+    """
+    if text is None:
+        return None
+    stripped = text.strip()
+    return stripped if stripped else None
 
 
 def truncate_with_marker(

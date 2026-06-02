@@ -76,7 +76,7 @@ from typing import TYPE_CHECKING, Final, Literal
 
 from opshub.core.errors import ConnectorFailedError
 from opshub.core.logging import get_logger
-from opshub.core.text_limits import truncate_with_marker
+from opshub.core.text_limits import normalise_optional_text, truncate_with_marker
 from opshub.core.time import now_utc
 from opshub.domain.events.source import SourceObserved
 
@@ -354,10 +354,13 @@ def _build_source_observed(
     """Assemble a :class:`SourceObserved` from the mapper's inputs.
 
     Centralising the construction here guarantees every event carries
-    the same provenance stamps + normalisation rules (empty-string-to-
-    ``None`` on optional fields). Mirrors the helper shape in the
-    Outlook + Google Workspace mappers so future audit passes can
-    diff the three side by side.
+    the same provenance stamps + normalisation rules. The optional
+    ``summary`` field is routed through
+    :func:`opshub.core.text_limits.normalise_optional_text` so empty
+    *and* whitespace-only previews collapse to ``None`` (issue #343
+    — SSOT semantics across the connector family). Mirrors the
+    helper shape in the Outlook + Google Workspace mappers so future
+    audit passes can diff the three side by side.
     """
     # Lazy import keeps the module-load cost off ``opshub.core.ids``
     # for callers that only need the literals (`map_gmail_message` /
@@ -374,7 +377,13 @@ def _build_source_observed(
         source_type=source_type,
         title=title,
         url=url if url else None,
-        summary=summary if summary else None,
+        # Issue #343: SSOT-uniform optional-summary normalisation via
+        # :func:`opshub.core.text_limits.normalise_optional_text`.
+        # Empty *and* whitespace-only summaries collapse to ``None`` so
+        # the ``sources.summary`` column never holds a visually-empty
+        # preview (matches the Slack / Teams / MS365 / Calendar /
+        # Workspace / GitHub-notification mappers).
+        summary=normalise_optional_text(summary),
         body=body,
         # External SaaS body — same provenance shape as the Outlook /
         # Google Workspace / Teams / Box mappers. Treated as untrusted

@@ -71,6 +71,7 @@ from opshub.core.document_extract import (
     GOOGLE_WORKSPACE_SOURCE_TYPES,
 )
 from opshub.core.errors import ConnectorFailedError
+from opshub.core.text_limits import normalise_optional_text
 from opshub.core.time import now_utc
 from opshub.domain.events.source import SourceObserved
 
@@ -373,8 +374,12 @@ def _build_source_observed(
 
     Centralising the construction here keeps :func:`map_drive_item`
     readable and guarantees every event carries the same provenance
-    stamps + normalisation rules (empty-string-to-``None`` on optional
-    fields).
+    stamps + normalisation rules. The optional ``summary`` field is
+    routed through
+    :func:`opshub.core.text_limits.normalise_optional_text` so empty
+    *and* whitespace-only previews collapse to ``None`` (issue #343
+    — SSOT semantics across the Slack / Teams / MS365 / Gmail /
+    Calendar / GitHub-notification connectors).
     """
     # Lazy import keeps the module-load cost off ``opshub.core.ids``
     # for callers that only need the literals (`source_type_for_mime_type`
@@ -390,7 +395,12 @@ def _build_source_observed(
         source_type=source_type,
         title=title,
         url=url if url else None,
-        summary=summary if summary else None,
+        # Issue #343: route the optional summary through
+        # :func:`opshub.core.text_limits.normalise_optional_text` so
+        # whitespace-only previews (e.g. HTML-strip residue) collapse
+        # to ``None`` consistently with the Slack / Teams / MS365 /
+        # Gmail / Calendar / GitHub-notification paths.
+        summary=normalise_optional_text(summary),
         # Phase 13 G4 (#278) hands the body in from
         # :func:`opshub.core.document_extract.extract_workspace_export`
         # via the connector when ``[connectors.google_workspace]
