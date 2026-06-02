@@ -31,8 +31,9 @@ already pin the iterator behaviour at the SDK boundary.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import AbstractContextManager
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -90,7 +91,7 @@ def _patch_list_channels(
     *,
     record: _CallRecord,
     raises: Exception | None = None,
-):
+) -> AbstractContextManager[MagicMock]:
     """Build a patch context that returns ``rows`` for ``list_channels``.
 
     The patched function accepts the same keyword arguments as the
