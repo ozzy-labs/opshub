@@ -106,10 +106,13 @@ __all__ = ["RawSlackMessage", "SlackFetcher"]
 #: without re-reading the magic number out of the implementation.
 _MAX_RETRIES_ON_RATE_LIMIT = 3
 
-#: Fallback display name when a Slack message has no ``user`` field
-#: (bot messages, system messages, ...). The A3 mapper renders this
-#: as ``"unknown in #channel"`` which is still useful context for the
-#: brief / propose paths.
+#: Final-fallback display name used only when *every* author resolution
+#: path failed (no ``user`` id, no ``bot_id``, no ``bot_profile.name``).
+#: The A3 mapper renders this as ``"unknown in #channel"`` — kept as a
+#: last-resort safety net so the projection never lands an empty string
+#: as the author. Issue #367 narrowed the surface: previously this was
+#: returned for every bot / system message, masking the real author /
+#: bot identity even when Slack populated ``bot_id`` or ``bot_profile``.
 _UNKNOWN_USER_DISPLAY = "unknown"
 
 
@@ -140,9 +143,21 @@ class RawSlackMessage:
         the empty string for bot / system messages (where ``user`` is
         absent in the API payload).
     user_display_name:
-        The author's display name resolved via ``users.info``, cached
-        per fetcher lifetime. Falls back to ``"unknown"`` for bot /
-        system messages.
+        The author's display name resolved via ``users.info`` for real
+        users, ``bot_profile.name`` (falling back to ``"bot:{bot_id}"``)
+        for bot messages, and only as a final safety net the literal
+        ``"unknown"`` constant — see :data:`_UNKNOWN_USER_DISPLAY`. Cached
+        per fetcher lifetime. The mapper composes this into the
+        :attr:`SourceObserved.title` so any regression that re-routes a
+        bot / system message back through the ``"unknown"`` arm
+        immediately surfaces in the projection.
+    subtype:
+        The Slack ``subtype`` field (``"bot_message"`` / ``"channel_join"``
+        / ``"me_message"`` / ...) or ``None`` for ordinary user
+        messages. Carried as a first-class field rather than read from
+        ``raw["subtype"]`` so a typo in the mapper surfaces at type-check
+        time instead of silently routing every payload through the
+        default arm (issue #367).
     permalink:
         Stable URL (``chat.getPermalink`` result) the mapper persists
         as the source's ``url`` column.
@@ -161,6 +176,7 @@ class RawSlackMessage:
     user_display_name: str
     permalink: str
     raw: dict[str, Any]
+    subtype: str | None = None
 
 
 class SlackFetcher:
@@ -405,7 +421,24 @@ class SlackFetcher:
                 # ``raw`` for forensic inspection.
                 continue
             user_id = str(raw.get("user", ""))
-            user_display_name = self._resolve_user_name(client, user_id)
+            # Slack populates ``subtype`` for bot messages and system
+            # events (``channel_join`` / ``channel_leave`` /
+            # ``channel_purpose`` / ``channel_topic`` / ``me_message``
+            # / ``bot_message`` / ...). Ordinary user messages omit
+            # the key entirely. We normalise the missing key to
+            # ``None`` (rather than ``""``) so the mapper's
+            # ``raw.subtype is None`` branch is unambiguous.
+            subtype_raw = raw.get("subtype")
+            subtype = str(subtype_raw) if subtype_raw else None
+            # Resolve the author display name with a richer fallback
+            # chain than the legacy ``"unknown"`` arm (issue #367).
+            # Bot messages don't have a ``user`` id but Slack populates
+            # ``bot_profile.name`` (the workspace-visible bot label)
+            # and ``bot_id`` — both produce a more useful title than
+            # the literal string ``"unknown"``.
+            user_display_name = self._resolve_author_display(
+                client=client, raw=raw, user_id=user_id
+            )
             permalink = self._resolve_permalink(client=client, channel_id=channel_id, ts=ts)
             message = RawSlackMessage(
                 channel_id=channel_id,
@@ -416,6 +449,7 @@ class SlackFetcher:
                 user_display_name=user_display_name,
                 permalink=permalink,
                 raw=raw,
+                subtype=subtype,
             )
             yield channel_id, message, ts
 
@@ -498,6 +532,52 @@ class SlackFetcher:
         assert last_error is not None
         raise last_error
 
+    def _resolve_author_display(self, *, client: Any, raw: dict[str, Any], user_id: str) -> str:
+        """Resolve a human-recognisable author name for any message shape.
+
+        Resolution order (issue #367):
+
+        1. ``user_id`` is present → :meth:`_resolve_user_name` (cached
+           ``users.info`` lookup with ``profile.display_name`` →
+           ``profile.real_name`` → ``user.name`` fallback chain).
+        2. Bot message → ``bot_profile.name`` (Slack's
+           workspace-visible bot label, e.g. ``"GitHub"``).
+        3. Bot message without ``bot_profile`` but with ``bot_id`` →
+           ``f"bot:{bot_id}"`` so the operator can still trace the
+           message back to its bot integration.
+        4. Final safety net → :data:`_UNKNOWN_USER_DISPLAY`. This
+           branch should be unreachable for any real Slack payload —
+           it exists only so a malformed message never produces an
+           empty-string author in the projection.
+
+        The function is intentionally stateless: caching belongs to
+        the per-user :meth:`_resolve_user_name` path (the only branch
+        that makes an API call). Bot-profile resolution reads from
+        the message payload directly so no extra API budget is spent.
+        """
+        if user_id:
+            return self._resolve_user_name(client, user_id)
+        # Bot message: prefer the human-readable ``bot_profile.name``
+        # before the opaque ``bot_id``. The two fields can co-exist;
+        # the name reads better in the title so we promote it first.
+        # ``raw`` is typed as ``dict[str, Any]`` so ``isinstance`` is
+        # the runtime narrow; the explicit ``cast`` keeps pyright
+        # strict mode happy (without it the narrowed dict is
+        # ``dict[Unknown, Unknown]`` and the ``.get`` lookup leaks
+        # ``Unknown`` into the return path).
+        bot_profile_obj = raw.get("bot_profile")
+        if isinstance(bot_profile_obj, dict):
+            bot_profile = cast(dict[str, Any], bot_profile_obj)
+            bot_name_raw = bot_profile.get("name")
+            bot_name = str(bot_name_raw).strip() if bot_name_raw else ""
+            if bot_name:
+                return bot_name
+        bot_id_raw = raw.get("bot_id")
+        bot_id = str(bot_id_raw).strip() if bot_id_raw else ""
+        if bot_id:
+            return f"bot:{bot_id}"
+        return _UNKNOWN_USER_DISPLAY
+
     def _resolve_user_name(self, client: Any, user_id: str) -> str:
         """Look up a Slack user's display name, caching the result.
 
@@ -507,6 +587,11 @@ class SlackFetcher:
         Slack-canonical handle) and fall back to ``profile.real_name``
         / ``name`` so renamed-but-not-display-set users still surface
         with something useful.
+
+        For bot / system messages :meth:`_resolve_author_display` is
+        the preferred entry point — it tries ``bot_profile.name`` /
+        ``bot_id`` before falling through to this helper's
+        ``_UNKNOWN_USER_DISPLAY`` arm.
 
         Caching is scoped to this fetcher instance — long enough to
         amortise across one sync run, short enough that an operator

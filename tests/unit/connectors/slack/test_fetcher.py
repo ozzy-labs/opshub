@@ -95,17 +95,27 @@ def _slack_message(
     *,
     text: str = "hello",
     user: str | None = "U1",
+    subtype: str | None = None,
+    bot_id: str | None = None,
+    bot_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a minimal Slack message dict.
 
     Slack's API returns many more fields (``team``, ``blocks``,
     ``reactions``, ...) but the fetcher only reads ``ts`` / ``text``
-    / ``user``. Keeping the fixture minimal exposes any future field
-    dependency immediately.
+    / ``user`` / ``subtype`` / ``bot_id`` / ``bot_profile``. Keeping
+    the fixture minimal exposes any future field dependency
+    immediately.
     """
     msg: dict[str, Any] = {"ts": ts, "text": text}
     if user is not None:
         msg["user"] = user
+    if subtype is not None:
+        msg["subtype"] = subtype
+    if bot_id is not None:
+        msg["bot_id"] = bot_id
+    if bot_profile is not None:
+        msg["bot_profile"] = bot_profile
     return msg
 
 
@@ -883,18 +893,21 @@ def test_user_display_name_cached_across_messages(
     assert client.users_info.call_args.kwargs == {"user": "U1"}
 
 
-def test_user_resolution_falls_back_when_user_missing(
+def test_user_resolution_falls_back_when_user_and_bot_profile_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Bot / system messages (no ``user`` field) → ``"unknown"`` without an API call.
+    """No ``user`` + no ``bot_id`` + no ``bot_profile`` → final ``"unknown"`` fallback.
 
-    Slack omits ``user`` for bot messages (``bot_id`` is set instead)
-    and system messages (``subtype="channel_join"`` etc.). The
-    fetcher must not blow up — and must not waste a ``users.info``
-    call — on these payloads. Operators still see the message in
-    briefs via the channel + summary text.
+    Issue #367 narrowed the ``"unknown"`` arm to a true last resort
+    so that bot / system messages no longer mask the real bot
+    identity in the title. This test pins the leaf case: a message
+    that lacks **every** author-shaped field (no ``user`` id, no
+    ``bot_id``, no ``bot_profile``) still degrades gracefully — the
+    fetcher must not blow up, must not waste a ``users.info`` call,
+    and must hand the mapper the literal ``"unknown"`` constant so
+    the projection never lands an empty author string.
     """
-    msgs = [_slack_message(ts="1700000001.000100", text="bot says hi", user=None)]
+    msgs = [_slack_message(ts="1700000001.000100", text="malformed payload", user=None)]
     client = _build_client(
         history=[_history_response(msgs)],
         users_info_side_effect=AssertionError("users_info must not be called"),
@@ -907,6 +920,8 @@ def test_user_resolution_falls_back_when_user_missing(
     assert len(results) == 1
     assert results[0][1].user_id == ""
     assert results[0][1].user_display_name == "unknown"
+    # No subtype on this payload either.
+    assert results[0][1].subtype is None
 
 
 def test_user_display_name_falls_back_to_real_name(
@@ -965,6 +980,179 @@ def test_fetch_channel_name_resolves_id_to_name(
     # One channel-info call regardless of message count.
     assert client.conversations_info.call_count == 1
     assert client.conversations_info.call_args.kwargs == {"channel": "C1"}
+
+
+# ----- bot / system message author resolution (issue #367) ----------------
+
+
+def test_bot_message_uses_bot_profile_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bot message → ``user_display_name`` resolves to ``bot_profile.name``.
+
+    Slack populates ``bot_profile`` on every modern bot integration
+    (Slack apps, incoming webhooks). The fetcher must prefer this
+    human-readable label over the opaque ``bot_id`` so the mapper
+    can compose ``"GitHub in #notifications: ..."`` rather than
+    ``"unknown in #notifications: ..."`` (issue #367).
+    """
+    msgs = [
+        _slack_message(
+            ts="1700000001.000100",
+            text="PR opened",
+            user=None,
+            subtype="bot_message",
+            bot_id="B123",
+            bot_profile={"name": "GitHub"},
+        )
+    ]
+    client = _build_client(
+        history=[_history_response(msgs)],
+        users_info_side_effect=AssertionError("users_info must not be called for bot messages"),
+    )
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    assert len(results) == 1
+    msg = results[0][1]
+    assert msg.user_id == ""
+    assert msg.user_display_name == "GitHub"
+    assert msg.subtype == "bot_message"
+
+
+def test_bot_message_without_bot_profile_falls_back_to_bot_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``bot_message`` without ``bot_profile.name`` → ``"bot:{bot_id}"``.
+
+    Legacy bot integrations omit ``bot_profile`` entirely. The
+    fetcher still recovers the bot identity via ``bot_id`` so the
+    title carries an operator-traceable label instead of the
+    literal ``"unknown"`` (issue #367).
+    """
+    msgs = [
+        _slack_message(
+            ts="1700000001.000100",
+            text="legacy webhook",
+            user=None,
+            subtype="bot_message",
+            bot_id="B999",
+        )
+    ]
+    client = _build_client(
+        history=[_history_response(msgs)],
+        users_info_side_effect=AssertionError("users_info must not be called for bot messages"),
+    )
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    assert results[0][1].user_display_name == "bot:B999"
+    assert results[0][1].subtype == "bot_message"
+
+
+def test_bot_message_with_empty_bot_profile_name_falls_back_to_bot_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``bot_profile`` present but ``name`` blank → falls through to ``bot_id``.
+
+    Some Slack workspaces have bot integrations whose profile is
+    populated with metadata other than a name (icons, app ids). The
+    fetcher must treat an empty / whitespace-only ``name`` the same
+    as a missing field and fall through to ``bot_id``.
+    """
+    msgs = [
+        _slack_message(
+            ts="1700000001.000100",
+            text="webhook with no display name",
+            user=None,
+            subtype="bot_message",
+            bot_id="B321",
+            bot_profile={"name": "  "},
+        )
+    ]
+    client = _build_client(
+        history=[_history_response(msgs)],
+        users_info_side_effect=AssertionError("users_info must not be called for bot messages"),
+    )
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    assert results[0][1].user_display_name == "bot:B321"
+
+
+def test_real_user_message_prefers_users_info_over_bot_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``user`` is set, ``users.info`` wins over any incidental ``bot_profile``.
+
+    Slack occasionally attaches ``bot_profile`` to messages that
+    originate from a real user (e.g. a user who is *also* the
+    installer of a bot). The fetcher must keep the user-first
+    contract so the title carries the human name, not the bot label.
+    """
+    msgs = [
+        _slack_message(
+            ts="1700000001.000100",
+            text="real user message",
+            user="U1",
+            bot_profile={"name": "GitHub"},
+        )
+    ]
+    client = _build_client(history=[_history_response(msgs)])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    assert results[0][1].user_display_name == "alice"  # default ``_users_info_response``
+    assert results[0][1].user_id == "U1"
+
+
+def test_subtype_is_carried_as_first_class_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Slack ``subtype`` lands on :attr:`RawSlackMessage.subtype` (typed field).
+
+    Issue #367 promoted ``subtype`` to a typed dataclass field so the
+    mapper can dispatch on it without ``raw.get("subtype")`` typo
+    risk. Pin the field round-trip for every realistic subtype the
+    mapper handles + the ``None`` default.
+    """
+    msgs = [
+        _slack_message(ts="1700000001.000100", text="user message", user="U1"),
+        _slack_message(
+            ts="1700000002.000200",
+            text="bot message",
+            user=None,
+            subtype="bot_message",
+            bot_id="B1",
+            bot_profile={"name": "BotName"},
+        ),
+        _slack_message(
+            ts="1700000003.000300",
+            text="<@U1> has joined the channel",
+            user="U1",
+            subtype="channel_join",
+        ),
+        _slack_message(
+            ts="1700000004.000400",
+            text="celebrates the ship",
+            user="U1",
+            subtype="me_message",
+        ),
+    ]
+    client = _build_client(history=[_history_response(msgs)])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    # Yielded ts-ascending; the subtype on each row matches the
+    # source payload (with ``None`` for the ordinary user message).
+    subtypes = [r[1].subtype for r in results]
+    assert subtypes == [None, "bot_message", "channel_join", "me_message"]
 
 
 # ----- cold-start guard --------------------------------------------------

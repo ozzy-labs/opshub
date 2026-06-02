@@ -248,8 +248,14 @@ def test_slack_sync_creates_sources(
             "C1:1700000001.000100",
             "C1:1700000002.000200",
         }
-        # Title shape matches the mapper contract.
-        assert {row["title"] for row in source_rows} == {"alice in #general"}
+        # Title shape matches the mapper contract — issue #367 added
+        # the body excerpt suffix so search results are recognisable
+        # without joining back to the ``body`` column. Two distinct
+        # messages → two distinct titles.
+        assert {row["title"] for row in source_rows} == {
+            "alice in #general: first message",
+            "alice in #general: second message",
+        }
         # Summary is the (un-truncated) text since both fit under cap.
         assert {row["summary"] for row in source_rows} == {"first message", "second message"}
         # Every inbox row links back through ``source_ref``.
@@ -346,15 +352,19 @@ def test_slack_sync_handles_empty_text_message(
             row for row in source_rows if row["external_id"] == empty_text_external_id
         )
         assert empty_text_source["summary"] is None
-        assert empty_text_source["title"] == "bob in #general"
+        # Title now carries the ``"(no text)"`` placeholder (issue
+        # #367) so an empty-body sync result is still recognisable
+        # as a Slack post by ``bob`` in ``#general``.
+        assert empty_text_source["title"] == "bob in #general: (no text)"
 
         # The inbox row for the empty-text message falls back to the
         # ``f"{source_type}: {title}"`` shape so the inbox stays
-        # legible without a join back to ``sources``.
+        # legible without a join back to ``sources``. The title now
+        # carries the ``"(no text)"`` placeholder.
         empty_text_inbox = next(
             row for row in inbox_rows if row["source_ref"] == f"slack:{empty_text_external_id}"
         )
-        assert empty_text_inbox["summary"] == "slack_message: bob in #general"
+        assert empty_text_inbox["summary"] == "slack_message: bob in #general: (no text)"
 
         # Cursor advanced through every message, including the empty
         # one — no take-back / stranding.
@@ -444,13 +454,16 @@ def test_slack_sync_handles_whitespace_only_message(
         ws_external_id = "C1:1700000002.000200"
         ws_source = next(row for row in source_rows if row["external_id"] == ws_external_id)
         assert ws_source["summary"] is None
-        assert ws_source["title"] == "carol in #general"
+        # Title's excerpt collapses to the empty-body placeholder
+        # (issue #367) because ``_truncate_body`` strips whitespace
+        # before the length check.
+        assert ws_source["title"] == "carol in #general: (no text)"
 
         # Inbox preview falls back to the identifiable
         # ``f"{source_type}: {title}"`` shape rather than landing a
         # 2-char whitespace string in the projection.
         ws_inbox = next(row for row in inbox_rows if row["source_ref"] == f"slack:{ws_external_id}")
-        assert ws_inbox["summary"] == "slack_message: carol in #general"
+        assert ws_inbox["summary"] == "slack_message: carol in #general: (no text)"
 
         # Cursor advanced through every message, including the
         # whitespace one.
