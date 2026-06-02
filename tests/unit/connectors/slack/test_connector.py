@@ -51,10 +51,16 @@ class _RecordingSourceService:
 
     Mirrors the keyword-only signature used by the real service so a
     drift on argument names trips a TypeError immediately.
+
+    The partial-progress checkpoint added for issue #339 Bug 2 calls
+    :meth:`cursor_set` mid-sync; we record those calls separately so
+    tests can assert "the connector wrote a partial cursor before
+    re-raising" without spinning up the full SQLite-backed service.
     """
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.cursor_set_calls: list[dict[str, Any]] = []
 
     def observe(
         self,
@@ -80,6 +86,27 @@ class _RecordingSourceService:
                 "body": body,
                 "provenance_origin": provenance_origin,
                 "provenance_trust": provenance_trust,
+            }
+        )
+
+    def cursor_set(
+        self,
+        connector_name: str,
+        value: str | None,
+        *,
+        sync_started: bool = False,
+    ) -> None:
+        """Record a ``cursor_set`` call without persisting anything.
+
+        Mirrors the real :meth:`SourceService.cursor_set` signature so
+        a connector-side argument drift trips a ``TypeError`` here
+        rather than silently no-op'ing.
+        """
+        self.cursor_set_calls.append(
+            {
+                "connector_name": connector_name,
+                "value": value,
+                "sync_started": sync_started,
             }
         )
 
@@ -635,6 +662,295 @@ def test_sync_with_no_yields_preserves_cursor(monkeypatch: pytest.MonkeyPatch) -
     assert result.observed_count == 0
     assert result.new_cursor == prior_cursor
     assert service.calls == []
+
+
+# --------------------------------------------- sync: partial-progress checkpoint (issue #339 Bug 2)
+
+
+def _patch_fetcher_with_mid_iteration_error(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    yields_before_error: list[tuple[str, RawSlackMessage, str | None]],
+    error: BaseException,
+) -> dict[str, dict[str, str | None]]:
+    """Patch :class:`SlackFetcher` so ``fetch_messages`` yields N tuples then raises.
+
+    The yields happen first (the connector advances ``cursors`` for
+    each), then the generator raises ``error``. Mirrors the realistic
+    failure shape: the fetcher made it part-way through a paginated
+    history before Slack returned (e.g.) ``rate_limited`` with the
+    retry budget exhausted, or a manual ``KeyboardInterrupt`` arrived.
+
+    Returns the snapshot of the initial ``cursor_per_channel`` so
+    tests can assert the connector was wired correctly.
+    """
+    fake_fetcher_cls = MagicMock()
+    captured: dict[str, dict[str, str | None]] = {}
+
+    def _fetch_messages(
+        *,
+        cursor_per_channel: dict[str, str | None],
+        max_per_channel: int = 100,
+    ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
+        del max_per_channel
+        captured["cursor_per_channel"] = dict(cursor_per_channel)
+        yield from yields_before_error
+        raise error
+
+    fake_fetcher_cls.return_value.fetch_messages.side_effect = _fetch_messages
+    monkeypatch.setattr(
+        "opshub.connectors.slack.connector.SlackFetcher",
+        fake_fetcher_cls,
+    )
+    return captured
+
+
+def test_sync_checkpoints_partial_cursor_on_mid_iteration_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #339 Bug 2: mid-iteration exception → partial cursor persists.
+
+    Pre-fix the connector returned only on the success path, so a
+    fetcher exception left the CLI driver without a ``new_cursor``
+    to write — the projection stayed at the prior-run value while
+    ``observe`` had already committed the N successful messages.
+    On retry the same N messages were re-fetched / re-enqueued,
+    inflating ``inbox_items`` per aborted-then-retried sync.
+
+    Post-fix the ``try/finally`` arm in :meth:`SlackConnector.sync`
+    writes the accumulated ``cursors`` dict via
+    ``cursor_set(sync_started=True)`` before the exception
+    propagates, so the projection cursor reflects the
+    actually-committed messages. The exception itself still
+    propagates verbatim (the CLI driver maps it to
+    :class:`ConnectorSyncFailed`); we only insert the cursor
+    write, we do not swallow.
+    """
+    from opshub.core.errors import ConnectorFailedError
+
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch)
+    msg_a = _raw_message(channel_id="C1", ts="1700000001.000100", text="first")
+    msg_b = _raw_message(channel_id="C1", ts="1700000002.000200", text="second")
+    _patch_fetcher_with_mid_iteration_error(
+        monkeypatch,
+        yields_before_error=[
+            ("C1", msg_a, "1700000001.000100"),
+            ("C1", msg_b, "1700000002.000200"),
+        ],
+        error=ConnectorFailedError("Slack fetch failed for channel C1: rate_limited"),
+    )
+
+    service = _RecordingSourceService()
+    with pytest.raises(ConnectorFailedError):
+        SlackConnector().sync(_context(service, cursor_value=None))
+
+    # Both messages reached observe before the crash.
+    assert [c["external_id"] for c in service.calls] == [
+        "C1:1700000001.000100",
+        "C1:1700000002.000200",
+    ]
+    # Exactly one ``cursor_set`` call, fired by the connector's
+    # finally arm with the partial-progress cursor encoded as JSON.
+    # ``sync_started=True`` so the projection's started-event
+    # reducer upserts ``cursor_value`` (see
+    # :meth:`ConnectorCursorsProjection._apply_started`).
+    assert len(service.cursor_set_calls) == 1
+    call = service.cursor_set_calls[0]
+    assert call["connector_name"] == "slack"
+    assert call["sync_started"] is True
+    assert call["value"] is not None
+    # The persisted JSON contains the latest ts observed before the
+    # crash — pre-fix this would have been missing entirely.
+    assert _load_cursors(call["value"]) == {"C1": "1700000002.000200"}
+
+
+def test_sync_no_checkpoint_when_failure_yields_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failure with zero observed messages → no checkpoint event noise.
+
+    The ``finally`` arm guards on ``cursors != cursors_at_entry``
+    so a fetcher that raises before yielding anything (e.g.
+    ``invalid_auth`` on the first ``conversations.history`` call)
+    does not emit a redundant ``ConnectorSyncStarted`` event with a
+    no-op cursor value. The CLI driver's ``record_sync_failure``
+    arm is still responsible for the audit trail; we just stay out
+    of its way.
+    """
+    from opshub.core.errors import ConnectorFailedError
+
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch)
+    _patch_fetcher_with_mid_iteration_error(
+        monkeypatch,
+        yields_before_error=[],
+        error=ConnectorFailedError("Slack fetch failed for channel C1: invalid_auth"),
+    )
+
+    service = _RecordingSourceService()
+    with pytest.raises(ConnectorFailedError):
+        SlackConnector().sync(_context(service, cursor_value=None))
+
+    # No observes (fetcher raised on its first call) and no
+    # cursor_set noise — the connector cleanly delegates the failure
+    # to the CLI driver.
+    assert service.calls == []
+    assert service.cursor_set_calls == []
+
+
+def test_sync_no_checkpoint_when_failure_yields_only_excluded_messages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Excluded messages still advance the cursor — so a mid-iteration crash
+    after only-excluded yields *does* trigger a checkpoint.
+
+    The skip-but-advance contract (pinned by
+    :func:`test_sync_skips_excluded_channel_but_advances_cursor`)
+    means even excluded yields mutate ``cursors``. The
+    ``cursors != cursors_at_entry`` guard therefore treats them as
+    progress for the checkpoint purpose: on retry we want to skip
+    re-fetching them, same as observed messages.
+
+    This is the symmetric counterpart to
+    :func:`test_sync_no_checkpoint_when_failure_yields_nothing`:
+    "no yields at all → no checkpoint" vs "yields happened (even
+    if filtered) → checkpoint".
+    """
+    from opshub.core.errors import ConnectorFailedError
+
+    _patch_excludes_yaml(monkeypatch, tmp_path, body="channels:\n  - C-secret\n")
+    _patch_settings(monkeypatch, channels=["C-secret", "C1"])
+    _patch_auth(monkeypatch)
+    excluded_msg = _raw_message(channel_id="C-secret", ts="1700000001.000100", text="leaked")
+    _patch_fetcher_with_mid_iteration_error(
+        monkeypatch,
+        yields_before_error=[
+            ("C-secret", excluded_msg, "1700000001.000100"),
+        ],
+        error=ConnectorFailedError("Slack fetch failed for channel C1: rate_limited"),
+    )
+
+    service = _RecordingSourceService()
+    with pytest.raises(ConnectorFailedError):
+        SlackConnector().sync(_context(service, cursor_value=None))
+
+    # Excluded message never reached observe.
+    assert service.calls == []
+    # But the cursor did advance, so the checkpoint fires — the
+    # next sync skips re-fetching the excluded message.
+    assert len(service.cursor_set_calls) == 1
+    call = service.cursor_set_calls[0]
+    assert call["sync_started"] is True
+    assert _load_cursors(call["value"]) == {"C-secret": "1700000001.000100"}
+
+
+def test_sync_no_checkpoint_on_normal_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path: ``finally`` arm is a no-op when the loop completes normally.
+
+    The CLI driver writes the terminal ``ConnectorSyncCompleted``
+    event with the same cursor value the partial checkpoint would
+    have written — so firing the checkpoint here would just emit a
+    redundant ``ConnectorSyncStarted`` event for no operator
+    benefit. The connector guards on ``completed_normally`` (set
+    just before the ``try`` arm exits) to keep the happy-path
+    event log clean.
+    """
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch)
+    msg_a = _raw_message(channel_id="C1", ts="1700000001.000100", text="first")
+    _patch_fetcher(
+        monkeypatch,
+        yields=[("C1", msg_a, "1700000001.000100")],
+    )
+
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=None))
+
+    # observe fired exactly once; cursor_set did NOT fire (the CLI
+    # driver will write the terminal completed event).
+    assert len(service.calls) == 1
+    assert service.cursor_set_calls == []
+    # The success-path return value still encodes the new cursor.
+    assert result.observed_count == 1
+    assert result.new_cursor is not None
+    assert _load_cursors(result.new_cursor) == {"C1": "1700000001.000100"}
+
+
+def test_sync_checkpoints_partial_progress_on_keyboard_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``KeyboardInterrupt`` mid-iteration → partial cursor still persists.
+
+    ``KeyboardInterrupt`` is a :class:`BaseException` (not
+    :class:`Exception`), so a naive ``try / except Exception`` would
+    miss it. The ``try / finally`` shape used in the fix covers
+    both branches uniformly — pinning the ``BaseException`` path
+    here prevents a future refactor from narrowing the catch
+    clause and re-opening the manual-abort half of the cascade.
+    """
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch)
+    msg_a = _raw_message(channel_id="C1", ts="1700000001.000100", text="first")
+    _patch_fetcher_with_mid_iteration_error(
+        monkeypatch,
+        yields_before_error=[("C1", msg_a, "1700000001.000100")],
+        error=KeyboardInterrupt(),
+    )
+
+    service = _RecordingSourceService()
+    with pytest.raises(KeyboardInterrupt):
+        SlackConnector().sync(_context(service, cursor_value=None))
+
+    # The partial-progress checkpoint fired despite the
+    # BaseException-derived interrupt.
+    assert len(service.cursor_set_calls) == 1
+    call = service.cursor_set_calls[0]
+    assert _load_cursors(call["value"]) == {"C1": "1700000001.000100"}
+
+
+def test_sync_checkpoint_preserves_prior_cursor_for_unprocessed_channels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mid-iteration crash → partial cursor merges prior + new progress.
+
+    A two-channel sync where channel A had a prior cursor and
+    channel B drained partially before crashing must persist the
+    union: A's prior cursor (untouched) + B's partial cursor (new).
+    Pre-fix B's progress was lost; channel A's was preserved only
+    by accident because the cursor map starts as a copy of the
+    resume state and the CLI's failure arm does not touch the
+    cursor projection.
+
+    Pinning the union here means a future refactor that, e.g.,
+    starts ``cursors = {}`` instead of ``cursors = _load_cursors(...)``
+    immediately fails this test — which would otherwise be a
+    silent data-loss regression for the "channel A had no new
+    messages this run" case.
+    """
+    from opshub.core.errors import ConnectorFailedError
+
+    _patch_settings(monkeypatch, channels=["A", "B"])
+    _patch_auth(monkeypatch)
+    msg_b = _raw_message(channel_id="B", ts="ts-b-new", text="B's first")
+    _patch_fetcher_with_mid_iteration_error(
+        monkeypatch,
+        yields_before_error=[("B", msg_b, "ts-b-new")],
+        error=ConnectorFailedError("Slack fetch failed for channel B: rate_limited"),
+    )
+
+    prior_cursor = _dump_cursors({"A": "ts-a-prior", "B": None})
+    service = _RecordingSourceService()
+    with pytest.raises(ConnectorFailedError):
+        SlackConnector().sync(_context(service, cursor_value=prior_cursor))
+
+    # The checkpoint persists both channels' state — A's prior
+    # cursor untouched, B's partial cursor advanced.
+    assert len(service.cursor_set_calls) == 1
+    call = service.cursor_set_calls[0]
+    assert _load_cursors(call["value"]) == {"A": "ts-a-prior", "B": "ts-b-new"}
 
 
 # ---------------------------------------------------------------------- registry
