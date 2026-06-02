@@ -36,6 +36,8 @@ If the `connectors-slack` extras are enabled and the host will surface Slack dat
 
 Bot Tokens (`xoxb-...`) work as an alternative principal, but the bot must be `/invite`d into every channel it should see (ADR-0018 §Decision (2)).
 
+The `*:history` scopes are also required when `opshub connector slack conversations --since <when>` is used ([#374](https://github.com/ozzy-labs/opshub/issues/374)): the activity filter calls `conversations.history?limit=1` per row. Missing a per-type scope drops that type from the activity-filtered output and emits one warning per type on stderr; other types continue to surface. The discovery listing itself (no `--since`) only needs the `*:read` scopes.
+
 ## 2. Initialise the database
 
 The MCP server reads the same SQLite store as the CLI, so `opshub init` (or `opshub db migrate` on an existing store) must have run before the agent connects.

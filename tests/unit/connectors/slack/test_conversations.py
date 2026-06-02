@@ -956,9 +956,314 @@ def test_slack_conversation_dataclass_round_trip() -> None:
     )
     assert row.id == "C1"
     assert row.participants == ()
+    assert row.last_activity_ts is None  # default, no activity probe attempted
     # frozen=True: assignment is rejected with FrozenInstanceError
     # (a subclass of AttributeError on Python 3.13).
     from dataclasses import FrozenInstanceError
 
     with pytest.raises(FrozenInstanceError):
         row.id = "C2"  # type: ignore[misc]
+
+
+# ----- activity filter (--since) ----------------------------------------
+
+
+def _history_response(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a ``conversations.history`` response with the documented shape."""
+    return {"ok": True, "messages": messages, "has_more": False}
+
+
+def _since_dt(*, days_ago: float) -> Any:
+    """Tz-aware UTC datetime ``days_ago`` days before now (helper for ``--since`` tests)."""
+    from datetime import UTC, datetime, timedelta
+
+    return datetime.now(UTC) - timedelta(days=days_ago)
+
+
+def test_list_conversations_since_calls_history_per_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``since`` set → one ``conversations.history`` call per surviving row.
+
+    Each row that survives the type / archived / filter gates triggers
+    one history probe with ``limit=1`` + the ``since`` timestamp.
+    Rows whose latest message predates ``since`` are dropped.
+    """
+    page = _list_response(
+        [_public_channel("C1", name="active"), _public_channel("C2", name="silent")]
+    )
+    client = _build_client(list_pages=[page])
+
+    # ``C1`` returns a fresh message → kept; ``C2`` returns no messages
+    # (i.e., no activity after ``since``) → dropped.
+    def _history(*, channel: str, **_kwargs: Any) -> dict[str, Any]:
+        if channel == "C1":
+            return _history_response([{"ts": "1717200000.123456", "text": "hi"}])
+        return _history_response([])
+
+    client.conversations_history.side_effect = _history
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+
+    assert [c.id for c in results] == ["C1"]
+    # ``last_activity_ts`` is a float parsed from the Slack ts string;
+    # use an absolute tolerance (fractional microsecond drift is below
+    # the precision the discovery command cares about).
+    ts = results[0].last_activity_ts
+    assert ts is not None
+    assert abs(ts - 1717200000.123456) < 1e-3
+    # One history call per row (2 rows ⇒ 2 calls, even though only 1 survived).
+    assert client.conversations_history.call_count == 2
+
+
+def test_list_conversations_no_since_skips_history_probes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``since=None`` → ``conversations.history`` is never called.
+
+    The no-extra-API-call path of #366 is preserved when the operator
+    does not opt into activity probing.
+    """
+    page = _list_response([_public_channel("C1"), _public_channel("C2")])
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth()))
+
+    assert [c.id for c in results] == ["C1", "C2"]
+    assert client.conversations_history.call_count == 0
+    assert all(r.last_activity_ts is None for r in results)
+
+
+def test_list_conversations_since_passes_oldest_to_slack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ``oldest=`` parameter on ``conversations.history`` carries ``since`` as a unix ts."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.conversations_history.return_value = _history_response([{"ts": "1717200000.000000"}])
+    _patch_webclient(monkeypatch, client)
+
+    from datetime import UTC, datetime
+
+    since = datetime(2026, 5, 1, tzinfo=UTC)
+    list(list_conversations(_auth(), since=since))
+
+    call_kwargs = client.conversations_history.call_args.kwargs
+    assert call_kwargs["channel"] == "C1"
+    assert call_kwargs["limit"] == 1
+    assert call_kwargs["inclusive"] is False
+    # Slack expects a stringified unix ts; the helper formats with
+    # microsecond precision so callers can use sub-second cutoffs.
+    assert abs(float(call_kwargs["oldest"]) - since.timestamp()) < 1e-3
+
+
+def test_list_conversations_since_missing_scope_disables_type_with_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``missing_scope`` on history → that type is dropped + 1 warning appended.
+
+    The warning is emitted once per type even when multiple rows of
+    that type would have triggered the call. Other types' rows
+    continue to flow normally.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response(
+        [
+            _public_channel("C1", name="public-one"),
+            _public_channel("C2", name="public-two"),
+            _private_channel("G1", name="private-one"),
+        ]
+    )
+    client = _build_client(list_pages=[page])
+
+    def _make_missing_scope() -> SlackApiError:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {}
+
+        def _get(key: str, default: object = None) -> object:
+            return {"error": "missing_scope", "needed": "channels:history"}.get(key, default)
+
+        resp.get.side_effect = _get
+        return SlackApiError(  # type: ignore[no-untyped-call]
+            message="missing_scope", response=resp
+        )
+
+    def _history(*, channel: str, **_kwargs: Any) -> dict[str, Any]:
+        if channel.startswith("C"):
+            raise _make_missing_scope()
+        return _history_response([{"ts": "1717200000.000000"}])
+
+    client.conversations_history.side_effect = _history
+    _patch_webclient(monkeypatch, client)
+
+    warnings: list[str] = []
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+
+    assert [c.id for c in results] == ["G1"]
+    # One warning per affected type (public), not per row (would be 2).
+    assert len(warnings) == 1
+    assert "public" in warnings[0]
+    assert "channels:history" in warnings[0]
+    # The token never leaks into the warning surface (ADR-0027).
+    assert "xoxb-test" not in warnings[0]
+
+
+def test_list_conversations_since_missing_scope_per_type_warnings_are_independent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two types failing with distinct ``needed`` scopes → two independent warnings.
+
+    Pins the per-type semantics of the ``disabled_history_types`` set:
+    a public-channel miss disables only the public bucket and surfaces
+    one warning naming ``channels:history``; a concurrent mpim-bucket
+    miss disables only mpim and surfaces a second warning naming
+    ``mpim:history``. Other types' rows (private here) continue to flow.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response(
+        [
+            _public_channel("C-pub", name="public-one"),
+            _private_channel("G-priv", name="private-one"),
+            _mpim_row("G-mpim-1"),
+        ]
+    )
+    client = _build_client(
+        list_pages=[page],
+        members_responses={"G-mpim-1": _members_response(["U-alice", "U-bob"])},
+        users_info_responses={
+            "U-alice": _user_info_response(display_name="alice"),
+            "U-bob": _user_info_response(display_name="bob"),
+        },
+    )
+
+    def _make_miss(needed: str) -> SlackApiError:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {}
+
+        def _get(key: str, default: object = None) -> object:
+            return {"error": "missing_scope", "needed": needed}.get(key, default)
+
+        resp.get.side_effect = _get
+        return SlackApiError(  # type: ignore[no-untyped-call]
+            message="missing_scope", response=resp
+        )
+
+    def _history(*, channel: str, **_kwargs: Any) -> dict[str, Any]:
+        if channel.startswith("C"):
+            raise _make_miss("channels:history")
+        if channel.startswith("G-mpim"):
+            raise _make_miss("mpim:history")
+        return _history_response([{"ts": "1717200000.000000"}])
+
+    client.conversations_history.side_effect = _history
+    _patch_webclient(monkeypatch, client)
+
+    warnings: list[str] = []
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+
+    # Only the private row (whose history call succeeded) survived.
+    assert [c.id for c in results] == ["G-priv"]
+    assert len(warnings) == 2
+    public_warn = next(w for w in warnings if "public" in w)
+    mpim_warn = next(w for w in warnings if "mpim" in w)
+    assert "channels:history" in public_warn
+    assert "mpim:history" in mpim_warn
+    # Token never leaks through the warning surface.
+    assert all("xoxb-test" not in w for w in warnings)
+
+
+def test_list_conversations_since_warnings_none_drops_silently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``warnings=None`` is the non-CLI default — missing_scope still disables the type."""
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.headers = {}
+
+    def _get(key: str, default: object = None) -> object:
+        return {"error": "missing_scope", "needed": "channels:history"}.get(key, default)
+
+    resp.get.side_effect = _get
+    client.conversations_history.side_effect = SlackApiError(  # type: ignore[no-untyped-call]
+        message="missing_scope", response=resp
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+    # No warnings collector ⇒ the row is still dropped, but no
+    # exception escapes — the helper stays caller-agnostic.
+    assert results == []
+
+
+def test_list_conversations_since_history_429_is_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``conversations.history`` 429 → ``Retry-After`` honoured (mirrors listing retry)."""
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+
+    bad_resp = MagicMock()
+    bad_resp.status_code = 429
+    bad_resp.headers = {"Retry-After": "1"}
+    bad_resp.get.return_value = "ratelimited"
+    rate_error = SlackApiError(  # type: ignore[no-untyped-call]
+        message="ratelimited", response=bad_resp
+    )
+    client.conversations_history.side_effect = [
+        rate_error,
+        _history_response([{"ts": "1717200000.000000"}]),
+    ]
+    _patch_webclient(monkeypatch, client)
+
+    import time as _stdlib_time
+
+    sleep_mock = MagicMock()
+    monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
+
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+
+    assert len(results) == 1
+    sleep_mock.assert_called_once_with(1)
+
+
+def test_list_conversations_since_history_non_429_raises_connector_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Other ``conversations.history`` API errors map to :class:`ConnectorFailedError`.
+
+    The error message names ``conversations.history`` so the operator
+    sees which scope's docs to consult — mirrors the listing error
+    vocabulary so the discovery command has one consistent shape.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+
+    bad_resp = MagicMock()
+    bad_resp.status_code = 500
+    bad_resp.headers = {}
+    bad_resp.get.return_value = "internal_error"
+    client.conversations_history.side_effect = SlackApiError(  # type: ignore[no-untyped-call]
+        message="internal_error", response=bad_resp
+    )
+    _patch_webclient(monkeypatch, client)
+
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+
+    assert "conversations.history" in str(excinfo.value)
+    assert "xoxb-test" not in str(excinfo.value)

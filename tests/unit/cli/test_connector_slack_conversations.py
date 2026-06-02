@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import AbstractContextManager
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -658,3 +658,388 @@ def test_conversations_table_truncates_long_purpose(_slack_token_env: None) -> N
     assert table_result.exit_code == 0
     assert "…" in table_result.stdout
     assert long_purpose in json_result.stdout
+
+
+# ----- type-bucket sort + --since filter (issue #374) -------------------
+
+
+def _row_with_activity(
+    base: SlackConversation,
+    *,
+    last_activity_ts: float,
+) -> SlackConversation:
+    """Clone ``base`` with an explicit ``last_activity_ts`` (frozen dataclass copy)."""
+    from dataclasses import replace
+
+    return replace(base, last_activity_ts=last_activity_ts)
+
+
+def test_parse_since_relative_days() -> None:
+    """``"7d"`` → ``now() - 7 days`` (within a small wall-clock tolerance)."""
+    from datetime import UTC, datetime, timedelta
+
+    from opshub.cli._slack_conversations import parse_since
+
+    before = datetime.now(UTC) - timedelta(days=7)
+    result = parse_since("7d")
+    after = datetime.now(UTC) - timedelta(days=7)
+    assert before <= result <= after
+    assert result.tzinfo is not None
+
+
+def test_parse_since_relative_weeks() -> None:
+    """``"2w"`` → ``now() - 14 days``."""
+    from datetime import UTC, datetime, timedelta
+
+    from opshub.cli._slack_conversations import parse_since
+
+    before = datetime.now(UTC) - timedelta(weeks=2)
+    result = parse_since("2w")
+    after = datetime.now(UTC) - timedelta(weeks=2)
+    assert before <= result <= after
+
+
+def test_parse_since_absolute_iso_date_defaults_to_utc() -> None:
+    """``"2026-05-01"`` → ``datetime(2026, 5, 1, 0, 0, 0, UTC)``."""
+    from datetime import UTC, datetime
+
+    from opshub.cli._slack_conversations import parse_since
+
+    assert parse_since("2026-05-01") == datetime(2026, 5, 1, tzinfo=UTC)
+
+
+def test_parse_since_absolute_iso_with_timezone_normalised_to_utc() -> None:
+    """A tz-aware ISO string is converted to UTC equivalent."""
+    from datetime import UTC, datetime
+
+    from opshub.cli._slack_conversations import parse_since
+
+    # 2026-05-01T09:00:00+09:00 is 2026-05-01T00:00:00Z
+    assert parse_since("2026-05-01T09:00:00+09:00") == datetime(2026, 5, 1, tzinfo=UTC)
+
+
+def test_parse_since_zulu_suffix_accepted() -> None:
+    """``"...Z"`` is rewritten to ``+00:00`` so :func:`datetime.fromisoformat` accepts it."""
+    from datetime import UTC, datetime
+
+    from opshub.cli._slack_conversations import parse_since
+
+    assert parse_since("2026-05-01T00:00:00Z") == datetime(2026, 5, 1, tzinfo=UTC)
+
+
+def test_parse_since_rejects_empty() -> None:
+    """Empty / whitespace input → :class:`typer.BadParameter`."""
+    import typer
+
+    from opshub.cli._slack_conversations import parse_since
+
+    with pytest.raises(typer.BadParameter):
+        parse_since("")
+    with pytest.raises(typer.BadParameter):
+        parse_since("   ")
+
+
+def test_parse_since_rejects_unknown_unit() -> None:
+    """``"7x"`` / ``"5h"`` (hours unsupported) / ``"30m"`` → :class:`typer.BadParameter`.
+
+    Hours / minutes / months / years are intentionally unsupported —
+    the discovery command's filter granularity is days. Operators who
+    need finer cuts can pass an absolute ISO datetime.
+    """
+    import typer
+
+    from opshub.cli._slack_conversations import parse_since
+
+    with pytest.raises(typer.BadParameter):
+        parse_since("7x")
+    with pytest.raises(typer.BadParameter):
+        parse_since("5h")
+    with pytest.raises(typer.BadParameter):
+        parse_since("30m")
+    with pytest.raises(typer.BadParameter):
+        parse_since("foobar")
+
+
+def test_parse_since_rejects_bare_integer() -> None:
+    """``"30"`` (no unit suffix) → :class:`typer.BadParameter`.
+
+    Without a unit the value is ambiguous (days? seconds since
+    epoch?). Forcing the unit suffix removes the foot-gun.
+    """
+    import typer
+
+    from opshub.cli._slack_conversations import parse_since
+
+    with pytest.raises(typer.BadParameter):
+        parse_since("30")
+
+
+def test_conversations_since_flag_propagates(_slack_token_env: None) -> None:
+    """``--since 7d`` forwards a tz-aware datetime to the iterator."""
+    from datetime import UTC, datetime, timedelta
+
+    record = _CallRecord()
+    runner = CliRunner()
+    before = datetime.now(UTC) - timedelta(days=7)
+    with _patch_list_conversations([], record=record):
+        result = runner.invoke(
+            app,
+            ["connector", "slack", "conversations", "--since", "7d"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    parsed_since = record.kwargs["since"]
+    assert parsed_since is not None
+    assert parsed_since.tzinfo is not None
+    after = datetime.now(UTC) - timedelta(days=7)
+    assert before <= parsed_since <= after
+
+
+def test_conversations_since_invalid_value_exits_2(_slack_token_env: None) -> None:
+    """Unknown ``--since`` value → usage error (exit 2, no API call)."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["connector", "slack", "conversations", "--since", "garbage"],
+    )
+
+    assert result.exit_code == 2, result.stdout + result.stderr
+    combined = result.stdout + result.stderr
+    assert "garbage" in combined or "since" in combined
+
+
+def test_conversations_default_sort_groups_by_type(_slack_token_env: None) -> None:
+    """Mixed-type rows sort into ``public → private → mpim → im`` buckets.
+
+    Within each bucket the no-``--since`` sort is ``display_name`` asc
+    (case-insensitive), so the visible order is fully deterministic.
+    """
+    rows = [
+        _im_row("D1", peer="zelda"),
+        _mpim_row("G-mpim-A", participants=("alice", "bob")),
+        _private_row("G-priv-A", name="leadership"),
+        _public_row("C-pub-B", name="random"),
+        _public_row("C-pub-A", name="general"),
+        _im_row("D2", peer="alice"),
+        _mpim_row("G-mpim-B", participants=("dave", "eve")),
+    ]
+    record = _CallRecord()
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=record):
+        result = runner.invoke(
+            app,
+            ["connector", "slack", "conversations", "--format", "toml"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    # Extract the id order from the TOML emission line-by-line. The
+    # ids on consecutive ``  "X",`` lines reflect post-sort ordering.
+    id_order = [line.split('"')[1] for line in result.stdout.splitlines() if line.startswith('  "')]
+    # Expected: public (alphabetical by name) → private → mpim (by
+    # display_name = "alice, bob" < "dave, eve") → im (alice < zelda).
+    assert id_order == [
+        "C-pub-A",
+        "C-pub-B",
+        "G-priv-A",
+        "G-mpim-A",
+        "G-mpim-B",
+        "D2",
+        "D1",
+    ]
+
+
+def test_conversations_since_sort_orders_by_activity_desc(
+    _slack_token_env: None,
+) -> None:
+    """With ``--since`` set, rows within each bucket sort by ``last_activity_ts`` desc."""
+    rows = [
+        _row_with_activity(_public_row("C-old", name="alpha"), last_activity_ts=1_000_000.0),
+        _row_with_activity(_public_row("C-new", name="zulu"), last_activity_ts=2_000_000.0),
+        _row_with_activity(_im_row("D1", peer="alice"), last_activity_ts=1_500_000.0),
+    ]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            ["connector", "slack", "conversations", "--since", "30d", "--format", "toml"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    id_order = [line.split('"')[1] for line in result.stdout.splitlines() if line.startswith('  "')]
+    # Within ``public`` bucket: ``C-new`` (ts=2M) before ``C-old`` (ts=1M).
+    # Then ``im`` bucket trails.
+    assert id_order == ["C-new", "C-old", "D1"]
+
+
+def test_conversations_since_table_shows_last_activity_column(
+    _slack_token_env: None,
+) -> None:
+    """``--since`` enables the ``LAST_ACTIVITY`` column with UTC YYYY-MM-DD values."""
+    rows = [
+        _row_with_activity(
+            _public_row("C1", name="general"),
+            last_activity_ts=1_717_200_000.0,  # 2024-06-01 04:00:00 UTC
+        ),
+    ]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            ["connector", "slack", "conversations", "--since", "30d"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "LAST_ACTIVITY" in result.stdout
+    assert "2024-06-01" in result.stdout
+
+
+def test_conversations_no_since_table_omits_last_activity_column(
+    _slack_token_env: None,
+) -> None:
+    """Without ``--since``, ``LAST_ACTIVITY`` is hidden so #366's layout is preserved."""
+    rows = [_public_row("C1")]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(app, ["connector", "slack", "conversations"])
+
+    assert result.exit_code == 0
+    assert "LAST_ACTIVITY" not in result.stdout
+
+
+def test_conversations_since_json_includes_last_activity_ts(
+    _slack_token_env: None,
+) -> None:
+    """``--since`` + ``--format json`` → ``last_activity_ts`` populated in payload."""
+    import json as _json
+
+    rows = [_row_with_activity(_public_row("C1", name="general"), last_activity_ts=1_717_200_000.0)]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            [
+                "connector",
+                "slack",
+                "conversations",
+                "--since",
+                "30d",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0
+    payload = _json.loads(result.stdout)
+    assert payload[0]["last_activity_ts"] == 1_717_200_000.0
+
+
+def test_conversations_no_since_json_omits_last_activity_ts(
+    _slack_token_env: None,
+) -> None:
+    """Without ``--since``, ``last_activity_ts`` is omitted from JSON entirely.
+
+    Keeps #366's payload contract intact for operators who never opt
+    into activity probing — no meaningless nulls in their pipeline.
+    """
+    import json as _json
+
+    rows = [_public_row("C1")]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            ["connector", "slack", "conversations", "--format", "json"],
+        )
+
+    assert result.exit_code == 0
+    payload = _json.loads(result.stdout)
+    assert "last_activity_ts" not in payload[0]
+
+
+def test_conversations_since_toml_comment_includes_activity_date(
+    _slack_token_env: None,
+) -> None:
+    """``--since`` + ``--format toml`` → comment includes ``last YYYY-MM-DD``."""
+    rows = [_row_with_activity(_public_row("C1", name="general"), last_activity_ts=1_717_200_000.0)]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            [
+                "connector",
+                "slack",
+                "conversations",
+                "--since",
+                "30d",
+                "--format",
+                "toml",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "last 2024-06-01" in result.stdout
+
+
+def test_conversations_warnings_from_iterator_surface_on_stderr_in_order(
+    _slack_token_env: None,
+) -> None:
+    """Iterator-populated warnings flush to stderr in append order after the spinner closes.
+
+    Pin the CLI boundary: the driver passes a ``warnings`` list to
+    ``list_conversations``, then echoes each entry on stderr in the
+    order the iterator appended them. Regression in either direction
+    (driver swallowing warnings, or re-ordering them) would miss the
+    per-type ``missing_scope`` UX from #374.
+    """
+
+    def _fake_list(auth: Any, **kwargs: Any) -> Iterator[SlackConversation]:
+        bucket_obj = kwargs.get("warnings")
+        if isinstance(bucket_obj, list):
+            bucket = cast("list[str]", bucket_obj)
+            bucket.append("warning: skipping public conversations: missing_scope ...")
+            bucket.append("warning: skipping mpim conversations: missing_scope ...")
+        del auth
+        return iter(())
+
+    runner = CliRunner()
+    with patch(
+        "opshub.connectors.slack.conversations.list_conversations",
+        side_effect=_fake_list,
+    ):
+        result = runner.invoke(
+            app,
+            ["connector", "slack", "conversations", "--since", "7d"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    stderr = result.stderr
+    public_idx = stderr.find("skipping public conversations")
+    mpim_idx = stderr.find("skipping mpim conversations")
+    assert public_idx != -1, stderr
+    assert mpim_idx != -1, stderr
+    assert public_idx < mpim_idx, "warnings must surface in iterator-append order"
+
+
+def test_sort_rows_activity_mode_pushes_missing_ts_to_bucket_tail() -> None:
+    """``_sort_rows(by_activity=True)`` parks ``last_activity_ts is None`` at bucket end.
+
+    The docstring marks the ``None`` branch as defensive (``--since``
+    should always populate the ts), but the branch is reachable if a
+    thin proxy returns a non-numeric ts that ``_fetch_last_activity_ts``
+    cannot parse — we keep the row, with ``None`` ts. The CLI sort
+    must place such rows last within their type bucket so the
+    presented order does not falsely promote a "no signal" row above
+    a row with a real recent ts.
+    """
+    from opshub.cli._slack_conversations import _sort_rows  # pyright: ignore[reportPrivateUsage]
+
+    rows = [
+        _row_with_activity(_public_row("C-mid", name="charlie"), last_activity_ts=1_500_000.0),
+        # ``last_activity_ts=None`` via the dataclass default — public bucket fallback.
+        _public_row("C-none", name="bravo"),
+        _row_with_activity(_public_row("C-new", name="alpha"), last_activity_ts=2_000_000.0),
+    ]
+
+    result = _sort_rows(rows, by_activity=True)
+
+    assert [r.id for r in result] == ["C-new", "C-mid", "C-none"]

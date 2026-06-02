@@ -775,6 +775,16 @@ def slack_conversations(
             "not return DM/MPIM rows."
         ),
     ),
+    since: str | None = typer.Option(
+        None,
+        "--since",
+        help=(
+            "Filter by last-message timestamp. Accepts a relative "
+            "duration (e.g. 7d, 2w) or an ISO date (e.g. 2026-05-01). "
+            "Triggers one conversations.history call per conversation; "
+            "requires *:history scopes for the requested --types."
+        ),
+    ),
 ) -> None:
     """List Slack conversations visible to the stored token (#366).
 
@@ -801,22 +811,46 @@ def slack_conversations(
 
     * ``0`` — conversations listed (zero matches is **not** an error;
       a stderr hint surfaces while stdout stays clean for pipelines).
+      When ``--since`` is set and a per-type ``conversations.history``
+      probe fails with ``missing_scope`` for one or more conversation
+      types, those types are dropped from the output and a one-per-
+      type warning is emitted on stderr; the command still exits 0
+      because the remaining types' rows are valid (#374).
     * ``1`` — config error (no token / wrong prefix / SDK extras
       missing) or runtime API failure (``invalid_auth`` /
-      ``missing_scope`` / exhausted 429 retries).
-    * ``2`` — usage error (unknown ``--format`` or ``--types``
-      value).
+      ``missing_scope`` on the listing call / exhausted 429 retries
+      / ``conversations.history`` non-rate-limit failure other than
+      ``missing_scope``).
+    * ``2`` — usage error (unknown ``--format`` / ``--types`` /
+      ``--since`` value).
+
+    Sort order:
+
+    * Rows are grouped into a fixed bucket order
+      ``public → private → mpim → im`` regardless of flags (#374).
+    * Within each bucket the secondary key is ``display_name`` ascending
+      (case-insensitive) by default; ``--since`` flips it to
+      ``last_activity_ts`` descending so the most recently active row
+      surfaces first.
 
     Output formats:
 
     * ``table`` (default): five columns ``ID TYPE NAME / PARTICIPANTS
-      ARCHIVED PURPOSE``. Suitable for visual inspection.
+      ARCHIVED PURPOSE``. Adding ``--since`` inserts a sixth
+      ``LAST_ACTIVITY`` column (``YYYY-MM-DD`` UTC) between
+      ``ARCHIVED`` and ``PURPOSE`` (#374). Suitable for visual
+      inspection.
     * ``toml``: a ``channels = [...]`` snippet ready to paste into
       ``opshub.toml`` under ``[connectors.slack]``. Each id is
       annotated with a comment carrying the conversation type and a
-      human-readable label.
+      human-readable label; ``--since`` appends ``last YYYY-MM-DD``
+      to the comment so reviewers can spot stale entries before
+      pasting (#374).
     * ``json``: a JSON array of dataclass objects. Suitable for
-      ``jq`` post-processing.
+      ``jq`` post-processing. ``--since`` populates
+      ``last_activity_ts`` (unix epoch seconds); the field is
+      omitted when ``--since`` is not set so the no-activity payload
+      stays free of meaningless nulls.
 
     The token is read lazily, so ``--help`` does not require a
     configured Slack token.
@@ -828,6 +862,7 @@ def slack_conversations(
     # top-level surface.
     from opshub.cli._slack_conversations import (
         FORMAT_CHOICES,
+        parse_since,
         parse_types,
         run_conversations_command,
     )
@@ -845,6 +880,11 @@ def slack_conversations(
     # — same UX as the ``--format`` arm above.
     parsed_types = parse_types(types)
 
+    # ``parse_since`` shares the ``typer.BadParameter`` exit-code-2
+    # contract so an unknown duration grammar / malformed ISO string
+    # surfaces the same way as a bad ``--format`` value.
+    parsed_since = parse_since(since) if since is not None else None
+
     normalised_filter: str | None = filter_substring or None
 
     try:
@@ -855,6 +895,7 @@ def slack_conversations(
             types=parsed_types,
             include_archived=include_archived,
             all=all_conversations,
+            since=parsed_since,
         )
     except ConfigError as exc:
         typer.echo(f"Error: {exc}", err=True)

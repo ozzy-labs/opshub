@@ -31,6 +31,15 @@ Scope (compared to the legacy helper)
 * Archived conversations are filtered client-side on the per-row
   ``is_archived`` flag (DM/MPIM never archive, so the gate is a no-op
   for them). Mirrors the legacy helper's single-flag-everywhere posture.
+* Activity filter (``since``) is opt-in. When set, the helper makes
+  one extra ``conversations.history?limit=1&oldest=<since>`` call per
+  row that survives the type / archived / filter gates; rows whose
+  latest message predates ``since`` are dropped. ``last_activity_ts``
+  on the yielded :class:`SlackConversation` carries the actual ts so
+  the CLI can sort / display by activity. ``missing_scope`` on the
+  history call disables the affected conversation type (one warning
+  per type, not per row) without aborting the listing for unaffected
+  types — see ``warnings`` parameter.
 * DM (``im``) and MPIM (``mpim``) rows have no ``name`` — Slack does
   not assign one. The helper resolves a human-readable label via
   ``users.info`` (im) and ``conversations.members`` + ``users.info``
@@ -81,13 +90,14 @@ so the redaction stance (ADR-0027) is uniform across the connector.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from opshub.core.errors import ConnectorFailedError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from datetime import datetime
 
     from opshub.cli._progress import ProgressReporter
     from opshub.connectors.slack.auth import SlackAuth
@@ -132,6 +142,17 @@ _API_TYPE_TOKEN: dict[ConversationType, str] = {
     "private": "private_channel",
     "im": "im",
     "mpim": "mpim",
+}
+
+#: ``conversations.history`` scope required to fetch the last-message ts
+#: for a given conversation type. Used to build the per-type warning
+#: surfaced when ``--since`` is set but the token lacks the relevant
+#: ``*:history`` scope (ADR-0018 §Decision (7)).
+_HISTORY_SCOPE_FOR_TYPE: dict[ConversationType, str] = {
+    "public": "channels:history",
+    "private": "groups:history",
+    "im": "im:history",
+    "mpim": "mpim:history",
 }
 
 #: Reverse map for classifying rows returned by the API. ``is_im`` /
@@ -187,6 +208,14 @@ class SlackConversation:
     purpose:
         Free-form purpose text (``conversation.purpose.value``). Empty
         string when the conversation has no purpose set (DMs always).
+    last_activity_ts:
+        Unix epoch seconds of the most recent message in the
+        conversation, populated only when :func:`list_conversations` was
+        called with a non-``None`` ``since`` argument (one extra
+        ``conversations.history`` call per row). ``None`` means
+        "unknown / not requested" — the JSON renderer drops the key in
+        that case so the discovery payload stays free of meaningless
+        nulls when the operator did not opt into activity probing.
     """
 
     id: str
@@ -197,6 +226,7 @@ class SlackConversation:
     is_archived: bool
     purpose: str
     participants: tuple[str, ...] = field(default_factory=tuple)
+    last_activity_ts: float | None = None
 
 
 def list_conversations(
@@ -207,6 +237,8 @@ def list_conversations(
     filter_substring: str | None = None,
     limit: int | None = None,
     all: bool = False,
+    since: datetime | None = None,
+    warnings: list[str] | None = None,
     reporter: ProgressReporter | None = None,
 ) -> Iterator[SlackConversation]:
     """Yield conversations the configured token can see, one row at a time.
@@ -242,6 +274,25 @@ def list_conversations(
         whatever Slack returns; the operator decides whether the
         joined-only or workspace-wide perspective is useful for their
         paste-into-opshub.toml workflow.
+    since:
+        When non-``None``, perform one extra
+        ``conversations.history?limit=1&oldest=<since>`` call per row
+        and yield only rows that had at least one message after
+        ``since``. The actual last-message ts is stored in
+        :attr:`SlackConversation.last_activity_ts`. ``since`` must be a
+        tz-aware :class:`datetime.datetime`; the helper does not
+        normalise — callers should pre-attach UTC. Cost: one extra
+        Slack call per surviving row of every type for which
+        ``conversations.history`` succeeds.
+    warnings:
+        Optional list the helper appends operator-facing warnings to.
+        Used when ``since`` is set and the ``conversations.history``
+        call fails with ``missing_scope`` for a given type: the helper
+        records one warning per affected type (so a 50-row MPIM
+        workspace yields one ``mpim:history`` warning, not 50) and
+        drops the type's rows from the yielded stream. ``None``
+        discards the warnings, which is fine for non-CLI callers that
+        only want the row stream.
     reporter:
         Optional :class:`opshub.cli._progress.ProgressReporter`. The
         helper advances it by the raw page size (pre-filter) so the
@@ -290,6 +341,19 @@ def list_conversations(
     # workspace.
     user_name_cache: dict[str, str] = {}
 
+    # Pre-compute the ``oldest`` token Slack expects on
+    # ``conversations.history`` calls — a stringified unix epoch with
+    # optional fractional part. ``None`` short-circuits the per-row
+    # history fetch entirely so the no-``since`` path costs zero extra
+    # API calls.
+    since_ts = since.timestamp() if since is not None else None
+
+    # Track which conversation types have already produced a
+    # ``missing_scope`` failure so subsequent rows of the same type
+    # skip the history call (and the warning emits once per type, not
+    # once per row).
+    disabled_history_types: set[ConversationType] = set()
+
     yielded = 0
     page_cursor: str | None = None
     while True:
@@ -333,6 +397,32 @@ def list_conversations(
                 continue
             if needle is not None and not _matches_filter(conversation, needle):
                 continue
+            if since_ts is not None:
+                if conversation.type in disabled_history_types:
+                    # Earlier row of this type tripped ``missing_scope``;
+                    # the warning was recorded once and we now drop the
+                    # entire type from the activity-filtered output.
+                    continue
+                try:
+                    activity_ts = _fetch_last_activity_ts(
+                        client=client,
+                        channel_id=conversation.id,
+                        since_ts=since_ts,
+                    )
+                except _MissingHistoryScopeError as missing:
+                    disabled_history_types.add(conversation.type)
+                    if warnings is not None:
+                        warnings.append(
+                            _format_missing_scope_warning(
+                                conversation_type=conversation.type,
+                                needed=missing.needed,
+                            )
+                        )
+                    continue
+                if activity_ts is None:
+                    # No message newer than ``since`` — drop.
+                    continue
+                conversation = replace(conversation, last_activity_ts=activity_ts)
             yield conversation
             yielded += 1
             if limit is not None and yielded >= limit:
@@ -610,6 +700,170 @@ def _call_list(
 
     assert last_error is not None
     raise _to_connector_failed(last_error, all=all) from last_error
+
+
+class _MissingHistoryScopeError(Exception):
+    """Sentinel raised by :func:`_fetch_last_activity_ts` on ``missing_scope``.
+
+    The listing loop catches this to disable history probing for the
+    affected conversation type without aborting the whole call: an
+    operator who granted ``channels:history`` but not ``mpim:history``
+    still wants to see public-channel activity, just with an MPIM-skip
+    warning.
+    """
+
+    def __init__(self, needed: str) -> None:
+        super().__init__(needed)
+        self.needed = needed
+
+
+def _format_missing_scope_warning(
+    *,
+    conversation_type: ConversationType,
+    needed: str,
+) -> str:
+    """Build the operator-facing warning for a per-type history scope miss.
+
+    The wording matches ADR-0027's "name the failure, point at the
+    scope catalogue, never leak the token" stance: we surface the
+    conversation type the operator can recognise (``public`` / ``im``)
+    and the documented Slack scope short string (``channels:history``).
+    """
+    return (
+        f"warning: skipping {conversation_type} conversations: "
+        f"missing_scope (needed: {needed!r}). See ADR-0018 §Decision (7) or "
+        f"https://api.slack.com/scopes for the scope catalogue."
+    )
+
+
+def _fetch_last_activity_ts(
+    *,
+    client: Any,
+    channel_id: str,
+    since_ts: float,
+) -> float | None:
+    """Return the latest ``conversations.history`` message ts > ``since_ts``.
+
+    ``None`` means "no activity newer than ``since_ts``" (the
+    conversation is either empty or its last message predates the
+    cutoff). The caller drops the row in that case.
+
+    Raises :class:`_MissingHistoryScopeError` on ``missing_scope`` so the
+    listing loop can disable the affected type and surface a single
+    operator-facing warning. Other Slack API errors bubble up via the
+    same :class:`ConnectorFailedError` channel as the listing call,
+    keeping the discovery command's error vocabulary uniform.
+    """
+    response = _call_history_oldest(
+        client=client,
+        channel_id=channel_id,
+        oldest=since_ts,
+    )
+    messages_obj = response.get("messages")
+    if not isinstance(messages_obj, list) or not messages_obj:
+        return None
+    messages = cast(list[dict[str, Any]], messages_obj)
+    head = messages[0]
+    ts_raw = head.get("ts")
+    if ts_raw is None:
+        return None
+    try:
+        return float(ts_raw)
+    except (TypeError, ValueError):
+        # A defensive arm for thin proxies that return non-numeric
+        # ts values. The listing loop drops the row, which is the
+        # right behaviour for "we can't trust this row's activity".
+        return None
+
+
+def _call_history_oldest(
+    *,
+    client: Any,
+    channel_id: str,
+    oldest: float,
+) -> dict[str, Any]:
+    """Call ``conversations.history?limit=1&oldest=<ts>`` with 429 retry.
+
+    Mirrors the budget + Retry-After handling of
+    :meth:`opshub.connectors.slack.fetcher.SlackFetcher._call_history`
+    but is duplicated here (rather than imported) so the discovery
+    module stays decoupled from the sync fetcher's instance state.
+
+    ``missing_scope`` is translated to :class:`_MissingHistoryScopeError`
+    so the listing loop can disable the affected type. All other
+    non-429 errors are mapped to :class:`ConnectorFailedError` with
+    an endpoint-qualified message — same vocabulary as the listing
+    call so operators see one consistent error shape across both
+    Slack endpoints the command touches.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    kwargs: dict[str, Any] = {
+        "channel": channel_id,
+        "limit": 1,
+        # ``oldest=ts`` filters at the API: only messages strictly
+        # newer than ``ts`` are returned (with ``inclusive=False`` we
+        # exclude the boundary message itself so an exact-match
+        # ``since`` does not double-count). Slack accepts the unix
+        # epoch as a stringified float — ``repr`` preserves the full
+        # IEEE-754 precision that ``now_utc().timestamp()`` carries,
+        # so a ``--since 7d`` cutoff close to a message ts is not
+        # silently rounded into either side of the cutoff (review
+        # finding: 6-digit ``f"{oldest:.6f}"`` was banker-rounded and
+        # could nudge the cutoff a fraction of a microsecond in
+        # either direction).
+        "oldest": repr(float(oldest)),
+        "inclusive": False,
+    }
+
+    last_error: SlackApiError | None = None
+    for attempt in range(_MAX_RETRIES_ON_RATE_LIMIT):
+        try:
+            response: Any = client.conversations_history(**kwargs)
+        except SlackApiError as exc:
+            response_any = cast(Any, exc.response)
+            status_code = getattr(response_any, "status_code", None)
+            if status_code == 429:
+                last_error = exc
+                headers_obj = getattr(response_any, "headers", None)
+                headers: dict[str, Any] = (
+                    cast(dict[str, Any], headers_obj) if isinstance(headers_obj, dict) else {}
+                )
+                retry_after_raw = headers.get("Retry-After")
+                try:
+                    retry_after = int(retry_after_raw) if retry_after_raw else 2**attempt
+                except (TypeError, ValueError):
+                    retry_after = 2**attempt
+                time.sleep(retry_after)
+                continue
+            error_code = ""
+            needed = ""
+            if response_any is not None:
+                error_code = response_any.get("error") or ""
+                if error_code == "missing_scope":
+                    needed = response_any.get("needed") or ""
+                    raise _MissingHistoryScopeError(needed) from exc
+            raise _to_connector_failed_history(exc) from exc
+        return _as_response_dict(response)
+
+    assert last_error is not None
+    raise _to_connector_failed_history(last_error) from last_error
+
+
+def _to_connector_failed_history(exc: Any) -> ConnectorFailedError:
+    """Map a ``conversations.history`` :class:`SlackApiError` → :class:`ConnectorFailedError`.
+
+    Kept distinct from :func:`_to_connector_failed` so the error
+    message names the endpoint the operator was waiting on: a 429 at
+    history time is operationally different from a 429 on the listing
+    call (the former indicates per-channel hot-path; the latter
+    indicates listing pagination).
+    """
+    response_any = cast(Any, getattr(exc, "response", None))
+    error_code = "unknown"
+    if response_any is not None:
+        error_code = response_any.get("error") or type(exc).__name__
+    return ConnectorFailedError(f"Slack conversations.history failed: {error_code}")
 
 
 def _to_connector_failed(exc: Any, *, all: bool) -> ConnectorFailedError:

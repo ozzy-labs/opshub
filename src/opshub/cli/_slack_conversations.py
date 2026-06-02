@@ -56,7 +56,9 @@ sanitised by the upstream iterator + auth resolver.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
 import typer
@@ -66,6 +68,7 @@ from opshub.connectors.slack.conversations import (
     CONVERSATION_TYPES,
     ConversationType,
 )
+from opshub.core.time import now_utc
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -77,6 +80,7 @@ __all__ = [
     "DEFAULT_TYPES_CSV",
     "FORMAT_CHOICES",
     "OutputFormat",
+    "parse_since",
     "parse_types",
     "render_conversations",
     "run_conversations_command",
@@ -120,6 +124,86 @@ _TYPE_WIDTH = 8
 #: the operator to identify the group.
 _MPIM_PARTICIPANT_DISPLAY_LIMIT = 3
 
+#: Fixed bucket order for the type-grouped sort. The CLI surface
+#: documented in #366 pins this enumeration; the operator-visible
+#: ordering follows ``public → private → mpim → im`` (channels first,
+#: then group DMs, then 1:1 DMs) so a TOML paste lands public-channel
+#: ids at the top where most opshub configs scope their first sync.
+_TYPE_BUCKET_ORDER: tuple[ConversationType, ...] = ("public", "private", "mpim", "im")
+
+#: Width for the ``LAST_ACTIVITY`` table column (``YYYY-MM-DD`` is
+#: 10 chars; we pad to 13 so the column header and values align).
+_LAST_ACTIVITY_WIDTH = 13
+
+#: ``--since`` relative-form pattern. Accepts ``<N>d`` (days) and
+#: ``<N>w`` (weeks). Months / years are intentionally unsupported —
+#: their calendar semantics are ambiguous for an "is this channel
+#: still active" filter and ``90d`` / ``365d`` cover the practical
+#: range without extra surface to test.
+_SINCE_RELATIVE_RE = re.compile(r"^\s*(\d+)\s*([dw])\s*$")
+
+
+def parse_since(raw: str) -> datetime:
+    """Parse a ``--since`` value into a tz-aware UTC :class:`datetime.datetime`.
+
+    Accepts two forms (see :data:`_SINCE_RELATIVE_RE` for the relative
+    grammar):
+
+    * Relative: ``"7d"`` / ``"2w"`` → ``now_utc() - timedelta(...)``.
+      ``"0d"`` is permitted and resolves to "now" (a degenerate but
+      harmless filter the operator can construct via ``--since 0d``
+      for a sanity check).
+    * Absolute: any ISO 8601 string :func:`datetime.fromisoformat`
+      accepts, plus the convenience that a trailing ``Z`` (UTC zulu)
+      is rewritten to ``+00:00`` so ``"2026-05-01T00:00:00Z"`` parses
+      cleanly. tz-naive inputs are interpreted as UTC.
+
+    Raises :class:`typer.BadParameter` for empty input, unknown forms,
+    and malformed numerics — Typer surfaces the message verbatim with
+    exit code 2 so operators can self-correct without re-reading
+    ``--help``.
+    """
+    if not raw or not raw.strip():
+        raise typer.BadParameter("--since must not be empty")
+
+    text = raw.strip()
+    relative = _SINCE_RELATIVE_RE.match(text)
+    if relative is not None:
+        amount = int(relative.group(1))
+        unit = relative.group(2)
+        # ``\d+`` is unbounded, so a typo like ``--since 99999999999d``
+        # would propagate to :class:`timedelta` and raise
+        # :class:`OverflowError` (escaping the documented
+        # :class:`typer.BadParameter` contract that surfaces with
+        # exit code 2). Translate the overflow into the documented
+        # usage-error vocabulary so the operator sees one consistent
+        # ``--help``-able message.
+        try:
+            delta = timedelta(days=amount) if unit == "d" else timedelta(weeks=amount)
+        except OverflowError as exc:
+            raise typer.BadParameter(
+                f"--since {raw!r} is too far in the past; use an ISO date "
+                "(e.g. '2026-05-01') for cutoffs beyond a few centuries."
+            ) from exc
+        return now_utc() - delta
+
+    iso_text = text.replace("Z", "+00:00") if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(iso_text)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"--since {raw!r} is not a recognised value: expected a relative "
+            "duration like '7d' / '2w' or an ISO date like '2026-05-01'."
+        ) from exc
+
+    if parsed.tzinfo is None:
+        # Naive inputs default to UTC so the operator can write
+        # ``--since 2026-05-01`` without manually annotating timezone.
+        # ADR-0027 keeps internal tz handling on UTC; matching that
+        # default here means cross-tz operators see no surprise drift.
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
 
 def parse_types(raw: str) -> tuple[ConversationType, ...]:
     """Parse a ``--types`` value (``"public,im"``) into a typed tuple.
@@ -160,6 +244,7 @@ def run_conversations_command(
     types: tuple[ConversationType, ...],
     include_archived: bool,
     all: bool,
+    since: datetime | None = None,
 ) -> None:
     """Drive ``opshub connector slack conversations`` end-to-end.
 
@@ -186,6 +271,15 @@ def run_conversations_command(
     all:
         When ``True``, switch from ``users.conversations`` (joined-
         only) to ``conversations.list`` (workspace-wide).
+    since:
+        Optional tz-aware :class:`datetime.datetime` cutoff. When
+        non-``None``, the listing iterator makes one extra
+        ``conversations.history?limit=1`` call per row and yields only
+        rows whose latest message ts is newer than ``since``. The
+        table renderer adds a ``LAST_ACTIVITY`` column in that mode;
+        the sort within each type-bucket flips from ``display_name``
+        ascending to ``last_activity_ts`` descending. ``None`` keeps
+        the no-extra-API-call path of #366.
 
     Raises
     ------
@@ -206,8 +300,17 @@ def run_conversations_command(
     # Wrap the iterator in the indeterminate progress reporter so the
     # operator sees a spinner + page-tick on slow workspaces. ``reporter``
     # is a no-op when progress is disabled (non-TTY / ``--no-progress``),
-    # which keeps captured-output tests stable.
-    with _progress.indeterminate("listing conversations") as reporter:
+    # which keeps captured-output tests stable. When ``--since`` is set
+    # the per-row ``conversations.history`` call happens inside the same
+    # iterator so the spinner ticks cover both the listing pages and
+    # the activity probes — a single description ("listing + activity")
+    # keeps the operator's mental model tidy without forcing a second
+    # rich Progress context.
+    warnings: list[str] = []
+    description = (
+        "listing conversations + activity" if since is not None else "listing conversations"
+    )
+    with _progress.indeterminate(description) as reporter:
         conversations = list_conversations(
             auth,
             types=types,
@@ -215,6 +318,8 @@ def run_conversations_command(
             filter_substring=filter_substring,
             limit=limit,
             all=all,
+            since=since,
+            warnings=warnings,
             reporter=reporter,
         )
 
@@ -225,10 +330,23 @@ def run_conversations_command(
         # scope the output before this point.
         rows = list(conversations)
 
-    if not rows and output_format != "json":
+    for warning in warnings:
+        # The iterator accumulates one warning per affected
+        # conversation type (e.g. ``mpim:history`` missing). Surface
+        # them on stderr after the spinner closes so they do not get
+        # interleaved with the live progress display.
+        typer.echo(warning, err=True)
+
+    sorted_rows = _sort_rows(rows, by_activity=since is not None)
+
+    if not sorted_rows and output_format != "json":
         _emit_empty_hint(filter_substring=filter_substring, err=True)
 
-    rendered = render_conversations(rows, output_format=output_format)
+    rendered = render_conversations(
+        sorted_rows,
+        output_format=output_format,
+        show_activity=since is not None,
+    )
     if rendered:
         typer.echo(rendered)
 
@@ -237,6 +355,7 @@ def render_conversations(
     rows: Iterable[SlackConversation],
     *,
     output_format: OutputFormat,
+    show_activity: bool = False,
 ) -> str:
     """Format a stream of :class:`SlackConversation` rows for stdout.
 
@@ -244,15 +363,64 @@ def render_conversations(
     list of fixtures and assert exact bytes — the
     :func:`run_conversations_command` wrapper is what shells out to
     ``typer.echo`` and reads from the network.
+
+    ``show_activity`` controls whether the table layout includes the
+    ``LAST_ACTIVITY`` column (default: hidden). The JSON / TOML
+    renderers always reflect ``last_activity_ts`` when populated; the
+    JSON renderer drops the key for rows where it is ``None`` so a
+    no-``--since`` invocation does not pollute the payload with
+    meaningless nulls.
     """
     materialised = list(rows)
     if output_format == "table":
-        return _render_table(materialised)
+        return _render_table(materialised, show_activity=show_activity)
     if output_format == "toml":
         return _render_toml(materialised)
     if output_format == "json":
         return _render_json(materialised)
     raise ValueError(f"unknown output format: {output_format!r}")
+
+
+def _sort_rows(
+    rows: Iterable[SlackConversation],
+    *,
+    by_activity: bool,
+) -> list[SlackConversation]:
+    """Sort rows by the documented fixed type buckets and within-bucket key.
+
+    Type buckets follow :data:`_TYPE_BUCKET_ORDER` (``public →
+    private → mpim → im``); rows of an unrecognised type bucket sort
+    last in their original order. Within each bucket:
+
+    * ``by_activity=True`` → ``last_activity_ts`` descending; rows
+      missing the ts (defensive, should not occur when ``--since`` is
+      set) sort last.
+    * ``by_activity=False`` → ``display_name`` case-insensitive
+      ascending; ``id`` is used as a stable tiebreaker so two rows
+      sharing a display name keep a deterministic order across runs.
+    """
+    bucket_index = {bucket: idx for idx, bucket in enumerate(_TYPE_BUCKET_ORDER)}
+    fallback_bucket = len(_TYPE_BUCKET_ORDER)
+
+    if by_activity:
+
+        def _activity_key(row: SlackConversation) -> tuple[int, int, float, str]:
+            bucket = bucket_index.get(row.type, fallback_bucket)
+            ts = row.last_activity_ts
+            # ``has_ts`` (0 = present, 1 = missing) lifts missing-ts
+            # rows to the bottom of the bucket; ``-ts`` flips the
+            # sort to descending (newest first) for present ts.
+            has_ts = 0 if ts is not None else 1
+            ts_key = -ts if ts is not None else 0.0
+            return (bucket, has_ts, ts_key, row.id)
+
+        return sorted(rows, key=_activity_key)
+
+    def _name_key(row: SlackConversation) -> tuple[int, str, str]:
+        bucket = bucket_index.get(row.type, fallback_bucket)
+        return (bucket, row.display_name.lower(), row.id)
+
+    return sorted(rows, key=_name_key)
 
 
 # ----- private helpers ---------------------------------------------------
@@ -269,33 +437,54 @@ def _emit_empty_hint(*, filter_substring: str | None, err: bool) -> None:
         typer.echo("no conversations matched", err=err)
 
 
-def _render_table(rows: list[SlackConversation]) -> str:
-    """Render conversations as a fixed-width 5-column table."""
+def _render_table(rows: list[SlackConversation], *, show_activity: bool = False) -> str:
+    """Render conversations as a fixed-width table.
+
+    ``show_activity=True`` inserts a ``LAST_ACTIVITY`` column between
+    ``ARCHIVED`` and ``PURPOSE``. The column renders the UTC date
+    (``YYYY-MM-DD``) of the per-row ``last_activity_ts``; rows
+    without a ts (defensive, should not occur when the caller invokes
+    ``--since``) render ``-``.
+    """
     name_values = [_format_name_column(row) for row in rows]
 
     id_width = max(_ID_MIN_WIDTH, max((len(row.id) for row in rows), default=0))
     name_width = max(_NAME_MIN_WIDTH, max((len(v) for v in name_values), default=0))
     archived_width = 8
 
-    header = (
-        f"{'ID':<{id_width}}  "
-        f"{'TYPE':<{_TYPE_WIDTH}}  "
-        f"{'NAME / PARTICIPANTS':<{name_width}}  "
-        f"{'ARCHIVED':<{archived_width}}  "
-        f"PURPOSE"
-    )
+    header_parts = [
+        f"{'ID':<{id_width}}",
+        f"{'TYPE':<{_TYPE_WIDTH}}",
+        f"{'NAME / PARTICIPANTS':<{name_width}}",
+        f"{'ARCHIVED':<{archived_width}}",
+    ]
+    if show_activity:
+        header_parts.append(f"{'LAST_ACTIVITY':<{_LAST_ACTIVITY_WIDTH}}")
+    header_parts.append("PURPOSE")
+    header = "  ".join(header_parts)
+
     lines = [header]
     for row, name_value in zip(rows, name_values, strict=True):
         purpose = _truncate(row.purpose, _PURPOSE_TRUNCATE_LEN)
         archived = _yes_no(row.is_archived) if _supports_archive(row) else "-"
-        lines.append(
-            f"{row.id:<{id_width}}  "
-            f"{row.type:<{_TYPE_WIDTH}}  "
-            f"{name_value:<{name_width}}  "
-            f"{archived:<{archived_width}}  "
-            f"{purpose}"
-        )
+        cells = [
+            f"{row.id:<{id_width}}",
+            f"{row.type:<{_TYPE_WIDTH}}",
+            f"{name_value:<{name_width}}",
+            f"{archived:<{archived_width}}",
+        ]
+        if show_activity:
+            cells.append(f"{_format_activity_date(row.last_activity_ts):<{_LAST_ACTIVITY_WIDTH}}")
+        cells.append(purpose)
+        lines.append("  ".join(cells))
     return "\n".join(lines)
+
+
+def _format_activity_date(ts: float | None) -> str:
+    """Render a Slack ts as ``YYYY-MM-DD`` (UTC) or ``-`` when missing."""
+    if ts is None:
+        return "-"
+    return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d")
 
 
 def _format_name_column(row: SlackConversation) -> str:
@@ -348,6 +537,13 @@ def _render_toml(rows: list[SlackConversation]) -> str:
         flags: list[str] = [row.type]
         if row.is_archived:
             flags.append("archived")
+        if row.last_activity_ts is not None:
+            # Operators reviewing a TOML paste want the activity
+            # signal inline with the channel id; carrying it in the
+            # comment keeps the actual config (``"C..."``) untouched
+            # while still showing the reviewer "this channel last
+            # spoke on 2026-05-30".
+            flags.append(f"last {_format_activity_date(row.last_activity_ts)}")
         label = row.name or row.display_name or row.id
         comment = f"{label} ({', '.join(flags)})"
         lines.append(f'  "{row.id}",  # {comment}')
@@ -362,8 +558,18 @@ def _render_json(rows: list[SlackConversation]) -> str:
     dataclass definition. ``participants`` lands as a JSON array (the
     dataclass field type is ``tuple[str, ...]`` but :func:`asdict` and
     :func:`json.dumps` lower tuples to arrays naturally).
+
+    ``last_activity_ts`` is omitted from rows where it is ``None`` so
+    a no-``--since`` invocation does not pollute the payload with
+    meaningless null fields — keeps the JSON contract of #366 intact
+    for operators who never opt into activity probing.
     """
-    payload = [asdict(row) for row in rows]
+    payload: list[dict[str, object]] = []
+    for row in rows:
+        entry = asdict(row)
+        if entry.get("last_activity_ts") is None:
+            entry.pop("last_activity_ts", None)
+        payload.append(entry)
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
