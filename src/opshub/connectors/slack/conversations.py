@@ -89,7 +89,6 @@ so the redaction stance (ADR-0027) is uniform across the connector.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -118,17 +117,6 @@ __all__ = [
 #: module constant so tests can pin the value without re-reading the magic
 #: number out of :func:`list_conversations`.
 _PAGE_SIZE = 200
-
-#: Retry budget for ``users.conversations`` / ``conversations.list``
-#: HTTP 429 responses. ``_call_list`` keeps its own retry loop for
-#: now (#377 §Out of scope; tracked as a one-line follow-up in
-#: `#379 <https://github.com/ozzy-labs/opshub/issues/379>`_), but
-#: the budget matches
-#: :data:`opshub.connectors.slack._retry.MAX_RETRIES_ON_RATE_LIMIT`
-#: so the listing path can opt into the shared helper later without
-#: changing operator-visible behaviour.
-_MAX_RETRIES_ON_RATE_LIMIT = 3
-
 
 #: The four Slack conversation types this helper understands. The
 #: ``ConversationType`` :class:`typing.Literal` is the dataclass-field
@@ -663,12 +651,19 @@ def _call_list(
 ) -> dict[str, Any]:
     """Call ``users.conversations`` (default) or ``conversations.list`` (all=True).
 
-    Both endpoints share request shape and pagination semantics, so the
-    retry / error-translation path is identical — the only difference is
-    which client method we dispatch on. Retry budget mirrors the
-    legacy ``_call_list`` helper from ``channels.py``: three 429
-    attempts with ``Retry-After``-honoured (or 1/2/4 exponential)
-    backoff, then escalation to :class:`ConnectorFailedError`.
+    Both endpoints share request shape and pagination semantics; the
+    only difference is which SDK method we dispatch on. Retry policy
+    (3 attempts, ``Retry-After`` honoured, 1s / 2s / 4s exponential
+    fallback) lives in
+    :func:`opshub.connectors.slack._retry.retry_on_rate_limit` so the
+    listing path now shares the same source of truth as the
+    per-conversation history calls (#379). Non-429
+    :class:`SlackApiError` (and the final 429 after budget exhaustion)
+    re-raise to the local error mapper
+    :func:`_to_connector_failed` which surfaces an endpoint-qualified
+    :class:`ConnectorFailedError` (``users.conversations`` vs
+    ``conversations.list``) — preserves the operator-visible error
+    vocabulary established in #366.
     """
     from slack_sdk.errors import SlackApiError
 
@@ -679,34 +674,16 @@ def _call_list(
     if cursor is not None:
         kwargs["cursor"] = cursor
 
-    last_error: SlackApiError | None = None
-    for attempt in range(_MAX_RETRIES_ON_RATE_LIMIT):
-        try:
-            if all:
-                response: Any = client.conversations_list(**kwargs)
-            else:
-                response = client.users_conversations(**kwargs)
-        except SlackApiError as exc:
-            response_any = cast(Any, exc.response)
-            status_code = getattr(response_any, "status_code", None)
-            if status_code == 429:
-                last_error = exc
-                headers_obj = getattr(response_any, "headers", None)
-                headers: dict[str, Any] = (
-                    cast(dict[str, Any], headers_obj) if isinstance(headers_obj, dict) else {}
-                )
-                retry_after_raw = headers.get("Retry-After")
-                try:
-                    retry_after = int(retry_after_raw) if retry_after_raw else 2**attempt
-                except (TypeError, ValueError):
-                    retry_after = 2**attempt
-                time.sleep(retry_after)
-                continue
-            raise _to_connector_failed(exc, all=all) from exc
-        return _as_response_dict(response)
+    def _call() -> Any:
+        if all:
+            return client.conversations_list(**kwargs)
+        return client.users_conversations(**kwargs)
 
-    assert last_error is not None
-    raise _to_connector_failed(last_error, all=all) from last_error
+    try:
+        response = retry_on_rate_limit(_call)
+    except SlackApiError as exc:
+        raise _to_connector_failed(exc, all=all) from exc
+    return _as_response_dict(response)
 
 
 class _MissingHistoryScopeError(Exception):

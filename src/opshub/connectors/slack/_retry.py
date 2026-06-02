@@ -1,22 +1,28 @@
-"""Slack 429 retry helper shared by the per-conversation hot paths (#377).
+"""Slack 429 retry helper — single source of truth for the connector (#377/#379).
 
-The Slack Web API rate-limits ``conversations.history`` (sync hot path
-in :meth:`opshub.connectors.slack.fetcher.SlackFetcher._call_history`)
-and the per-conversation activity probe in
-:func:`opshub.connectors.slack.conversations._call_history_oldest` with
-the same documented budget (3 attempts, ``Retry-After``-honoured, fall
-back to 1s / 2s / 4s exponential backoff). Before #377 both call sites
-carried near-identical copies of the retry loop; a third
-``conversations.history``-class endpoint would have made it a
-triple-copy where a policy change had to land in three places at once.
+The Slack Web API rate-limits every endpoint this connector talks to
+with the same documented policy: 3 attempts, ``Retry-After``-honoured,
+falling back to 1s / 2s / 4s exponential backoff. Before #377 each
+call site carried its own near-identical copy of the loop; #377/#378
+collapsed two of them (sync ``conversations.history`` +
+discovery activity probe) and #379 closed the listing path
+(``users.conversations`` / ``conversations.list``). All three call
+sites in this package now share this one helper:
 
-This module centralises the budget + backoff so each call site only
-spells out (a) the Slack SDK method to invoke, and (b) its own
-non-429 :class:`SlackApiError` translation (``missing_scope`` →
-sentinel, otherwise endpoint-named :class:`ConnectorFailedError`).
-Listing retry (``users.conversations`` / ``conversations.list``) keeps
-its existing loop for now — the helper is shaped so that path can opt
-in later without changing the surface (#377 §Out of scope).
+* :meth:`opshub.connectors.slack.fetcher.SlackFetcher._call_history`
+  (sync hot path)
+* :func:`opshub.connectors.slack.conversations._call_history_oldest`
+  (discovery activity probe)
+* :func:`opshub.connectors.slack.conversations._call_list`
+  (listing path)
+
+Each call site only spells out (a) the Slack SDK method to invoke
+(typically via a zero-arg closure over the request kwargs), and (b)
+its own non-429 :class:`SlackApiError` translation (``missing_scope``
+→ a discovery-only sentinel for the activity probe, otherwise an
+endpoint-named :class:`ConnectorFailedError`). Future
+``conversations.*``-class endpoints added to this connector inherit
+the retry policy for free.
 
 Cold-start guard
 ----------------
