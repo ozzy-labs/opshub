@@ -1043,3 +1043,108 @@ def test_sort_rows_activity_mode_pushes_missing_ts_to_bucket_tail() -> None:
     result = _sort_rows(rows, by_activity=True)
 
     assert [r.id for r in result] == ["C-new", "C-mid", "C-none"]
+
+
+# ----- audit followup: defensive arm + edge case coverage ---------------
+
+
+def test_parse_since_rejects_overflowingly_large_amount() -> None:
+    """``parse_since('99999999999d')`` → :class:`typer.BadParameter` (not raw OverflowError).
+
+    The relative grammar accepts ``\\d+`` without an upper bound, so a
+    typo (or paste from another tool) can produce an integer that
+    overflows :class:`datetime.timedelta`. The guard in ``parse_since``
+    translates the overflow into the documented exit-code-2
+    ``typer.BadParameter`` contract; this test pins that translation
+    so a future refactor of the relative-form code cannot accidentally
+    drop the guard and surface an unfriendly traceback to operators.
+    """
+    import typer
+
+    from opshub.cli._slack_conversations import parse_since
+
+    with pytest.raises(typer.BadParameter) as excinfo:
+        parse_since("99999999999d")
+    assert "too far in the past" in str(excinfo.value) or "ISO date" in str(excinfo.value)
+
+
+def test_conversations_since_json_drops_only_none_rows_in_mixed_payload(
+    _slack_token_env: None,
+) -> None:
+    """JSON renderer drops ``last_activity_ts`` per-row when ``None``, keeps it when populated.
+
+    Earlier tests pin the all-populated and all-``None`` cases in
+    isolation. This mixed payload — one populated row + one defensive
+    ``None`` row in the same emission — exercises the per-row pop
+    logic so a regression that strips the key from every row (or
+    none) is caught.
+    """
+    import json as _json
+
+    rows = [
+        _row_with_activity(_public_row("C-pop", name="alpha"), last_activity_ts=1_717_200_000.0),
+        _public_row("C-none", name="bravo"),  # dataclass default → last_activity_ts=None
+    ]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            [
+                "connector",
+                "slack",
+                "conversations",
+                "--since",
+                "30d",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0
+    payload = _json.loads(result.stdout)
+    assert len(payload) == 2
+    # Sort order is activity-desc; the populated row comes first.
+    populated, defensive = payload[0], payload[1]
+    assert populated["id"] == "C-pop"
+    assert populated["last_activity_ts"] == 1_717_200_000.0
+    assert defensive["id"] == "C-none"
+    assert "last_activity_ts" not in defensive
+
+
+def test_sort_rows_unknown_type_falls_to_tail_bucket() -> None:
+    """``_sort_rows`` parks rows of an unrecognised ``type`` after all known buckets.
+
+    Defensive arm: a future code path that adds a new conversation
+    type to Slack but forgets to extend :data:`_TYPE_BUCKET_ORDER`
+    would land its rows at the bottom rather than crash the sort
+    (the type literal is enforced at the dataclass level so this
+    requires a typing-bypassed payload, e.g. a thin proxy or a
+    forward-compat schema). The Python runtime does not enforce
+    :class:`typing.Literal`, so ``type='unknown'`` constructs fine.
+    """
+    from typing import cast
+
+    from opshub.cli._slack_conversations import _sort_rows  # pyright: ignore[reportPrivateUsage]
+    from opshub.connectors.slack.conversations import ConversationType, SlackConversation
+
+    unknown = SlackConversation(
+        id="X-future",
+        type=cast(ConversationType, "future_kind"),  # Literal-bypass for the defensive arm
+        name=None,
+        display_name="future-kind-conversation",
+        is_private=False,
+        is_archived=False,
+        purpose="",
+        participants=(),
+    )
+
+    rows = [
+        unknown,
+        _public_row("C-pub", name="alpha"),
+        _im_row("D-dm", peer="alice"),
+    ]
+
+    result = _sort_rows(rows, by_activity=False)
+
+    # Known buckets (public → im) come first, unknown bucket lands last.
+    assert [r.id for r in result] == ["C-pub", "D-dm", "X-future"]

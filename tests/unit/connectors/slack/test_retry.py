@@ -255,3 +255,40 @@ def test_module_does_not_import_slack_sdk_eagerly() -> None:
         "opshub.connectors.slack._retry imports slack_sdk at module level "
         "(must be lazy-loaded):\n  - " + "\n  - ".join(offenders)
     )
+
+
+def test_headers_not_a_dict_falls_back_to_exponential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``response.headers`` not a dict (``None`` / other) → exponential fallback.
+
+    Defensive arm: the helper guards ``isinstance(headers_obj, dict)``
+    before calling ``.get("Retry-After")``. A thin proxy that returns
+    ``headers=None`` (or any non-dict object) would otherwise raise
+    ``AttributeError`` from the missing ``.get`` and break the retry
+    loop. This pins the guard so a future simplification cannot
+    silently drop it.
+    """
+    import time as _stdlib_time
+
+    from slack_sdk.errors import SlackApiError
+
+    sleep_mock = MagicMock()
+    monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
+
+    resp = MagicMock()
+    resp.status_code = 429
+    resp.headers = None  # non-dict shape — drives the isinstance guard fallback
+    resp.get.return_value = "rate_limited"
+    error = SlackApiError(  # type: ignore[no-untyped-call]
+        message="ratelimited", response=resp
+    )
+
+    success = {"ok": True}
+    call = MagicMock(side_effect=[error, success])
+
+    result = retry_on_rate_limit(call)
+
+    assert result is success
+    # First attempt uses 2**0 = 1 (no headers → can't read Retry-After).
+    sleep_mock.assert_called_once_with(1)
