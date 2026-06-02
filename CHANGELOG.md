@@ -5,6 +5,30 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11](https://github.com/ozzy-labs/opshub/compare/v0.2.10...v0.2.11) (2026-06-02)
+
+
+### Added
+
+* **slack:** emit per-row debug log on inaccessible-channel skip ([#407](https://github.com/ozzy-labs/opshub/issues/407)) ([7c6cb3a](https://github.com/ozzy-labs/opshub/commit/7c6cb3ac4761ea287ea1079113eb5da20fcafb97))
+
+
+### Fixed
+
+* **slack:** drop context-mismatched ADR-0018 §(7) reference from inaccessible-channels warning ([#406](https://github.com/ozzy-labs/opshub/issues/406)) ([60484ea](https://github.com/ozzy-labs/opshub/commit/60484ea9e71bf7f460653b04a6728ef27feaf63e))
+* **slack:** skip inaccessible channels in conversations --since probe ([#405](https://github.com/ozzy-labs/opshub/issues/405)) ([2e53815](https://github.com/ozzy-labs/opshub/commit/2e5381577b9c2b153e1f6c84b340bbf264c88eb3))
+
+
+### Changed
+
+* rename "secretary" terminology to "assistant" across the repo ([#404](https://github.com/ozzy-labs/opshub/issues/404)) ([9edf1be](https://github.com/ozzy-labs/opshub/commit/9edf1be642d4c15940689ac7ec5b0af6dbf6b67d))
+
+
+### Documentation
+
+* **adr:** add ADR-0030 Slack thread reply ingestion policy ([#402](https://github.com/ozzy-labs/opshub/issues/402)) ([9247d37](https://github.com/ozzy-labs/opshub/commit/9247d3754c0f9eeaaecd4321ec7018776c6fba13))
+* **slack:** point operators at --debug for per-channel skip ids ([#408](https://github.com/ozzy-labs/opshub/issues/408)) ([e0f2de8](https://github.com/ozzy-labs/opshub/commit/e0f2de8dbe651c0f36d5c72f5f7928fcca0c1d7d))
+
 ## [0.2.10](https://github.com/ozzy-labs/opshub/compare/v0.2.9...v0.2.10) (2026-06-02)
 
 
