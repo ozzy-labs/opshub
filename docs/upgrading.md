@@ -93,8 +93,8 @@ Operators handling regulated / sensitive bodies should enable SQLCipher-backed e
 # 1. Install the encryption extras (pulls sqlcipher3-binary + keyring).
 uv tool install "ozzylabs-opshub[encryption]"   # add to your existing install
 
-# 2. Store the DB key in the OS keychain (recommended).
-opshub connector auth set db:encryption_key      # interactive paste-once flow
+# 2. Mint the DB key in the OS keychain (recommended).
+opshub init                                       # auto-mints db:encryption_key on first run
 # Or, for CI / non-interactive contexts:
 export OPSHUB_DB_ENCRYPTION_KEY="<long random hex>"
 
@@ -164,8 +164,8 @@ uv tool install "ozzylabs-opshub[office]"
 #   content_extraction = true
 
 # 3. Re-scan to pick up the bodies.
-opshub connector sync box_drive
-opshub connector sync onedrive_drive
+opshub box_drive sync
+opshub onedrive_drive sync
 opshub embeddings rebuild                        # re-embed with the new body content
 ```
 
@@ -185,7 +185,7 @@ uv tool install "ozzylabs-opshub[connectors-teams]"
 
 # 2. Register an Azure app and grant Chat.Read (see docs/teams-setup.md).
 # 3. Store the Microsoft Graph User Token.
-opshub connector auth set connector:teams        # paste-once
+opshub teams auth set                            # paste-once
 # Or for CI / non-interactive contexts:
 export OPSHUB_CONNECTOR_TEAMS_TOKEN="<access_token>"
 
@@ -196,7 +196,7 @@ export OPSHUB_CONNECTOR_TEAMS_TOKEN="<access_token>"
 #   fallback_window_days = 30                    # delta-link invalidation fallback window
 
 # 5. Sync.
-opshub connector sync teams
+opshub teams sync
 ```
 
 The Teams connector uses Microsoft Graph delta query (`/me/chats/getAllMessages`). When Graph invalidates the stored delta token (`410 Gone` / `invalidatedDeltaToken`) the fetcher automatically falls back to a `$filter=lastModifiedDateTime ge <iso>` full pass over the last `fallback_window_days` (default 30) and re-acquires a fresh delta link ([ADR-0010](adr/0010-connector-contract.md) §改訂 (c)).
@@ -217,19 +217,19 @@ The OneDrive Desktop FS-scan path mirrors the Phase 9 `box_drive` connector ([AD
 #   content_extraction = true                    # optional, requires [office] extras
 
 # 3. Sync.
-opshub connector sync onedrive_drive
+opshub onedrive_drive sync
 ```
 
 Full OneDrive Drive setup (mount, root_path overrides, troubleshooting): [`docs/onedrive-drive-setup.md`](onedrive-drive-setup.md).
 
 ### Behavioural change: Outlook body deep retention
 
-The existing `ms365` connector's Outlook mapper (`opshub.connectors.ms365.mapper.map_outlook_message`) now retains the full email body alongside the summary. Existing rows with `body = NULL` continue to round-trip cleanly through every query path (the recall / search / brief paths already tolerated NULL bodies in Phase 10). Re-running `opshub connector sync ms365` after upgrading will start populating bodies for newly observed mail. Bodies larger than 500K chars are head-truncated inline.
+The existing `ms365` connector's Outlook mapper (`opshub.connectors.ms365.mapper.map_outlook_message`) now retains the full email body alongside the summary. Existing rows with `body = NULL` continue to round-trip cleanly through every query path (the recall / search / brief paths already tolerated NULL bodies in Phase 10). Re-running `opshub ms365 sync` after upgrading will start populating bodies for newly observed mail. Bodies larger than 500K chars are head-truncated inline.
 
 To re-embed the freshly-retained bodies:
 
 ```bash
-opshub connector sync ms365
+opshub ms365 sync
 opshub embeddings rebuild
 ```
 
@@ -239,7 +239,7 @@ opshub embeddings rebuild
 - New optional extras: `office` (`markitdown[docx,xlsx,pptx]` — i.e. markitdown plus the `mammoth` / `openpyxl` / `python-pptx` sub-extras for the three Office sub-formats opshub extracts) / `connectors-teams` (msal + httpx).
 - New connectors: `teams` (Microsoft Graph chat delta) / `onedrive_drive` (OneDrive Desktop FS scan).
 - New `source_type` discriminators: `teams_message` / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`.
-- No CLI breaking changes. `opshub connector sync teams` / `... onedrive_drive` are the new sync targets.
+- No CLI breaking changes (Phase 11 当時). `opshub teams sync` / `opshub onedrive_drive sync` are the new sync targets.
 - External write-back is **still forbidden** (ADR-0010 §禁止事項 7). The assistant drafts only; the operator sends.
 
 ## Phase 12: Assistant skills expansion
@@ -305,12 +305,12 @@ uv tool install "ozzylabs-opshub[connectors-google-workspace]"
 #   fallback_window_days = 30              # changes.list TTL invalidation fallback window
 
 # 4. Run the paste-code OAuth flow to obtain a refresh token.
-opshub connector auth set google_workspace        # opens the consent URL; paste the code back
+opshub google_workspace auth set                  # opens the consent URL; paste the code back
 # Or for CI / non-interactive contexts:
 export OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN="<refresh-token>"
 
 # 5. Sync.
-opshub connector sync google_workspace
+opshub google_workspace sync
 ```
 
 The connector reads Drive API v3 `changes.list` with a stored `startPageToken` cursor. When Google invalidates the stored token (`400 invalidToken` / `404 startPageToken expired` / `410 Gone`) the connector logs a warning and falls back to a `changes.getStartPageToken` bootstrap + a one-time full pass over the last `fallback_window_days` (default 30) before resuming differential mode — same shape as the Phase 11 Teams delta-link fallback ([ADR-0010](adr/0010-connector-contract.md) §改訂 (c) → §Phase 13 改訂 (g)).
@@ -331,7 +331,7 @@ uv tool install "ozzylabs-opshub[office]"
 #   content_extraction = true
 
 # 3. Re-sync to pick up the bodies.
-opshub connector sync google_workspace
+opshub google_workspace sync
 opshub embeddings rebuild                        # re-embed with the new body content
 ```
 
@@ -360,7 +360,7 @@ The first three discriminators flow through the same `find-document` / `search` 
 
 - **DB head unchanged** = `0019_create_sources_fts` (Phase 10). Phase 13 ships **no migrations**; bodies flow through the existing `sources.body` column + FTS5 index.
 - **New optional extras**: `connectors-google-workspace` (httpx). Pair with `[office]` extras when enabling `content_extraction = true`.
-- **No CLI breaking changes**. `opshub connector auth set google_workspace` (positional form, not `connector:google_workspace`) and `opshub connector sync google_workspace` are the new sync targets — both are additive.
+- **No CLI breaking changes (Phase 13 当時)**. `opshub google_workspace auth set` and `opshub google_workspace sync` are the new sync targets — both are additive.
 - **External write-back is still forbidden** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7). Drive write APIs (`files.update` / `files.create` / `files.copy` / `comments.create` / `permissions.*`) are deliberately not implemented in the connector. Drive push notifications (`files.watch`) are also forbidden — the connector polls via `changes.list` only to preserve form-A (no opshub-internal runtime).
 
 ## Phase 14: Gmail + Google Calendar connectors
@@ -375,14 +375,14 @@ If you already configured the `google_workspace` connector in Phase 13, **your e
 2. **Re-run the paste-code flow once.** A single re-consent applies to all three connectors:
 
    ```bash
-   opshub connector auth set google_workspace
+   opshub google_workspace auth set
    # browser opens with the new 3-scope consent screen; paste the code back
    ```
 
    The keyring slot stays the same (`connector:google_workspace:refresh_token`), so existing env override `OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN` continues to work — just refresh its value once.
 3. **Existing `google_workspace` sync continues to work** unchanged after re-consent. The Drive endpoint still uses `drive.readonly`; the extra scopes are unused there.
 
-If you skip re-consent, `opshub connector sync google_mail` and `opshub connector sync google_calendar` will fail with a 401 `Request had insufficient authentication scopes` error and exit cleanly without writing any events.
+If you skip re-consent, `opshub google_mail sync` and `opshub google_calendar sync` will fail with a 401 `Request had insufficient authentication scopes` error and exit cleanly without writing any events.
 
 ### Opt-in: enable the `google_mail` connector
 
@@ -398,7 +398,7 @@ If you skip re-consent, `opshub connector sync google_mail` and `opshub connecto
 #   # initial_window_days = 7              # first-sync backfill window (cursor=None pass の遡及範囲)
 
 # 3. Sync (re-consent 済み前提、Phase 13 google_workspace と同 principal).
-opshub connector sync google_mail
+opshub google_mail sync
 ```
 
 The connector reads Gmail API v1 `users.messages.list` for the initial sync and `users.history.list` for delta. When Google invalidates the `startHistoryId` (HTTP 404 after the 7-day TTL elapses) the connector logs a warning (`connector.history_list.expired`) and falls back to a one-time `users.messages.list` full pass over the last `fallback_window_days` (default 30) before resuming differential mode. Same shape as the Phase 11 Teams / Phase 13 Drive fallback ([ADR-0010](adr/0010-connector-contract.md) §Phase 14 改訂 (j) generalises the pattern to all delta-cursor connectors).
@@ -419,7 +419,7 @@ Bodies are extracted **symmetrically with the Phase 11 Outlook mapper**: `text/p
 #   # time_max_days = 365                  # 未来 N 日
 
 # 3. Sync.
-opshub connector sync google_calendar
+opshub google_calendar sync
 ```
 
 The connector reads Calendar API v3 `events.list(syncToken=...)` for delta. When Google returns 410 GONE (`SyncTokenExpiredError`), the connector logs `connector.events_list.expired` and falls back to a `events.list(timeMin, timeMax)` window walk (`singleEvents=false` + `showDeleted=true` pinned) before resuming sync-token mode. Override events (`recurringEventId` + `originalStartTime` set) are emitted as **separate `SourceObserved` records sharing `source_type="google_calendar"`** with a body back-pointer `Override of: <master_id> (originalStart: <iso>)` — symmetric in spirit with how the MS365 calendar mapper handles master events ([Phase 14 plan §G4 / OQ3](phase-14-plan.md#1-確定済み事項)).
@@ -430,7 +430,7 @@ Summaries follow `f"{start_iso} - {end_iso} ({attendees_count} attendees)"`; att
 
 - **DB head unchanged** = `0019_create_sources_fts` (Phase 10). Phase 14 ships **no migrations**.
 - **No new extras** — both connectors reuse `connectors-google-workspace` (httpx).
-- **No CLI breaking changes**. `opshub connector sync google_mail` and `opshub connector sync google_calendar` are additive. The auth CLI is unchanged: `opshub connector auth set google_workspace` now provisions the refresh token for all three connectors at once.
+- **No CLI breaking changes (Phase 14 当時)**. `opshub google_mail sync` and `opshub google_calendar sync` are additive. The auth CLI is unchanged: `opshub google_workspace auth set` now provisions the refresh token for all three connectors at once.
 - **Mapper symmetry is mechanically verified** by `tests/unit/connectors/test_mapper_symmetry.py` (6 cases for Gmail ↔ Outlook + 4 cases for google_calendar ↔ ms365_calendar). If you fork the mapper for vendor-specific tweaks, run this pin test to confirm the divergence is intentional.
 - **External write-back is still forbidden** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7). Gmail `send` API and Calendar `events.insert` / `events.patch` / `events.delete` are deliberately not implemented. Push notifications (`users.watch` for Gmail / Calendar `events.watch`) are also forbidden — both connectors poll only ([ADR-0010](adr/0010-connector-contract.md) §Phase 14 改訂 (i)).
 - **No new ADRs** — Phase 14 continues the single-revision trajectory (Phase 11 = 1 new + 2 revisions → Phase 12 = 0 new + 3 revisions → Phase 13 = 0 new + 3 revisions → **Phase 14 = 0 new + 2 revisions**).
@@ -467,10 +467,10 @@ Because the requested OAuth scope set grows, Google invalidates the existing ref
 # 2. Re-run the paste-code OAuth flow. The CLI now opens a consent URL
 #    that requests all three scopes at once; the operator approves the
 #    new combined consent screen and pastes the redirect URL back.
-opshub connector auth set google_workspace
+opshub google_workspace auth set
 
 # 3. Next sync picks up the rotated refresh token automatically.
-opshub connector sync google_workspace
+opshub google_workspace sync
 ```
 
 The keyring slot string (`connector:google_workspace:refresh_token`) and the env-var override name (`OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN`) are **unchanged** — Phase 14 G2 only moves the Python module path and widens the scope set. Operators using the env-var override should re-paste their refresh token after re-running the consent flow (the previous token will no longer satisfy `gmail.readonly` / `calendar.readonly` requests once Gmail / Calendar connectors land in G3 / G4).
@@ -479,7 +479,7 @@ The keyring slot string (`connector:google_workspace:refresh_token`) and the env
 
 - DB head, schema, migrations: **unchanged**.
 - `[connectors-google-workspace]` extras: **unchanged** (Phase 14 plan §Alternatives §9 — Gmail / Calendar reuse the same extras instead of introducing `[connectors-google-mail]` / `[connectors-google-calendar]`).
-- `opshub connector sync google_workspace` (Drive) keeps working bit-for-bit — the connector now imports its auth helper from the shared module, but the contract (cursor, mapper, settings) is invariant.
+- `opshub google_workspace sync` (Drive) keeps working bit-for-bit — the connector now imports its auth helper from the shared module, but the contract (cursor, mapper, settings) is invariant.
 - ADR-0010 §禁止事項 7 (no external write-back): **still in force** for Gmail / Calendar too — G2 only ships read scopes, and Phase 14 G3 / G4 will land Gmail / Calendar read connectors. Gmail send / Calendar write are not part of Phase 14.
 
 ### Phase 14 G2 specifics
