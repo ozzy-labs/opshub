@@ -283,3 +283,54 @@ def test_init_force_and_no_install_skills_combine(
     assert config_file.read_text(encoding="utf-8") == STARTER_CONFIG_TOML
     # ... but the skill install path was never entered.
     install_mock.assert_not_called()
+
+
+def test_init_writes_config_toml_and_it_takes_effect(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``opshub init`` writes a starter TOML that :class:`OpsHubSettings` reads.
+
+    Phase 17 (ADR-0032, #418) end-to-end pin: previously the starter
+    ``config.toml`` was written by ``init`` but never read by any
+    subsequent ``OpsHubSettings()`` call. After #418, instantiating
+    ``OpsHubSettings`` immediately after ``opshub init`` returns
+    values reflecting the starter TOML (not just the field defaults).
+
+    The starter template only carries ``embedding.backend = "disabled"``
+    explicitly, so this test additionally edits the TOML in place to
+    set ``[storage] encryption = true`` and verifies a fresh settings
+    instance picks the override up — proving the round-trip
+    (writer → reader) lands without an intervening process restart.
+    """
+    paths = _isolate_env(monkeypatch, tmp_path)
+    _patch_install_command(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "--no-install-skills"])
+    assert result.exit_code == 0, result.stdout
+
+    config_file = paths["config_dir"] / "config.toml"
+    assert config_file.is_file()
+    assert config_file.read_text(encoding="utf-8") == STARTER_CONFIG_TOML
+
+    # 1. The starter TOML's explicit value flows into OpsHubSettings().
+    from opshub.core.config import OpsHubSettings
+
+    settings_initial = OpsHubSettings()
+    assert settings_initial.embedding.backend == "disabled"
+    # The OPSHUB_CONFIG_DIR override resolves to the temp dir, so the
+    # source path here actually is the starter we just wrote.
+    assert settings_initial.config_dir == paths["config_dir"]
+
+    # 2. Edit the TOML in place — a subsequent OpsHubSettings() must
+    #    pick it up (proving runtime loading, not init-time snapshot).
+    #    The starter template already declares ``[storage]`` (commented
+    #    body) so we add a new top-level section to avoid the "section
+    #    declared twice" tomllib error and exercise a different field.
+    config_file.write_text(
+        STARTER_CONFIG_TOML + "\n[connectors.box_drive]\nenabled = true\nmax_depth = 8\n",
+        encoding="utf-8",
+    )
+    settings_after_edit = OpsHubSettings()
+    assert settings_after_edit.connectors.box_drive.enabled is True
+    assert settings_after_edit.connectors.box_drive.max_depth == 8

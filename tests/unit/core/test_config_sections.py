@@ -243,12 +243,22 @@ def test_llm_backend_env_shortcut_rejects_bogus_value(
     would surface as a confusing "unknown llm backend" error far from
     the actual misconfiguration; we re-validate via ``LLMSettings`` so
     the failure happens at ``OpsHubSettings()`` construction instead.
+
+    Phase 17 (ADR-0032, #418) wrapped :class:`pydantic.ValidationError`
+    inside :class:`ConfigError` at :meth:`OpsHubSettings.__init__` time
+    so the CLI driver renders a single-line actionable error across all
+    three config sources (TOML / env / init args). The original pydantic
+    exception is chained via ``__cause__`` for ``--debug`` diagnostics.
     """
     from pydantic import ValidationError as PydanticValidationError
 
+    from opshub.core.errors import ConfigError
+
     monkeypatch.setenv("OPSHUB_LLM_BACKEND", "grok")
-    with pytest.raises(PydanticValidationError):
+    with pytest.raises(ConfigError) as excinfo:
         OpsHubSettings()
+    # Underlying pydantic diagnostic is preserved via __cause__.
+    assert isinstance(excinfo.value.__cause__, PydanticValidationError)
 
 
 def test_llm_anthropic_model_id_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
