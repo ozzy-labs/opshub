@@ -94,7 +94,7 @@ filename は **固定で `config.toml`** (pydantic-settings の慣習に揃え�
 
 - **`opshub init` 未実行の環境で `OpsHubSettings()` が即座に動く** — テスト / CI / 初回起動 / `opshub init` 自身の冪等再実行で TOML 不在時 fail-fast すると、初期化経路が機能しない (`opshub init` が `OpsHubSettings()` を構築する前に TOML を作る順序になり、循環)
 - **env-only 後方互換と整合** — env で全 setting を渡している operator は TOML を作らずに運用できる
-- **operator が TOML を書いたかどうかは別経路で観測** — `opshub init` 後に config 状態を確認したい operator は `opshub init --print-paths` (Phase 16 で導入) や `docs/troubleshooting.md` §config 優先順位 (#419 で追加予定) で経路を辿れる
+- **operator が TOML を書いたかどうかは別経路で観測** — `opshub init` 後に config 状態を確認したい operator は `opshub skills install --print-paths` (Phase 16-B `--print-paths` flag、`opshub init` 自体には flag 無し) や `docs/troubleshooting.md` §3.10 config 優先順位 で経路を辿れる
 
 ### (5) 不正値 = 既存 `ConfigError` で fail-fast
 
