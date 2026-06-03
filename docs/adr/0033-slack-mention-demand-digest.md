@@ -155,6 +155,15 @@ tool であり、Phase 18-C で `_registry.py` に追加する。
 > (ADR-0034 §(a) §(f))。本 ADR §不変条件 4 (「engagement 軸は Phase 18 scope 外」)
 > は ADR-0034 で別 ADR scope に閉じた形で解除される (本 ADR の demand 軸 projection
 > 経路には影響なし、両 axis は orthogonal)。
+>
+> **Update (Phase 19-D / [ADR-0035](0035-slack-sort-axis-consolidation.md))**:
+> ADR-0034 の CLI surface (`--activity={mine|any}`) は ADR-0035 で
+> `--sort=name|last_self_post|last_activity` に部分 supersede され、
+> engagement 軸経路の表記は `--sort=last_self_post` (または `--sort=name +
+> --since` 単独時の暗黙 engagement default) に rename される。demand 軸 (本
+> ADR `slack.demand.list`) と engagement 軸 (ADR-0034 / ADR-0035
+> `opshub slack conversations`) が orthogonal で共存する不変条件は完全継承
+> され、本 ADR の demand 軸 projection 経路には影響なし。
 
 理由 (Phase 18 時点):
 
@@ -263,7 +272,9 @@ projection が mention parse / DM 判定で必要とする self user_id は、`S
 - **engagement 軸** — 自分の最終投稿日時 (§(d) 参照)。Phase 19 で
   [ADR-0034](0034-slack-engagement-axis.md) として defer 解除済 (`opshub slack
   conversations --activity=mine` 経路、ad-hoc `search.messages` ベース、projection
-  化は scope 外)。本 ADR の demand projection 経路とは orthogonal で相互依存なし
+  化は scope 外)。Phase 19-D で [ADR-0035](0035-slack-sort-axis-consolidation.md)
+  が CLI surface を `--sort=last_self_post` 表記に部分 supersede (decision 本質
+  不変)。本 ADR の demand projection 経路とは orthogonal で相互依存なし
 - **Slack 以外の SaaS への demand 信号拡張** — Gmail (To: self / inbox label) /
   MS Teams (mention) / Calendar (organizer = others, attendee = self の未応答 invite)
 
@@ -382,5 +393,11 @@ epic [#426](https://github.com/ozzy-labs/opshub/issues/426) で 3 PR に分割�
   ADR-0034 で別 ADR scope に閉じた形で解除。demand 軸 (本 ADR 受信、`slack.demand.list`)
   と engagement 軸 (ADR-0034 発信、`opshub slack conversations`) は orthogonal で
   共存し、相互依存なし
+- [ADR-0035: Slack Sort Axis Consolidation](0035-slack-sort-axis-consolidation.md)
+  — ADR-0034 の CLI surface (`--activity={mine|any}`) を
+  `--sort=name|last_self_post|last_activity` に部分 supersede。engagement 軸経路の
+  表記は `--sort=last_self_post` に rename される。demand 軸 (本 ADR) と engagement
+  軸 (ADR-0034 / ADR-0035) の orthogonal 共存は完全継承され、本 ADR の demand 軸
+  projection 経路には影響なし
 - Phase 18 epic [#426](https://github.com/ozzy-labs/opshub/issues/426) — 本 ADR の
   起票元、3 PR 分割 (18-A / 18-B / 18-C) と Scope 外項目の SSOT
