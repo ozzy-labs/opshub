@@ -114,4 +114,5 @@ T2 の `main()` error wrapper から呼ぶ専用ヘルパとして `format_debug
 - [ADR-0021 Encryption at Rest](0021-encryption-at-rest.md) — 暗号化鍵も keyring。ログには出さない原則。
 - [ADR-0022 MCP Server Surface](0022-mcp-server-surface.md) — MCP 境界の redaction (`mcp/_redact.py`)。本 ADR と独立した第二層。
 - [ADR-0026 CLI Progress Reporting](0026-cli-progress-reporting.md) — stdout / stderr 分離の先例。本 ADR も stderr 出力。
+- [ADR-0034 Slack Engagement Axis](0034-slack-engagement-axis.md) — Phase 19 で追加される `search.messages?query=from:@me` 呼び出し経路の Slack OAuth token (`xoxp-`) も、本 ADR §(b) の structlog redaction processor 経路と `core/sanitise.py` SSOT regex (bearer / API key 形状) を inherit する。新 redaction 経路 / scrubber 拡張は ADR-0034 では追加せず、既 stance を継承する契約。
 - Epic #317（CLI トラブルシューティング用オプション）, sub-issues #318 (T1) / 続く T2-T4.

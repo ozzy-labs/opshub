@@ -59,6 +59,8 @@ Slack connector の token principal を **User Token first-class** に転換す�
 5. **prefix チェック**: `xoxp-` / `xoxb-` 両許可は維持。docstring / error message での記述順序は `xoxp-` 先
 6. **principal 可観測性**: `SlackAuth.test_token()` の返り値に `principal: "user" | "bot"` を追加 (Slack `auth.test` の `bot_id` 有無で判別)
 7. **MVP scope**: `channels:history` / `channels:read` / `users:read` (3 scope) を User Token Scopes として登録する前提に書き換え。optional scope menu として `groups:history` (private) / `im:history` (DM) / `mpim:history` (MPIM) / `search:read` (search) / `files:read` (files) を README に記載
+   - **`search:read` の利用条件** ([ADR-0034](0034-slack-engagement-axis.md) §(c) §(d) で格上げ): engagement 軸 (`opshub slack conversations --since` の default `--activity=mine` 経路、`search.messages?query=from:@me`) を使う場合に必要。MVP scope セット (`channels:history` / `channels:read` / `users:read`) には含めず、engagement 軸を使う operator のみが追加で承認する設計
+   - **Bot Token は `search:read` を構造的に持てない** (§Context Bot Token の構造的制約 を再掲) ため、Bot Token 運用 operator は engagement 軸利用不可。`--activity=any` fallback で従来挙動 (broadcast 含む最終 activity) を選ぶ。ADR-0034 §(d) §(e) で明示エラー経路 (`ConnectorFailedError` exit 1) を pin
 
 ## Consequences
 
@@ -116,3 +118,4 @@ Slack connector の token principal を **User Token first-class** に転換す�
 - [Principles 1: Local-first](../principles.md) — personal Operational Memory positioning の根拠
 - Phase 7 Sub A: Slack connector ([#110](https://github.com/ozzy-labs/opshub/issues/110)) — 本 ADR 起票の起点となった実装
 - [ADR-0033: Slack Mention / DM Demand Digest](0033-slack-mention-demand-digest.md) — 本 ADR §決定 7 で MVP として登録する `channels:read` / `channels:history` (User Token) または invite 済 channel の Bot Token 同等 scope のみで、@mention / DM / MPIM の demand 信号検出が完結する (`search:read` scope 追加不要)。ADR-0033 §(a) §不変条件 7 で本 ADR を cross-ref
+- [ADR-0034: Slack Engagement Axis (Self-Posted Last Activity)](0034-slack-engagement-axis.md) — engagement 軸 (`opshub slack conversations --since` の default `--activity=mine` 経路、自分の最終発言 ts) は `search.messages?query=from:@me` 経由で実装され、本 ADR §決定 7 で optional 列挙済の `search:read` scope を「engagement 軸利用時に必要」と格上げする。Bot Token は本 ADR §Context の構造的制約により `search:read` を持てず、engagement 軸利用不可 (ADR-0034 §(d) §(e) で明示エラー経路を pin)
