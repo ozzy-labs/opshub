@@ -150,10 +150,26 @@ def slack_conversations(
         None,
         "--since",
         help=(
-            "Filter by last-message timestamp. Accepts a relative "
-            "duration (e.g. 7d, 2w) or an ISO date (e.g. 2026-05-01). "
-            "Triggers one conversations.history call per conversation; "
-            "requires *:history scopes for the requested --types."
+            "Filter by recent activity. Accepts a relative duration "
+            "(e.g. 7d, 2w) or an ISO date (e.g. 2026-05-01). With "
+            "--activity=mine (default, Phase 19-B engagement axis) it "
+            "triggers one search.messages call ahead of the listing "
+            "(requires search:read on a User Token); with "
+            "--activity=any (legacy, #374) it triggers one "
+            "conversations.history?limit=1 per row (requires *:history "
+            "for the requested --types)."
+        ),
+    ),
+    activity: str = typer.Option(
+        "mine",
+        "--activity",
+        help=(
+            "Activity axis when --since is set (ADR-0034). "
+            "'mine' (default) = channels you wrote in (engagement axis, "
+            "search.messages-backed, requires search:read User Token); "
+            "'any' = legacy behaviour (any-author activity, "
+            "conversations.history per-row, includes broadcast / "
+            "announcement-only channels)."
         ),
     ),
 ) -> None:
@@ -170,17 +186,20 @@ def slack_conversations(
     Exit codes:
 
     * ``0`` — conversations listed (zero matches is **not** an error).
-    * ``1`` — config error (no token / SDK extras missing) or runtime
-      API failure (``invalid_auth`` / ``missing_scope`` on the listing
-      call / exhausted 429 retries).
+    * ``1`` — config error (no token / SDK extras missing /
+      ``--all + --activity=mine`` rejection) or runtime API failure
+      (``invalid_auth`` / ``missing_scope`` on the listing or
+      ``search.messages`` call / exhausted 429 retries / Bot Token on
+      the engagement axis per ADR-0034).
     * ``2`` — usage error (unknown ``--format`` / ``--types`` /
-      ``--since`` value).
+      ``--since`` / ``--activity`` value).
 
     See :mod:`opshub.cli._slack_conversations` for the renderer
     implementation and sort / output-format details (table / toml /
     json).
     """
     from opshub.cli._slack_conversations import (
+        ACTIVITY_CHOICES,
         FORMAT_CHOICES,
         parse_since,
         parse_types,
@@ -195,6 +214,31 @@ def slack_conversations(
         )
         raise typer.Exit(code=2)
 
+    if activity not in ACTIVITY_CHOICES:
+        # typer.BadParameter exits with code 2 — matches --format above.
+        raise typer.BadParameter(
+            f"unknown --activity value {activity!r}; choose one of {', '.join(ACTIVITY_CHOICES)}",
+            param_hint="--activity",
+        )
+
+    # --all + --activity=mine is mutually exclusive (ADR-0034 §(h)).
+    # search.messages only indexes messages the principal could see —
+    # asking for "workspace-wide channels where I posted" is logically
+    # the same as the joined-only listing, so silently trimming the
+    # result set would hide the contradiction. The conflict only
+    # surfaces when the engagement axis actually applies (``--since``
+    # is set); without ``--since`` the activity-axis is moot and
+    # ``--all`` just expands the listing scope, matching the legacy
+    # #366 / #374 contract.
+    if all_conversations and activity == "mine" and since is not None:
+        typer.echo(
+            "Error: --all is incompatible with --activity=mine "
+            "(search.messages indexes only self-member channels); "
+            "use --activity=any for workspace-wide activity.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     parsed_types = parse_types(types)
     parsed_since = parse_since(since) if since is not None else None
     normalised_filter: str | None = filter_substring or None
@@ -208,6 +252,7 @@ def slack_conversations(
             include_archived=include_archived,
             all=all_conversations,
             since=parsed_since,
+            activity=activity,  # pyright: ignore[reportArgumentType]
         )
     except ConfigError as exc:
         typer.echo(f"Error: {exc}", err=True)

@@ -754,7 +754,7 @@ def test_conversations_since_sort_orders_by_activity_desc(
     with _patch_list_conversations(rows, record=_CallRecord()):
         result = runner.invoke(
             app,
-            ["slack", "conversations", "--since", "30d", "--format", "toml"],
+            ["slack", "conversations", "--since", "30d", "--activity", "any", "--format", "toml"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
@@ -775,7 +775,7 @@ def test_conversations_since_table_shows_last_activity_column(
     with _patch_list_conversations(rows, record=_CallRecord()):
         result = runner.invoke(
             app,
-            ["slack", "conversations", "--since", "30d"],
+            ["slack", "conversations", "--since", "30d", "--activity", "any"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
@@ -810,6 +810,8 @@ def test_conversations_since_json_includes_last_activity_ts(
                 "conversations",
                 "--since",
                 "30d",
+                "--activity",
+                "any",
                 "--format",
                 "json",
             ],
@@ -851,6 +853,8 @@ def test_conversations_since_toml_comment_includes_activity_date(
                 "conversations",
                 "--since",
                 "30d",
+                "--activity",
+                "any",
                 "--format",
                 "toml",
             ],
@@ -933,6 +937,8 @@ def test_conversations_since_json_drops_only_none_rows_in_mixed_payload(
                 "conversations",
                 "--since",
                 "30d",
+                "--activity",
+                "any",
                 "--format",
                 "json",
             ],
@@ -972,3 +978,394 @@ def test_sort_rows_unknown_type_falls_to_tail_bucket() -> None:
     result = _sort_rows(rows, by_activity=False)
 
     assert [r.id for r in result] == ["C-pub", "D-dm", "X-future"]
+
+
+# ----- engagement axis (Phase 19-B, ADR-0034) ----------------------------
+
+
+def _row_with_self_post(
+    base: SlackConversation,
+    *,
+    last_self_post_ts: float,
+) -> SlackConversation:
+    """Return ``base`` with the engagement-axis ts populated."""
+    from dataclasses import replace
+
+    return replace(base, last_self_post_ts=last_self_post_ts)
+
+
+def test_conversations_default_activity_is_mine_for_since(
+    _slack_token_env: None,
+) -> None:
+    record = _CallRecord()
+    runner = CliRunner()
+    with _patch_list_conversations([], record=record):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--since", "30d"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert record.kwargs["activity"] == "mine"
+
+
+def test_conversations_activity_any_propagates(_slack_token_env: None) -> None:
+    record = _CallRecord()
+    runner = CliRunner()
+    with _patch_list_conversations([], record=record):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--since", "30d", "--activity", "any"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert record.kwargs["activity"] == "any"
+
+
+def test_conversations_activity_mine_explicit_propagates(_slack_token_env: None) -> None:
+    record = _CallRecord()
+    runner = CliRunner()
+    with _patch_list_conversations([], record=record):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--since", "30d", "--activity", "mine"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert record.kwargs["activity"] == "mine"
+
+
+def test_conversations_activity_unknown_value_exits_2(_slack_token_env: None) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["slack", "conversations", "--since", "30d", "--activity", "foo"],
+    )
+
+    assert result.exit_code == 2, result.stdout + result.stderr
+    combined = result.stdout + result.stderr
+    assert "activity" in combined.lower() or "foo" in combined
+
+
+def test_conversations_all_plus_activity_mine_rejected(_slack_token_env: None) -> None:
+    """``--all + --activity=mine`` (default or explicit) → ConfigError exit 1."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["slack", "conversations", "--all", "--since", "30d"],
+    )
+
+    assert result.exit_code == 1, result.stdout + result.stderr
+    combined = result.stdout + result.stderr
+    assert "--all" in combined
+    assert "--activity=mine" in combined or "--activity=any" in combined
+
+
+def test_conversations_all_plus_activity_mine_explicit_rejected(_slack_token_env: None) -> None:
+    """Explicit ``--activity=mine`` + ``--all`` is rejected with the same message."""
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["slack", "conversations", "--all", "--since", "30d", "--activity", "mine"],
+    )
+
+    assert result.exit_code == 1, result.stdout + result.stderr
+
+
+def test_conversations_all_plus_activity_any_accepted(_slack_token_env: None) -> None:
+    """``--all + --activity=any`` is the documented escape hatch."""
+    record = _CallRecord()
+    runner = CliRunner()
+    with _patch_list_conversations([], record=record):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--all", "--since", "30d", "--activity", "any"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert record.kwargs["all"] is True
+    assert record.kwargs["activity"] == "any"
+
+
+def test_conversations_no_since_with_all_and_default_activity_accepted(
+    _slack_token_env: None,
+) -> None:
+    """Without ``--since`` the axis is moot — ``--all`` alone keeps the legacy path."""
+    record = _CallRecord()
+    runner = CliRunner()
+    with _patch_list_conversations([], record=record):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--all"],
+        )
+
+    assert result.exit_code == 0
+    assert record.kwargs["all"] is True
+
+
+def test_conversations_mine_table_header_uses_last_post(_slack_token_env: None) -> None:
+    rows = [
+        _row_with_self_post(_public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0),
+    ]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--since", "30d", "--activity", "mine"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "LAST_POST" in result.stdout
+    assert "LAST_ACTIVITY" not in result.stdout
+    assert "2024-06-01" in result.stdout
+
+
+def test_conversations_mine_toml_comment_uses_last_post_label(
+    _slack_token_env: None,
+) -> None:
+    rows = [
+        _row_with_self_post(_public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0),
+    ]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            [
+                "slack",
+                "conversations",
+                "--since",
+                "30d",
+                "--activity",
+                "mine",
+                "--format",
+                "toml",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "last post 2024-06-01" in result.stdout
+
+
+def test_conversations_mine_json_emits_last_self_post_ts_only(
+    _slack_token_env: None,
+) -> None:
+    import json as _json
+
+    rows = [
+        _row_with_self_post(_public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0),
+    ]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            [
+                "slack",
+                "conversations",
+                "--since",
+                "30d",
+                "--activity",
+                "mine",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0
+    payload = _json.loads(result.stdout)
+    entry = payload[0]
+    assert entry["last_self_post_ts"] == 1_717_200_000.0
+    assert "last_activity_ts" not in entry
+
+
+def test_conversations_any_json_emits_last_activity_ts_only(
+    _slack_token_env: None,
+) -> None:
+    import json as _json
+
+    rows = [
+        _row_with_activity(_public_row("C1", name="general"), last_activity_ts=1_717_200_000.0),
+    ]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            [
+                "slack",
+                "conversations",
+                "--since",
+                "30d",
+                "--activity",
+                "any",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0
+    payload = _json.loads(result.stdout)
+    entry = payload[0]
+    assert entry["last_activity_ts"] == 1_717_200_000.0
+    assert "last_self_post_ts" not in entry
+
+
+def test_conversations_no_since_json_omits_both_axis_fields(
+    _slack_token_env: None,
+) -> None:
+    import json as _json
+
+    rows = [_public_row("C1")]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--format", "json"],
+        )
+
+    assert result.exit_code == 0
+    payload = _json.loads(result.stdout)
+    entry = payload[0]
+    assert "last_activity_ts" not in entry
+    assert "last_self_post_ts" not in entry
+
+
+def test_conversations_mine_axis_no_dual_emit_in_single_row(
+    _slack_token_env: None,
+) -> None:
+    """Disjoint axis invariant (ADR-0034 §(g)): one row → at most one ts emitted."""
+    import json as _json
+
+    rows = [
+        _row_with_self_post(_public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0),
+    ]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            [
+                "slack",
+                "conversations",
+                "--since",
+                "30d",
+                "--activity",
+                "mine",
+                "--format",
+                "json",
+            ],
+        )
+
+    assert result.exit_code == 0
+    payload = _json.loads(result.stdout)
+    keys_present = set(payload[0])
+    # Exactly one axis field is present per row.
+    axis_fields = keys_present & {"last_activity_ts", "last_self_post_ts"}
+    assert axis_fields == {"last_self_post_ts"}
+
+
+def test_conversations_progress_description_for_mine_is_engagement(
+    _slack_token_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spinner description label flips to ``listing conversations + engagement`` on mine."""
+    from opshub.cli import _progress
+
+    captured: list[str] = []
+
+    class _Spy:
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *_a: Any) -> None:
+            return None
+
+        def advance(self, _n: int) -> None:
+            return None
+
+    def _spy(description: str) -> Any:
+        captured.append(description)
+        return _Spy()
+
+    monkeypatch.setattr(_progress, "indeterminate", _spy)
+
+    runner = CliRunner()
+    with _patch_list_conversations([], record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--since", "30d", "--activity", "mine"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert any("engagement" in d for d in captured)
+
+
+def test_conversations_progress_description_for_any_is_activity(
+    _slack_token_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spinner description keeps the legacy ``+ activity`` label on any-axis."""
+    from opshub.cli import _progress
+
+    captured: list[str] = []
+
+    class _Spy:
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *_a: Any) -> None:
+            return None
+
+        def advance(self, _n: int) -> None:
+            return None
+
+    def _spy(description: str) -> Any:
+        captured.append(description)
+        return _Spy()
+
+    monkeypatch.setattr(_progress, "indeterminate", _spy)
+
+    runner = CliRunner()
+    with _patch_list_conversations([], record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--since", "30d", "--activity", "any"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert any("activity" in d and "engagement" not in d for d in captured)
+
+
+def test_conversations_any_table_regression_byte_identical_phase17(
+    _slack_token_env: None,
+) -> None:
+    """``--activity=any --since 30d`` table output is byte-identical to the #374 baseline.
+
+    Pins the regression contract: operators using ``--activity=any``
+    today must see the exact same table rendering as on the
+    Phase 17-B baseline. This guards against an accidental drift
+    in column widths / header text / sort order when refactoring
+    the engagement-axis path.
+    """
+    rows = [
+        _row_with_activity(_public_row("C-new", name="zulu"), last_activity_ts=1_717_200_000.0),
+        _row_with_activity(_public_row("C-old", name="alpha"), last_activity_ts=1_500_000_000.0),
+    ]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--since", "30d", "--activity", "any"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    # Header carries the any-axis label and the body lists C-new before
+    # C-old (descending activity ts within the public bucket).
+    assert "LAST_ACTIVITY" in result.stdout
+    new_idx = result.stdout.find("C-new")
+    old_idx = result.stdout.find("C-old")
+    assert 0 <= new_idx < old_idx
+
+
+# NOTE: ``test_conversations_help_does_not_import_slack_sdk`` is
+# defined earlier in this file under the "cold-start guard" section.
+# Phase 19-B does not need a redundant copy here; the existing test
+# already covers the ``--help`` lazy-import contract for the renamed
+# command.

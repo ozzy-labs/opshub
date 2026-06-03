@@ -36,18 +36,24 @@ If the `connectors-slack` extras are enabled and the host will surface Slack dat
 | DM listing | `im:read` | `--types ...,im` in `opshub slack conversations`, DM sync |
 | MPIM listing | `mpim:read` | `--types ...,mpim` in `opshub slack conversations`, MPIM sync |
 
-**Message sync (`opshub slack sync`) and the `--since` activity filter** additionally need the matching `*:history` scopes:
+**Engagement-axis activity (`opshub slack conversations --since <when>` default, Phase 19-B)** needs `search:read` so the discovery command can build the per-channel index of the operator's own most-recent post via `search.messages`:
 
 | Purpose | Scope | Required for |
 | --- | --- | --- |
-| public channel message history | `channels:history` | `opshub slack sync`, `opshub slack conversations --since <when>` for public channels ([#374](https://github.com/ozzy-labs/opshub/issues/374)) |
-| private channel message history | `groups:history` | private channel sync, `--since` for private channels |
-| DM message history | `im:history` | DM sync, `--since` for DMs |
-| MPIM message history | `mpim:history` | MPIM sync, `--since` for MPIMs |
+| engagement axis lookup | `search:read` | `opshub slack conversations --since <when>` default ([ADR-0034](adr/0034-slack-engagement-axis.md)); **User Token only** — Bot Tokens cannot hold `search:read`, opt back into the any-author probe with `--activity=any` if you cannot grant the scope |
 
-Bot Tokens (`xoxb-...`) work as an alternative principal, but the bot must be `/invite`d into every channel it should see (ADR-0018 §Decision (2)).
+**Any-author activity (`opshub slack conversations --since <when> --activity=any`, legacy [#374](https://github.com/ozzy-labs/opshub/issues/374)) and `opshub slack sync`** need the matching `*:history` scopes:
 
-The `*:history` scopes are checked per type: when `--since <when>` is used and one of them is missing, that conversation type is dropped from the activity-filtered output and a single warning surfaces on stderr (other types continue to flow, `exit 0`). The discovery listing itself (no `--since`) only needs the `*:read` scopes.
+| Purpose | Scope | Required for |
+| --- | --- | --- |
+| public channel message history | `channels:history` | `opshub slack sync`, `opshub slack conversations --since <when> --activity=any` for public channels |
+| private channel message history | `groups:history` | private channel sync, `--activity=any` for private channels |
+| DM message history | `im:history` | DM sync, `--activity=any` for DMs |
+| MPIM message history | `mpim:history` | MPIM sync, `--activity=any` for MPIMs |
+
+Bot Tokens (`xoxb-...`) work as an alternative principal, but the bot must be `/invite`d into every channel it should see (ADR-0018 §Decision (2)). Bot Tokens **cannot** satisfy the engagement axis (`search:read` is a User-Token-only scope); the discovery command surfaces an explicit `ConfigError` recommending `--activity=any` when a Bot Token is detected on the engagement path ([ADR-0034](adr/0034-slack-engagement-axis.md) §決定).
+
+The `*:history` scopes are checked per type only on the any-author axis: when `--activity=any --since <when>` is used and one of them is missing, that conversation type is dropped from the activity-filtered output and a single warning surfaces on stderr (other types continue to flow, `exit 0`). The discovery listing itself (no `--since`) only needs the `*:read` scopes.
 
 ## 2. Initialise the database
 

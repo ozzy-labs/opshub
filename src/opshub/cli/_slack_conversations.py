@@ -66,6 +66,7 @@ import typer
 from opshub.cli import _progress
 from opshub.connectors.slack.conversations import (
     CONVERSATION_TYPES,
+    ActivityAxis,
     ConversationType,
 )
 from opshub.core.time import now_utc
@@ -77,6 +78,8 @@ if TYPE_CHECKING:
 
 
 __all__ = [
+    "ACTIVITY_CHOICES",
+    "DEFAULT_ACTIVITY",
     "DEFAULT_TYPES_CSV",
     "FORMAT_CHOICES",
     "OutputFormat",
@@ -93,6 +96,18 @@ OutputFormat = Literal["table", "toml", "json"]
 
 #: Valid ``--format`` values surfaced to Typer.
 FORMAT_CHOICES: tuple[OutputFormat, ...] = ("table", "toml", "json")
+
+#: Valid ``--activity`` values surfaced to Typer (ADR-0034 §(g)). The
+#: engagement axis (``mine``) is the documented default — it matches
+#: "channels I actually wrote in" which is the discoverability
+#: behaviour operators expect when pasting into ``opshub.toml``.
+ACTIVITY_CHOICES: tuple[ActivityAxis, ...] = ("mine", "any")
+
+#: Phase 19-B default for ``--activity``. Spelled out as a constant
+#: (rather than re-derived from ``ACTIVITY_CHOICES[0]``) so a future
+#: reordering of the choice list does not silently flip the operator-
+#: visible default.
+DEFAULT_ACTIVITY: ActivityAxis = "mine"
 
 #: Default value for the Typer ``--types`` option. Spells out the full
 #: accept-list (rather than rebuilding from :data:`CONVERSATION_TYPES`)
@@ -245,6 +260,7 @@ def run_conversations_command(
     include_archived: bool,
     all: bool,
     since: datetime | None = None,
+    activity: ActivityAxis = DEFAULT_ACTIVITY,
 ) -> None:
     """Drive ``opshub slack conversations`` end-to-end.
 
@@ -273,13 +289,24 @@ def run_conversations_command(
         only) to ``conversations.list`` (workspace-wide).
     since:
         Optional tz-aware :class:`datetime.datetime` cutoff. When
-        non-``None``, the listing iterator makes one extra
-        ``conversations.history?limit=1`` call per row and yields only
-        rows whose latest message ts is newer than ``since``. The
-        table renderer adds a ``LAST_ACTIVITY`` column in that mode;
-        the sort within each type-bucket flips from ``display_name``
-        ascending to ``last_activity_ts`` descending. ``None`` keeps
-        the no-extra-API-call path of #366.
+        non-``None``, the listing iterator runs an extra activity probe
+        whose shape depends on ``activity`` (engagement axis vs
+        any-author axis); see :data:`ACTIVITY_CHOICES`. The table
+        renderer adds a ``LAST_POST`` / ``LAST_ACTIVITY`` column in that
+        mode; the sort within each type-bucket flips from
+        ``display_name`` ascending to the axis ts descending. ``None``
+        keeps the no-extra-API-call path of #366.
+    activity:
+        Activity axis when ``since`` is set (ADR-0034 §(g)):
+
+        * ``"mine"`` (default) — engagement axis. One ``search.messages``
+          call returns the operator's own posts; channels missing from
+          the index are dropped. Populates ``last_self_post_ts``.
+          Requires ``search:read`` on a User Token.
+        * ``"any"`` — legacy any-author axis (#374). One
+          ``conversations.history?limit=1`` per row; channels with
+          any-author messages newer than ``since`` survive. Populates
+          ``last_activity_ts``. Requires ``*:history`` per type.
 
     Raises
     ------
@@ -307,9 +334,12 @@ def run_conversations_command(
     # keeps the operator's mental model tidy without forcing a second
     # rich Progress context.
     warnings: list[str] = []
-    description = (
-        "listing conversations + activity" if since is not None else "listing conversations"
-    )
+    if since is None:
+        description = "listing conversations"
+    elif activity == "mine":
+        description = "listing conversations + engagement"
+    else:
+        description = "listing conversations + activity"
     with _progress.indeterminate(description) as reporter:
         conversations = list_conversations(
             auth,
@@ -319,6 +349,7 @@ def run_conversations_command(
             limit=limit,
             all=all,
             since=since,
+            activity=activity,
             warnings=warnings,
             reporter=reporter,
         )
@@ -346,6 +377,7 @@ def run_conversations_command(
         sorted_rows,
         output_format=output_format,
         show_activity=since is not None,
+        activity=activity,
     )
     if rendered:
         typer.echo(rendered)
@@ -356,6 +388,7 @@ def render_conversations(
     *,
     output_format: OutputFormat,
     show_activity: bool = False,
+    activity: ActivityAxis = DEFAULT_ACTIVITY,
 ) -> str:
     """Format a stream of :class:`SlackConversation` rows for stdout.
 
@@ -365,17 +398,23 @@ def render_conversations(
     ``typer.echo`` and reads from the network.
 
     ``show_activity`` controls whether the table layout includes the
-    ``LAST_ACTIVITY`` column (default: hidden). The JSON / TOML
-    renderers always reflect ``last_activity_ts`` when populated; the
-    JSON renderer drops the key for rows where it is ``None`` so a
-    no-``--since`` invocation does not pollute the payload with
-    meaningless nulls.
+    activity-axis column (default: hidden). ``activity`` selects the
+    column header (``LAST_POST`` for engagement axis, ``LAST_ACTIVITY``
+    for the any-author axis) and the TOML comment label. The JSON
+    renderer always reflects whichever axis ts is populated and drops
+    the key when it is ``None`` so a no-``--since`` invocation does
+    not pollute the payload with meaningless null fields and a single
+    invocation never emits both ts fields on the same row.
     """
     materialised = list(rows)
     if output_format == "table":
-        return _render_table(materialised, show_activity=show_activity)
+        return _render_table(
+            materialised,
+            show_activity=show_activity,
+            activity=activity,
+        )
     if output_format == "toml":
-        return _render_toml(materialised)
+        return _render_toml(materialised, activity=activity)
     if output_format == "json":
         return _render_json(materialised)
     raise ValueError(f"unknown output format: {output_format!r}")
@@ -406,7 +445,14 @@ def _sort_rows(
 
         def _activity_key(row: SlackConversation) -> tuple[int, int, float, str]:
             bucket = bucket_index.get(row.type, fallback_bucket)
-            ts = row.last_activity_ts
+            # Engagement axis populates ``last_self_post_ts``; any-axis
+            # populates ``last_activity_ts``. The two are disjoint per
+            # ADR-0034 §(g), so picking whichever is non-``None``
+            # resolves the populated value without inspecting which
+            # axis built the row.
+            ts = (
+                row.last_self_post_ts if row.last_self_post_ts is not None else row.last_activity_ts
+            )
             # ``has_ts`` (0 = present, 1 = missing) lifts missing-ts
             # rows to the bottom of the bucket; ``-ts`` flips the
             # sort to descending (newest first) for present ts.
@@ -437,20 +483,31 @@ def _emit_empty_hint(*, filter_substring: str | None, err: bool) -> None:
         typer.echo("no conversations matched", err=err)
 
 
-def _render_table(rows: list[SlackConversation], *, show_activity: bool = False) -> str:
+def _render_table(
+    rows: list[SlackConversation],
+    *,
+    show_activity: bool = False,
+    activity: ActivityAxis = DEFAULT_ACTIVITY,
+) -> str:
     """Render conversations as a fixed-width table.
 
-    ``show_activity=True`` inserts a ``LAST_ACTIVITY`` column between
-    ``ARCHIVED`` and ``PURPOSE``. The column renders the UTC date
-    (``YYYY-MM-DD``) of the per-row ``last_activity_ts``; rows
-    without a ts (defensive, should not occur when the caller invokes
-    ``--since``) render ``-``.
+    ``show_activity=True`` inserts an activity-axis column between
+    ``ARCHIVED`` and ``PURPOSE``. The header is ``LAST_POST`` for the
+    engagement axis (``activity="mine"``) and ``LAST_ACTIVITY`` for
+    the any-author axis (``activity="any"``); column width is constant
+    at :data:`_LAST_ACTIVITY_WIDTH` either way so a TOML / table diff
+    across axes stays column-aligned. The column renders the UTC date
+    (``YYYY-MM-DD``) of the populated axis ts; rows without a ts
+    (defensive, should not occur when the caller invokes ``--since``)
+    render ``-``.
     """
     name_values = [_format_name_column(row) for row in rows]
 
     id_width = max(_ID_MIN_WIDTH, max((len(row.id) for row in rows), default=0))
     name_width = max(_NAME_MIN_WIDTH, max((len(v) for v in name_values), default=0))
     archived_width = 8
+
+    activity_header = "LAST_POST" if activity == "mine" else "LAST_ACTIVITY"
 
     header_parts = [
         f"{'ID':<{id_width}}",
@@ -459,7 +516,7 @@ def _render_table(rows: list[SlackConversation], *, show_activity: bool = False)
         f"{'ARCHIVED':<{archived_width}}",
     ]
     if show_activity:
-        header_parts.append(f"{'LAST_ACTIVITY':<{_LAST_ACTIVITY_WIDTH}}")
+        header_parts.append(f"{activity_header:<{_LAST_ACTIVITY_WIDTH}}")
     header_parts.append("PURPOSE")
     header = "  ".join(header_parts)
 
@@ -474,7 +531,8 @@ def _render_table(rows: list[SlackConversation], *, show_activity: bool = False)
             f"{archived:<{archived_width}}",
         ]
         if show_activity:
-            cells.append(f"{_format_activity_date(row.last_activity_ts):<{_LAST_ACTIVITY_WIDTH}}")
+            row_ts = row.last_self_post_ts if activity == "mine" else row.last_activity_ts
+            cells.append(f"{_format_activity_date(row_ts):<{_LAST_ACTIVITY_WIDTH}}")
         cells.append(purpose)
         lines.append("  ".join(cells))
     return "\n".join(lines)
@@ -521,29 +579,38 @@ def _supports_archive(row: SlackConversation) -> bool:
     return row.type in ("public", "private")
 
 
-def _render_toml(rows: list[SlackConversation]) -> str:
+def _render_toml(
+    rows: list[SlackConversation],
+    *,
+    activity: ActivityAxis = DEFAULT_ACTIVITY,
+) -> str:
     """Render conversations as a TOML ``channels = [...]`` snippet.
 
     Each id sits inside string quotes followed by a comment that names
     the conversation type and a human-readable label so reviewers can
     spot DMs / MPIMs / archived entries at a glance before pasting
-    into ``opshub.toml``.
+    into ``opshub.toml``. The activity flag label depends on
+    ``activity``: ``"last post YYYY-MM-DD"`` for the engagement axis
+    (matches the table header label), ``"last YYYY-MM-DD"`` for the
+    any-author axis (preserves the #374 wording).
     """
     header = f"# Slack conversations ({len(rows)})"
     if not rows:
         return f"{header}\nchannels = []"
+    label_prefix = "last post" if activity == "mine" else "last"
     lines = [header, "channels = ["]
     for row in rows:
         flags: list[str] = [row.type]
         if row.is_archived:
             flags.append("archived")
-        if row.last_activity_ts is not None:
+        axis_ts = row.last_self_post_ts if activity == "mine" else row.last_activity_ts
+        if axis_ts is not None:
             # Operators reviewing a TOML paste want the activity
             # signal inline with the channel id; carrying it in the
             # comment keeps the actual config (``"C..."``) untouched
             # while still showing the reviewer "this channel last
-            # spoke on 2026-05-30".
-            flags.append(f"last {_format_activity_date(row.last_activity_ts)}")
+            # spoke on 2026-05-30" (or "I last posted there").
+            flags.append(f"{label_prefix} {_format_activity_date(axis_ts)}")
         label = row.name or row.display_name or row.id
         comment = f"{label} ({', '.join(flags)})"
         lines.append(f'  "{row.id}",  # {comment}')
@@ -559,16 +626,20 @@ def _render_json(rows: list[SlackConversation]) -> str:
     dataclass field type is ``tuple[str, ...]`` but :func:`asdict` and
     :func:`json.dumps` lower tuples to arrays naturally).
 
-    ``last_activity_ts`` is omitted from rows where it is ``None`` so
-    a no-``--since`` invocation does not pollute the payload with
-    meaningless null fields — keeps the JSON contract of #366 intact
-    for operators who never opt into activity probing.
+    ``last_activity_ts`` / ``last_self_post_ts`` are omitted from rows
+    where they are ``None`` so a no-``--since`` invocation does not
+    pollute the payload with meaningless null fields, and a single
+    ``--activity`` invocation never carries both axis fields on the
+    same row (ADR-0034 §(g)) — keeps the JSON contract of #366
+    intact for operators who never opt into activity probing and adds
+    Phase 19-B disjointness for engagement-axis consumers.
     """
     payload: list[dict[str, object]] = []
     for row in rows:
         entry = asdict(row)
-        if entry.get("last_activity_ts") is None:
-            entry.pop("last_activity_ts", None)
+        for axis_field in ("last_activity_ts", "last_self_post_ts"):
+            if entry.get(axis_field) is None:
+                entry.pop(axis_field, None)
         payload.append(entry)
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
