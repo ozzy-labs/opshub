@@ -208,7 +208,7 @@ sqlite3 ~/.local/share/opshub/db/opshub.sqlite \
 
 Slack connector を有効化するには `opshub.toml` の `[connectors.slack] channels = ["C012345...", ...]` に **channel ID** を列挙する必要がある。Slack Web UI から「リンクをコピー → URL 末尾」を読む手作業はチャネル数が多いワークスペースで現実的でない。
 
-**手順** (Phase 14.x [#341](https://github.com/ozzy-labs/opshub/issues/341) で初出、Phase 15+ [#366](https://github.com/ozzy-labs/opshub/issues/366) で `channels` → `conversations` 刷新 = `users.conversations` 切替 + DM/MPIM 統合 + 進捗表示、[#374](https://github.com/ozzy-labs/opshub/issues/374) で type 別固定ソート + `--since` activity フィルター追加):
+**手順** (Phase 14.x [#341](https://github.com/ozzy-labs/opshub/issues/341) で初出、Phase 15+ [#366](https://github.com/ozzy-labs/opshub/issues/366) で `channels` → `conversations` 刷新 = `users.conversations` 切替 + DM/MPIM 統合 + 進捗表示、[#374](https://github.com/ozzy-labs/opshub/issues/374) で type 別固定ソート + `--since` activity フィルター追加、Phase 19-B [ADR-0034](adr/0034-slack-engagement-axis.md) で `--since` default を engagement 軸 = 自分が発言した channel に切替え + `--activity=mine|any` flag 追加):
 
 ```bash
 opshub slack auth set            # 既存。User Token (`xoxp-`) 推奨
@@ -218,7 +218,8 @@ opshub slack conversations --filter eng    # name / participant に "eng" を含
 opshub slack conversations --types public,private   # public / private channel のみ (DM/MPIM を除外)
 opshub slack conversations --include-archived       # archived channel も対象
 opshub slack conversations --all           # workspace 全体 (`conversations.list` 経由、joined 外も含む)
-opshub slack conversations --since 30d     # 直近 30 日に最終メッセージがある conversation のみ (per-conv 1 API call、LAST_ACTIVITY 列を追加、activity 降順)
+opshub slack conversations --since 30d     # Phase 19-B default = engagement 軸: 直近 30 日に **自分が発言した** channel のみ (1 度の search.messages 呼出、LAST_POST 列を追加、activity 降順、`search:read` scope 必要)
+opshub slack conversations --since 30d --activity=any   # 旧挙動: 直近 30 日に **誰かが発言した** channel (per-conv 1 conversations.history 呼出、LAST_ACTIVITY 列、broadcast / announcement-only 含む、`*:history` scope 必要)
 opshub slack conversations --since 2026-05-01 --format toml  # 絶対日付指定 (ISO 8601。YYYY-MM-DD は UTC 0:00 解釈、`+09:00` 付き timezone も可)
 ```
 
@@ -243,8 +244,21 @@ opshub slack conversations --since 2026-05-01 --format toml  # 絶対日付指�
   - 該当 channel id を特定する場合は `--debug` (または `-vv`) を付けて再実行する。skip した行ごとに `slack.conversations.history.row_skipped` event が `channel_id` / `error_code` / `conversation_type` を伴って出力される ([PR #407](https://github.com/ozzy-labs/opshub/pull/407))
   - 注意: sync hot path (`opshub slack sync`) は `opshub.toml` で明示指定された channel id を fetch するため、同じ error code を **fail-fast** 扱いする (config drift を検知させる意図)。discovery と sync で error semantics が意図的に非対称なのは、discovery = 動的列挙 / sync = 明示指定の責務差に基づく
 - `Invalid value for '--since': '<入力>' is not a recognised value` (exit code 2) → 相対は `<N>d` / `<N>w`、絶対は ISO 8601 (`2026-05-01` / `2026-05-01T00:00:00Z`) のみ受け付ける
+- `unknown --activity value 'foo'; choose one of mine, any` (exit code 2) → `--activity` は `mine` (default、engagement 軸) / `any` (legacy any-author 軸) のみ。タイポ / 旧 doc の参照
+- `Error: --all is incompatible with --activity=mine ...` (exit code 1) → `--all + --since + --activity=mine` (default 含む) の組合せ非両立 ([ADR-0034](adr/0034-slack-engagement-axis.md) §決定)。`search.messages` は principal が member の channel しか index しないため、workspace-wide listing と engagement 軸の積集合は joined-only と同義になる。`--activity=any` を明示するか `--all` を外す
 
 トークン値・API レスポンス本文はどの出力経路 (stdout / stderr) にも出ない。`--debug` を付けた場合の追加 traceback もサニタイズ済み (§3.1 と同じ redaction processor が効く)。
+
+### 3.7a engagement 軸 (`--activity=mine`) で何も表示されない / `search:read` 不足エラー
+
+Phase 19-B ([ADR-0034](adr/0034-slack-engagement-axis.md)) で `opshub slack conversations --since <when>` の default が「自分が発言した channel」(engagement 軸) に切替わった。`search.messages` 経由で自分の最近の発言 channel を index 化し、それで listing をフィルタする。下記の代表的な失敗ケースとリカバリ手順:
+
+- `Error: Slack search.messages failed: missing_scope (needed: 'search:read'). User Token must hold 'search:read' for --activity=mine. Rerun with --activity=any if you cannot grant the scope. See ADR-0018 §Decision (7) ...` (exit code 1) → User Token の OAuth scope に `search:read` がない。Slack App の OAuth & Permissions で `search:read` (User Token Scopes) を追加し再認可、`opshub slack auth set` でトークンを更新する。scope を増やせない (workspace policy / 管理者承認待ち) 場合は暫定的に `--activity=any` で旧 `*:history` 経路に戻す
+- `Error: Slack Bot Token cannot satisfy 'search:read' (engagement axis); use a User Token ('xoxp-') or rerun with --activity=any.` (exit code 1) → Bot Token (`xoxb-`) は `search:read` を保持できない (Slack の制約)。User Token (`xoxp-`) を `opshub slack auth set` で再登録するか、`--activity=any` で旧挙動に切替える
+- `Error: Slack search.messages failed: invalid_auth` / `not_authed` / `account_inactive` / `team_not_found` (exit code 1) → User Token 失効 / 再認証 / 権限剥奪。`opshub slack auth set` で再登録する
+- `notice: search.messages may lag by minutes; use --activity=any for live activity.` (stderr、exit code 0、1 度だけ) → Slack `search.messages` は full-text index 経由のため数分〜数十分の lag がある (ADR-0034 §(i))。直近の発言だが engagement 軸の出力に現れない channel がある場合は、`--activity=any` で `conversations.history` 直接呼出に切替えると live 状態が見える
+- 出力が空 (`no conversations matched`、exit code 0) で listing 自体は機能している場合 → 過去 `<期間>` で自分が発言した channel が実際に 0 件、または lag で index に未反映。`--activity=any` で any-author 経路 (broadcast / announcement-only 含む) も併せ確認する
+- 該当 channel が listing には載るが engagement 軸の output から落ちている場合 → 自分は member だが発言していない (read-only 状態)。これは仕様通りの drop。`opshub --debug` で `slack.conversations.engagement_index_orphan` event の counter を確認すると、index にあるが listing にない channel 数 (Slack Connect / archived / type filter で落ちた件数) が見える (warning 化はしない、UX を汚さないため debug log 限定)
 
 ### 3.8 `opshub search` の Slack 結果 title が `unknown in #channel-name` になる
 

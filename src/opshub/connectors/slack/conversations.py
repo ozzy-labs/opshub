@@ -5,6 +5,31 @@ Iterates Slack's ``users.conversations`` API (default) — or
 ``all=True`` — and yields :class:`SlackConversation` rows so the CLI surface
 can render a human-friendly table / TOML snippet / JSON payload.
 
+Engagement axis (Phase 19-B, ADR-0034)
+--------------------------------------
+
+When ``since`` is set the caller now picks between two activity semantics:
+
+* ``activity="mine"`` (default) — "channels where I actually wrote
+  something". We call ``search.messages`` **once** with
+  ``query=f"from:<@{self_user_id}>"`` + ``oldest=since`` and build a
+  per-channel index of the operator's own most-recent post ts.
+  Listing rows are kept only when the channel appears in the index; the
+  retained ts lands on :attr:`SlackConversation.last_self_post_ts`. This
+  matches the "discoverability of my Slack engagement" use case far
+  better than the legacy any-author probe — operators paste-into-toml
+  the channels they speak in, not the channels marketing broadcasts
+  into.
+* ``activity="any"`` — pre-19-B behaviour: one
+  ``conversations.history?limit=1&oldest=<since>`` call per row,
+  ``last_activity_ts`` populated, broadcast / announcement-only
+  channels included.
+
+The two fields stay disjoint per row: mine writes only
+``last_self_post_ts`` (any-axis field stays ``None``), any writes only
+``last_activity_ts``. The JSON renderer drops whichever field is ``None``
+so consumers see exactly one axis per row.
+
 Motivation (over the original ``list_channels`` helper)
 -------------------------------------------------------
 
@@ -108,7 +133,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from opshub.connectors.slack._retry import retry_on_rate_limit
-from opshub.core.errors import ConnectorFailedError
+from opshub.core.errors import ConfigError, ConnectorFailedError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -120,6 +145,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CONVERSATION_TYPES",
+    "ActivityAxis",
     "ConversationType",
     "SlackConversation",
     "list_conversations",
@@ -153,6 +179,30 @@ _API_TYPE_TOKEN: dict[ConversationType, str] = {
     "im": "im",
     "mpim": "mpim",
 }
+
+#: Activity axis literal (Phase 19-B, ADR-0034). ``"mine"`` is the
+#: engagement axis (search.messages-backed, default) and ``"any"``
+#: preserves the Phase 17 #374 any-author probe so an operator can
+#: opt back into the old behaviour with ``--activity=any``.
+ActivityAxis = Literal["mine", "any"]
+
+#: Per-page size for ``search.messages`` engagement-index calls. Slack
+#: caps page-based pagination at ``count*page <= 10000``; ``count=100``
+#: is the documented sweet spot for the engagement use case (the
+#: cursor walk terminates as soon as the operator has seen all of
+#: their recent posts, so a tighter page also limits the worst-case
+#: API budget on chatty workspaces).
+_SEARCH_MESSAGES_PAGE_SIZE = 100
+
+#: ``search.messages`` indexing lag advisory. Slack's full-text index
+#: lags message ingestion by minutes — the engagement axis surfaces a
+#: stale snapshot relative to live ``conversations.history``. We emit
+#: this once per ``list_conversations`` call (before the index fetch)
+#: so an operator who sees a freshly-posted channel missing from the
+#: output has a documented cause to map to (ADR-0034 §(i)).
+_INDEXING_LAG_NOTICE = (
+    "notice: search.messages may lag by minutes; use --activity=any for live activity."
+)
 
 #: ``conversations.history`` scope required to fetch the last-message ts
 #: for a given conversation type. Used to build the per-type warning
@@ -220,12 +270,21 @@ class SlackConversation:
         string when the conversation has no purpose set (DMs always).
     last_activity_ts:
         Unix epoch seconds of the most recent message in the
-        conversation, populated only when :func:`list_conversations` was
-        called with a non-``None`` ``since`` argument (one extra
-        ``conversations.history`` call per row). ``None`` means
-        "unknown / not requested" — the JSON renderer drops the key in
-        that case so the discovery payload stays free of meaningless
-        nulls when the operator did not opt into activity probing.
+        conversation **regardless of author**, populated only on the
+        ``activity="any"`` path (one extra ``conversations.history``
+        call per row). ``None`` on the ``activity="mine"`` path or when
+        ``since`` is not set — the JSON renderer drops the key in that
+        case so the discovery payload stays free of meaningless nulls
+        when the operator did not opt into the any-axis probe.
+    last_self_post_ts:
+        Unix epoch seconds of the operator's own most-recent post in
+        the conversation, populated only on the engagement axis
+        (``activity="mine"``) when ``since`` is set. ``None`` on the
+        ``activity="any"`` path or when ``since`` is not set. The two
+        axis fields are disjoint by design — see ADR-0034 §(g)
+        ("axes are orthogonal; one row carries one axis ts") so a JSON
+        consumer can branch on field presence without re-reading the
+        invocation flags.
     """
 
     id: str
@@ -237,6 +296,7 @@ class SlackConversation:
     purpose: str
     participants: tuple[str, ...] = field(default_factory=tuple)
     last_activity_ts: float | None = None
+    last_self_post_ts: float | None = None
 
 
 def list_conversations(
@@ -248,6 +308,7 @@ def list_conversations(
     limit: int | None = None,
     all: bool = False,
     since: datetime | None = None,
+    activity: ActivityAxis = "mine",
     warnings: list[str] | None = None,
     reporter: ProgressReporter | None = None,
 ) -> Iterator[SlackConversation]:
@@ -285,15 +346,32 @@ def list_conversations(
         joined-only or workspace-wide perspective is useful for their
         paste-into-opshub.toml workflow.
     since:
-        When non-``None``, perform one extra
-        ``conversations.history?limit=1&oldest=<since>`` call per row
-        and yield only rows that had at least one message after
-        ``since``. The actual last-message ts is stored in
-        :attr:`SlackConversation.last_activity_ts`. ``since`` must be a
-        tz-aware :class:`datetime.datetime`; the helper does not
-        normalise — callers should pre-attach UTC. Cost: one extra
-        Slack call per surviving row of every type for which
-        ``conversations.history`` succeeds.
+        When non-``None``, filter rows by recent activity. The actual
+        probe strategy depends on ``activity`` (see below). ``since``
+        must be a tz-aware :class:`datetime.datetime`; the helper does
+        not normalise — callers should pre-attach UTC.
+    activity:
+        Selects the activity axis when ``since`` is set (no effect when
+        ``since`` is ``None``). ADR-0034:
+
+        * ``"mine"`` (default, Phase 19-B engagement axis): one
+          ``search.messages`` paginated call before the listing loop
+          (``query="from:<@<self>>"`` + ``oldest=since`` +
+          ``sort=timestamp,sort_dir=desc``) builds a per-channel index
+          of the operator's own most-recent post ts. Rows whose
+          ``channel_id`` is absent from the index are dropped. The
+          retained ts lands on
+          :attr:`SlackConversation.last_self_post_ts`; the any-axis
+          ``last_activity_ts`` stays ``None``. Bot Tokens cannot hold
+          ``search:read`` — the helper raises
+          :class:`~opshub.core.errors.ConfigError` on principal
+          mismatch and recommends ``--activity=any``.
+        * ``"any"``: pre-19-B behaviour. One
+          ``conversations.history?limit=1&oldest=<since>`` per surviving
+          row; ``last_activity_ts`` populated, ``last_self_post_ts``
+          stays ``None``. Required scope set is
+          ``*:history`` (per type). Broadcast / announcement-only
+          channels survive even when the operator never wrote in them.
     warnings:
         Optional list the helper appends operator-facing warnings to.
         Used when ``since`` is set and the ``conversations.history``
@@ -382,6 +460,44 @@ def list_conversations(
     # Connect channels does not see 50 lines of stderr noise.
     inaccessible_history_counts: dict[str, int] = {}
 
+    # Engagement-axis (``activity="mine"``) state. Built lazily before
+    # the first row that needs it so workspaces with no since-filter
+    # never pay for the principal check or the ``search.messages``
+    # round-trip. ``self_post_index`` is set to ``None`` until the
+    # engagement path has built it (or determined that no engagement
+    # path applies); subsequent code reads ``self_post_index is not
+    # None`` to discriminate between "engagement applies, lookup
+    # below" and "any-axis path".
+    self_post_index: dict[str, float] | None = None
+    referenced_channel_ids: set[str] | None = None
+    if since_ts is not None and activity == "mine":
+        # Reject Bot Tokens early: ``search:read`` is a User Token-only
+        # scope, so a Bot Token can never satisfy the engagement axis.
+        # The check runs *before* the index fetch so the operator sees
+        # a documented ``ConfigError`` instead of a Slack
+        # ``missing_scope`` error code that does not name the token
+        # principal.
+        principal_info = auth.test_token()
+        if principal_info.get("principal") == "bot":
+            raise ConfigError(
+                "Slack Bot Token cannot satisfy `search:read` "
+                "(engagement axis); use a User Token (`xoxp-`) "
+                "or rerun with --activity=any."
+            )
+        self_user_id = principal_info.get("user_id") or ""
+        # Indexing-lag advisory: emit before the fetch so the operator
+        # has the cue queued up before the spinner ticks over to the
+        # listing pages. Single-shot per call: list_conversations is
+        # already a per-invocation entry point, so the dedupe is
+        # implicit in the call boundary.
+        _emit_indexing_lag_notice()
+        self_post_index = _fetch_self_post_index(
+            client=client,
+            self_user_id=self_user_id,
+            since_ts=since_ts,
+        )
+        referenced_channel_ids = set()
+
     yielded = 0
     page_cursor: str | None = None
     while True:
@@ -426,62 +542,83 @@ def list_conversations(
             if needle is not None and not _matches_filter(conversation, needle):
                 continue
             if since_ts is not None:
-                if conversation.type in disabled_history_types:
-                    # Earlier row of this type tripped ``missing_scope``;
-                    # the warning was recorded once and we now drop the
-                    # entire type from the activity-filtered output.
-                    continue
-                try:
-                    activity_ts = _fetch_last_activity_ts(
-                        client=client,
-                        channel_id=conversation.id,
-                        since_ts=since_ts,
-                    )
-                except _MissingHistoryScopeError as missing:
-                    disabled_history_types.add(conversation.type)
-                    if warnings is not None:
-                        warnings.append(
-                            _format_missing_scope_warning(
-                                conversation_type=conversation.type,
-                                needed=missing.needed,
-                            )
+                if self_post_index is not None:
+                    # Engagement axis (``activity="mine"``): the
+                    # pre-built index is the source of truth. Rows
+                    # absent from the index are dropped (the operator
+                    # has not written there since ``since``); the
+                    # retained ts lands on ``last_self_post_ts`` and
+                    # the any-axis ``last_activity_ts`` stays ``None``
+                    # so the two axes never bleed into the same row
+                    # (ADR-0034 §(g)).
+                    assert referenced_channel_ids is not None
+                    referenced_channel_ids.add(conversation.id)
+                    self_post_ts = self_post_index.get(conversation.id)
+                    if self_post_ts is None or self_post_ts < since_ts:
+                        continue
+                    conversation = replace(conversation, last_self_post_ts=self_post_ts)
+                else:
+                    if conversation.type in disabled_history_types:
+                        # Earlier row of this type tripped
+                        # ``missing_scope``; the warning was recorded
+                        # once and we now drop the entire type from
+                        # the activity-filtered output.
+                        continue
+                    try:
+                        activity_ts = _fetch_last_activity_ts(
+                            client=client,
+                            channel_id=conversation.id,
+                            since_ts=since_ts,
                         )
-                    continue
-                except _InaccessibleHistoryError as inaccessible:
-                    # Row-scoped skip: Slack Connect external channels,
-                    # DMs with deactivated peers, and rows archived /
-                    # left between the listing and the per-row probe
-                    # all surface here. Bump the counter and drop just
-                    # this row — the other rows of the same type are
-                    # not affected. Per-row debug log carries the
-                    # channel id so an operator running with
-                    # ``--debug`` can map back to which rows were
-                    # dropped (the aggregate warning at call end only
-                    # reports counts, by design — ADR-0027 redaction
-                    # processor strips any token on the off-chance the
-                    # event dict picks one up).
-                    from opshub.core.logging import get_logger
+                    except _MissingHistoryScopeError as missing:
+                        disabled_history_types.add(conversation.type)
+                        if warnings is not None:
+                            warnings.append(
+                                _format_missing_scope_warning(
+                                    conversation_type=conversation.type,
+                                    needed=missing.needed,
+                                )
+                            )
+                        continue
+                    except _InaccessibleHistoryError as inaccessible:
+                        # Row-scoped skip: Slack Connect external channels,
+                        # DMs with deactivated peers, and rows archived /
+                        # left between the listing and the per-row probe
+                        # all surface here. Bump the counter and drop just
+                        # this row — the other rows of the same type are
+                        # not affected. Per-row debug log carries the
+                        # channel id so an operator running with
+                        # ``--debug`` can map back to which rows were
+                        # dropped (the aggregate warning at call end only
+                        # reports counts, by design — ADR-0027 redaction
+                        # processor strips any token on the off-chance the
+                        # event dict picks one up).
+                        from opshub.core.logging import get_logger
 
-                    get_logger(__name__).debug(
-                        "slack.conversations.history.row_skipped",
-                        channel_id=conversation.id,
-                        error_code=inaccessible.error_code,
-                        conversation_type=conversation.type,
-                    )
-                    inaccessible_history_counts[inaccessible.error_code] = (
-                        inaccessible_history_counts.get(inaccessible.error_code, 0) + 1
-                    )
-                    continue
-                if activity_ts is None:
-                    # No message newer than ``since`` — drop.
-                    continue
-                conversation = replace(conversation, last_activity_ts=activity_ts)
+                        get_logger(__name__).debug(
+                            "slack.conversations.history.row_skipped",
+                            channel_id=conversation.id,
+                            error_code=inaccessible.error_code,
+                            conversation_type=conversation.type,
+                        )
+                        inaccessible_history_counts[inaccessible.error_code] = (
+                            inaccessible_history_counts.get(inaccessible.error_code, 0) + 1
+                        )
+                        continue
+                    if activity_ts is None:
+                        # No message newer than ``since`` — drop.
+                        continue
+                    conversation = replace(conversation, last_activity_ts=activity_ts)
             yield conversation
             yielded += 1
             if limit is not None and yielded >= limit:
                 _flush_inaccessible_history_warning(
                     counts=inaccessible_history_counts,
                     warnings=warnings,
+                )
+                _emit_orphan_index_debug(
+                    self_post_index=self_post_index,
+                    referenced_channel_ids=referenced_channel_ids,
                 )
                 return
 
@@ -497,6 +634,10 @@ def list_conversations(
             _flush_inaccessible_history_warning(
                 counts=inaccessible_history_counts,
                 warnings=warnings,
+            )
+            _emit_orphan_index_debug(
+                self_post_index=self_post_index,
+                referenced_channel_ids=referenced_channel_ids,
             )
             return
         page_cursor = str(next_cursor)
@@ -994,6 +1135,255 @@ def _to_connector_failed(exc: Any, *, all: bool) -> ConnectorFailedError:
             f"https://api.slack.com/scopes for the scope catalogue."
         )
     return ConnectorFailedError(f"Slack {endpoint} failed: {error_code}")
+
+
+def _emit_indexing_lag_notice() -> None:
+    """Emit the engagement-axis indexing-lag advisory to stderr (once per call).
+
+    Slack's ``search.messages`` full-text index lags message ingestion
+    by minutes — the engagement axis surfaces a stale snapshot
+    relative to live ``conversations.history``. ADR-0034 §(i)
+    documents the cue so the operator who notices a freshly-posted
+    channel missing from the output has a documented cause to map to
+    without re-reading the SDK error model.
+
+    Goes through ``sys.stderr`` (not the structured logger) because
+    the listing CLI surface mixes a spinner + warnings on stderr — a
+    one-shot advisory is the same stream the operator is already
+    watching for the post-call warnings (``warning: skipping ...``).
+    The structured logger path stays free for ``--debug`` traces.
+    """
+    import sys
+
+    print(_INDEXING_LAG_NOTICE, file=sys.stderr)
+
+
+def _fetch_self_post_index(
+    *,
+    client: Any,
+    self_user_id: str,
+    since_ts: float,
+) -> dict[str, float]:
+    """Walk ``search.messages`` and return ``{channel_id: max_ts}`` for self.
+
+    Parameters
+    ----------
+    client:
+        The :mod:`slack_sdk` ``WebClient`` (or a mock-shaped stand-in).
+    self_user_id:
+        Slack user id resolved via :meth:`SlackAuth.test_token`. The
+        documented ``from:`` operator format wraps the id in angle
+        brackets + ``@`` (``"from:<@U012345>"``) so the search engine
+        interprets it as a user-mention filter rather than a string
+        literal.
+    since_ts:
+        Unix epoch seconds lower bound. Forwarded to Slack as
+        ``oldest=<since_ts>``; the search response only contains
+        messages strictly newer than this cutoff.
+
+    Returns
+    -------
+    dict[str, float]
+        ``{channel_id: max_message_ts}`` aggregated across every page
+        Slack returned. Channels appear in the dict only when the
+        operator wrote at least one message in them within the
+        ``since_ts`` window. The listing loop joins this dict against
+        the discovered channel rows; unmatched rows are dropped.
+
+    Pagination
+    ----------
+
+    Cursor-style pagination (``cursor=*`` initial → ``next_cursor`` in
+    ``response_metadata``) is the first choice; page-style pagination
+    (``paging.page`` / ``paging.pages``) is the documented fallback
+    Slack still emits on the ``search.messages`` response shape. The
+    helper consumes whichever shape the response advertises so an
+    SDK-shaped proxy that omits ``next_cursor`` does not silently
+    short-circuit after one page.
+
+    Error mapping
+    -------------
+
+    Non-429 :class:`SlackApiError` (the budget-exhausted 429 included)
+    is translated by :func:`_to_connector_failed_search` into an
+    endpoint-qualified :class:`ConnectorFailedError`. The 429 retry /
+    backoff loop is shared with the rest of the connector via
+    :func:`retry_on_rate_limit`.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    query = f"from:<@{self_user_id}>"
+    index: dict[str, float] = {}
+
+    # Slack returns either cursor or page-based pagination on
+    # ``search.messages`` — defaults below let the response shape pick
+    # the next-page mechanism.
+    next_cursor: str | None = "*"
+    page_number = 1
+
+    while True:
+        kwargs: dict[str, Any] = {
+            "query": query,
+            "count": _SEARCH_MESSAGES_PAGE_SIZE,
+            "sort": "timestamp",
+            "sort_dir": "desc",
+            "oldest": repr(float(since_ts)),
+        }
+        if next_cursor is not None:
+            kwargs["cursor"] = next_cursor
+        else:
+            kwargs["page"] = page_number
+
+        def _call(kwargs: dict[str, Any] = kwargs) -> Any:
+            return client.search_messages(**kwargs)
+
+        try:
+            response = retry_on_rate_limit(_call)
+        except SlackApiError as exc:
+            raise _to_connector_failed_search(exc) from exc
+
+        data = _as_response_dict(response)
+        messages_obj = data.get("messages")
+        if not isinstance(messages_obj, dict):
+            # Defensive: a malformed proxy that lacks ``messages``
+            # short-circuits cleanly. The caller will see an empty
+            # index and drop every row — matches the "no recent
+            # self posts" semantics.
+            return index
+        messages = cast(dict[str, Any], messages_obj)
+        matches_obj = messages.get("matches")
+        if isinstance(matches_obj, list):
+            for match in cast(list[dict[str, Any]], matches_obj):
+                channel_id, ts = _extract_search_match(match)
+                if channel_id and ts is not None:
+                    previous = index.get(channel_id)
+                    if previous is None or ts > previous:
+                        index[channel_id] = ts
+
+        # Cursor pagination wins when ``next_cursor`` is present.
+        response_metadata_obj = data.get("response_metadata")
+        new_cursor: str | None = None
+        if isinstance(response_metadata_obj, dict):
+            cursor_raw = cast(dict[str, Any], response_metadata_obj).get("next_cursor")
+            if cursor_raw:
+                new_cursor = str(cursor_raw)
+        if new_cursor:
+            next_cursor = new_cursor
+            continue
+
+        # Fallback: walk page-based pagination via ``paging.page`` /
+        # ``paging.pages``. The Slack docs response example carries
+        # both shapes — page-based is the legacy default on
+        # ``search.messages`` so the fallback is mandatory, not
+        # paranoid.
+        paging_obj = messages.get("paging")
+        if isinstance(paging_obj, dict):
+            paging = cast(dict[str, Any], paging_obj)
+            current_page = _safe_int(paging.get("page"))
+            total_pages = _safe_int(paging.get("pages"))
+            if current_page is not None and total_pages is not None and current_page < total_pages:
+                page_number = current_page + 1
+                next_cursor = None
+                continue
+
+        return index
+
+
+def _extract_search_match(match: dict[str, Any]) -> tuple[str, float | None]:
+    """Return ``(channel_id, ts)`` from one ``search.messages`` match.
+
+    The match shape is documented as ``{channel: {id, name, ...},
+    ts: "1234567890.000100", ...}``. Defensive against thin proxies
+    that flatten ``channel`` to a string id or drop the ``ts`` field;
+    the caller treats missing values as "skip this match" so a
+    malformed page never poisons the aggregate index.
+    """
+    channel_obj = match.get("channel")
+    if isinstance(channel_obj, dict):
+        channel_id = str(cast(dict[str, Any], channel_obj).get("id") or "")
+    elif isinstance(channel_obj, str):
+        channel_id = channel_obj
+    else:
+        channel_id = ""
+    ts_raw = match.get("ts")
+    if ts_raw is None:
+        return channel_id, None
+    try:
+        return channel_id, float(ts_raw)
+    except (TypeError, ValueError):
+        return channel_id, None
+
+
+def _safe_int(value: Any) -> int | None:
+    """Best-effort ``int`` coerce; returns ``None`` for unparseable input."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_connector_failed_search(exc: Any) -> ConnectorFailedError:
+    """Map a ``search.messages`` :class:`SlackApiError` → :class:`ConnectorFailedError`.
+
+    Kept distinct from :func:`_to_connector_failed` and
+    :func:`_to_connector_failed_history` so the error message names the
+    endpoint the operator was waiting on (the discovery engagement axis
+    uses one ``search.messages`` call per invocation rather than per
+    row, so a 429 / scope failure here is operationally distinct from
+    the listing / history paths).
+    """
+    response_any = cast(Any, getattr(exc, "response", None))
+    error_code = "unknown"
+    needed = ""
+    if response_any is not None:
+        error_code = response_any.get("error") or type(exc).__name__
+        if error_code == "missing_scope":
+            needed = response_any.get("needed") or ""
+    if error_code == "missing_scope":
+        return ConnectorFailedError(
+            f"Slack search.messages failed: missing_scope "
+            f"(needed: {needed!r}). User Token must hold "
+            f"'search:read' for --activity=mine. Rerun with "
+            f"--activity=any if you cannot grant the scope. "
+            f"See ADR-0018 §Decision (7) or "
+            f"https://api.slack.com/scopes for the scope catalogue."
+        )
+    return ConnectorFailedError(f"Slack search.messages failed: {error_code}")
+
+
+def _emit_orphan_index_debug(
+    *,
+    self_post_index: dict[str, float] | None,
+    referenced_channel_ids: set[str] | None,
+) -> None:
+    """Emit a debug counter for index channels not seen in the listing.
+
+    On the engagement axis a channel can appear in the
+    ``search.messages`` index but not in ``users.conversations``
+    output — e.g. Slack Connect external channels, archived rows that
+    listing excludes by default, or type-filtered listings
+    (``--types public`` while the operator posted in a DM). The count
+    is a *debug* signal only (``opshub --debug`` surfaces it); we do
+    not warn the operator because the asymmetry is structural, not a
+    misconfiguration.
+
+    A ``None`` index (any-axis path) short-circuits cleanly.
+    """
+    if self_post_index is None or referenced_channel_ids is None:
+        return
+    orphan_count = sum(1 for cid in self_post_index if cid not in referenced_channel_ids)
+    if orphan_count <= 0:
+        return
+    from opshub.core.logging import get_logger
+
+    get_logger(__name__).debug(
+        "slack.conversations.engagement_index_orphan",
+        engagement_index_orphan=orphan_count,
+        index_size=len(self_post_index),
+        listing_size=len(referenced_channel_ids),
+    )
 
 
 def _as_response_dict(response: Any) -> dict[str, Any]:

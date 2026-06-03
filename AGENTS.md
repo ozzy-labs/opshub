@@ -56,6 +56,13 @@ Phase 15 完了 (2026-06-02) 以降の改修は Phase 化されておらず、co
 - **Phase 18-B** (PR [#433](https://github.com/ozzy-labs/opshub/pull/433)) — `slack_demand_digest` projection 実装 + Alembic migration `0029_create_slack_demand_digest` + `opshub projections rebuild` 経路へ登録 + debug CLI `opshub slack mentions list` (`--types` / `--demand-kind` / `--format`)。`<@self>` mention literal + DM channel id prefix (`D...`) で demand 信号を検出し `(channel_id, demand_kind)` で upsert。self user_id は constructor / `OPSHUB_SLACK_SELF_USER_ID` env var / `SlackAuth.test_token()` cascade で解決し fail-soft。
 - **Phase 18-C** ([#430](https://github.com/ozzy-labs/opshub/issues/430)) — 新 MCP tool `slack.demand.list` (`ReadCategory.SLACK_DEMAND_LIST`、`readOnlyHint=true, openWorldHint=false`、`types` / `demand_kinds` / `since_ts` / `limit` / `order` 引数) + skill 拡張 (`next-actions` / `personal-brief` / `inbox-triage` の SSOT に `slack.demand.list` 経路追記) + `opshub skills install --scope project` で dogfood mirror 再生成 + docs 一括更新 (mcp-setup / assistant-agent / upgrading §Phase 18-C)。MCP tool surface は 17 → 18 (read 12 → 13)、write 5 件は不変。
 
+### Phase 19: Slack discovery engagement axis (`opshub slack conversations` の `--since` default 改訂)
+
+新 ADR + CLI default semantics 切替を伴うため新 Phase で起票。epic [#438](https://github.com/ozzy-labs/opshub/issues/438)、根拠 [ADR-0034](docs/adr/0034-slack-engagement-axis.md)。
+
+- **Phase 19-A** ([#440](https://github.com/ozzy-labs/opshub/issues/440)) — ADR-0034 新規 (docs only)。`opshub slack conversations --since` の default semantics を「any-author activity」 (Phase 17 #374) から「engagement axis = 自分が発言した channel」に切替えるための設計 pin、search.messages 経由 + `search:read` scope 要件、`--activity=mine|any` の disjoint axes 不変条件、`--all + --activity=mine` 非両立を確定。
+- **Phase 19-B** ([#441](https://github.com/ozzy-labs/opshub/issues/441)) — Slack adapter `_fetch_self_post_index` (search.messages, `query=f"from:<@{self_user_id}>"`, cursor + legacy paging fallback, retry 共有, `_to_connector_failed_search` error mapper) + `SlackConversation.last_self_post_ts` 追加 + `list_conversations(activity=...)` 引数追加 + Bot Token 拒否 (ConfigError) + indexing-lag notice + `engagement_index_orphan` debug counter。CLI `--activity` flag (`mine` default、`any` accept、unknown は exit 2) + `--all + --activity=mine + --since` 非両立 (exit 1) + table `LAST_POST` / TOML `last post YYYY-MM-DD` / JSON disjoint axis field emit + spinner description 切替。docs 一括更新 (README / CLAUDE / AGENTS / mcp-setup §scope 表 `search:read` 追加 / troubleshooting `--activity=mine` 失敗時セクション / upgrading §Phase 19 default semantics 切替 + JSON consumer 注意 / architecture engagement 軸段落)。
+
 ## Tech Stack
 
 - Runtime: Python 3.13+ (ADR-0001)

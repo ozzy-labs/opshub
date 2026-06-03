@@ -193,6 +193,8 @@ opshub github auth set                      # store GitHub PAT in OS keychain
 opshub github sync                          # incremental sync (OPSHUB_CONNECTOR_GITHUB_REPO=owner/repo)
 opshub slack auth set             # store Slack OAuth token in OS keychain (User Token preferred, Bot Token also accepted — ADR-0018)
 opshub slack conversations                  # list joined conversations (channels + DMs) for [connectors.slack] channels (use --format toml to paste; --since 30d for activity filter, #374)
+opshub slack conversations --since 30d                        # Phase 19-B engagement axis: channels you wrote in within 30 days (default, requires search:read on a User Token; ADR-0034)
+opshub slack conversations --since 30d --activity=any         # legacy #374 behaviour: channels with any-author messages within 30 days (broadcast / announcement-only included)
 opshub slack sync                           # incremental sync ([connectors.slack] channels)
 opshub ms365 auth set             # OAuth paste-code (Microsoft Graph Calendar / OneDrive / Outlook)
 opshub ms365 sync                           # incremental sync per endpoint

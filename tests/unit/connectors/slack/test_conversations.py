@@ -1011,7 +1011,7 @@ def test_list_conversations_since_calls_history_per_row(
     client.conversations_history.side_effect = _history
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
 
     assert [c.id for c in results] == ["C1"]
     # ``last_activity_ts`` is a float parsed from the Slack ts string;
@@ -1055,7 +1055,7 @@ def test_list_conversations_since_passes_oldest_to_slack(
     from datetime import UTC, datetime
 
     since = datetime(2026, 5, 1, tzinfo=UTC)
-    list(list_conversations(_auth(), since=since))
+    list(list_conversations(_auth(), since=since, activity="any"))
 
     call_kwargs = client.conversations_history.call_args.kwargs
     assert call_kwargs["channel"] == "C1"
@@ -1108,7 +1108,10 @@ def test_list_conversations_since_missing_scope_disables_type_with_warning(
     _patch_webclient(monkeypatch, client)
 
     warnings: list[str] = []
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+    results = list(list_conversations(
+        _auth(),
+        since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+    )
 
     assert [c.id for c in results] == ["G1"]
     # One warning per affected type (public), not per row (would be 2).
@@ -1172,7 +1175,10 @@ def test_list_conversations_since_missing_scope_per_type_warnings_are_independen
     _patch_webclient(monkeypatch, client)
 
     warnings: list[str] = []
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+    results = list(list_conversations(
+        _auth(),
+        since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+    )
 
     # Only the private row (whose history call succeeded) survived.
     assert [c.id for c in results] == ["G-priv"]
@@ -1207,7 +1213,7 @@ def test_list_conversations_since_warnings_none_drops_silently(
     )
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
     # No warnings collector ⇒ the row is still dropped, but no
     # exception escapes — the helper stays caller-agnostic.
     assert results == []
@@ -1240,7 +1246,7 @@ def test_list_conversations_since_history_429_is_retried(
     sleep_mock = MagicMock()
     monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
 
     assert len(results) == 1
     sleep_mock.assert_called_once_with(1)
@@ -1270,7 +1276,7 @@ def test_list_conversations_since_history_non_429_raises_connector_failed(
     _patch_webclient(monkeypatch, client)
 
     with pytest.raises(ConnectorFailedError) as excinfo:
-        list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+        list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
 
     assert "conversations.history" in str(excinfo.value)
     assert "xoxb-test" not in str(excinfo.value)
@@ -1324,7 +1330,10 @@ def test_list_conversations_since_channel_not_found_skips_row_aggregates_warning
     _patch_webclient(monkeypatch, client)
 
     warnings: list[str] = []
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+    results = list(list_conversations(
+        _auth(),
+        since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+    )
 
     assert [c.id for c in results] == ["C1", "C2"]
     # One aggregate warning naming the count + error code (not per-row).
@@ -1383,7 +1392,10 @@ def test_list_conversations_since_not_in_channel_skips_row(
     _patch_webclient(monkeypatch, client)
 
     warnings: list[str] = []
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+    results = list(list_conversations(
+        _auth(),
+        since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+    )
 
     assert [c.id for c in results] == ["C1"]
     assert len(warnings) == 1
@@ -1438,7 +1450,10 @@ def test_list_conversations_since_inaccessible_warning_aggregates_per_error_code
     _patch_webclient(monkeypatch, client)
 
     warnings: list[str] = []
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+    results = list(list_conversations(
+        _auth(),
+        since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+    )
 
     assert [c.id for c in results] == ["C1", "C2"]
     assert len(warnings) == 1
@@ -1464,7 +1479,10 @@ def test_list_conversations_since_inaccessible_warning_omitted_when_none(
     _patch_webclient(monkeypatch, client)
 
     warnings: list[str] = []
-    list(list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings))
+    list(list_conversations(
+        _auth(),
+        since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+    )
 
     assert warnings == []
 
@@ -1512,7 +1530,13 @@ def test_list_conversations_since_inaccessible_warning_emitted_under_limit_cap(
 
     warnings: list[str] = []
     results = list(
-        list_conversations(_auth(), since=_since_dt(days_ago=7), limit=1, warnings=warnings)
+        list_conversations(
+            _auth(),
+            since=_since_dt(days_ago=7),
+            limit=1,
+            warnings=warnings,
+            activity="any",
+        )
     )
 
     # Limit 1 + the C-extern skip → only C1 surfaces.
@@ -1548,7 +1572,7 @@ def test_list_conversations_since_inaccessible_warnings_none_drops_silently(
     )
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
     assert results == []
 
 
@@ -1616,7 +1640,7 @@ def test_list_conversations_since_drops_row_when_history_ts_is_non_numeric(
     }
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
 
     assert results == []
 
@@ -1675,7 +1699,7 @@ def test_list_conversations_since_inaccessible_emits_per_row_debug_log(
 
     monkeypatch.setattr(_logging_module, "get_logger", mock_get_logger)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
 
     # Sibling row still flows; only the offending row is dropped.
     assert [c.id for c in results] == ["C1"]
@@ -1714,6 +1738,567 @@ def test_list_conversations_since_drops_row_when_messages_field_is_not_a_list(
     }
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7)))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
 
     assert results == []
+
+
+# ----- engagement axis (Phase 19-B, ADR-0034) ----------------------------
+
+
+def _recent_ts(*, seconds_ago: int = 60) -> float:
+    """Return a Slack ts strictly newer than ``_since_dt(days_ago=7)``.
+
+    The any-axis fixtures could hard-code unix epoch values like
+    ``1717200000`` because ``_fetch_last_activity_ts`` does not gate
+    on ``since_ts`` client-side (Slack's ``oldest=`` parameter does).
+    The engagement axis builds the index client-side and *does* gate
+    on ``self_post_ts >= since_ts``, so engagement-axis fixtures need
+    a ts genuinely newer than the test's ``since`` cutoff. Pinning
+    ``seconds_ago=60`` keeps the fixture self-consistent: the
+    engagement test's ``_since_dt(days_ago=7)`` is always more than
+    60 seconds in the past.
+    """
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).timestamp() - seconds_ago
+
+
+def _search_response(
+    matches: list[dict[str, Any]],
+    *,
+    next_cursor: str | None = None,
+    page: int | None = None,
+    pages: int | None = None,
+) -> dict[str, Any]:
+    """Build a ``search.messages`` response with the documented shape.
+
+    Cursor pagination wins when ``next_cursor`` is provided; otherwise
+    the legacy ``paging`` shape (page / pages) is used so tests can
+    cover both code paths the helper supports.
+    """
+    body: dict[str, Any] = {
+        "ok": True,
+        "messages": {"matches": matches, "total": len(matches)},
+    }
+    if next_cursor is not None:
+        body["response_metadata"] = {"next_cursor": next_cursor}
+    if page is not None or pages is not None:
+        paging: dict[str, Any] = {}
+        if page is not None:
+            paging["page"] = page
+        if pages is not None:
+            paging["pages"] = pages
+        body["messages"]["paging"] = paging
+    return body
+
+
+def _search_match(channel_id: str, ts: str) -> dict[str, Any]:
+    """Build one ``search.messages`` match (subset of documented shape)."""
+    return {
+        "channel": {"id": channel_id, "name": f"{channel_id}-name"},
+        "ts": ts,
+        "user": "U-self",
+        "text": "anything",
+    }
+
+
+def _auth_with_user(monkeypatch: pytest.MonkeyPatch, user_id: str = "U-self") -> SlackAuth:
+    """Construct :class:`SlackAuth` whose ``test_token`` reports ``principal='user'``."""
+    auth = SlackAuth(token="xoxp-self")
+
+    def _test_token(_self: SlackAuth) -> dict[str, str]:
+        return {
+            "team": "t",
+            "team_id": "T1",
+            "user": "self",
+            "user_id": user_id,
+            "principal": "user",
+        }
+
+    monkeypatch.setattr(type(auth), "test_token", _test_token)
+    return auth
+
+
+def _auth_with_bot(monkeypatch: pytest.MonkeyPatch) -> SlackAuth:
+    """Construct :class:`SlackAuth` whose ``test_token`` reports ``principal='bot'``."""
+    auth = SlackAuth(token="xoxb-bot")
+
+    def _test_token(_self: SlackAuth) -> dict[str, str]:
+        return {
+            "team": "t",
+            "team_id": "T1",
+            "user": "botname",
+            "user_id": "U-bot",
+            "principal": "bot",
+        }
+
+    monkeypatch.setattr(type(auth), "test_token", _test_token)
+    return auth
+
+
+def test_fetch_self_post_index_aggregates_max_ts_per_channel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One page of 5 matches across 3 channels → dict size 3 with max ts."""
+    page = _list_response([_public_channel("C1"), _public_channel("C2"), _public_channel("C3")])
+    client = _build_client(list_pages=[page])
+    # Two matches in C1, two in C2, one in C3; max ts per channel. All
+    # timestamps fall within the engagement-axis ``since`` window so
+    # the client-side staleness arm does not drop them.
+    c1_max = _recent_ts(seconds_ago=60)
+    c1_old = _recent_ts(seconds_ago=120)
+    c2_max = _recent_ts(seconds_ago=90)
+    c2_old = _recent_ts(seconds_ago=180)
+    c3_only = _recent_ts(seconds_ago=300)
+    matches = [
+        _search_match("C1", f"{c1_max:.6f}"),
+        _search_match("C1", f"{c1_old:.6f}"),
+        _search_match("C2", f"{c2_max:.6f}"),
+        _search_match("C2", f"{c2_old:.6f}"),
+        _search_match("C3", f"{c3_only:.6f}"),
+    ]
+    client.search_messages.return_value = _search_response(matches)
+    _patch_webclient(monkeypatch, client)
+
+    results = list(
+        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7))
+    )
+
+    by_id = {r.id: r.last_self_post_ts for r in results}
+    # Three channels; each retained ts is the per-channel max.
+    assert set(by_id) == {"C1", "C2", "C3"}
+    assert by_id["C1"] is not None and abs(by_id["C1"] - c1_max) < 1e-3
+    assert by_id["C2"] is not None and abs(by_id["C2"] - c2_max) < 1e-3
+    assert by_id["C3"] is not None and abs(by_id["C3"] - c3_only) < 1e-3
+    # last_activity_ts stays None on every row (engagement axis only).
+    assert all(r.last_activity_ts is None for r in results)
+    assert client.search_messages.call_count == 1
+    # per-row history call is bypassed entirely.
+    assert client.conversations_history.call_count == 0
+
+
+def test_fetch_self_post_index_walks_cursor_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cursor pagination: page 1 returns ``next_cursor`` → page 2 fetched."""
+    page = _list_response([_public_channel("C1"), _public_channel("C2")])
+    client = _build_client(list_pages=[page])
+    c1_ts = _recent_ts(seconds_ago=60)
+    c2_ts = _recent_ts(seconds_ago=120)
+    client.search_messages.side_effect = [
+        _search_response(
+            [_search_match("C1", f"{c1_ts:.6f}")],
+            next_cursor="page2",
+        ),
+        _search_response([_search_match("C2", f"{c2_ts:.6f}")]),
+    ]
+    _patch_webclient(monkeypatch, client)
+
+    results = list(
+        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7))
+    )
+
+    assert client.search_messages.call_count == 2
+    # Second call must carry the cursor from the first response.
+    second_kwargs = client.search_messages.call_args_list[1].kwargs
+    assert second_kwargs["cursor"] == "page2"
+    ids = {r.id for r in results}
+    assert ids == {"C1", "C2"}
+
+
+def test_fetch_self_post_index_falls_back_to_legacy_page_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy page pagination (``paging.page`` / ``paging.pages``) is consumed.
+
+    When the response omits ``response_metadata.next_cursor`` but
+    advertises a multi-page ``paging`` block, the helper walks the
+    page-based pagination until the current page reaches the total.
+    """
+    page = _list_response([_public_channel("C1"), _public_channel("C2")])
+    client = _build_client(list_pages=[page])
+    c1_ts = _recent_ts(seconds_ago=60)
+    c2_ts = _recent_ts(seconds_ago=120)
+    client.search_messages.side_effect = [
+        _search_response(
+            [_search_match("C1", f"{c1_ts:.6f}")],
+            page=1,
+            pages=2,
+        ),
+        _search_response(
+            [_search_match("C2", f"{c2_ts:.6f}")],
+            page=2,
+            pages=2,
+        ),
+    ]
+    _patch_webclient(monkeypatch, client)
+
+    results = list(
+        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7))
+    )
+
+    assert client.search_messages.call_count == 2
+    second_kwargs = client.search_messages.call_args_list[1].kwargs
+    assert second_kwargs["page"] == 2
+    assert {r.id for r in results} == {"C1", "C2"}
+
+
+def test_fetch_self_post_index_empty_response_drops_all_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty search → empty index → every listing row is dropped."""
+    page = _list_response([_public_channel("C1"), _public_channel("C2")])
+    client = _build_client(list_pages=[page])
+    client.search_messages.return_value = _search_response([])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(
+        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7))
+    )
+
+    assert results == []
+
+
+def test_fetch_self_post_index_query_uses_documented_from_user_form(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``search.messages`` query is built as ``"from:<@<user_id>>"`` (Slack format).
+
+    Docs at ``api.slack.com/methods/search.messages`` document the
+    user-mention filter as ``from:<@U...>`` (angle brackets + @ +
+    user id). Pinning the form here guards against a future helper
+    that drops the angle brackets and degrades to a substring match.
+    """
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.search_messages.return_value = _search_response(
+        [_search_match("C1", f"{_recent_ts(seconds_ago=60):.6f}")]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    list(
+        list_conversations(
+            _auth_with_user(monkeypatch, user_id="UABC123"), since=_since_dt(days_ago=7)
+        )
+    )
+
+    kwargs = client.search_messages.call_args.kwargs
+    assert kwargs["query"] == "from:<@UABC123>"
+    # ``oldest`` is forwarded as a stringified float.
+    assert "oldest" in kwargs
+    assert float(kwargs["oldest"]) > 0
+    assert kwargs["sort"] == "timestamp"
+    assert kwargs["sort_dir"] == "desc"
+
+
+def test_list_conversations_mine_axis_does_not_call_conversations_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Engagement axis does not fall back to per-row ``conversations.history``."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.search_messages.return_value = _search_response(
+        [_search_match("C1", f"{_recent_ts(seconds_ago=60):.6f}")]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+
+    assert client.conversations_history.call_count == 0
+    assert client.search_messages.call_count == 1
+
+
+def test_list_conversations_mine_axis_drops_rows_absent_from_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Listing rows not present in the self-post index are dropped silently."""
+    page = _list_response(
+        [_public_channel("C1"), _public_channel("C2"), _public_channel("C3")]
+    )
+    client = _build_client(list_pages=[page])
+    # Only C1 has a self-post; C2 / C3 are absent from the index.
+    client.search_messages.return_value = _search_response(
+        [_search_match("C1", f"{_recent_ts(seconds_ago=60):.6f}")]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(
+        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7))
+    )
+
+    assert [r.id for r in results] == ["C1"]
+
+
+def test_list_conversations_mine_axis_index_ts_below_since_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Defensive arm: index ts older than ``since`` drops the row."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    # A staleness arm — ts is well below the recent ``since``.
+    client.search_messages.return_value = _search_response(
+        [_search_match("C1", "100.000000")]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(
+        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=1))
+    )
+
+    assert results == []
+
+
+def test_list_conversations_mine_axis_populates_self_post_ts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mine axis writes ``last_self_post_ts`` and leaves ``last_activity_ts`` ``None``."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    fresh_ts = _recent_ts(seconds_ago=42)
+    client.search_messages.return_value = _search_response(
+        [_search_match("C1", f"{fresh_ts:.6f}")]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(
+        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7))
+    )
+
+    assert results[0].last_self_post_ts is not None
+    assert abs(results[0].last_self_post_ts - fresh_ts) < 1e-3
+    assert results[0].last_activity_ts is None
+
+
+def test_list_conversations_mine_axis_emits_indexing_lag_notice_once(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The indexing-lag notice surfaces on stderr once per call (ADR-0034 §(i))."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    # ``return_value`` (rather than ``side_effect=[page]``) lets the
+    # listing endpoint be re-invoked across the two
+    # ``list_conversations`` calls without exhausting the iterator.
+    client.users_conversations.side_effect = None
+    client.users_conversations.return_value = page
+    client.search_messages.return_value = _search_response(
+        [_search_match("C1", f"{_recent_ts(seconds_ago=60):.6f}")]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    # Two separate calls — each must emit the notice exactly once.
+    list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    captured_first = capsys.readouterr()
+    assert "search.messages may lag" in captured_first.err
+    assert captured_first.err.count("search.messages may lag") == 1
+
+    # Second invocation; stderr is captured fresh per readouterr().
+    list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    captured_second = capsys.readouterr()
+    assert captured_second.err.count("search.messages may lag") == 1
+
+
+def test_list_conversations_any_axis_preserves_legacy_behaviour(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """activity='any' calls conversations.history per row; search.messages stays unused."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.conversations_history.return_value = _history_response(
+        [{"ts": "1717200000.000000"}]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
+
+    assert client.search_messages.call_count == 0
+    assert client.conversations_history.call_count == 1
+    assert results[0].last_activity_ts == 1717200000.0
+    assert results[0].last_self_post_ts is None
+
+
+def test_list_conversations_mine_axis_missing_search_read_scope_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``missing_scope`` on ``search.messages`` → ``ConnectorFailedError`` with hint."""
+    import slack_sdk.errors as _errors
+
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+
+    resp = MagicMock()
+    resp.status_code = 403
+
+    def _get_missing_search_read(key: str, default: object = None) -> object:
+        return {"error": "missing_scope", "needed": "search:read"}.get(key, default)
+
+    resp.get = _get_missing_search_read
+    resp.headers = {}
+    client.search_messages.side_effect = _errors.SlackApiError(  # type: ignore[no-untyped-call]
+        message="missing_scope",
+        response=resp,
+    )
+    _patch_webclient(monkeypatch, client)
+
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+
+    message = str(excinfo.value)
+    assert "search.messages" in message
+    assert "missing_scope" in message
+    assert "search:read" in message
+    assert "ADR-0018" in message
+    assert "xoxp-self" not in message
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    ["not_authed", "invalid_auth", "account_inactive", "team_not_found"],
+)
+def test_list_conversations_mine_axis_search_error_codes_endpoint_qualified(
+    monkeypatch: pytest.MonkeyPatch,
+    error_code: str,
+) -> None:
+    """Each ``search.messages`` error code surfaces with endpoint name and no token leak."""
+    import slack_sdk.errors as _errors
+
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+
+    resp = MagicMock()
+    resp.status_code = 401
+
+    def _get_error(key: str, default: object = None) -> object:
+        return {"error": error_code}.get(key, default)
+
+    resp.get = _get_error
+    resp.headers = {}
+    client.search_messages.side_effect = _errors.SlackApiError(  # type: ignore[no-untyped-call]
+        message=error_code,
+        response=resp,
+    )
+    _patch_webclient(monkeypatch, client)
+
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+
+    message = str(excinfo.value)
+    assert "search.messages" in message
+    assert error_code in message
+    assert "xoxp-self" not in message
+
+
+def test_list_conversations_mine_axis_bot_token_principal_raises_config_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``activity='mine'`` + Bot Token → ``ConfigError`` with documented remediation."""
+    import opshub.core.errors as _errors_mod
+
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    with pytest.raises(_errors_mod.ConfigError) as excinfo:
+        list(
+            list_conversations(_auth_with_bot(monkeypatch), since=_since_dt(days_ago=7))
+        )
+
+    message = str(excinfo.value)
+    assert "Bot Token" in message
+    assert "search:read" in message
+    assert "--activity=any" in message
+    assert "xoxb-bot" not in message
+    # search.messages must not be called when the principal check fails.
+    assert client.search_messages.call_count == 0
+
+
+def test_list_conversations_mine_axis_engagement_index_orphan_logged_at_debug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Index channels not seen in listing → ``engagement_index_orphan`` debug log."""
+    # Listing returns C1 only; index has both C1 (matched) and CX
+    # (orphan — appears in search.messages but not in users.conversations).
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.search_messages.return_value = _search_response(
+        [
+            _search_match("C1", "1700000005.000000"),
+            _search_match("CX", "1700000004.000000"),
+        ]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    mock_logger = MagicMock()
+    mock_get_logger = MagicMock(return_value=mock_logger)
+    import opshub.core.logging as _logging_module
+
+    monkeypatch.setattr(_logging_module, "get_logger", mock_get_logger)
+
+    list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+
+    # Exactly one debug log with the orphan counter.
+    debug_calls = [
+        c for c in mock_logger.debug.call_args_list
+        if c.args and c.args[0] == "slack.conversations.engagement_index_orphan"
+    ]
+    assert len(debug_calls) == 1
+    assert debug_calls[0].kwargs["engagement_index_orphan"] == 1
+    assert debug_calls[0].kwargs["index_size"] == 2
+    assert debug_calls[0].kwargs["listing_size"] == 1
+
+
+def test_list_conversations_mine_axis_search_429_retries_and_eventually_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """429 on ``search.messages`` → retried; after budget exhaustion ``ConnectorFailedError``."""
+    import slack_sdk.errors as _errors
+
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+
+    resp_429 = MagicMock()
+    resp_429.status_code = 429
+
+    def _get_ratelimited(key: str, default: object = None) -> object:
+        return {"error": "ratelimited"}.get(key, default)
+
+    resp_429.get = _get_ratelimited
+    resp_429.headers = {"Retry-After": "0"}
+
+    client.search_messages.side_effect = [
+        _errors.SlackApiError(message="rate", response=resp_429),  # type: ignore[no-untyped-call]
+        _errors.SlackApiError(message="rate", response=resp_429),  # type: ignore[no-untyped-call]
+        _errors.SlackApiError(message="rate", response=resp_429),  # type: ignore[no-untyped-call]
+    ]
+    _patch_webclient(monkeypatch, client)
+
+    # Patch ``time.sleep`` so the test does not actually wait.
+    def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("opshub.connectors.slack._retry.time.sleep", _no_sleep)
+
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+
+    assert "search.messages" in str(excinfo.value)
+    # 3 attempts (default ``MAX_RETRIES_ON_RATE_LIMIT``).
+    assert client.search_messages.call_count == 3
+
+
+def test_list_conversations_no_since_with_mine_activity_skips_search_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``since=None`` short-circuits engagement axis regardless of ``activity`` value."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth_with_user(monkeypatch), activity="mine"))
+
+    assert client.search_messages.call_count == 0
+    assert client.conversations_history.call_count == 0
+    assert len(results) == 1
+    assert results[0].last_self_post_ts is None
+    assert results[0].last_activity_ts is None

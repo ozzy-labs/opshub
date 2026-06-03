@@ -773,3 +773,47 @@ opshub skills install --scope project
 - **No CLI breaking changes.** The Phase 18-B debug CLI (`opshub slack mentions list`) stays in place; `slack.demand.list` is the MCP surface twin, not a CLI replacement.
 - **MCP tool surface: total 18 tools** = 13 read + 5 write (was 17 = 12 read + 5 write after Phase 12 H1). The single new read tool brings the count to 18.
 - **No new ADR — implements [ADR-0033 §決定 (c)](adr/0033-slack-mention-demand-digest.md) + adds the §(f) 補遺 cross-reference to [ADR-0022](adr/0022-mcp-server-surface.md)** (delivered in Phase 18-A docs-only PR [#431](https://github.com/ozzy-labs/opshub/pull/431) — the MCP read tool addition is a documented extension under the existing 5 不変条件).
+
+## Phase 19: `opshub slack conversations` engagement axis default — **BREAKING CHANGE**
+
+Phase 19 ([ADR-0034](adr/0034-slack-engagement-axis.md), epic [#438](https://github.com/ozzy-labs/opshub/issues/438)) changes the default semantics of `opshub slack conversations --since <when>`. The `--since` filter now indexes "channels you wrote in" (engagement axis) instead of "channels with any-author activity" (Phase 17 [#374](https://github.com/ozzy-labs/opshub/issues/374) any-axis). The legacy any-author behaviour is preserved verbatim under the new opt-in flag `--activity=any` — opshub is pre-userbase, so [ADR-0034](adr/0034-slack-engagement-axis.md) ships **no compat shim** (per the standing pre-userbase posture).
+
+### What changes
+
+- `opshub slack conversations --since <when>` (no `--activity` flag) → engagement axis (`--activity=mine`). Uses **one** `search.messages` call with `query="from:<@<self>>"` and builds an in-memory `{channel_id: max_self_post_ts}` index that filters the listing. Channels you never wrote in within the window are dropped.
+- The table renderer flips the activity column header from `LAST_ACTIVITY` to `LAST_POST` (column width unchanged at 13).
+- The TOML comment label flips from `last YYYY-MM-DD` to `last post YYYY-MM-DD`.
+- The JSON output now emits **one** of the two axis fields per row, never both: `last_self_post_ts` for the engagement axis, `last_activity_ts` for the any-author axis. The other field is dropped (the no-`--since` invocation still drops both).
+- The spinner description switches from `listing conversations + activity` to `listing conversations + engagement` on the engagement axis.
+- A one-shot stderr advisory (`notice: search.messages may lag by minutes; use --activity=any for live activity.`) surfaces before the engagement-axis index fetch — `search.messages` is full-text-index-backed and has a documented several-minute indexing lag.
+- New scope requirement: `search:read` on a **User Token** (`xoxp-`). Bot Tokens (`xoxb-`) cannot satisfy `search:read` — the discovery command surfaces an explicit `ConfigError` and recommends `--activity=any` when a Bot Token is detected on the engagement path.
+- New invalid combination: `--all + --activity=mine` (default or explicit) **with** `--since` is rejected with `ConfigError` exit 1. Rationale: `search.messages` only indexes channels where the principal is a member, so the intersection of "workspace-wide listing" and "engagement axis" collapses to the joined-only listing. Use `--activity=any` for workspace-wide any-author activity, or drop `--all` to restore the engagement axis.
+- New debug observability: when the engagement index contains channel ids that the listing does not (Slack Connect / archived / type-filtered rows), `opshub --debug` logs a `slack.conversations.engagement_index_orphan` event with the orphan count. No operator warning — the asymmetry is structural, not a misconfiguration.
+
+### Restoring the Phase 17 behaviour
+
+```bash
+opshub slack conversations --since 30d --activity=any   # legacy #374 path (any-author, conversations.history per-row, *:history scopes)
+```
+
+This is the documented escape hatch for operators who cannot grant `search:read` (workspace policy, audit committee delay), need broadcast / announcement-only channels in the output, or want live activity without the `search.messages` indexing lag.
+
+### JSON consumer impact
+
+If a downstream script reads `last_activity_ts` from `opshub slack conversations --format=json --since <when>`, it now has to handle the field switching depending on `--activity`:
+
+| `--activity` | populated field | absent field |
+| --- | --- | --- |
+| `mine` (default) | `last_self_post_ts` | `last_activity_ts` |
+| `any` | `last_activity_ts` | `last_self_post_ts` |
+| (no `--since`) | (both absent) | (both absent) |
+
+Either pin `--activity=any` to keep the field name stable, or update the consumer to read whichever of the two fields is present.
+
+### Phase 19 specifics
+
+- **No DB migration.** Phase 19 is CLI / connector / docs surface only.
+- **No new extras.** The change reuses `[connectors-slack]` (slack-sdk) for the `search.messages` call.
+- **BREAKING CHANGE → minor version bump while pre-1.0.** `opshub` is in the `0.x` line where any minor can change the public surface (SemVer §4). Phase 19-B's Conventional Commit prefix is `feat(slack):` (not `feat!:`) because the breaking change rule for `release-please` only forces a major bump on `0.x` when the operator opts in explicitly. Operators reading this section before upgrading are the intended trigger for the docs-side awareness.
+- **One new ADR + zero revisions** — Phase 19 = 1 new + 0 revisions (Phase 11 = 1 new + 2 revisions → Phase 12 = 0 + 3 → Phase 13 = 0 + 3 → Phase 14 = 0 + 2 → Phase 15 = 1 + 0 → Phase 17 = 1 + 0 → Phase 18 was 0 new + ADR-0033 forward-pinned across A/B/C → **Phase 19 = 1 new + 0 revisions**).
+- Full rationale and rejected alternatives: [ADR-0034](adr/0034-slack-engagement-axis.md). Phase 19-A delivered the ADR ([#440](https://github.com/ozzy-labs/opshub/issues/440)); Phase 19-B delivers the implementation + tests + this docs section.
