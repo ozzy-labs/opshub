@@ -63,7 +63,10 @@ fields (``external_id`` / ``title``) via Pydantic. The mapper raises
 :class:`ConnectorFailedError` early when those are empty rather than
 letting the Pydantic ``ValidationError`` leak out: the CLI driver
 already wraps :class:`ConnectorFailedError` into a sanitised
-``ConnectorSyncFailed`` event (see :func:`opshub.cli.connector.connector_sync`).
+``ConnectorSyncFailed`` event (see
+:func:`opshub.cli._connector_common.run_connector_sync`; the legacy
+``opshub.cli.connector.connector_sync`` was renamed and moved during
+the Phase 17-B per-noun split, ADR-0031).
 """
 
 from __future__ import annotations

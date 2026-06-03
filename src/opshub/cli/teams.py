@@ -12,10 +12,11 @@ Surface:
   ``opshub teams sync`` for end-to-end verification.
 
 Phase 17-B BREAKING CHANGE: the old ``opshub connector auth test
-teams`` path was not implemented in the legacy CLI either (see
-:func:`opshub.cli.connector._resolve_auth_test_verifier` which has no
-teams arm), so per-noun parity here is achieved by the same
-"unsupported verifier" stub — no behaviour drift.
+teams`` path was not implemented in the legacy CLI either — its
+``_resolve_auth_test_verifier`` dispatch (since refactored into
+:func:`opshub.cli._auth_common.run_auth_test` per ADR-0031) never
+had a teams arm. Per-noun parity here is therefore achieved by the
+same "unsupported verifier" stub — no behaviour drift.
 """
 
 from __future__ import annotations
