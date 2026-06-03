@@ -6,7 +6,7 @@
 
 ## Context
 
-Phase 1-15 完了時点で `opshub` CLI は connector / embedder / llm / events / projection / mcp 等の混在する top-level group を持つ。Phase 10 ([ADR-0006](0006-cli-first-mvp.md) §決定) で「CLI が agent 接続の唯一経路」、Phase 12 ([ADR-0022](0022-mcp-server-surface.md)) で MCP server 面が CLI と並列に追加された結果、CLI 表面は connector 系の verb / noun が散在する状態になっている。
+Phase 1-15 完了時点で `opshub` CLI は connector / embedder / llm / events / projection / mcp 等の混在する top-level group を持つ。Phase 0-1 ([ADR-0006](0006-cli-first-mvp.md) §決定) で「CLI が agent 接続の唯一経路」、Phase 10 ([ADR-0022](0022-mcp-server-surface.md)) で MCP server 面が CLI と並列に追加された結果、CLI 表面は connector 系の verb / noun が散在する状態になっている。
 
 具体的に表面化している不整合は 3 点:
 
