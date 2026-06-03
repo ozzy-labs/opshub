@@ -26,6 +26,7 @@ from opshub.projections.ingested_files import IngestedFilesProjection
 from opshub.projections.links import LinksProjector
 from opshub.projections.locks import LocksProjection
 from opshub.projections.proposals import ProposalsProjection
+from opshub.projections.slack_demand_digest import SlackDemandDigestProjection
 from opshub.projections.sources import SourcesProjection
 from opshub.projections.tasks import TasksProjection
 from opshub.projections.work_sessions import WorkSessionsProjection
@@ -49,4 +50,11 @@ def all_projections() -> list[Projection]:
         BriefingsProjection(),
         ProposalsProjection(),
         LinksProjector(),
+        # Phase 18-B (ADR-0033): Slack mention / DM demand digest.
+        # Consumes existing ``SourceObserved`` events (connector_name =
+        # "slack") — no new fetcher / mapper / event. Registered last
+        # so the fan-out order keeps the upstream ``SourcesProjection``
+        # write ahead of this derived read model (defence-in-depth for
+        # the ``last_source_id`` FK).
+        SlackDemandDigestProjection(),
     ]

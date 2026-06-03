@@ -11,6 +11,10 @@ Surface:
   ``auth.test``.
 * ``opshub slack conversations`` — list conversations visible to the
   configured token (channels + DMs + MPIMs; #366 / #374).
+* ``opshub slack mentions list`` — debug view of the
+  ``slack_demand_digest`` projection (Phase 18-B, ADR-0033). Operator
+  inspection only; the first-class skill surface is the Phase 18-C
+  MCP ``slack.demand.list`` tool.
 
 Module-level imports are restricted to ``__future__`` and ``typer``
 so ``opshub --help`` cold start stays under the ~300ms budget set by
@@ -24,7 +28,7 @@ import typer
 
 slack_app = typer.Typer(
     name="slack",
-    help="Slack connector (sync + auth + conversations discovery).",
+    help="Slack connector (sync + auth + conversations discovery + demand digest).",
     no_args_is_help=True,
 )
 
@@ -34,6 +38,13 @@ slack_auth_app = typer.Typer(
     no_args_is_help=True,
 )
 slack_app.add_typer(slack_auth_app)
+
+slack_mentions_app = typer.Typer(
+    name="mentions",
+    help="Slack mention / DM demand digest (Phase 18-B, ADR-0033).",
+    no_args_is_help=True,
+)
+slack_app.add_typer(slack_mentions_app)
 
 
 @slack_app.command("sync")
@@ -204,3 +215,78 @@ def slack_conversations(
     except ConnectorFailedError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+
+
+@slack_mentions_app.command("list")
+def slack_mentions_list(
+    output_format: str = typer.Option(
+        "table",
+        "--format",
+        help="Output format: table | json | md.",
+    ),
+    types: str | None = typer.Option(
+        None,
+        "--types",
+        help=(
+            "Comma-separated channel types to include "
+            "(``im,mpim,private,public``). Default: no filter."
+        ),
+    ),
+    demand_kind: str | None = typer.Option(
+        None,
+        "--demand-kind",
+        help=(
+            "Comma-separated demand kinds to include (``mention,dm``). "
+            "Default: no filter."
+        ),
+    ),
+    limit: int = typer.Option(
+        50,
+        "--limit",
+        help="Maximum number of digest rows to render (default: 50).",
+        min=1,
+    ),
+) -> None:
+    """Render the Slack demand digest projection (Phase 18-B, ADR-0033).
+
+    Reads the ``slack_demand_digest`` table populated by the
+    :class:`~opshub.projections.slack_demand_digest.SlackDemandDigestProjection`
+    when ``opshub slack sync`` runs (or after a manual
+    ``opshub projections rebuild``). The view is sorted by most
+    recent demand first; ``--types`` and ``--demand-kind`` narrow the
+    listing without changing the sort order.
+
+    Exit codes:
+
+    * ``0`` — rows rendered (zero matches is **not** an error).
+    * ``1`` — config error (DB not initialised, schema mismatch).
+    * ``2`` — usage error (unknown ``--format`` / ``--types`` /
+      ``--demand-kind`` value).
+    """
+    # Lazy imports keep ``opshub --help`` under the ADR-0001 cold-start
+    # budget and satisfy ``test_cli_imports`` (bans top-level
+    # ``opshub.core`` / ``opshub.projections`` imports in this module).
+    from opshub.cli._slack_mentions import (
+        parse_demand_kinds,
+        parse_types,
+        render_mentions_list,
+    )
+    from opshub.cli._wiring import build_engine
+
+    parsed_types = parse_types(types)
+    parsed_demand_kinds = parse_demand_kinds(demand_kind)
+
+    engine = build_engine()
+    try:
+        rendered = render_mentions_list(
+            engine,
+            fmt=output_format,
+            types=parsed_types,
+            demand_kinds=parsed_demand_kinds,
+            limit=limit,
+        )
+    finally:
+        engine.dispose()
+
+    if rendered:
+        typer.echo(rendered)
