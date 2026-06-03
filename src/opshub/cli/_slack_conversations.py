@@ -451,9 +451,7 @@ def _sort_rows(
             # resolves the populated value without inspecting which
             # axis built the row.
             ts = (
-                row.last_self_post_ts
-                if row.last_self_post_ts is not None
-                else row.last_activity_ts
+                row.last_self_post_ts if row.last_self_post_ts is not None else row.last_activity_ts
             )
             # ``has_ts`` (0 = present, 1 = missing) lifts missing-ts
             # rows to the bottom of the bucket; ``-ts`` flips the

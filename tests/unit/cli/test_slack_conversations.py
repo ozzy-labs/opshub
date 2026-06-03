@@ -1105,9 +1105,7 @@ def test_conversations_no_since_with_all_and_default_activity_accepted(
 
 def test_conversations_mine_table_header_uses_last_post(_slack_token_env: None) -> None:
     rows = [
-        _row_with_self_post(
-            _public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0
-        ),
+        _row_with_self_post(_public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0),
     ]
     runner = CliRunner()
     with _patch_list_conversations(rows, record=_CallRecord()):
@@ -1126,9 +1124,7 @@ def test_conversations_mine_toml_comment_uses_last_post_label(
     _slack_token_env: None,
 ) -> None:
     rows = [
-        _row_with_self_post(
-            _public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0
-        ),
+        _row_with_self_post(_public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0),
     ]
     runner = CliRunner()
     with _patch_list_conversations(rows, record=_CallRecord()):
@@ -1156,9 +1152,7 @@ def test_conversations_mine_json_emits_last_self_post_ts_only(
     import json as _json
 
     rows = [
-        _row_with_self_post(
-            _public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0
-        ),
+        _row_with_self_post(_public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0),
     ]
     runner = CliRunner()
     with _patch_list_conversations(rows, record=_CallRecord()):
@@ -1189,9 +1183,7 @@ def test_conversations_any_json_emits_last_activity_ts_only(
     import json as _json
 
     rows = [
-        _row_with_activity(
-            _public_row("C1", name="general"), last_activity_ts=1_717_200_000.0
-        ),
+        _row_with_activity(_public_row("C1", name="general"), last_activity_ts=1_717_200_000.0),
     ]
     runner = CliRunner()
     with _patch_list_conversations(rows, record=_CallRecord()):
@@ -1243,9 +1235,7 @@ def test_conversations_mine_axis_no_dual_emit_in_single_row(
     import json as _json
 
     rows = [
-        _row_with_self_post(
-            _public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0
-        ),
+        _row_with_self_post(_public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0),
     ]
     runner = CliRunner()
     with _patch_list_conversations(rows, record=_CallRecord()):

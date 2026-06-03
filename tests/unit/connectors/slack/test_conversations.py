@@ -1108,9 +1108,8 @@ def test_list_conversations_since_missing_scope_disables_type_with_warning(
     _patch_webclient(monkeypatch, client)
 
     warnings: list[str] = []
-    results = list(list_conversations(
-        _auth(),
-        since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+    results = list(
+        list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
     )
 
     assert [c.id for c in results] == ["G1"]
@@ -1175,9 +1174,8 @@ def test_list_conversations_since_missing_scope_per_type_warnings_are_independen
     _patch_webclient(monkeypatch, client)
 
     warnings: list[str] = []
-    results = list(list_conversations(
-        _auth(),
-        since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+    results = list(
+        list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
     )
 
     # Only the private row (whose history call succeeded) survived.
@@ -1330,9 +1328,8 @@ def test_list_conversations_since_channel_not_found_skips_row_aggregates_warning
     _patch_webclient(monkeypatch, client)
 
     warnings: list[str] = []
-    results = list(list_conversations(
-        _auth(),
-        since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+    results = list(
+        list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
     )
 
     assert [c.id for c in results] == ["C1", "C2"]
@@ -1392,9 +1389,8 @@ def test_list_conversations_since_not_in_channel_skips_row(
     _patch_webclient(monkeypatch, client)
 
     warnings: list[str] = []
-    results = list(list_conversations(
-        _auth(),
-        since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+    results = list(
+        list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
     )
 
     assert [c.id for c in results] == ["C1"]
@@ -1450,9 +1446,8 @@ def test_list_conversations_since_inaccessible_warning_aggregates_per_error_code
     _patch_webclient(monkeypatch, client)
 
     warnings: list[str] = []
-    results = list(list_conversations(
-        _auth(),
-        since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+    results = list(
+        list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
     )
 
     assert [c.id for c in results] == ["C1", "C2"]
@@ -1479,9 +1474,8 @@ def test_list_conversations_since_inaccessible_warning_omitted_when_none(
     _patch_webclient(monkeypatch, client)
 
     warnings: list[str] = []
-    list(list_conversations(
-        _auth(),
-        since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+    list(
+        list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
     )
 
     assert warnings == []
@@ -1861,9 +1855,7 @@ def test_fetch_self_post_index_aggregates_max_ts_per_channel(
     client.search_messages.return_value = _search_response(matches)
     _patch_webclient(monkeypatch, client)
 
-    results = list(
-        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7))
-    )
+    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
 
     by_id = {r.id: r.last_self_post_ts for r in results}
     # Three channels; each retained ts is the per-channel max.
@@ -1895,9 +1887,7 @@ def test_fetch_self_post_index_walks_cursor_pagination(
     ]
     _patch_webclient(monkeypatch, client)
 
-    results = list(
-        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7))
-    )
+    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
 
     assert client.search_messages.call_count == 2
     # Second call must carry the cursor from the first response.
@@ -1934,9 +1924,7 @@ def test_fetch_self_post_index_falls_back_to_legacy_page_pagination(
     ]
     _patch_webclient(monkeypatch, client)
 
-    results = list(
-        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7))
-    )
+    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
 
     assert client.search_messages.call_count == 2
     second_kwargs = client.search_messages.call_args_list[1].kwargs
@@ -1953,9 +1941,7 @@ def test_fetch_self_post_index_empty_response_drops_all_rows(
     client.search_messages.return_value = _search_response([])
     _patch_webclient(monkeypatch, client)
 
-    results = list(
-        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7))
-    )
+    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
 
     assert results == []
 
@@ -2013,9 +1999,7 @@ def test_list_conversations_mine_axis_drops_rows_absent_from_index(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Listing rows not present in the self-post index are dropped silently."""
-    page = _list_response(
-        [_public_channel("C1"), _public_channel("C2"), _public_channel("C3")]
-    )
+    page = _list_response([_public_channel("C1"), _public_channel("C2"), _public_channel("C3")])
     client = _build_client(list_pages=[page])
     # Only C1 has a self-post; C2 / C3 are absent from the index.
     client.search_messages.return_value = _search_response(
@@ -2023,9 +2007,7 @@ def test_list_conversations_mine_axis_drops_rows_absent_from_index(
     )
     _patch_webclient(monkeypatch, client)
 
-    results = list(
-        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7))
-    )
+    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
 
     assert [r.id for r in results] == ["C1"]
 
@@ -2037,14 +2019,10 @@ def test_list_conversations_mine_axis_index_ts_below_since_dropped(
     page = _list_response([_public_channel("C1")])
     client = _build_client(list_pages=[page])
     # A staleness arm — ts is well below the recent ``since``.
-    client.search_messages.return_value = _search_response(
-        [_search_match("C1", "100.000000")]
-    )
+    client.search_messages.return_value = _search_response([_search_match("C1", "100.000000")])
     _patch_webclient(monkeypatch, client)
 
-    results = list(
-        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=1))
-    )
+    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=1)))
 
     assert results == []
 
@@ -2056,14 +2034,10 @@ def test_list_conversations_mine_axis_populates_self_post_ts(
     page = _list_response([_public_channel("C1")])
     client = _build_client(list_pages=[page])
     fresh_ts = _recent_ts(seconds_ago=42)
-    client.search_messages.return_value = _search_response(
-        [_search_match("C1", f"{fresh_ts:.6f}")]
-    )
+    client.search_messages.return_value = _search_response([_search_match("C1", f"{fresh_ts:.6f}")])
     _patch_webclient(monkeypatch, client)
 
-    results = list(
-        list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7))
-    )
+    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
 
     assert results[0].last_self_post_ts is not None
     assert abs(results[0].last_self_post_ts - fresh_ts) < 1e-3
@@ -2105,9 +2079,7 @@ def test_list_conversations_any_axis_preserves_legacy_behaviour(
     """activity='any' calls conversations.history per row; search.messages stays unused."""
     page = _list_response([_public_channel("C1")])
     client = _build_client(list_pages=[page])
-    client.conversations_history.return_value = _history_response(
-        [{"ts": "1717200000.000000"}]
-    )
+    client.conversations_history.return_value = _history_response([{"ts": "1717200000.000000"}])
     _patch_webclient(monkeypatch, client)
 
     results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
@@ -2200,9 +2172,7 @@ def test_list_conversations_mine_axis_bot_token_principal_raises_config_error(
     _patch_webclient(monkeypatch, client)
 
     with pytest.raises(_errors_mod.ConfigError) as excinfo:
-        list(
-            list_conversations(_auth_with_bot(monkeypatch), since=_since_dt(days_ago=7))
-        )
+        list(list_conversations(_auth_with_bot(monkeypatch), since=_since_dt(days_ago=7)))
 
     message = str(excinfo.value)
     assert "Bot Token" in message
@@ -2239,7 +2209,8 @@ def test_list_conversations_mine_axis_engagement_index_orphan_logged_at_debug(
 
     # Exactly one debug log with the orphan counter.
     debug_calls = [
-        c for c in mock_logger.debug.call_args_list
+        c
+        for c in mock_logger.debug.call_args_list
         if c.args and c.args[0] == "slack.conversations.engagement_index_orphan"
     ]
     assert len(debug_calls) == 1

@@ -217,8 +217,7 @@ def slack_conversations(
     if activity not in ACTIVITY_CHOICES:
         # typer.BadParameter exits with code 2 — matches --format above.
         raise typer.BadParameter(
-            f"unknown --activity value {activity!r}; "
-            f"choose one of {', '.join(ACTIVITY_CHOICES)}",
+            f"unknown --activity value {activity!r}; choose one of {', '.join(ACTIVITY_CHOICES)}",
             param_hint="--activity",
         )
 
