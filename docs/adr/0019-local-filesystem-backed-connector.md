@@ -196,6 +196,8 @@ ADR-0005 §決定で言及されている `~/.config/opshub/excludes.yaml` の�
 - `opshub.toml` inline は operator が「box_drive の excludes はどこ?」と探すコストが低い (config が 1 ファイルに集約)
 - Phase 9.x で `~/.config/opshub/excludes.yaml` を導入する際は、`opshub.toml` inline を deprecated にせず両 sources を merge する経路で migration 可能 (ADR-0005 と整合)
 
+Phase 18 改訂: `[connectors.<name>] exclude_globs` の TOML 読込経路は [ADR-0032](0032-runtime-toml-config-loading.md) で実装される。
+
 ### (h) Operator precondition (`mountvol B:` + `wsl --shutdown`) は opshub 範囲外、`docs/box-drive-setup.md` に外出し
 
 WSL2 で `/mnt/b` を出現させる手順:

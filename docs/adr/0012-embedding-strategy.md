@@ -84,6 +84,8 @@ api_key_env = "OPENAI_API_KEY"
 
 デフォルト backend は **Phase 4 着手時に決定** する (本 ADR の Open Question 1)。Phase 1-3 では `backend = "disabled"` (embedding 機能 OFF) が default。
 
+Phase 18 改訂: `[embedding]` セクションの TOML 読込経路は [ADR-0032](0032-runtime-toml-config-loading.md) で実装される。
+
 ### 4. Embed 対象 (ADR-0020 整合、Phase 10 で改訂)
 
 > **改訂履歴**: 当初版 (2026-05-17) は ADR-0005 (External Content Minimization) 整合で「`sources.summary` を embed、full body は embed しない」を pin していた。Phase 10 で ADR-0020 (Full Local Content Retention) が ADR-0005 を Superseded し、`sources.body` が SSOT として保持されるようになったため、本節を**本文ベース**に改訂する (2026-05-30、Alternative #4 採用)。
