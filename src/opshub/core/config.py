@@ -10,16 +10,28 @@ or ``OPSHUB_EMBEDDING__BACKEND=local``.
 
 Path defaults follow the XDG Base Directory specification so that opshub
 data does not leak into the user's home directory root.
+
+Phase 17 ([ADR-0032](../../../docs/adr/0032-runtime-toml-config-loading.md), #418)
+wires :class:`TomlConfigSettingsSource` into the sources tuple so the
+starter ``config.toml`` written by ``opshub init`` is **actually read at
+runtime**. Before #418, ``OpsHubSettings()`` only consulted env vars +
+field defaults — the TOML file was silently ignored, which was the
+behaviour ``docs/upgrading.md`` already described incorrectly. The TOML
+file path is resolved from ``$OPSHUB_CONFIG_DIR`` (when set) or
+:func:`default_config_dir` (XDG fallback). Priority order, highest →
+lowest: ``init args`` > env > dotenv > **toml** > file_secret > defaults.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import ValidationError as PydanticValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict, TomlConfigSettingsSource
+from pydantic_settings.sources import PydanticBaseSettingsSource
 
 from opshub.core.errors import ConfigError
 
@@ -815,6 +827,18 @@ class OpsHubSettings(BaseSettings):
     "env var override is the documented CI / headless path" stance.
     Per-backend overrides still use the canonical
     ``OPSHUB_LLM__ANTHROPIC__MODEL_ID`` etc. form.
+
+    Phase 17 ([ADR-0032](../../../docs/adr/0032-runtime-toml-config-loading.md),
+    #418) overrides :meth:`settings_customise_sources` to insert
+    :class:`TomlConfigSettingsSource` into the sources tuple between
+    ``dotenv_settings`` and ``file_secret_settings``. The TOML path is
+    resolved at instantiation time from ``$OPSHUB_CONFIG_DIR`` (when
+    set) or :func:`default_config_dir` (XDG fallback) — keying the
+    lookup off an env var rather than a class attribute keeps the
+    operator-facing ``OPSHUB_CONFIG_DIR=/tmp/x opshub ...`` override
+    working without code changes. A missing TOML file is treated as an
+    empty config (no exception), so a fresh ``uv tool install`` that
+    has not yet run ``opshub init`` still produces working defaults.
     """
 
     model_config = SettingsConfigDict(
@@ -831,6 +855,93 @@ class OpsHubSettings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     connectors: ConnectorSettings = Field(default_factory=ConnectorSettings)
     office: OfficeSettings = Field(default_factory=OfficeSettings)
+
+    def __init__(self, **values: Any) -> None:
+        """Construct settings; convert pydantic ValidationError to ConfigError.
+
+        ADR-0032 §決定 (#418) — once ``config.toml`` is read at runtime,
+        a typo in the operator-edited file (e.g. ``backend = "grok"``)
+        produces a :class:`pydantic.ValidationError`. The CLI driver's
+        existing error-rendering path already understands
+        :class:`ConfigError` (single-line stderr summary, exit 1), so
+        re-wrapping the pydantic exception keeps the operator-facing
+        UX consistent across all three config sources (TOML / env /
+        init args) without forcing every CLI command to import
+        :class:`pydantic.ValidationError` separately.
+
+        The wrap preserves ``__cause__`` so the underlying pydantic
+        diagnostic chain stays accessible for ``--debug`` traces
+        (ADR-0027 §決定 (c)). Pure :class:`OpsHubError` subclasses
+        (e.g. the :meth:`EmbeddingSettings._check_disabled_has_no_descriptors`
+        validator already raising :class:`ConfigError` directly) pass
+        through untouched because they never trigger the
+        :class:`pydantic.ValidationError` branch.
+        """
+        try:
+            super().__init__(**values)
+        except PydanticValidationError as exc:
+            raise ConfigError(
+                f"invalid OpsHub config: {exc}. Check $OPSHUB_CONFIG_DIR/config.toml, "
+                "OPSHUB_* env vars, and the field constraints in "
+                "src/opshub/core/config.py."
+            ) from exc
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Insert ``TomlConfigSettingsSource`` into the sources tuple.
+
+        Priority (highest → lowest): ``init_settings`` > ``env_settings``
+        > ``dotenv_settings`` > ``toml_settings`` > ``file_secret_settings``.
+        The order matches ADR-0032 §決定 — env vars (the documented CI /
+        headless path) always win over the on-disk TOML, init args (used
+        by ``OpsHubSettings(storage=StorageSettings(...))``-style overrides
+        in tests / programmatic code) always win over env, and defaults
+        are the floor.
+
+        The TOML path is recomputed every call so ``monkeypatch.setenv(
+        "OPSHUB_CONFIG_DIR", ...)`` in tests / ``$OPSHUB_CONFIG_DIR=...``
+        on the CLI redirects the lookup without code changes. A
+        non-existent file is **not** an error — :class:`TomlConfigSettingsSource`
+        returns an empty mapping in that case, so a fresh ``uv tool install``
+        that has not yet run ``opshub init`` keeps working off defaults.
+        Malformed TOML (a syntax error in the file the operator hand-edited)
+        raises :class:`tomllib.TOMLDecodeError` from inside the source
+        constructor; the CLI driver wraps it in a :class:`ConfigError` so
+        the operator gets an actionable message instead of a raw Python
+        traceback.
+        """
+        config_dir_env = os.environ.get("OPSHUB_CONFIG_DIR")
+        config_dir = Path(config_dir_env) if config_dir_env else default_config_dir()
+        toml_path = config_dir / "config.toml"
+        try:
+            toml_settings: PydanticBaseSettingsSource = TomlConfigSettingsSource(
+                settings_cls, toml_file=toml_path
+            )
+        except Exception as exc:  # pragma: no cover - exact subclass varies by tomllib
+            # ``TomlConfigSettingsSource`` raises ``tomllib.TOMLDecodeError``
+            # synchronously from its constructor when the file is malformed.
+            # Surface it as our project-level :class:`ConfigError` so the
+            # CLI driver can render an actionable message instead of leaking
+            # the raw stdlib traceback. Path is included so the operator
+            # knows exactly which file to fix.
+            raise ConfigError(
+                f"failed to parse {toml_path}: {exc}. Fix the TOML syntax or "
+                "delete the file and re-run `opshub init` to regenerate the starter."
+            ) from exc
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            toml_settings,
+            file_secret_settings,
+        )
 
     @model_validator(mode="after")
     def _apply_llm_backend_env_shortcut(self) -> OpsHubSettings:

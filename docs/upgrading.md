@@ -41,11 +41,45 @@ Downgrade contracts:
 
 ## Configuration changes between versions
 
-OpsHub's config file (`$XDG_CONFIG_HOME/opshub/config.toml`) is loaded via
-[`pydantic-settings`](https://docs.pydantic.dev/latest/usage/pydantic_settings/),
-which silently ignores unknown keys. New optional config fields added in a
+OpsHub's config file (`$XDG_CONFIG_HOME/opshub/config.toml`) is loaded at
+runtime via [`pydantic-settings`](https://docs.pydantic.dev/latest/usage/pydantic_settings/)'s
+`TomlConfigSettingsSource` ([ADR-0032](adr/0032-runtime-toml-config-loading.md), [#418](https://github.com/ozzy-labs/opshub/issues/418)).
+Each `OpsHubSettings()` instantiation re-reads the file from disk and merges
+its keys into the settings tree. Unknown keys are silently ignored
+(`model_config.extra = "ignore"`), so new optional config fields added in a
 minor version are backward-compatible — old configs continue to work and the
 defaults apply.
+
+Resolution priority (highest → lowest):
+
+1. **init args** — values passed to `OpsHubSettings(storage=..., embedding=...)`
+   directly (used by tests and programmatic wiring).
+2. **env vars** — `OPSHUB_<SECTION>__<FIELD>=...` (e.g.
+   `OPSHUB_EMBEDDING__BACKEND=openai`) plus the convenience aliases
+   `OPSHUB_CONFIG_DIR` / `OPSHUB_DATA_DIR` / `OPSHUB_LLM_BACKEND`.
+3. **dotenv** — `.env` next to the CLI invocation (pydantic-settings default).
+4. **TOML file** — `$OPSHUB_CONFIG_DIR/config.toml` if `$OPSHUB_CONFIG_DIR` is
+   set, otherwise `$XDG_CONFIG_HOME/opshub/config.toml`.
+5. **field defaults** — every section's `Field(default_factory=...)`.
+
+A missing TOML file is **not** an error — a fresh `uv tool install` that has
+not yet run `opshub init` falls through to step 5 cleanly. Malformed TOML
+(syntax error from a hand-edit) surfaces as `ConfigError` with the file path
+in the message so the operator can find and fix it.
+
+To temporarily relocate the config directory (e.g. for a CI smoke test):
+
+```bash
+OPSHUB_CONFIG_DIR=/tmp/opshub-ci opshub init
+OPSHUB_CONFIG_DIR=/tmp/opshub-ci opshub task list   # same dir is consulted
+```
+
+Pre-#418 versions silently ignored `config.toml` at runtime — the file was
+written by `opshub init` but only env vars + field defaults flowed into
+`OpsHubSettings()`. After upgrading, any setting an operator had previously
+expressed in `config.toml` (and worked around by re-exporting as an `OPSHUB_*`
+env var) starts taking effect from the file directly; the env-var workaround
+still wins because env > toml in the priority order above.
 
 ## Embedding model changes
 
