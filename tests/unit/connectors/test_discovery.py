@@ -125,7 +125,19 @@ def test_helper_populates_registry_in_fresh_subprocess() -> None:
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
+    )
+    # ``check=False`` + explicit assertion (over ``check=True``) so a
+    # subprocess-side failure (SyntaxError in the inline script,
+    # import-time crash in a connector module, ...) surfaces with
+    # stdout + stderr in the pytest output instead of being hidden
+    # behind a bare ``CalledProcessError``. The sibling test in
+    # ``tests/unit/connectors/test_import_clean.py`` uses the same
+    # pattern for the same reason.
+    assert result.returncode == 0, (
+        f"subprocess exited non-zero ({result.returncode}).\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
     )
     registered = set(result.stdout.strip().splitlines())
     missing = set(_EXPECTED_CONNECTORS) - registered
@@ -178,7 +190,14 @@ def test_helper_continues_after_individual_import_error() -> None:
         [sys.executable, "-c", script],
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
+    )
+    # See sibling test for the rationale behind ``check=False`` +
+    # explicit assertion (surface stderr to pytest output on failure).
+    assert result.returncode == 0, (
+        f"subprocess exited non-zero ({result.returncode}).\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
     )
     registered = set(result.stdout.strip().splitlines())
 
@@ -197,10 +216,10 @@ def test_helper_continues_after_individual_import_error() -> None:
 
 
 @pytest.mark.parametrize("name", _EXPECTED_CONNECTORS)
-def test_helper_source_contains_no_trailing_extras_only_for_one_connector(
+def test_helper_wraps_each_connector_import_in_try_except_importerror(
     name: str,
 ) -> None:
-    """Sanity pin: every connector's import line is uniformly guarded.
+    """Shape pin: every connector's import line is guarded by ``try / except``.
 
     Pre-PR-#437 the inline MCP block in ``mcp/_writes.py`` had per-line
     drift — Gmail in particular carried an extra ``# noqa: F401`` while
