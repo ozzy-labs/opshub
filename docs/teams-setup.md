@@ -100,6 +100,8 @@ env var を設定すると keyring lookup を skip する。CI / container 等�
 
 ## 4. opshub.toml 設定
 
+> **TOML 読込**: `opshub.toml` は起動時に毎回読まれ、`OPSHUB_*` 環境変数は TOML を上書きする (優先順位 `init args > env > toml > defaults`、[ADR-0032](adr/0032-runtime-toml-config-loading.md))。`OPSHUB_CONFIG_DIR=<dir>` で config dir 全体を差し替え可。詳細は [`docs/troubleshooting.md` §3.10](troubleshooting.md)。
+
 ```toml
 [connectors.teams]
 enabled = true                        # default: false
