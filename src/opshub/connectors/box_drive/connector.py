@@ -4,8 +4,8 @@ Composes the B1 :class:`opshub.connectors.box_drive.scanner.BoxDriveScanner`
 and the B2 :func:`opshub.connectors.box_drive.mapper.map_scanned_file`
 into the :class:`opshub.connectors.base.Connector` Protocol contract.
 Driven by the ``opshub box_drive sync`` CLI in
-:mod:`opshub.cli.connector` (the CLI surface itself ships in Phase 9
-step C1; this module already satisfies the runtime contract).
+:mod:`opshub.cli.box_drive` (shared driver:
+:mod:`opshub.cli._connector_common`).
 
 Sync flow (Phase 9 plan §1 #5 / ADR-0019 §決定 (a)(c)(d)(g))
 -----------------------------------------------------------
@@ -125,7 +125,7 @@ class BoxDriveConnector:
         :class:`ConfigError` when ``root_path`` cannot be resolved
         (Linux native / unsupported platforms / explicit path
         missing on disk). The CLI driver in
-        :mod:`opshub.cli.connector` maps :class:`ConfigError` to a
+        :mod:`opshub.cli._connector_common` maps :class:`ConfigError` to a
         non-zero exit code without appending a
         ``ConnectorSyncFailed`` event — config mistakes are not
         connector failures.

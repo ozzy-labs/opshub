@@ -121,11 +121,21 @@ def build_inbox_add_handler(engine: Engine) -> ToolHandler:
 def build_connector_sync_handler(engine: Engine) -> ToolHandler:
     """Return the handler bound to ``engine`` for ``connector.sync``.
 
-    Resolves the connector from the in-process registry — the same
-    discovery path as ``opshub connector sync``. Credentials are not
-    threaded through the arguments; the connector implementation
-    reads them out of the keyring via :mod:`opshub.core.secrets` so
-    the MCP boundary stays token-free (ADR-0022 §(b)).
+    Resolves the connector from the in-process registry. Population of
+    that registry is delegated to
+    :func:`opshub.connectors._discovery.import_connector_modules` —
+    the SSOT shared with ``opshub <connector> sync`` (CLI per-noun
+    drivers) and ``opshub connectors`` (the list command), so the set
+    of names this handler accepts always matches the CLI surface. The
+    helper is typer-free so this MCP request path stays free of the
+    CLI framework (ADR-0022 §(b) for the token-free posture; the
+    helper itself documents why the import set lives in
+    ``_discovery`` rather than duplicated inline here as it was
+    pre-PR-#437).
+
+    Credentials are not threaded through the arguments; the connector
+    implementation reads them out of the keyring via
+    :mod:`opshub.core.secrets` so the MCP boundary stays token-free.
 
     The handler reports only ``observed_count`` plus an ``ok`` flag
     on success — it does not echo per-item content into the MCP

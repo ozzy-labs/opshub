@@ -80,11 +80,12 @@ skills_app = typer.Typer(
 
 
 # Sentinel enum-like accept lists. Typer would accept ``Enum`` here, but
-# the matching CLI surface in ``opshub.cli.connector`` (``--format``,
-# ``--types``) uses plain strings for the same readability trade-off so
-# we follow that precedent. ``--host`` and ``--scope`` validation lives
-# inside the command body (raising ``typer.BadParameter`` for unknown
-# values).
+# the matching CLI surface that introduced this style (the legacy
+# ``opshub.cli.connector`` module's ``--format`` / ``--types`` flags,
+# since broken up into per-noun groups in Phase 17-B per ADR-0031) used
+# plain strings for the same readability trade-off, so we follow that
+# precedent. ``--host`` and ``--scope`` validation lives inside the
+# command body (raising ``typer.BadParameter`` for unknown values).
 _HOST_CHOICES: tuple[str, ...] = ("claude-code", "codex", "copilot", "all")
 _SCOPE_CHOICES: tuple[str, ...] = ("user", "project")
 

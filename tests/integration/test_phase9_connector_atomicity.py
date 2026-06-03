@@ -198,7 +198,7 @@ def test_box_drive_sync_persists_prefix_when_scan_raises(
     The Phase 9 connector loop calls :meth:`SourceService.observe`
     once per yielded file (one UoW each), so the two prefix yields
     land durably before the iterator raises. The CLI driver in
-    :mod:`opshub.cli.connector` catches the exception, records a
+    :mod:`opshub.cli._connector_common` catches the exception, records a
     sanitised ``ConnectorSyncFailed`` event with
     ``type(exc).__name__`` only, and exits 1.
 

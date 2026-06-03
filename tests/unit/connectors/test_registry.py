@@ -125,6 +125,29 @@ def _reseed_in_tree_connectors() -> None:
         "opshub.connectors.teams.connector",
         "TeamsConnector",
     )
+    # Phase 13 / 14 additions: re-seed google_workspace (Phase 13) +
+    # google_calendar / google_mail (Phase 14) to match the connector
+    # set ``opshub.connectors._discovery.import_connector_modules``
+    # imports. Until PR #437 these three were absent here, so
+    # downstream tests that depended on the post-``unregister_all``
+    # registry baseline observed a partial set — the same shape of
+    # drift the Phase 11 block above closed for Teams + OneDrive
+    # Drive.
+    _seed_connector(
+        "opshub.connectors.google_workspace",
+        "opshub.connectors.google_workspace.connector",
+        "GoogleWorkspaceConnector",
+    )
+    _seed_connector(
+        "opshub.connectors.google_calendar",
+        "opshub.connectors.google_calendar.connector",
+        "GoogleCalendarConnector",
+    )
+    _seed_connector(
+        "opshub.connectors.google_mail",
+        "opshub.connectors.google_mail.connector",
+        "GoogleMailConnector",
+    )
 
 
 def _seed_connector(package: str, module: str, class_name: str) -> None:

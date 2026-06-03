@@ -11,10 +11,10 @@ The helper lives behind a ``_`` prefix so the static cold-start guard
 (``tests/integration/test_cli_imports``) does not require its
 module-level imports to stay inside the whitelist (the parametrised
 test only walks public ``cli/*.py`` modules). The public
-:mod:`opshub.cli.connector` module still defers
-``_slack_conversations`` import inside the command callback to preserve
-the ADR-0001 cold-start budget for operators who never run the
-``connector slack conversations`` subcommand.
+:mod:`opshub.cli.slack` module still defers ``_slack_conversations``
+import inside the command callback to preserve the ADR-0001
+cold-start budget for operators who never run the ``opshub slack
+conversations`` subcommand.
 
 Output formats
 --------------

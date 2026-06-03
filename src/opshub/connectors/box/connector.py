@@ -4,8 +4,8 @@ Composes the C1 :class:`opshub.connectors.box.auth.BoxAuth`, the C2
 :class:`opshub.connectors.box.fetcher.BoxFetcher`, and the C3
 :func:`opshub.connectors.box.mapper.map_event` projection into the
 :class:`opshub.connectors.base.Connector` Protocol contract. Driven by
-the ``opshub box sync`` CLI in
-:mod:`opshub.cli.connector`.
+the ``opshub box sync`` CLI in :mod:`opshub.cli.box`
+(shared driver: :mod:`opshub.cli._connector_common`).
 
 Sync semantics (Phase 7 plan §2.3 C3, mirroring the Phase 3 GitHub
 precedent):
@@ -35,7 +35,7 @@ Failure posture (Phase 7 plan §1 #8 / phase-3-plan §4 Q3):
   retries, refresh-token revoked) propagates so the CLI driver records
   a :class:`ConnectorSyncFailed` event with a sanitised message
   (``type(exc).__name__`` only — never the raw text, see
-  :mod:`opshub.cli.connector`).
+  :func:`opshub.cli._connector_common.run_connector_sync`).
 * :class:`ConfigError` from the auth helper (missing ``client_id``,
   no refresh token) likewise propagates — operator action required.
 * Any other exception propagates verbatim; the CLI driver applies the

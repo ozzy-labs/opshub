@@ -2,8 +2,8 @@
 
 Composes the B1 auth helper + B2 fetcher + B3 mapper into the
 :class:`opshub.connectors.base.Connector` Protocol contract. Driven
-by the ``opshub ms365 sync`` CLI in
-:mod:`opshub.cli.connector`.
+by the ``opshub ms365 sync`` CLI in :mod:`opshub.cli.ms365`
+(shared driver: :mod:`opshub.cli._connector_common`).
 
 Endpoint groups
 ---------------

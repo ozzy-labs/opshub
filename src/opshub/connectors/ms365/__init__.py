@@ -13,7 +13,8 @@ it (mirrors the Phase 3 GitHub pattern). Heavy SDK imports (``msal``,
 constructors — importing this package itself only pulls in the
 framework primitives + a single ``register_connector`` call, which
 keeps the ADR-0001 cold-start budget intact (the call site lives
-inside the CLI command callback in :mod:`opshub.cli.connector`, so it
+inside the ``opshub ms365`` command callback (:mod:`opshub.cli.ms365`,
+sharing the driver in :mod:`opshub.cli._connector_common`), so it
 never runs on the ``opshub --help`` path).
 """
 

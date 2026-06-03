@@ -15,15 +15,15 @@ Public surface:
   ``connector_sync`` function so scripts grepping ``sync failed:
   <Type>`` / ``synced <name>: N item(s) observed`` keep working.
 * :class:`_ProgressSourceProxy` — kept module-public (single
-  underscore stays for backward import compat from the old
-  ``opshub.cli.connector`` tests; the constructor / contract is
-  unchanged).
+  underscore retained for legibility / historical continuity with the
+  pre-Phase-17-B ``opshub.cli.connector`` tests that originally
+  anchored on it; the constructor / contract is unchanged).
 * :func:`is_debug_enabled` — env-var probe for ``OPSHUB_DEBUG``,
   re-exported so each noun's ``sync`` callback does not duplicate
   the truthy-table.
-* :data:`_DEBUG_TRUTHY` — module-public so the
-  :mod:`opshub.cli.connector` → :mod:`opshub.core.logging` drift pin
-  test can be ported over (re-anchored on this module).
+* :data:`_DEBUG_TRUTHY` — module-public so the legacy
+  ``opshub.cli.connector`` → :mod:`opshub.core.logging` drift pin
+  test (now re-anchored on this module) can keep its import path.
 
 Module-level imports are restricted to ``__future__``, ``os`` and
 ``typer`` so ``opshub --help`` cold start stays under the ~300ms
