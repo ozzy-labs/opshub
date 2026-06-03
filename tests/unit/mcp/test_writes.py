@@ -1,25 +1,30 @@
-"""Phase 11 audit Cluster B (H4) — MCP ``connector.sync`` widening.
+"""MCP ``connector.sync`` widening pins.
 
-Pins that the MCP ``connector.sync`` write handler imports the full
-Phase 11 connector set (github + slack + ms365 + box + box_drive +
-**teams + onedrive_drive**) before dispatching. The H4 audit finding
-recorded the CLI imported both Phase 11 connectors but the MCP write
-handler did not, so an MCP client invoking ``connector.sync`` with
-``name="teams"`` or ``name="onedrive_drive"`` received an
-``OpsHubError("unknown connector ...")`` even when the connector was
-fully wired on the CLI side.
+Pins that the MCP ``connector.sync`` write handler can reach every
+in-tree connector — originally from Phase 11 audit Cluster B (H4),
+which caught the CLI / MCP drift for Teams + OneDrive Drive
+(``connector.sync`` raised ``OpsHubError("unknown connector ...")``
+for both names even though the CLI was wired). Phase 14 added
+``google_calendar`` / ``google_mail`` and the MCP inline import block
+silently missed them too — same shape of drift. Subsequently the
+import set was consolidated into
+:mod:`opshub.connectors._discovery` (``import_connector_modules``),
+so the static pins below now grep that SSOT instead of the MCP
+handler module. Either way the contract is unchanged: the MCP path
+must register the same connector set the CLI does, before
+dispatching.
 
 The tests assert two things:
 
-1. **Static source check** — the handler module's source contains the
-   ``import opshub.connectors.teams`` and
-   ``import opshub.connectors.onedrive_drive`` lines. This is the
-   cheap, deterministic check that does not depend on registry state.
-2. **Dynamic registry check** — after the handler's side-effect
-   imports run, the registry exposes both connector names. We mock
-   the registered connector instance so we don't exercise the real
-   SaaS sync path; the contract under test is "the handler reaches
-   the connector via discovery", not the connector's own behaviour.
+1. **Static source check** — the discovery helper's source contains
+   an ``import opshub.connectors.<name>`` line for every connector
+   the MCP handler dispatches to. Cheap, deterministic, does not
+   depend on registry state.
+2. **Dynamic registry check** — after the handler runs, the registry
+   exposes the connector name end-to-end. We mock the registered
+   connector instance so we don't exercise the real SaaS sync path;
+   the contract under test is "the handler reaches the connector via
+   discovery", not the connector's own behaviour.
 """
 
 from __future__ import annotations
@@ -33,43 +38,91 @@ import pytest
 from opshub.connectors.base import SyncResult
 
 # ---------------------------------------------------------------------------
-# Static source check — the import block must mention both new connectors
+# Static source check — the discovery helper must mention every connector the
+# MCP handler dispatches to.
+#
+# Pre-extraction these pins grepped ``opshub.mcp._writes`` directly because
+# the import block was duplicated inline in the handler. The handler now
+# delegates to ``opshub.connectors._discovery.import_connector_modules``,
+# so the SSOT moved with it. The grep target is correspondingly re-anchored
+# on the discovery module — the contract under test is unchanged.
 # ---------------------------------------------------------------------------
 
 
-def test_writes_module_imports_teams_connector() -> None:
-    """The handler module's source must import ``opshub.connectors.teams``.
+def test_discovery_helper_imports_teams_connector() -> None:
+    """The discovery helper must import ``opshub.connectors.teams``.
 
-    The H4 fix added the side-effect import; a regression that drops
-    the line would silently break MCP ``connector.sync`` for Teams
-    again. We grep the module source rather than executing it because
-    the import runs inside an async handler and re-running it across
-    tests would couple the assertion to ``sys.modules`` state.
+    Phase 11 audit Cluster B (H4) recorded the original CLI / MCP
+    drift for Teams. A regression that drops the line would silently
+    break MCP ``connector.sync`` for Teams again. We grep the module
+    source rather than executing it because the import runs lazily
+    inside the helper and re-running it across tests would couple the
+    assertion to ``sys.modules`` state.
     """
-    from opshub.mcp import _writes
+    from opshub.connectors import _discovery
 
-    source = inspect.getsource(_writes)
+    source = inspect.getsource(_discovery)
     assert "import opshub.connectors.teams" in source, (
-        "Phase 11 audit Cluster B (H4): MCP connector.sync handler must "
-        "side-effect-import opshub.connectors.teams so the Teams connector "
+        "MCP connector.sync handler must reach Teams via "
+        "import_connector_modules — the helper must side-effect-import "
+        "opshub.connectors.teams so the Teams connector registers with "
+        "the global registry before discovery."
+    )
+
+
+def test_discovery_helper_imports_onedrive_drive_connector() -> None:
+    """The discovery helper must import ``opshub.connectors.onedrive_drive``.
+
+    Symmetric to the Teams pin — OneDrive Drive is the second
+    Phase 11 connector the MCP write handler historically missed.
+    """
+    from opshub.connectors import _discovery
+
+    source = inspect.getsource(_discovery)
+    assert "import opshub.connectors.onedrive_drive" in source, (
+        "MCP connector.sync handler must reach OneDrive Drive via "
+        "import_connector_modules — the helper must side-effect-import "
+        "opshub.connectors.onedrive_drive so the OneDrive Drive connector "
         "registers with the global registry before discovery."
     )
 
 
-def test_writes_module_imports_onedrive_drive_connector() -> None:
-    """The handler module's source must import ``opshub.connectors.onedrive_drive``.
+def test_discovery_helper_imports_google_calendar_connector() -> None:
+    """The discovery helper must import ``opshub.connectors.google_calendar``.
 
-    Symmetric to the teams check — OneDrive Drive is the second
-    Phase 11 connector the MCP write handler historically missed.
+    Phase 14 added the Google Calendar connector. The MCP inline
+    import block (pre-extraction) missed it, so MCP clients invoking
+    ``connector.sync`` with ``name="google_calendar"`` received
+    ``OpsHubError("unknown connector ...")`` even though the CLI was
+    wired. The extraction to ``_discovery`` closed that gap; this pin
+    keeps it shut.
     """
-    from opshub.mcp import _writes
+    from opshub.connectors import _discovery
 
-    source = inspect.getsource(_writes)
-    assert "import opshub.connectors.onedrive_drive" in source, (
-        "Phase 11 audit Cluster B (H4): MCP connector.sync handler must "
-        "side-effect-import opshub.connectors.onedrive_drive so the "
-        "OneDrive Drive connector registers with the global registry "
-        "before discovery."
+    source = inspect.getsource(_discovery)
+    assert "import opshub.connectors.google_calendar" in source, (
+        "MCP connector.sync handler must reach Google Calendar via "
+        "import_connector_modules — the helper must side-effect-import "
+        "opshub.connectors.google_calendar so the connector registers "
+        "with the global registry before discovery."
+    )
+
+
+def test_discovery_helper_imports_google_mail_connector() -> None:
+    """The discovery helper must import ``opshub.connectors.google_mail``.
+
+    Symmetric to the Google Calendar pin — Phase 14's Gmail
+    connector was the second connector the MCP inline import block
+    silently missed.
+    """
+    from opshub.connectors import _discovery
+
+    source = inspect.getsource(_discovery)
+    assert "import opshub.connectors.google_mail" in source, (
+        "MCP connector.sync handler must reach Gmail via "
+        "import_connector_modules — the helper must side-effect-import "
+        "opshub.connectors.google_mail so the connector registers with "
+        "the global registry before discovery."
     )
 
 

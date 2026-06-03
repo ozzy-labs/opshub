@@ -105,75 +105,18 @@ class _ProgressSourceProxy:
 def _import_connector_modules() -> None:
     """Best-effort import of every connector subpackage.
 
-    Each subpackage triggers ``register_connector`` as an import side
-    effect; the ``try / except ImportError`` arms guard against
-    partial-extras installs (an operator who only installed
-    ``[connectors-github]`` can still sync GitHub).
-
-    All connector modules are import-clean (heavy SDKs are deferred
-    into method bodies), so these guards are defensive — they keep a
-    future refactor that adds a top-level SDK import from breaking
-    sync for the *other* connectors.
+    Thin wrapper around
+    :func:`opshub.connectors._discovery.import_connector_modules` — the
+    same helper the MCP ``connector.sync`` handler and the
+    ``opshub connectors`` list command call. Kept under this
+    underscore-prefixed name so the historical call site in
+    :func:`run_connector_sync` (below) stays stable; the body lives in
+    ``opshub.connectors._discovery`` so the import set is not
+    duplicated across the CLI / MCP surfaces.
     """
-    # GitHub
-    try:
-        import opshub.connectors.github  # pyright: ignore[reportUnusedImport]
-    except ImportError:
-        pass
+    from opshub.connectors._discovery import import_connector_modules
 
-    # Slack
-    try:
-        import opshub.connectors.slack  # pyright: ignore[reportUnusedImport]
-    except ImportError:
-        pass
-
-    # MS365
-    try:
-        import opshub.connectors.ms365  # pyright: ignore[reportUnusedImport]
-    except ImportError:
-        pass
-
-    # Box
-    try:
-        import opshub.connectors.box  # pyright: ignore[reportUnusedImport]
-    except ImportError:
-        pass
-
-    # Box Drive (Phase 9, ADR-0019)
-    try:
-        import opshub.connectors.box_drive  # pyright: ignore[reportUnusedImport]
-    except ImportError:
-        pass
-
-    # OneDrive Drive (Phase 11 F4-b, ADR-0019 §(j))
-    try:
-        import opshub.connectors.onedrive_drive  # pyright: ignore[reportUnusedImport]
-    except ImportError:
-        pass
-
-    # Teams (Phase 11 F5)
-    try:
-        import opshub.connectors.teams  # pyright: ignore[reportUnusedImport]
-    except ImportError:
-        pass
-
-    # Google Workspace (Phase 13)
-    try:
-        import opshub.connectors.google_workspace  # pyright: ignore[reportUnusedImport]
-    except ImportError:
-        pass
-
-    # Google Calendar (Phase 14)
-    try:
-        import opshub.connectors.google_calendar  # pyright: ignore[reportUnusedImport]
-    except ImportError:
-        pass
-
-    # Gmail (Phase 14)
-    try:
-        import opshub.connectors.google_mail  # pyright: ignore[reportUnusedImport]  # noqa: F401
-    except ImportError:
-        pass
+    import_connector_modules()
 
 
 def _build_source_service(*, actor: str) -> object:
