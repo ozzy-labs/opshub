@@ -523,7 +523,7 @@ def test_phase12_assistant_lifecycle(
         specs = build_tool_specs_for_engine(engine)
         specs_by_name = {spec.name: spec for spec in specs}
 
-        # Phase 12 H1 surface: 17 tools (12 read + 5 write).
+        # Phase 12 H1 + Phase 18-C surface: 18 tools (13 read + 5 write).
         assert set(specs_by_name) == {
             # Phase 10 C2 baseline.
             "recall.search",
@@ -546,6 +546,8 @@ def test_phase12_assistant_lifecycle(
             # Phase 12 H1 widening (ADR-0022 改訂 §決定 (f)).
             "search",
             "propose.apply",
+            # Phase 18-C widening (ADR-0033 §決定 (c)).
+            "slack.demand.list",
         }
 
         # ---- 4. Phase 12 H1 widening end-to-end -----------------------

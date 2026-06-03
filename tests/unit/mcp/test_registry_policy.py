@@ -61,6 +61,8 @@ _TOOL_NAMES: tuple[str, ...] = (
     # Phase 12 H1 (ADR-0022 改訂): FTS5 search + HITL propose.apply.
     "search",
     "propose.apply",
+    # Phase 18-C (ADR-0033 §決定 (c)): Slack mention / DM demand digest.
+    "slack.demand.list",
 )
 
 # Phase 12 H1: ``propose.apply`` is the only write-class tool with

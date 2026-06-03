@@ -334,9 +334,7 @@ def render_mentions_list(
             f"invalid --format {fmt!r}; expected one of {', '.join(ALLOWED_FORMATS)}"
         )
     if limit < 1:
-        raise ValidationError(
-            f"invalid --limit {limit!r}; expected a positive integer"
-        )
+        raise ValidationError(f"invalid --limit {limit!r}; expected a positive integer")
 
     rows = _fetch_rows(
         engine,
@@ -367,13 +365,9 @@ def _fetch_rows(
         slack_demand_digest_table.c.channel_id.asc(),
     )
     if types is not None:
-        statement = statement.where(
-            slack_demand_digest_table.c.channel_type.in_(types)
-        )
+        statement = statement.where(slack_demand_digest_table.c.channel_type.in_(types))
     if demand_kinds is not None:
-        statement = statement.where(
-            slack_demand_digest_table.c.demand_kind.in_(demand_kinds)
-        )
+        statement = statement.where(slack_demand_digest_table.c.demand_kind.in_(demand_kinds))
     statement = statement.limit(limit)
 
     with engine.connect() as conn:

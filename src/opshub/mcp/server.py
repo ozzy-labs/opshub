@@ -84,6 +84,7 @@ def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
         build_inbox_list_handler,
         build_recall_search_handler,
         build_search_handler,
+        build_slack_demand_list_handler,
         build_source_get_handler,
         build_source_list_handler,
         build_task_list_handler,
@@ -116,6 +117,8 @@ def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
         # Phase 12 H1 (ADR-0022 改訂): FTS5 search + HITL propose.apply.
         "search": build_search_handler(engine),
         "propose.apply": build_propose_apply_handler(engine),
+        # Phase 18-C (ADR-0033 §決定 (c)): Slack mention / DM demand digest.
+        "slack.demand.list": build_slack_demand_list_handler(engine),
     }
     return build_tool_specs(handlers=handlers)
 

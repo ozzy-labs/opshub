@@ -1,6 +1,6 @@
 ---
 name: personal-brief
-description: '「今日のまとめ」「今週どうなってる」「今月の動き」「先週の状況」「先月の振り返り」「最近どうなってる」「状況教えて」「自分の状況」と聞かれたら、opshub MCP の brief (LLM 要約) または recall.search / task.list / inbox.list / decision.list を順に叩いて指定期間 (デフォルト直近 24h) の主要な動きを要約する。期間は ISO 8601 timestamp を physical-column 時間フィルタ (updated_after/before / created_after/before / recorded_after/before) に渡してホスト側で組み立てる。LLM 推論ループは外部ホスト (Claude Code 等) 側、本 skill は手順書のみで実処理を持たない。pair: external-brief (外向き) と対をなす。'
+description: '「今日のまとめ」「今週どうなってる」「今月の動き」「先週の状況」「先月の振り返り」「最近どうなってる」「状況教えて」「自分の状況」と聞かれたら、opshub MCP の brief (LLM 要約) または recall.search / task.list / inbox.list / decision.list を順に叩いて指定期間 (デフォルト直近 24h) の主要な動きを要約する。Phase 18-C で slack.demand.list を追加し、Slack の @mention / DM 信号も「状況」に含める。期間は ISO 8601 timestamp を physical-column 時間フィルタ (updated_after/before / created_after/before / recorded_after/before) に渡してホスト側で組み立てる。LLM 推論ループは外部ホスト (Claude Code 等) 側、本 skill は手順書のみで実処理を持たない。pair: external-brief (外向き) と対をなす。'
 ---
 
 # personal-brief — 自分向けの状況サマリを opshub から組み立てて返す
@@ -103,6 +103,23 @@ input:
 
 期間内の意思決定 / コミットメントを確認。再質問されたときの根拠として使う。`recorded_after` / `recorded_before` フィルタが Phase 12 H1 で `decisions.recorded_at` ベースで追加された。
 
+### Step 5 (Phase 18-C): Slack demand 信号を「状況」に含める
+
+```text
+tool: slack.demand.list
+input:
+  demand_kinds: ["dm", "mention"]
+  since_ts: <期間開始 epoch float>   # オプション、Slack ts は Unix epoch float
+  limit: 20
+  order: "last_demand_desc"
+```
+
+Phase 18-C ([ADR-0033 §決定 (c)](../../adr/0033-slack-mention-demand-digest.md)) で追加された `slack.demand.list` は Phase 18-B `slack_demand_digest` projection を読み、`<@self>` mention と DM 相手の最終発言 (operator 視点で「自分が放置している ping」) を新しい順に返す。「今日のまとめ」「今週どうなってる」のような問い合わせでは、これを「期間内に自分宛に来た Slack」セクションとして含めると situation awareness が大きく向上する。
+
+戻り値の `items[]` (`channel_id` / `channel_type` / `channel_name` / `demand_kind` / `last_demand_ts` / `last_demand_excerpt` / `last_demand_permalink` / `last_source_id`) を期間内 (`since_ts` でフィルタ) で表示。`channel_name` が `None` の場合は `channel_id` を fall back 表示。`last_demand_permalink` を付けると operator が直接 Slack UI に飛べる。
+
+`slack.demand.list` は read-only / `readOnlyHint=true` / `openWorldHint=false` (local SQLite のみ、Slack API 不発火)。Slack への投稿 / reaction は本 skill から行わない (ADR-0010 §禁止事項 7)。
+
 ## 出力フォーマット (ホスト側)
 
 ホストが以下のような構造でユーザーに返す。具体的な文面はホスト側 LLM が決める (本 skill は構造のみ pin)。
@@ -122,6 +139,10 @@ input:
 
 ## 直近の decision
 - ...
+
+## Slack の demand 信号 (Phase 18-C、slack.demand.list)
+- [DM] @alice 2026-06-02: 「<excerpt>」 → permalink
+- [mention #general] @bob 2026-06-01: 「<excerpt>」 → permalink
 ```
 
 ## 自律範囲
@@ -140,10 +161,11 @@ input:
 
 - ADR-0004 (Agent Runtime Boundary、形A)
 - ADR-0016 改訂 (Action Loop、Phase 12 H1 で draft 系統一方針追加)
-- ADR-0022 改訂 (MCP Server Surface、Phase 12 H1 で physical-column 時間フィルタ追加)
+- ADR-0022 改訂 (MCP Server Surface、Phase 12 H1 で physical-column 時間フィルタ追加、Phase 18 補遺で `slack.demand.list` 追加)
 - ADR-0025 (Office 文書本文抽出)
 - ADR-0010 §改訂 (connector contract、Phase 11 で Teams 追加)
 - ADR-0020 §改訂 (Outlook body deep retention、Phase 11)
+- ADR-0033 (Slack mention / DM demand digest、Phase 18) — `slack.demand.list` の根拠
 - Phase 10 plan §3-D (skill ↔ MCP tool マッピング)
 - Phase 11 plan (`docs/phase-11-plan.md`)
 - Phase 12 plan (`docs/phase-12-plan.md` §3 H1)

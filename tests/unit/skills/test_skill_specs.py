@@ -176,14 +176,16 @@ def test_skill_mentions_mcp_or_cli_path(name: str) -> None:
         re.search(
             # Phase 10 C2 baseline + Step 1 widening (brief, graph.*,
             # source.*, embeddings.find_duplicates, propose.generate) +
-            # Phase 12 H1 (search, propose.apply). Keep the alternation
-            # single-line so the regex compiles as one literal.
+            # Phase 12 H1 (search, propose.apply) + Phase 18-C
+            # (slack.demand.list). Keep the alternation single-line so
+            # the regex compiles as one literal.
             r"\b("
             r"recall\.search|task\.list|inbox\.list|decision\.list"
             r"|task\.create|inbox\.add|connector\.sync"
             r"|brief|graph\.related|graph\.trace|graph\.expand"
             r"|source\.list|source\.get|embeddings\.find_duplicates"
             r"|propose\.generate|propose\.apply"
+            r"|slack\.demand\.list"
             r"|search"
             r")\b",
             text,
@@ -308,6 +310,7 @@ def test_skill_mentions_at_least_one_mcp_tool_name(name: str) -> None:
         r"|brief|graph\.related|graph\.trace|graph\.expand"
         r"|source\.list|source\.get|embeddings\.find_duplicates"
         r"|propose\.generate|propose\.apply"
+        r"|slack\.demand\.list"
         r"|search"
         r")\b"
     )
@@ -522,6 +525,8 @@ def test_h4_propose_apply_annotation_is_not_read_only() -> None:
         "propose.generate",
         "propose.apply",
         "search",
+        # Phase 18-C (ADR-0033 §決定 (c)): Slack mention / DM demand digest.
+        "slack.demand.list",
     )
     handlers: dict[str, object] = dict.fromkeys(handler_names, _noop)
 
@@ -579,6 +584,8 @@ def test_h4_propose_generate_schema_includes_mode_enum() -> None:
         "propose.generate",
         "propose.apply",
         "search",
+        # Phase 18-C (ADR-0033 §決定 (c)): Slack mention / DM demand digest.
+        "slack.demand.list",
     )
     handlers: dict[str, object] = dict.fromkeys(handler_names, _noop)
 

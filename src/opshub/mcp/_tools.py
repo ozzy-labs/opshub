@@ -49,6 +49,7 @@ __all__ = [
     "build_inbox_list_handler",
     "build_recall_search_handler",
     "build_search_handler",
+    "build_slack_demand_list_handler",
     "build_source_get_handler",
     "build_source_list_handler",
     "build_task_list_handler",
@@ -756,6 +757,153 @@ def build_search_handler(engine: Engine) -> ToolHandler:
                 "query": query,
                 "connector_filter": connector_name,
                 "items": items,
+                **_pagination_hint(item_count=len(items), limit=limit),
+            }
+        )
+
+    return handler
+
+
+# ------------------------------------------------------- slack.demand.list
+
+
+def build_slack_demand_list_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``slack.demand.list``.
+
+    Phase 18-C (ADR-0033 §決定 (c)) — read-only query against the
+    ``slack_demand_digest`` projection materialised by Phase 18-B
+    ([ADR-0033](../../docs/adr/0033-slack-mention-demand-digest.md)).
+    Returns the per-channel x per-demand-kind digest rows that the
+    assistant skills (``next-actions`` / ``personal-brief`` /
+    ``inbox-triage``) use to surface Slack ``<@self>`` mentions and
+    DM activity as "next to read" signals.
+
+    Filters
+    -------
+
+    * ``types`` — list of ``CHANNEL_TYPES`` (``im`` / ``mpim`` /
+      ``private`` / ``public``). Defaults to all four. Maps 1:1 to
+      ``slack_demand_digest.channel_type``.
+    * ``demand_kinds`` — list of ``DEMAND_KINDS`` (``mention`` /
+      ``dm`` / ``mpim``). Defaults to all three. Maps 1:1 to
+      ``slack_demand_digest.demand_kind``.
+    * ``since_ts`` — Slack epoch float lower bound on
+      ``last_demand_ts`` (rows strictly older are excluded).
+    * ``limit`` — ADR-0022 §(d) page cap; default 50.
+    * ``order`` — fixed at ``last_demand_desc`` (newest first) per
+      ADR-0033 §決定 (e). The argument is reserved for forward
+      compatibility (future ``oldest_first`` / type-tier orderings
+      would land here).
+
+    Output shape
+    ------------
+
+    ``{"items": [SlackDemandItem, ...], "total": N, "truncated":
+    bool, "next_offset": int | null}`` where ``SlackDemandItem``
+    mirrors the projection columns (``channel_id`` / ``channel_type``
+    / ``channel_name`` / ``demand_kind`` / ``last_demand_ts`` /
+    ``last_demand_user_id`` / ``last_demand_excerpt`` /
+    ``last_demand_permalink`` / ``last_source_id``). ``total`` is the
+    item count in the response page (not the full table size); the
+    pagination hint pair signals whether more rows exist behind the
+    cap.
+    """
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from sqlalchemy import select
+
+        from opshub.projections.slack_demand_digest import (
+            CHANNEL_TYPES,
+            DEMAND_KINDS,
+            slack_demand_digest_table,
+        )
+
+        raw_types = arguments.get("types")
+        # ``types`` is optional; ``None`` / missing means "all channel
+        # types". The MCP schema enum already narrows membership to
+        # ``CHANNEL_TYPES``, but we still filter defensively so a
+        # rogue handler caller cannot inject SQL via a stray value.
+        types_filter: tuple[str, ...] | None
+        if raw_types is None:
+            types_filter = None
+        else:
+            types_filter = tuple(t for t in raw_types if t in CHANNEL_TYPES)
+        raw_kinds = arguments.get("demand_kinds")
+        demand_kinds_filter: tuple[str, ...] | None
+        if raw_kinds is None:
+            demand_kinds_filter = None
+        else:
+            demand_kinds_filter = tuple(k for k in raw_kinds if k in DEMAND_KINDS)
+
+        since_ts_arg = arguments.get("since_ts")
+        since_ts: float | None
+        if since_ts_arg is None:
+            since_ts = None
+        else:
+            # Schema enforces ``type: number`` so this is safe; the
+            # ``float()`` cast normalises ``int`` values for the
+            # subsequent ``>=`` comparison.
+            since_ts = float(since_ts_arg)
+
+        limit: int = int(arguments.get("limit", 50))
+
+        # Phase 18-C only ships the ADR-0033 §決定 (e) default order
+        # (``last_demand_desc``). The ``order`` argument is reserved
+        # for forward compatibility — when a new order key is added,
+        # validation moves into the dispatch table below.
+        _order: str = str(arguments.get("order", "last_demand_desc"))
+
+        stmt = select(
+            slack_demand_digest_table.c.channel_id,
+            slack_demand_digest_table.c.channel_type,
+            slack_demand_digest_table.c.channel_name,
+            slack_demand_digest_table.c.demand_kind,
+            slack_demand_digest_table.c.last_demand_ts,
+            slack_demand_digest_table.c.last_demand_user_id,
+            slack_demand_digest_table.c.last_demand_excerpt,
+            slack_demand_digest_table.c.last_demand_permalink,
+            slack_demand_digest_table.c.last_source_id,
+        )
+        if types_filter is not None:
+            stmt = stmt.where(slack_demand_digest_table.c.channel_type.in_(types_filter))
+        if demand_kinds_filter is not None:
+            stmt = stmt.where(slack_demand_digest_table.c.demand_kind.in_(demand_kinds_filter))
+        if since_ts is not None:
+            stmt = stmt.where(slack_demand_digest_table.c.last_demand_ts >= since_ts)
+        # Stable order: ``last_demand_ts DESC`` is the demand signal
+        # primary; the secondary ``channel_id ASC`` keeps page
+        # boundaries deterministic when multiple rows share a ts (rare
+        # but possible after a rebuild).
+        stmt = stmt.order_by(
+            slack_demand_digest_table.c.last_demand_ts.desc(),
+            slack_demand_digest_table.c.channel_id.asc(),
+        ).limit(limit)
+
+        with engine.connect() as conn:
+            rows = conn.execute(stmt).all()
+
+        items = [
+            {
+                "channel_id": row.channel_id,
+                "channel_type": row.channel_type,
+                "channel_name": row.channel_name,
+                "demand_kind": row.demand_kind,
+                "last_demand_ts": row.last_demand_ts,
+                "last_demand_user_id": row.last_demand_user_id,
+                # Truncate excerpts to the standard MCP snippet cap so
+                # a long Slack body cannot blow the agent context
+                # window even though the projection persists the full
+                # mapper-truncated excerpt.
+                "last_demand_excerpt": _truncate(row.last_demand_excerpt),
+                "last_demand_permalink": row.last_demand_permalink,
+                "last_source_id": row.last_source_id,
+            }
+            for row in rows
+        ]
+        return _json_dump(
+            {
+                "items": items,
+                "total": len(items),
                 **_pagination_hint(item_count=len(items), limit=limit),
             }
         )

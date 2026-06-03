@@ -228,9 +228,7 @@ def test_rebuild_is_idempotent(migrated_engine: Engine) -> None:
     # ts for ``C400REPLAY``.
     keyed = {(row["channel_id"], row["demand_kind"]): row for row in first}
     assert set(keyed) == {("C400REPLAY", "mention"), ("D500REPLAYDM", "dm")}
-    assert keyed[("C400REPLAY", "mention")]["last_demand_ts"] == pytest.approx(
-        1700000200.000200
-    )
+    assert keyed[("C400REPLAY", "mention")]["last_demand_ts"] == pytest.approx(1700000200.000200)
 
 
 def test_rebuild_with_no_slack_events_produces_no_digest_rows(

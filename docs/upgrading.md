@@ -712,3 +712,64 @@ The first-class skill surface (`next-actions` / `personal-brief` / `inbox-triage
 - **No CLI breaking changes** — `opshub slack mentions list` is a new sub-group under the existing Phase 17 noun-first `opshub slack` group ([ADR-0031](adr/0031-cli-command-surface-organization.md) §決定 (4)).
 - **No new ADR — implements [ADR-0033](adr/0033-slack-mention-demand-digest.md)** (delivered in Phase 18-A docs-only PR [#431](https://github.com/ozzy-labs/opshub/pull/431)).
 - **Forward-compat enum headroom** — the `demand_kind` CHECK constraint admits `{"mention", "dm", "mpim"}` (3-value SSOT per ADR-0033 §決定 (b) §不変条件 #2). Phase 18-B writes `mention` and `dm` only; group-DM `<@self>` mentions land in the mention row. A Phase 19+ MPIM-specific refinement can start writing `mpim` rows without a schema migration.
+
+## Phase 18-C: `slack.demand.list` MCP tool + assistant skill wiring
+
+Phase 18-C ([ADR-0033 §決定 (c)](adr/0033-slack-mention-demand-digest.md), epic [#426](https://github.com/ozzy-labs/opshub/issues/426)) exposes the Phase 18-B `slack_demand_digest` projection to the assistant skills (`next-actions` / `personal-brief` / `inbox-triage`) via a new MCP read tool `slack.demand.list`. **No DB schema changes** (the projection schema landed in Phase 18-B migration `0029_create_slack_demand_digest`), **no new CLI surface** (the Phase 18-B `opshub slack mentions list` debug CLI stays in place), and **no new Slack scope requirements** for existing operators.
+
+### First-time setup after upgrading
+
+If you already ran the Phase 18-B steps (`opshub db migrate` + `opshub projections rebuild`), no additional commands are required for Phase 18-C — the new MCP tool ships with the package and is wired automatically. Verify it appears in the registry:
+
+```bash
+opshub mcp tools | grep slack.demand.list
+# → read   slack.demand.list             List Slack demand digest rows
+```
+
+If you have not yet bootstrapped the projection, the Phase 18-B steps still apply:
+
+```bash
+uv tool upgrade opshub
+opshub db migrate                  # applies 0029_create_slack_demand_digest (Phase 18-B)
+opshub projections rebuild         # replays the event log into slack_demand_digest
+```
+
+### New MCP tool: `slack.demand.list` (read-only)
+
+| field | shape |
+| --- | --- |
+| `types` | `list[str]`, optional, default = all four. Members ∈ `{im, mpim, private, public}`. Maps 1:1 to `slack_demand_digest.channel_type`. |
+| `demand_kinds` | `list[str]`, optional, default = all three. Members ∈ `{mention, dm, mpim}`. Maps 1:1 to `slack_demand_digest.demand_kind`. |
+| `since_ts` | `float`, optional. Slack epoch lower bound on `slack_demand_digest.last_demand_ts` (rows strictly older are excluded). |
+| `limit` | `int`, optional, default 50, max 200. ADR-0022 §(d) page cap. |
+| `order` | `"last_demand_desc"` (fixed for Phase 18; reserved for forward-compat). |
+
+Output: `{items: SlackDemandItem[], total: N, truncated: bool, next_offset: int|null}` where `SlackDemandItem` mirrors the projection columns (`channel_id` / `channel_type` / `channel_name` / `demand_kind` / `last_demand_ts` / `last_demand_user_id` / `last_demand_excerpt` / `last_demand_permalink` / `last_source_id`).
+
+The tool is **read-only** (`readOnlyHint=true, destructiveHint=false, openWorldHint=false, idempotent=true`) and hits local SQLite only — no Slack API round-trip happens at MCP call time (the projection is rebuilt offline from already-stored `SourceObserved` events).
+
+### Assistant skill wiring
+
+The three skills below now reference `slack.demand.list` in their SKILL.md SSOT (the `opshub skills install` install path picks up the new bodies automatically):
+
+- **`next-actions`** — Adds a "Slack で読むべき" section to the priority ranking. DM rows are surfaced at the top, mention rows are tiered by `channel_name` + `last_demand_ts` freshness.
+- **`personal-brief`** — Adds "Slack の demand 信号" to the period summary. Filters by `since_ts` (the period lower bound translated to Slack epoch float) so only mentions / DMs inside the brief window appear.
+- **`inbox-triage`** — Uses `slack.demand.list` as an *auxiliary* priority signal alongside the existing `inbox.list` triage queue. Slack mention / DM rows themselves remain in `sources`, not `inbox_items` (ADR-0033 §採用しなかった代替 §2 — no inbox row duplication).
+
+If you ran `opshub skills install` (or `opshub init` with the default install behaviour) before Phase 18-C, re-run `opshub skills install` after upgrading to pick up the new SKILL.md bodies:
+
+```bash
+uv tool upgrade opshub                 # ships the new SKILL.md SSOT in src/opshub/_skills/
+opshub skills install                  # overwrite ~/.claude/skills/ + ~/.agents/skills/ with the new bodies
+# or, for repo-scoped installs:
+opshub skills install --scope project
+```
+
+### Phase 18-C specifics
+
+- **No DB migration.** DB head stays at `0029_create_slack_demand_digest` (Phase 18-B).
+- **No new extras.** The MCP server continues to use the existing `[mcp]` extras; the new tool reuses the standing engine.
+- **No new Slack scope.** Existing Slack operators already have the data (the Phase 18-B projection is purely derived from `SourceObserved` events the Phase 7 connector already emits).
+- **No CLI breaking changes.** The Phase 18-B debug CLI (`opshub slack mentions list`) stays in place; `slack.demand.list` is the MCP surface twin, not a CLI replacement.
+- **MCP tool surface: total 18 tools** = 13 read + 5 write (was 17 = 12 read + 5 write after Phase 12 H1). The single new read tool brings the count to 18.
+- **No new ADR — implements [ADR-0033 §決定 (c)](adr/0033-slack-mention-demand-digest.md) + adds the §(f) 補遺 cross-reference to [ADR-0022](adr/0022-mcp-server-surface.md)** (delivered in Phase 18-A docs-only PR [#431](https://github.com/ozzy-labs/opshub/pull/431) — the MCP read tool addition is a documented extension under the existing 5 不変条件).

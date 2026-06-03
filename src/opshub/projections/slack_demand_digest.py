@@ -488,8 +488,7 @@ class SlackDemandDigestProjection:
                 "last_source_id": stmt.excluded.last_source_id,
                 "updated_at": stmt.excluded.updated_at,
             },
-            where=slack_demand_digest_table.c.last_demand_ts
-            < stmt.excluded.last_demand_ts,
+            where=slack_demand_digest_table.c.last_demand_ts < stmt.excluded.last_demand_ts,
         )
         conn.execute(stmt)
 

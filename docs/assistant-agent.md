@@ -11,7 +11,7 @@ opshub は Phase 10 (アシスタントエージェント・プラットフォ�
 opshub 本体が提供するもの:
 
 1. **operational memory (①コア)** — events / projections / connectors / recall / propose / brief / graph
-2. **MCP サーバ (口)** — `opshub mcp serve` (stdio)。エージェント host が ①コアを叩く経路。Phase 12 H1 で `search` (FTS5) と `propose.apply` (HITL idempotent) と既存 4 read tools の physical column ベース時間フィルタを追加し、計 17 tools (read 12 + write 5) を公開
+2. **MCP サーバ (口)** — `opshub mcp serve` (stdio)。エージェント host が ①コアを叩く経路。Phase 12 H1 で `search` (FTS5) と `propose.apply` (HITL idempotent) と既存 4 read tools の physical column ベース時間フィルタを追加し、Phase 18-C で `slack.demand.list` (Slack mention / DM demand digest、ADR-0033) を追加して計 18 tools (read 13 + write 5) を公開
 3. **Agent Skills (手順書)** — SKILL.md 標準。本 doc が catalog する **14 Skill** (Phase 12 H2-H5 で 9 新規 + Phase 12 H1 で rename 2 を含む)。`docs/skills/<name>/SKILL.md` を opshub SSOT、配信機構は Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地)
 4. **skill security scan** — `tools/skill_scan.py` (4 カテゴリ + frontmatter 隠し命令検出)、`tests/unit/skills/test_skill_specs.py` が 14 skills 全てに対して per-skill MCP dispatch pin + scan を実行
 
@@ -121,9 +121,9 @@ auto-apply 経路は構造的に存在しない (ADR-0016 §決定 (c))。`opshu
 
 ## 6. MCP tool 依存マップ
 
-14 skills × 17 MCP tools (read 12 + write 5) のマトリクス。各 skill が呼び出す MCP tool を列挙。✓ = primary 経路、(✓) = 補助経路 (Step 2 以降の optional 呼び出し)。
+14 skills × 18 MCP tools (read 13 + write 5) のマトリクス。各 skill が呼び出す MCP tool を列挙。✓ = primary 経路、(✓) = 補助経路 (Step 2 以降の optional 呼び出し)。
 
-### 6.1 Read tools (12)
+### 6.1 Read tools (13)
 
 | MCP tool | personal-brief | next-actions | reply-draft | pr-review | find-document | meeting-prep | research | external-brief | decision-rationale | handoff-draft | announcement-draft | inbox-triage | source-extract | meeting-followup |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -139,6 +139,7 @@ auto-apply 経路は構造的に存在しない (ADR-0016 §決定 (c))。`opshu
 | `source.get` |  |  |  |  | (✓) | (✓) | (✓) |  | (✓) |  |  |  | ✓ | ✓ |
 | `embeddings.find_duplicates` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `search` (FTS5、Phase 12 H1) |  |  |  |  | ✓ |  | ✓ |  |  |  |  |  | (✓) |  |
+| `slack.demand.list` (Phase 18-C) | ✓ | ✓ |  |  |  |  |  |  |  |  |  | (✓) |  |  |
 
 ### 6.2 Write tools (5、HITL)
 
@@ -187,6 +188,18 @@ Phase 15+ で symmetric に拡張する候補: Calendar instance 展開 projecti
 | `source.list` | `observed_after` / `observed_before` | `sources.observed_at` |
 
 すべて ISO 8601 string、optional、`>= after` / `< before` 半開区間。physical column 命名により business 概念 (`completed_after` 等) と物理列の混線を回避 (ADR-0022 改訂 §決定 (f-3))。
+
+### 6.5 Phase 18-C で追加された Slack demand 信号 MCP tool
+
+| MCP tool | argument | projection 列 |
+|---|---|---|
+| `slack.demand.list` | `types` (list[str]) | `slack_demand_digest.channel_type` (`im` / `mpim` / `private` / `public`) |
+| `slack.demand.list` | `demand_kinds` (list[str]) | `slack_demand_digest.demand_kind` (`mention` / `dm` / `mpim`) |
+| `slack.demand.list` | `since_ts` (float) | `slack_demand_digest.last_demand_ts` (>= 半開下界、Slack epoch float) |
+| `slack.demand.list` | `limit` (int、default 50) | ADR-0022 §(d) page cap |
+| `slack.demand.list` | `order` (固定 `last_demand_desc`) | `last_demand_ts DESC` (ADR-0033 §決定 (e)、forward-compat 余地) |
+
+`slack.demand.list` は Phase 18-B `slack_demand_digest` projection ([ADR-0033](adr/0033-slack-mention-demand-digest.md)) を読む read-only tool。`readOnlyHint=true` / `destructiveHint=false` / `openWorldHint=false` (local SQLite のみ、Slack API 不発火 = projection 自体は既存 `SourceObserved` event を消費するため新 fetch 経路を持たない)。Slack への投稿 / reaction / reply 送信は本 tool 経路に含まない (ADR-0010 §禁止事項 7、ADR-0033 §決定 (a))。skill 利用者は `next-actions` (priority 上位に組み込む) / `personal-brief` (「期間内の状況」に含める) / `inbox-triage` (補助的に priority 補強) の 3 経路 (§6.1 マトリクス参照)。
 
 ## 7. できること / できないこと
 
