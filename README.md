@@ -65,6 +65,8 @@ opshub propose apply <proposal-id> 0                  # operator-approved entity
 All state lives under XDG directories; override via `OPSHUB_*` env vars
 (e.g. `OPSHUB_STORAGE__DB_PATH=/custom/path.sqlite`).
 
+`opshub init` writes `~/.config/opshub/config.toml`; editing it takes effect on the **next startup** (no re-install / re-init needed). Precedence is `init args > env > toml > defaults` ([ADR-0032](docs/adr/0032-runtime-toml-config-loading.md)) — `OPSHUB_*` env vars override TOML for CI / headless, and `OPSHUB_CONFIG_DIR=<dir>` relocates the config directory. Invalid values fail-fast on startup with `ConfigError`; see [`docs/troubleshooting.md` §3.10](docs/troubleshooting.md) for operator-side details.
+
 ## Ask your assistant
 
 Once you wire OpsHub into an agent host over MCP (see [Connect an agent host](#connect-an-agent-host-mcp) below), you can talk to your assistant in plain language. The agent calls the right OpsHub commands behind the scenes.

@@ -344,6 +344,43 @@ opshub skills install --dry-run --print-paths
 - [`src/opshub/_skills_resources.py`](../src/opshub/_skills_resources.py) — `SkillResourceError` (wheel 破損時 hint)
 - [docs/assistant-agent.md §8](assistant-agent.md) — setup 手順 (3 host 共通)
 
+### 3.10 `config.toml` と環境変数の優先順位
+
+`opshub init` 後に `~/.config/opshub/config.toml` を編集しても反映されない、または `OPSHUB_*` 環境変数と TOML 設定が衝突したときどちらが効くか分からないケース。
+
+**前提**: OpsHub の設定は **init args > env > toml > defaults** の順に評価される ([ADR-0032](adr/0032-runtime-toml-config-loading.md))。
+
+- `~/.config/opshub/config.toml` は `opshub init` で作成され、**起動時に毎回読み込まれる**。手で値を編集すると次回起動から反映される (再 install / 再 init は不要)。
+- `OPSHUB_*` 環境変数 (例: `OPSHUB_EMBEDDING__BACKEND=local` / `OPSHUB_LLM__BACKEND=anthropic`) は TOML より優先される。CI / headless / 一時的な上書き用途。
+- `OPSHUB_CONFIG_DIR=<dir>` で config ディレクトリの位置を上書きできる (デフォルト `~/.config/opshub`)。複数 OpsHub インスタンスを並行運用する場合 (例: dev / prod 分離) に有用。
+- TOML が存在しなくても起動失敗しない (defaults にフォールバック)。`opshub init` を実行していない fresh shell でも `opshub --help` / `opshub task list` 等は通る。
+
+**症状別の切り分け**:
+
+| 症状 | 確認手順 |
+|---|---|
+| `config.toml` を編集したのに反映されない | `OPSHUB_*` 環境変数で同 key を export していないか確認 (env > toml)。`env \| grep ^OPSHUB_` で列挙 |
+| 設定が読まれているか不明 | `opshub --debug task list` 等で起動時の config load を観測 (DEBUG レベルで設定 source 経路がログに出る) |
+| 起動時に `ConfigError` で fail-fast する | TOML の値が enum 制約に違反している (例: `[embedding] backend = "grok"` のような未知 backend)。stderr に該当 key と allowed values が出る |
+| `~/.config/opshub/config.toml` 以外の場所を読ませたい | `OPSHUB_CONFIG_DIR=/path/to/dir` を export してから `opshub init` を実行 (TOML はその dir 配下に作成される) |
+
+**不正値による fail-fast**: TOML / env で未知 enum / 範囲外の数値を渡すと起動時に `ConfigError` で fail-fast する (ADR-0032)。例:
+
+```bash
+# 未知 backend (allowed: disabled / local / openai / voyage)
+$ OPSHUB_EMBEDDING__BACKEND=grok opshub task list
+Error: ConfigError: [embedding] backend "grok" is not a valid choice
+       (allowed: disabled, local, openai, voyage)
+```
+
+正しい値に修正すれば次回起動から通る。runtime fallback は行わない (Local-first + fail-fast 原則、principles.md §1)。
+
+**関連**:
+
+- [ADR-0032](adr/0032-runtime-toml-config-loading.md) — `config.toml` runtime 読込 + 優先順位 (`init args > env > toml > defaults`)
+- [`src/opshub/core/config.py`](../src/opshub/core/config.py) — `Settings` (pydantic-settings) の SSOT
+- §1 / §2 の global verbosity フラグ / 環境変数も同じ優先順位 (`CLI フラグ > 環境変数 > デフォルト`) で揃えている
+
 ## 4. セキュリティ注意書き
 
 `-v` / `-vv` / `--debug` / `--log-file` を使うときに operator が知っておくこと:
@@ -358,6 +395,7 @@ opshub skills install --dry-run --print-paths
 
 ## 5. 関連
 
+- [ADR-0032 Runtime TOML config loading](adr/0032-runtime-toml-config-loading.md) — `config.toml` 起動時読込 + 優先順位 `init args > env > toml > defaults` (§3.10 の設計根拠)
 - [ADR-0027 Observability & troubleshooting logging](adr/0027-observability-and-troubleshooting-logging.md) — 本ドキュメントの設計根拠 (5 オプション + 4 環境変数 + redaction processor + `--log-file` 0600 + `format_debug_traceback`)
 - [ADR-0022 MCP Server Surface](adr/0022-mcp-server-surface.md) — MCP 境界の redaction (`mcp/_redact.py`)。本 ADR の structlog processor と独立した第二層
 - [ADR-0014 SaaS Token Storage](adr/0014-saas-token-storage.md) — トークンは keyring。ログには出さない原則
