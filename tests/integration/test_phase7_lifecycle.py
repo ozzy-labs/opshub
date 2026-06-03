@@ -13,7 +13,7 @@ shared Phase 4-6 layers without regressions.
 What this pins
 --------------
 
-- ``opshub connector sync slack`` / ``ms365`` / ``box`` each persist
+- ``opshub slack sync`` / ``ms365`` / ``box`` each persist
   rows under their phase-7 ``source_type`` discriminators
   (``slack_message`` / ``ms365_calendar`` / ``ms365_onedrive`` /
   ``ms365_outlook`` / ``box_event``) using the per-connector mocked
@@ -271,7 +271,7 @@ def _invoke(args: list[str]) -> tuple[int, str, str]:
 # SDK / HTTP boundary stubs per connector. We bypass each connector's
 # real SDK boundary by monkeypatching:
 #   - Slack: replace ``SlackFetcher`` on the connector module (the
-#     ``opshub connector sync slack`` CLI imports it via the connector).
+#     ``opshub slack sync`` CLI imports it via the connector).
 #   - MS365: replace ``MS365Auth`` and ``MS365Fetcher`` on their
 #     respective modules so the connector's lazy imports pick the stubs.
 #   - Box: register a :class:`BoxConnector` instance whose
@@ -504,11 +504,11 @@ def test_phase7_lifecycle_connector_sync_through_propose(
 
     Steps (mirrors Phase 7 plan §2.4 D1 spec):
 
-    1. ``opshub connector sync slack`` → ``slack_message`` rows in
+    1. ``opshub slack sync`` → ``slack_message`` rows in
        ``sources`` projection.
-    2. ``opshub connector sync ms365`` → ``ms365_calendar`` /
+    2. ``opshub ms365 sync`` → ``ms365_calendar`` /
        ``ms365_onedrive`` / ``ms365_outlook`` rows.
-    3. ``opshub connector sync box`` → ``box_event`` rows.
+    3. ``opshub box sync`` → ``box_event`` rows.
     4. ``opshub embeddings rebuild`` → every source row embedded
        (verified by the source-only count assertion below).
     5. ``opshub recall "<topic>"`` → returns SaaS hits.
@@ -539,7 +539,7 @@ def test_phase7_lifecycle_connector_sync_through_propose(
             ),
         ],
     )
-    code, out, err = _invoke(["connector", "sync", "slack"])
+    code, out, err = _invoke(["slack", "sync"])
     assert code == 0, out + (err or "")
 
     # ---- 2. MS365 sync ---------------------------------------------------
@@ -549,7 +549,7 @@ def test_phase7_lifecycle_connector_sync_through_propose(
         onedrive=[_ms365_onedrive("drive-1")],
         outlook=[_ms365_outlook("mail-1")],
     )
-    code, out, err = _invoke(["connector", "sync", "ms365"])
+    code, out, err = _invoke(["ms365", "sync"])
     assert code == 0, out + (err or "")
 
     # ---- 3. Box sync -----------------------------------------------------
@@ -561,7 +561,7 @@ def test_phase7_lifecycle_connector_sync_through_propose(
             ],
         },
     )
-    code, out, err = _invoke(["connector", "sync", "box"])
+    code, out, err = _invoke(["box", "sync"])
     assert code == 0, out + (err or "")
 
     # ---- Source projection assertions -----------------------------------

@@ -37,7 +37,7 @@ opshub repo 自身も Phase 16-D ([ADR-0029](docs/adr/0029-distribute-assistant-
 - `pr-review` — 「PR #N レビューして」「この差分どう?」
 - `find-document` — 「Box にあったあの資料」「<キーワード>含むファイル」 (Phase 12 H1 で `search` FTS5 MCP tool 直接利用)
 - `meeting-prep` (Phase 12 H2) — 「来週の会議準備」「明日のミーティング前確認」
-- `research` (Phase 12 H2) — 「<X> について調べて」「<トピック> 網羅的に教えて」
+- `research` (Phase 12 H2) — 「`<X>` について調べて」「`<トピック>` 網羅的に教えて」
 - `external-brief` (Phase 12 H3) — 「上司向け週次報告」「クライアント向け進捗まとめ」 (pair = personal-brief)
 - `decision-rationale` (Phase 12 H3) — 「あの決定はなぜ」「X を選んだ理由」
 - `handoff-draft` (Phase 12 H5) — 「引き継ぎ書作って」「handoff 書く」 (text-only、persist なし)
@@ -59,7 +59,7 @@ opshub repo 自身も Phase 16-D ([ADR-0029](docs/adr/0029-distribute-assistant-
 
 ## 長時間 CLI の進捗表示
 
-長時間 CLI (`opshub connector sync` / `opshub connector slack conversations` / `opshub embeddings rebuild` / `opshub embeddings drain` / `opshub projections rebuild`) は TTY 時に進捗を自動表示し、`--progress` / `--no-progress` フラグまたは `OPSHUB_PROGRESS` 環境変数 (truthy = `1`/`true`/`yes`/`on`、falsy = `0`/`false`/`no`/`off`、case-insensitive) で上書きできる ([ADR-0026](docs/adr/0026-cli-progress-reporting.md))。`opshub connector slack conversations` は `--since` 指定時に表示説明文が `"listing conversations + activity"` に切り替わり (一つの spinner で listing pages と per-row `conversations.history?limit=1` の両方が tick する)、table 出力にも `LAST_ACTIVITY` 列 (`YYYY-MM-DD` UTC) が追加される ([#374](https://github.com/ozzy-labs/opshub/issues/374))。
+長時間 CLI (`opshub <connector> sync` / `opshub slack conversations` / `opshub embeddings rebuild` / `opshub embeddings drain` / `opshub projections rebuild`) は TTY 時に進捗を自動表示し、`--progress` / `--no-progress` フラグまたは `OPSHUB_PROGRESS` 環境変数 (truthy = `1`/`true`/`yes`/`on`、falsy = `0`/`false`/`no`/`off`、case-insensitive) で上書きできる ([ADR-0026](docs/adr/0026-cli-progress-reporting.md))。`opshub slack conversations` は `--since` 指定時に表示説明文が `"listing conversations + activity"` に切り替わり (一つの spinner で listing pages と per-row `conversations.history?limit=1` の両方が tick する)、table 出力にも `LAST_ACTIVITY` 列 (`YYYY-MM-DD` UTC) が追加される ([#374](https://github.com/ozzy-labs/opshub/issues/374))。`opshub connector` group は Phase 17 で全廃止 (ADR-0031、`docs/upgrading.md` §Phase 17 で旧 → 新コマンドの対応表を参照)。
 
 ## トラブルシュート用オプション
 

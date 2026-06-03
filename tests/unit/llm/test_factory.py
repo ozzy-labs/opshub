@@ -84,7 +84,7 @@ def test_noop_client_complete_raises_config_error() -> None:
     assert "anthropic" in message
     assert "openai" in message
     assert "OPSHUB_LLM_BACKEND" in message
-    assert "opshub connector auth set" in message
+    assert "opshub llm auth set" in message
 
 
 def test_noop_client_complete_passes_protocol_kwargs() -> None:

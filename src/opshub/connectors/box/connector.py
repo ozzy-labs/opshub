@@ -4,7 +4,7 @@ Composes the C1 :class:`opshub.connectors.box.auth.BoxAuth`, the C2
 :class:`opshub.connectors.box.fetcher.BoxFetcher`, and the C3
 :func:`opshub.connectors.box.mapper.map_event` projection into the
 :class:`opshub.connectors.base.Connector` Protocol contract. Driven by
-the ``opshub connector sync box`` CLI in
+the ``opshub box sync`` CLI in
 :mod:`opshub.cli.connector`.
 
 Sync semantics (Phase 7 plan §2.3 C3, mirroring the Phase 3 GitHub

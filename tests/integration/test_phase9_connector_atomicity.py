@@ -174,7 +174,7 @@ def test_box_drive_sync_observes_each_file_atomically(
     )
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "box_drive"])
+    result = runner.invoke(app, ["box_drive", "sync"])
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
     assert "synced box_drive: 2 item(s) observed" in result.stdout
 
@@ -221,7 +221,7 @@ def test_box_drive_sync_persists_prefix_when_scan_raises(
     )
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "box_drive"])
+    result = runner.invoke(app, ["box_drive", "sync"])
 
     # CLI surface: failure path → exit 1, sanitised type name surfaces.
     assert result.exit_code == 1
@@ -299,7 +299,7 @@ def test_box_drive_sync_rolls_back_event_when_observe_fails(
     )
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "box_drive"])
+    result = runner.invoke(app, ["box_drive", "sync"])
     assert result.exit_code == 1
 
     # First file's UoW committed → exactly one sources / inbox row.

@@ -961,7 +961,7 @@ def test_slack_subpackage_registers_connector() -> None:
 
     Mirrors the Phase 3 GitHub precedent — the CLI driver discovers
     connectors purely through the registry, so the import side
-    effect is the contract that makes ``opshub connector sync slack``
+    effect is the contract that makes ``opshub slack sync``
     resolve.
 
     We :func:`importlib.reload` the package after a registry reset so

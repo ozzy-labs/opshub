@@ -11,7 +11,7 @@ differs between the two.
 
 Importing this module triggers
 ``register_connector(OneDriveDriveConnector())`` so the CLI driver
-(``opshub connector sync onedrive_drive``) discovers it through
+(``opshub onedrive_drive sync``) discovers it through
 :func:`opshub.connectors.discover_connectors`. Heavy dependencies
 (:class:`OpsHubSettings`, SQLAlchemy ``sources_table``,
 ``markitdown`` when opted in) load lazily inside

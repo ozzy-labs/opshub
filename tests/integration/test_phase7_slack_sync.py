@@ -35,7 +35,7 @@ Why integration-level (not pure unit):
   CLI driver's ``try/except`` arm owns the sanitisation; only the
   integration test reaches that arm.
 
-The CLI driver (``opshub connector sync slack``) lives in
+The CLI driver (``opshub slack sync``) lives in
 :mod:`opshub.cli.connector` and its own surface (Typer command,
 cursor bracket, exception sanitisation) is exercised here through
 :class:`~typer.testing.CliRunner` so the contract is validated end-to-end.
@@ -194,7 +194,7 @@ def test_slack_sync_creates_sources(
 ) -> None:
     """End-to-end first sync: 2 messages observed, projections populated, cursor advances.
 
-    Drives the full ``opshub connector sync slack`` path through
+    Drives the full ``opshub slack sync`` path through
     :class:`CliRunner`:
 
     1. ``conftest.isolated_env`` runs ``opshub init`` so the schema
@@ -220,7 +220,7 @@ def test_slack_sync_creates_sources(
     _patch_slack_fetcher(monkeypatch, yields=yields)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "slack"])
+    result = runner.invoke(app, ["slack", "sync"])
     assert result.exit_code == 0, result.stdout
 
     # ---- On-disk state ---------------------------------------------------
@@ -314,7 +314,7 @@ def test_slack_sync_handles_empty_text_message(
     _patch_slack_fetcher(monkeypatch, yields=yields)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "slack"])
+    result = runner.invoke(app, ["slack", "sync"])
     # The empty-text message must not abort the run — exit 0, no
     # ``ValidationError`` in stderr.
     assert result.exit_code == 0, result.stdout
@@ -419,7 +419,7 @@ def test_slack_sync_handles_whitespace_only_message(
     _patch_slack_fetcher(monkeypatch, yields=yields)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "slack"])
+    result = runner.invoke(app, ["slack", "sync"])
     # The whitespace-only message must not abort the run — exit 0
     # and no ``ValidationError`` in stderr.
     assert result.exit_code == 0, result.stdout
@@ -500,7 +500,7 @@ def test_slack_sync_is_idempotent_when_no_new_messages(
         ],
     )
     runner = CliRunner()
-    first = runner.invoke(app, ["connector", "sync", "slack"])
+    first = runner.invoke(app, ["slack", "sync"])
     assert first.exit_code == 0, first.stdout
 
     # Second sync: fetcher yields nothing. The connector still drives
@@ -508,7 +508,7 @@ def test_slack_sync_is_idempotent_when_no_new_messages(
     # gains 2 more rows but the source / inbox projections are
     # unchanged.
     _patch_slack_fetcher(monkeypatch, yields=[])
-    second = runner.invoke(app, ["connector", "sync", "slack"])
+    second = runner.invoke(app, ["slack", "sync"])
     assert second.exit_code == 0, second.stdout
 
     engine = create_engine_for_sqlite(isolated_env["db_path"])
@@ -608,7 +608,7 @@ def test_slack_sync_advances_to_latest_across_pagination(
     monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=web_client))
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "slack"])
+    result = runner.invoke(app, ["slack", "sync"])
     assert result.exit_code == 0, result.stdout
 
     engine = create_engine_for_sqlite(isolated_env["db_path"])
@@ -781,7 +781,7 @@ def test_slack_sync_first_then_resume_no_duplicate_ingest(
     runner = CliRunner()
 
     # ---- First sync: drains the three pages, cursor advances to max ts.
-    first = runner.invoke(app, ["connector", "sync", "slack"])
+    first = runner.invoke(app, ["slack", "sync"])
     assert first.exit_code == 0, first.stdout
 
     engine = create_engine_for_sqlite(isolated_env["db_path"])
@@ -812,7 +812,7 @@ def test_slack_sync_first_then_resume_no_duplicate_ingest(
         assert all(c.kwargs.get("oldest") is None for c in first_calls)
 
         # ---- Second sync: same stubbed Slack history; cursor-driven resume.
-        second = runner.invoke(app, ["connector", "sync", "slack"])
+        second = runner.invoke(app, ["slack", "sync"])
         assert second.exit_code == 0, second.stdout
 
         # Projection counts unchanged — pre-#345 these would have
@@ -911,7 +911,7 @@ def test_slack_sync_resumes_without_duplicates_after_mid_iteration_failure(
     )
 
     runner = CliRunner()
-    first = runner.invoke(app, ["connector", "sync", "slack"])
+    first = runner.invoke(app, ["slack", "sync"])
     # Exit 1 because the fetcher raised; the CLI maps it to
     # ConnectorSyncFailed + exit code 1.
     assert first.exit_code == 1, first.stdout
@@ -951,7 +951,7 @@ def test_slack_sync_resumes_without_duplicates_after_mid_iteration_failure(
         # by yielding an empty iterator).
         _patch_slack_fetcher(monkeypatch, yields=[])
 
-        second = runner.invoke(app, ["connector", "sync", "slack"])
+        second = runner.invoke(app, ["slack", "sync"])
         assert second.exit_code == 0, second.stdout
 
         # Critical invariant: projection counts unchanged. Pre-fix
@@ -1003,7 +1003,7 @@ def test_slack_sync_records_failure_event_on_fetcher_error(
     )
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "slack"])
+    result = runner.invoke(app, ["slack", "sync"])
     assert result.exit_code == 1
     # CLI exception path: only the type name reaches stderr (the
     # message is intentionally not echoed because it could carry
@@ -1076,7 +1076,7 @@ def test_slack_sync_works_without_github_extra(
     ``monkeypatch.setattr(github_auth, "test_token", ...)`` patches the
     parent-attr module while ``opshub.cli.connector._resolve_auth_test_verifier``
     looks up ``test_token`` via the ``sys.modules`` entry — the patch
-    does not take effect and ``opshub connector auth test github`` calls
+    does not take effect and ``opshub github auth test`` calls
     the real ``test_token``. We pin a deterministic post-condition here:
     evict the github subpackage from ``sys.modules`` again on teardown
     so the next consumer triggers a fresh import that re-binds both
@@ -1142,7 +1142,7 @@ def test_slack_sync_works_without_github_extra(
 
     runner = CliRunner()
     try:
-        result = runner.invoke(app, ["connector", "sync", "slack"])
+        result = runner.invoke(app, ["slack", "sync"])
         assert result.exit_code == 0, result.stdout
 
         # The github package is import-clean, so it registers even with httpx
@@ -1191,7 +1191,7 @@ def test_slack_sync_truncates_long_message_text(
     )
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "slack"])
+    result = runner.invoke(app, ["slack", "sync"])
     assert result.exit_code == 0, result.stdout
 
     engine = create_engine_for_sqlite(isolated_env["db_path"])

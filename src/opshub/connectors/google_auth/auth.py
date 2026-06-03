@@ -50,7 +50,7 @@ Phase 14 changes vs Phase 13
    the Phase 13 codebase.
 4. **Operator action on upgrade**: because the scope set grows, Google
    invalidates the existing refresh token on first use and the
-   operator must re-run ``opshub connector auth set google_workspace``
+   operator must re-run ``opshub google_workspace auth set``
    to consent to all three scopes in one paste-code round (see
    ``docs/upgrading.md`` Phase 14 section).
 
@@ -129,7 +129,7 @@ OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 #: Default OAuth scopes requested by the Phase 14 G2 shared auth
 #: foundation. The list spans **all three** Google read surfaces opshub
 #: ingests in Phase 13 + Phase 14 — Drive + Gmail + Calendar — so a
-#: single ``opshub connector auth set google_workspace`` paste-code
+#: single ``opshub google_workspace auth set`` paste-code
 #: round grants every Google connector access. Per Phase 14 plan §X.1
 #: the scope set is a **fixed list shared by every Google connector**;
 #: per-connector subset declarations were considered and rejected
@@ -226,7 +226,7 @@ class GoogleWorkspaceAuth:
 
     Typical lifecycle:
 
-    1. Operator runs ``opshub connector auth set google_workspace``.
+    1. Operator runs ``opshub google_workspace auth set``.
     2. CLI constructs :class:`GoogleWorkspaceAuth` from configured
        ``client_id`` / ``client_secret`` / ``redirect_uri`` and calls
        :meth:`start_auth_flow` to get the auth URL.
@@ -480,7 +480,7 @@ class GoogleWorkspaceAuth:
         if not refresh_token:
             raise ConfigError(
                 "Google Workspace refresh token not found. Run the auth "
-                "flow via `opshub connector auth set google_workspace`."
+                "flow via `opshub google_workspace auth set`."
             )
 
         result = self._token_endpoint_request(
@@ -507,7 +507,7 @@ class GoogleWorkspaceAuth:
         if not access_token:
             raise GoogleAuthError(
                 "Google Workspace token endpoint returned no access_token. "
-                "Re-run `opshub connector auth set google_workspace`."
+                "Re-run `opshub google_workspace auth set`."
             )
         expires_in = _coerce_expires_in(result.get("expires_in"))
         self._token = GoogleWorkspaceTokenSet(

@@ -3,7 +3,7 @@
 Composes the B1 :class:`opshub.connectors.box_drive.scanner.BoxDriveScanner`
 and the B2 :func:`opshub.connectors.box_drive.mapper.map_scanned_file`
 into the :class:`opshub.connectors.base.Connector` Protocol contract.
-Driven by the ``opshub connector sync box_drive`` CLI in
+Driven by the ``opshub box_drive sync`` CLI in
 :mod:`opshub.cli.connector` (the CLI surface itself ships in Phase 9
 step C1; this module already satisfies the runtime contract).
 

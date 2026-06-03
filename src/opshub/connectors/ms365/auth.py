@@ -119,7 +119,7 @@ class MS365Auth:
 
     Typical lifecycle:
 
-    1. Operator runs ``opshub connector auth set connector:ms365``.
+    1. Operator runs ``opshub ms365 auth set``.
     2. CLI constructs :class:`MS365Auth` from configured ``client_id`` /
        ``authority`` and calls :meth:`start_auth_flow` to get the auth
        URL.
@@ -310,8 +310,7 @@ class MS365Auth:
         refresh_token = get_secret(self.REFRESH_TOKEN_KEY)
         if not refresh_token:
             raise ConfigError(
-                "MS365 refresh token not found. Run the auth flow via "
-                "`opshub connector auth set connector:ms365`."
+                "MS365 refresh token not found. Run the auth flow via `opshub ms365 auth set`."
             )
 
         result: dict[str, Any] = self._app.acquire_token_by_refresh_token(
@@ -320,8 +319,7 @@ class MS365Auth:
         if "error" in result:
             description = result.get("error_description", result)
             raise ConfigError(
-                f"MS365 refresh failed: {description}. "
-                "Re-run `opshub connector auth set connector:ms365`."
+                f"MS365 refresh failed: {description}. Re-run `opshub ms365 auth set`."
             )
 
         # Refresh-token rotation: Microsoft may return a fresh refresh

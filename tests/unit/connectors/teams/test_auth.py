@@ -122,7 +122,7 @@ def test_init_raises_when_get_secret_returns_none(
     with pytest.raises(ConfigError) as excinfo:
         TeamsAuth()
     msg = str(excinfo.value)
-    assert "connector auth set connector:teams" in msg
+    assert "teams auth set" in msg
     assert "OPSHUB_CONNECTOR_TEAMS_TOKEN" in msg
 
 

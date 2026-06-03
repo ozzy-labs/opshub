@@ -35,7 +35,7 @@ from opshub.llm.schema import pydantic_to_tool_schema
 __all__ = ["ANTHROPIC_API_KEY_SECRET", "AnthropicLLMClient"]
 
 #: Keyring key used to store the Anthropic API key. Exposed so the CLI
-#: command (Phase 5 step A5 ``opshub connector auth set llm:anthropic``)
+#: command (Phase 5 step A5 ``opshub llm auth set anthropic``)
 #: writes to the exact same key this client reads at complete time.
 ANTHROPIC_API_KEY_SECRET = "llm:anthropic:api_key"
 
@@ -304,7 +304,7 @@ class AnthropicLLMClient:
 
                 raise ConfigError(
                     "Anthropic API key not configured. Run "
-                    "`opshub connector auth set llm:anthropic` or set "
+                    "`opshub llm auth set anthropic` or set "
                     "OPSHUB_LLM_ANTHROPIC_API_KEY in the environment."
                 )
             self._client = anthropic_module.Anthropic(api_key=api_key)

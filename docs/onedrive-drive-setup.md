@@ -98,7 +98,7 @@ CI / container では env 経由が便利。
 uv tool install "ozzylabs-opshub[office]"
 ```
 
-その後 `opshub connector sync onedrive_drive` 実行時に `.docx`/`.xlsx`/`.pptx`
+その後 `opshub onedrive_drive sync` 実行時に `.docx`/`.xlsx`/`.pptx`
 が検出されると、`core/document_extract.extract_document(path)` 経由で本文を
 抽出し、`source_type = word_document` / `excel_spreadsheet` /
 `powerpoint_slide_deck` で `sources.body` に persist する。
@@ -106,7 +106,7 @@ uv tool install "ozzylabs-opshub[office]"
 ## sync 実行
 
 ```bash
-opshub connector sync onedrive_drive
+opshub onedrive_drive sync
 ```
 
 差分検出は `sources.fingerprint` 列 (Phase 9 step A2 / migration 0017)
@@ -120,13 +120,14 @@ fingerprint state は `connector_name = 'onedrive_drive'` で box_drive と
 
 ```cron
 # crontab -e
-0 */6 * * * opshub connector sync onedrive_drive
+0 */6 * * * opshub onedrive_drive sync
 ```
 
 ## 認証
 
-`opshub connector auth set connector:onedrive_drive` は **意図的に reject**
-される。`onedrive_drive` は OS-level OneDrive Desktop 認証 (Microsoft
+`opshub onedrive_drive auth set` は **登録されていない** (Phase 17 ADR-0031 §決定 (6))。
+コマンドを叩くと Typer が `No such command 'auth'` で exit 2 する。
+`onedrive_drive` は OS-level OneDrive Desktop 認証 (Microsoft
 アカウント sign-in 状態を OneDrive Desktop daemon が保持) に依存しているため、
 opshub 側で token を持たない (ADR-0019 §決定 (a))。opshub から見える唯一の
 設定は `opshub.toml` 内の `[connectors.onedrive_drive] root_path` /
@@ -148,7 +149,7 @@ opshub 側で token を持たない (ADR-0019 §決定 (a))。opshub から見�
   `sources` 行は stale row として残る。`opshub source list --stale` は
   Phase 11.x 候補。
 - **watch mode なし** (ADR-0019 §決定 (i))。Phase 11 MVP は scan-only。
-  `opshub connector sync onedrive_drive` を operator が cron 等で叩く前提。
+  `opshub onedrive_drive sync` を operator が cron 等で叩く前提。
 
 ## トラブルシューティング
 
@@ -168,7 +169,7 @@ macOS で OneDrive Desktop がインストールされていない / sign in 未
 OneDrive Desktop 側の同期が完了しているか確認 (`ls -la <root>/<file>` で
 mtime が最新か)。OneDrive Desktop は file が変更されたタイミングと OS 側に
 mtime が反映されるタイミングに lag がある (特に大きい file)。
-`opshub connector sync onedrive_drive` を数分後にもう一度実行する。
+`opshub onedrive_drive sync` を数分後にもう一度実行する。
 
 ### Office 抽出が動かない
 

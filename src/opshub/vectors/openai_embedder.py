@@ -32,7 +32,7 @@ from opshub.vectors.embedder import EmbeddingResult
 __all__ = ["OPENAI_API_KEY_SECRET", "OpenAIEmbedder"]
 
 #: Keyring key used to store the OpenAI API key. Exposed so the CLI
-#: command ``opshub connector auth set embedder:openai`` writes to the
+#: command ``opshub embedder auth set openai`` writes to the
 #: exact same key this embedder reads at embed time.
 OPENAI_API_KEY_SECRET = "embedder:openai:api_key"
 
@@ -150,7 +150,7 @@ class OpenAIEmbedder:
 
                 raise ConfigError(
                     "OpenAI API key not configured. Run "
-                    "`opshub connector auth set embedder:openai` or set "
+                    "`opshub embedder auth set openai` or set "
                     "OPSHUB_EMBEDDER_OPENAI_API_KEY in the environment."
                 )
             self._client = openai_module.OpenAI(api_key=api_key)

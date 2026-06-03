@@ -79,7 +79,7 @@ Phase 12 (2026-05-31) widened the assistant skill repertoire from 5 to **14** (1
 | "Find that Box file about X" / "Word/Excel/PPT 探して" / "あの Google Doc" / "Sheets 探して" / "あの Gmail" / "Gmail に来てた件" / "Google Calendar の予定" | `find-document` | Full-text + semantic search across Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive / Google Workspace (incl. Office body extraction, Phase 11; Google Docs / Slides / Sheets via Drive API export, Phase 13; Gmail + Google Calendar via Gmail API + Calendar API, Phase 14; FTS5 over MCP since Phase 12 H1) |
 | "Summarise that Teams thread" / "Teams スレッド要約して" | `personal-brief` / `find-document` | Body-based recall over Teams chat history (Phase 11) |
 | "Prep me for tomorrow's meeting" / "明日の会議準備" | `meeting-prep` (Phase 12) | Purpose + prior discussion + related decisions / sources for the upcoming calendar event |
-| "Research X end-to-end" / "<X> について調べて" | `research` (Phase 12) | Cross-cutting topical research (semantic recall + FTS5 + graph expand + briefing) |
+| "Research X end-to-end" / "`<X>` について調べて" | `research` (Phase 12) | Cross-cutting topical research (semantic recall + FTS5 + graph expand + briefing) |
 | "Weekly status for my manager" / "上司向け週次報告" | `external-brief` (Phase 12) | Outward-facing report (completed tasks + confirmed decisions, restrained tone) — pair of personal-brief |
 | "Why did we choose X?" / "あの決定はなぜ" | `decision-rationale` (Phase 12) | Decision + source + prior decisions traced via `graph.trace` |
 | "Triage my inbox" / "受信箱整理して" | `inbox-triage` (Phase 12, HITL) | Generate per-item action candidates over open inbox items, you approve each one |
@@ -129,8 +129,8 @@ OpsHub is functional without any LLM — `task` / `decision` / `inbox` /
 one of:
 
 ```bash
-opshub connector auth set llm:anthropic       # Anthropic Claude (recommended)
-opshub connector auth set llm:openai          # OpenAI
+opshub llm auth set anthropic       # Anthropic Claude (recommended)
+opshub llm auth set openai          # OpenAI
 # Or for local-only:
 ollama serve && ollama pull llama3.2:3b
 # Then set [llm] backend = "ollama" in ~/.config/opshub/config.toml
@@ -187,24 +187,24 @@ opshub handoff open --from agent:claude --to ozzy --topic "review"
 opshub handoff close <handoff-id> --note "merged"
 
 # Connectors (Phase 3 + Phase 7, ADR-0010 / ADR-0014)
-opshub connector auth set github                      # store GitHub PAT in OS keychain
-opshub connector sync github                          # incremental sync (OPSHUB_CONNECTOR_GITHUB_REPO=owner/repo)
-opshub connector auth set connector:slack             # store Slack OAuth token in OS keychain (User Token preferred, Bot Token also accepted — ADR-0018)
-opshub connector slack conversations                  # list joined conversations (channels + DMs) for [connectors.slack] channels (use --format toml to paste; --since 30d for activity filter, #374)
-opshub connector sync slack                           # incremental sync ([connectors.slack] channels)
-opshub connector auth set connector:ms365             # OAuth paste-code (Microsoft Graph Calendar / OneDrive / Outlook)
-opshub connector sync ms365                           # incremental sync per endpoint
-opshub connector auth set connector:box               # OAuth paste-code (Box Events API)
-opshub connector sync box                             # incremental sync (Box stream_position cursor)
-opshub connector sync box_drive                       # Phase 9: scan local Box Drive mount (see docs/box-drive-setup.md)
-opshub connector sync onedrive_drive                  # Phase 11: scan local OneDrive Desktop mount (see docs/onedrive-drive-setup.md)
-opshub connector auth set connector:teams             # Phase 11: store Microsoft Graph User Token (Chat.Read, see docs/teams-setup.md)
-opshub connector sync teams                           # Phase 11: Graph chat delta + invalidated-token fallback
-opshub connector auth set google_workspace            # Phase 14: Google OAuth paste-code, shared across Drive + Gmail + Calendar (drive.readonly + gmail.readonly + calendar.readonly, single re-consent applies to all three; see docs/google-workspace-setup.md)
-opshub connector sync google_workspace                # Phase 13: Drive API v3 changes.list cursor + invalidated-token fallback (Workspace export → markitdown when content_extraction = true)
-opshub connector sync google_mail                     # Phase 14: Gmail API v1 users.history.list delta + 7-day TTL fallback (message unit, Outlook-symmetric body extraction)
-opshub connector sync google_calendar                 # Phase 14: Calendar API v3 events.list(syncToken=...) + 410 GONE fallback (master event only + override separate record, MS365 Calendar-symmetric)
-opshub connector list                                 # show registered connectors
+opshub github auth set                      # store GitHub PAT in OS keychain
+opshub github sync                          # incremental sync (OPSHUB_CONNECTOR_GITHUB_REPO=owner/repo)
+opshub slack auth set             # store Slack OAuth token in OS keychain (User Token preferred, Bot Token also accepted — ADR-0018)
+opshub slack conversations                  # list joined conversations (channels + DMs) for [connectors.slack] channels (use --format toml to paste; --since 30d for activity filter, #374)
+opshub slack sync                           # incremental sync ([connectors.slack] channels)
+opshub ms365 auth set             # OAuth paste-code (Microsoft Graph Calendar / OneDrive / Outlook)
+opshub ms365 sync                           # incremental sync per endpoint
+opshub box auth set               # OAuth paste-code (Box Events API)
+opshub box sync                             # incremental sync (Box stream_position cursor)
+opshub box_drive sync                       # Phase 9: scan local Box Drive mount (see docs/box-drive-setup.md)
+opshub onedrive_drive sync                  # Phase 11: scan local OneDrive Desktop mount (see docs/onedrive-drive-setup.md)
+opshub teams auth set             # Phase 11: store Microsoft Graph User Token (Chat.Read, see docs/teams-setup.md)
+opshub teams sync                           # Phase 11: Graph chat delta + invalidated-token fallback
+opshub google_workspace auth set            # Phase 14: Google OAuth paste-code, shared across Drive + Gmail + Calendar (drive.readonly + gmail.readonly + calendar.readonly, single re-consent applies to all three; see docs/google-workspace-setup.md)
+opshub google_workspace sync                # Phase 13: Drive API v3 changes.list cursor + invalidated-token fallback (Workspace export → markitdown when content_extraction = true)
+opshub google_mail sync                     # Phase 14: Gmail API v1 users.history.list delta + 7-day TTL fallback (message unit, Outlook-symmetric body extraction)
+opshub google_calendar sync                 # Phase 14: Calendar API v3 events.list(syncToken=...) + 410 GONE fallback (master event only + override separate record, MS365 Calendar-symmetric)
+opshub connectors                                 # show registered connectors
 
 # Workspace + projections
 opshub workspace ingest                               # ingest workspace/inbox/*.md (Phase 3)
@@ -213,7 +213,7 @@ opshub workspace generate                             # regenerate markdown work
 opshub projections rebuild                            # rebuild projections from the event store (idempotent)
 
 # Semantic recall (Phase 4, ADR-0012)
-opshub connector auth set embedder:openai             # store OpenAI API key in OS keychain
+opshub embedder auth set openai             # store OpenAI API key in OS keychain
 opshub embeddings rebuild                             # bulk-embed task/decision/inbox/source bodies (Phase 10: now body-based, ADR-0020)
 opshub embeddings status                              # show backend + per-entity-type embedded vs pending
 opshub embeddings drain                               # retry pending embeddings (auto-embed hook backup)
@@ -226,7 +226,7 @@ opshub search "deploy AND failure" --raw              # opt into FTS5 boolean / 
 opshub search "channel ID" --connector slack          # restrict to one connector
 
 # Briefing (Phase 5, ADR-0015)
-opshub connector auth set llm:anthropic               # store Anthropic API key in OS keychain
+opshub llm auth set anthropic               # store Anthropic API key in OS keychain
 opshub brief "phase 5 progress"                       # LLM-backed briefing (markdown to stdout)
 opshub brief "phase 5 progress" --save                # also persist under <workspace>/briefings/
 opshub brief "phase 5 progress" --format json         # JSON with briefing_id / model / tokens / source_refs

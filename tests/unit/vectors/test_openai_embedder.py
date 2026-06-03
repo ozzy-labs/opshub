@@ -202,7 +202,7 @@ def test_missing_api_key_raises_config_error(monkeypatch: pytest.MonkeyPatch) ->
 
     openai_cls.assert_not_called()
     message = str(excinfo.value)
-    assert "opshub connector auth set embedder:openai" in message
+    assert "opshub embedder auth set openai" in message
     assert "OPSHUB_EMBEDDER_OPENAI_API_KEY" in message
 
 

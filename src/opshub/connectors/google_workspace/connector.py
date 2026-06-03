@@ -3,7 +3,7 @@
 Composes :class:`GoogleWorkspaceAuth` + :class:`DriveClient` +
 :func:`map_drive_item` into the
 :class:`opshub.connectors.base.Connector` Protocol contract. Driven
-by ``opshub connector sync google_workspace`` in
+by ``opshub google_workspace sync`` in
 :mod:`opshub.cli.connector`.
 
 Single cursor + TTL fallback (ADR-0010 §Phase 13 改訂 (g))

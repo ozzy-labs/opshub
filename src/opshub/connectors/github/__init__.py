@@ -2,7 +2,7 @@
 
 Importing this module registers :class:`GitHubConnector` with the
 global connector registry so the CLI driver
-(``opshub connector sync github``) can discover it. The package also
+(``opshub github sync``) can discover it. The package also
 re-exports :func:`get_github_token` and :data:`GITHUB_PAT_SECRET_KEY`
 so callers can write ``from opshub.connectors.github import
 get_github_token`` without reaching into the ``auth`` submodule.

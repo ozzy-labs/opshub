@@ -60,7 +60,7 @@ from opshub.core.errors import ConfigError
 
 def test_slack_token_secret_key_constant() -> None:
     """The exported constant is the public contract between the CLI
-    writer (``opshub connector auth set slack``) and the SlackAuth
+    writer (``opshub slack auth set``) and the SlackAuth
     reader. Changing this string is a breaking change for already-stored
     tokens; pinning it in a test makes that visible at review time.
 
@@ -141,7 +141,7 @@ def test_init_raises_when_token_missing(
         SlackAuth()
 
     message = str(excinfo.value)
-    assert "opshub connector auth set slack" in message
+    assert "opshub slack auth set" in message
     assert "OPSHUB_CONNECTOR_SLACK_TOKEN" in message
 
 

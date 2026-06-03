@@ -2,7 +2,7 @@
 
 Composes the F5 auth helper, the F5 fetcher, and the F5 mapper into
 the :class:`opshub.connectors.base.Connector` Protocol contract so the
-CLI driver (``opshub connector sync teams``) can resolve and run a
+CLI driver (``opshub teams sync``) can resolve and run a
 Teams sync end-to-end. The shape mirrors :class:`SlackConnector` /
 :class:`MS365Connector` so a future common sync orchestrator can lift
 identical structure from all three.

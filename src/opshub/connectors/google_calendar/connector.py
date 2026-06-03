@@ -3,7 +3,7 @@
 Composes :class:`GoogleWorkspaceAuth` (shared via Phase 14 G2 #294) +
 :class:`CalendarClient` + :func:`map_calendar_event` into the
 :class:`opshub.connectors.base.Connector` Protocol contract. Driven
-by ``opshub connector sync google_calendar`` in
+by ``opshub google_calendar sync`` in
 :mod:`opshub.cli.connector`.
 
 Single cursor + TTL fallback (ADR-0010 §Phase 14 改訂 (j))

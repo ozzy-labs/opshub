@@ -1,29 +1,11 @@
-"""Tests for ``opshub connector slack conversations`` (#366).
+"""Tests for ``opshub slack conversations`` (#366; Phase 17-B path update).
 
-The CLI command wraps
-:func:`opshub.connectors.slack.conversations.list_conversations` and
-renders the result in one of three formats — ``table`` (default),
-``toml``, or ``json``. Behaviour worth pinning here:
-
-1. Happy path through each output format with the DM / MPIM type
-   surfacing (TYPE / NAME-PARTICIPANTS / ARCHIVED columns).
-2. Flag propagation: ``--filter``, ``--limit``, ``--types``,
-   ``--include-archived``, ``--all`` all reach the iterator's
-   keyword arguments unchanged.
-3. ``--types`` parsing: comma-separated tokens, validation errors for
-   unknown tokens / empty input.
-4. ``--progress`` / ``--no-progress`` precedence is honoured via the
-   shared :mod:`opshub.cli._progress` plumbing.
-5. Empty result: stderr hint surfaces for ``table`` / ``toml``; JSON
-   still emits ``[]`` on stdout.
-6. Auth / runtime / usage error paths map to the documented exit
-   codes (1 / 1 / 2 respectively).
-7. ``--help`` keeps ``slack_sdk`` off the cold-start path.
-8. MPIM participant truncation: 4+ participants render as
-   ``a, b, c +N``.
-
-The Slack SDK extras may not be installed in every CI environment,
-so the file-level ``pytest.importorskip`` gates the whole module.
+Carried over from the legacy ``tests/unit/cli/test_connector_slack_conversations.py``
+with the legacy 3-segment ``["connector", "slack", "conversations", ...]``
+invocations rewritten to the new per-noun 2-segment form
+``["slack", "conversations", ...]``. All behavioural invariants
+(output formats / sort order / flag propagation / cold-start guard)
+are unchanged from #366 / #374.
 """
 
 from __future__ import annotations
@@ -55,7 +37,6 @@ def _public_row(
     is_archived: bool = False,
     purpose: str = "Company-wide announcements",
 ) -> SlackConversation:
-    """Build a public-channel :class:`SlackConversation` fixture."""
     return SlackConversation(
         id=channel_id,
         type="public",
@@ -159,7 +140,6 @@ def _slack_token_env(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignor
 
 
 def test_conversations_default_format_is_table(_slack_token_env: None) -> None:
-    """No ``--format`` flag → table output with the new TYPE / NAME-PARTICIPANTS columns."""
     rows = [
         _public_row("C01234567", name="general", purpose="Company-wide"),
         _im_row("D04567890", peer="Alice Johnson"),
@@ -167,7 +147,7 @@ def test_conversations_default_format_is_table(_slack_token_env: None) -> None:
     record = _CallRecord()
     runner = CliRunner()
     with _patch_list_conversations(rows, record=record):
-        result = runner.invoke(app, ["connector", "slack", "conversations"])
+        result = runner.invoke(app, ["slack", "conversations"])
 
     assert result.exit_code == 0, result.stdout + result.stderr
     out = result.stdout
@@ -180,7 +160,6 @@ def test_conversations_default_format_is_table(_slack_token_env: None) -> None:
     assert "general" in out
     assert "D04567890" in out
     assert "Alice Johnson" in out
-    # Default types tuple covers all four kinds.
     assert record.kwargs["types"] == ("public", "private", "im", "mpim")
     assert record.kwargs["all"] is False
     assert record.auth_token == "xoxb-test"
@@ -189,34 +168,24 @@ def test_conversations_default_format_is_table(_slack_token_env: None) -> None:
 def test_conversations_table_marks_dm_archive_column_as_dash(
     _slack_token_env: None,
 ) -> None:
-    """DM / MPIM rows render ``-`` in the ARCHIVED column (DMs never archive)."""
     rows = [_im_row("D1", peer="Alice")]
     runner = CliRunner()
     with _patch_list_conversations(rows, record=_CallRecord()):
-        result = runner.invoke(app, ["connector", "slack", "conversations"])
+        result = runner.invoke(app, ["slack", "conversations"])
 
     assert result.exit_code == 0
-    # Header row contains "ARCHIVED"; the value row must contain "-"
-    # somewhere after the type column. We assert the substring is
-    # present (full layout assertion is too fragile to fixed widths).
     assert " - " in result.stdout
 
 
 def test_conversations_table_renders_mpim_participants_with_cap(
     _slack_token_env: None,
 ) -> None:
-    """MPIM with 4+ participants renders ``a, b, c +N``.
-
-    The display cap (3 names + remainder) keeps the column width
-    bounded on group DMs with many participants. The JSON output
-    keeps the full participant list for downstream consumers.
-    """
     rows = [
         _mpim_row("G1", participants=("alice", "bob", "carol", "dave", "ellen")),
     ]
     runner = CliRunner()
     with _patch_list_conversations(rows, record=_CallRecord()):
-        result = runner.invoke(app, ["connector", "slack", "conversations"])
+        result = runner.invoke(app, ["slack", "conversations"])
 
     assert result.exit_code == 0
     assert "alice, bob, carol +2" in result.stdout
@@ -225,7 +194,6 @@ def test_conversations_table_renders_mpim_participants_with_cap(
 def test_conversations_format_toml_emits_paste_ready_snippet(
     _slack_token_env: None,
 ) -> None:
-    """``--format toml`` emits a ``channels = [...]`` snippet with type comments."""
     rows = [
         _public_row("C01234567", name="general"),
         _private_row("G03456789", name="leadership"),
@@ -235,7 +203,7 @@ def test_conversations_format_toml_emits_paste_ready_snippet(
     with _patch_list_conversations(rows, record=_CallRecord()):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--format", "toml"],
+            ["slack", "conversations", "--format", "toml"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
@@ -246,7 +214,6 @@ def test_conversations_format_toml_emits_paste_ready_snippet(
     assert "general (public)" in out
     assert "leadership (private)" in out
     assert '"D04567890"' in out
-    # DM rows render the resolved peer name in the comment.
     assert "Alice (im)" in out
     assert out.rstrip().endswith("]")
 
@@ -254,7 +221,6 @@ def test_conversations_format_toml_emits_paste_ready_snippet(
 def test_conversations_format_json_emits_array_of_dataclass_dicts(
     _slack_token_env: None,
 ) -> None:
-    """``--format json`` emits a JSON array including type / display_name / participants."""
     import json as _json
 
     rows = [
@@ -265,7 +231,7 @@ def test_conversations_format_json_emits_array_of_dataclass_dicts(
     with _patch_list_conversations(rows, record=_CallRecord()):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--format", "json"],
+            ["slack", "conversations", "--format", "json"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
@@ -298,13 +264,12 @@ def test_conversations_format_json_emits_array_of_dataclass_dicts(
 
 
 def test_conversations_filter_flag_propagates(_slack_token_env: None) -> None:
-    """``--filter`` forwards verbatim."""
     record = _CallRecord()
     runner = CliRunner()
     with _patch_list_conversations([], record=record):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--filter", "Backend"],
+            ["slack", "conversations", "--filter", "Backend"],
         )
 
     assert result.exit_code == 0
@@ -314,13 +279,12 @@ def test_conversations_filter_flag_propagates(_slack_token_env: None) -> None:
 def test_conversations_filter_empty_string_normalised_to_none(
     _slack_token_env: None,
 ) -> None:
-    """``--filter ""`` collapses to ``None`` upstream."""
     record = _CallRecord()
     runner = CliRunner()
     with _patch_list_conversations([_public_row()], record=record):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--filter", ""],
+            ["slack", "conversations", "--filter", ""],
         )
 
     assert result.exit_code == 0
@@ -328,13 +292,12 @@ def test_conversations_filter_empty_string_normalised_to_none(
 
 
 def test_conversations_limit_flag_propagates(_slack_token_env: None) -> None:
-    """``--limit N`` forwards as the iterator's ``limit`` kwarg."""
     record = _CallRecord()
     runner = CliRunner()
     with _patch_list_conversations([_public_row()], record=record):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--limit", "5"],
+            ["slack", "conversations", "--limit", "5"],
         )
 
     assert result.exit_code == 0
@@ -342,13 +305,12 @@ def test_conversations_limit_flag_propagates(_slack_token_env: None) -> None:
 
 
 def test_conversations_types_flag_parses_subset(_slack_token_env: None) -> None:
-    """``--types public,im`` → ``types=("public", "im")`` upstream."""
     record = _CallRecord()
     runner = CliRunner()
     with _patch_list_conversations([], record=record):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--types", "public,im"],
+            ["slack", "conversations", "--types", "public,im"],
         )
 
     assert result.exit_code == 0
@@ -356,14 +318,12 @@ def test_conversations_types_flag_parses_subset(_slack_token_env: None) -> None:
 
 
 def test_conversations_types_flag_deduplicates(_slack_token_env: None) -> None:
-    """``--types public,public,im`` → deduplicated to ``("public", "im")``."""
     record = _CallRecord()
     runner = CliRunner()
     with _patch_list_conversations([], record=record):
         result = runner.invoke(
             app,
             [
-                "connector",
                 "slack",
                 "conversations",
                 "--types",
@@ -376,32 +336,23 @@ def test_conversations_types_flag_deduplicates(_slack_token_env: None) -> None:
 
 
 def test_conversations_types_flag_rejects_unknown(_slack_token_env: None) -> None:
-    """Unknown ``--types`` value → usage error (exit 2) listing valid options."""
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["connector", "slack", "conversations", "--types", "public,bot"],
+        ["slack", "conversations", "--types", "public,bot"],
     )
 
     assert result.exit_code == 2, result.stdout + result.stderr
     combined = result.stdout + result.stderr
     assert "bot" in combined
-    # Diagnostic lists at least one valid token so the operator can self-correct.
     assert "public" in combined
 
 
 def test_conversations_types_flag_rejects_empty(_slack_token_env: None) -> None:
-    """Empty ``--types`` → usage error.
-
-    Without this guard, an empty ``--types`` would silently collapse
-    the API request's ``types=`` parameter and Slack would default
-    behaviour (returning public channels only), surprising the
-    operator.
-    """
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["connector", "slack", "conversations", "--types", ""],
+        ["slack", "conversations", "--types", ""],
     )
 
     assert result.exit_code == 2, result.stdout + result.stderr
@@ -410,31 +361,22 @@ def test_conversations_types_flag_rejects_empty(_slack_token_env: None) -> None:
 def test_conversations_types_flag_rejects_whitespace_and_comma_only(
     _slack_token_env: None,
 ) -> None:
-    """``--types " , , "`` → usage error.
-
-    Whitespace-only chunks individually skip (via the parser's per-
-    chunk ``strip()``) so a payload that is *only* whitespace + commas
-    collapses to zero parsed types. The parser must catch this case
-    via the post-loop ``if not parts`` guard rather than silently
-    sending an empty ``types`` parameter to the Slack API.
-    """
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["connector", "slack", "conversations", "--types", " , , "],
+        ["slack", "conversations", "--types", " , , "],
     )
 
     assert result.exit_code == 2, result.stdout + result.stderr
 
 
 def test_conversations_all_flag_propagates(_slack_token_env: None) -> None:
-    """``--all`` → ``all=True`` upstream (workspace-wide endpoint)."""
     record = _CallRecord()
     runner = CliRunner()
     with _patch_list_conversations([], record=record):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--all"],
+            ["slack", "conversations", "--all"],
         )
 
     assert result.exit_code == 0
@@ -444,18 +386,16 @@ def test_conversations_all_flag_propagates(_slack_token_env: None) -> None:
 def test_conversations_include_archived_flips_iterator_kwarg(
     _slack_token_env: None,
 ) -> None:
-    """``--include-archived`` forwards as ``include_archived=True``."""
     record = _CallRecord()
     runner = CliRunner()
     with _patch_list_conversations([_public_row(is_archived=True)], record=record):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--include-archived"],
+            ["slack", "conversations", "--include-archived"],
         )
 
     assert result.exit_code == 0
     assert record.kwargs["include_archived"] is True
-    # Archived channel renders ``yes`` in the ARCHIVED column.
     assert "yes" in result.stdout
 
 
@@ -465,20 +405,16 @@ def test_conversations_include_archived_flips_iterator_kwarg(
 def test_conversations_no_progress_flag_disables_reporter(
     _slack_token_env: None,
 ) -> None:
-    """``--no-progress`` → the iterator receives a no-op reporter."""
     record = _CallRecord()
     runner = CliRunner()
     with _patch_list_conversations([_public_row()], record=record):
         result = runner.invoke(
             app,
-            ["--no-progress", "connector", "slack", "conversations"],
+            ["--no-progress", "slack", "conversations"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
     reporter = record.kwargs["reporter"]
-    # The no-op reporter has the same advance / update surface but
-    # never affects stderr — driving it should not raise even in a
-    # captured-output context.
     reporter.advance(1)
     reporter.update(total=10, description="x")
 
@@ -486,17 +422,15 @@ def test_conversations_no_progress_flag_disables_reporter(
 def test_conversations_progress_flag_forces_reporter(
     _slack_token_env: None,
 ) -> None:
-    """``--progress`` → forces the rich reporter even in captured-stderr tests."""
     record = _CallRecord()
     runner = CliRunner()
     with _patch_list_conversations([_public_row()], record=record):
         result = runner.invoke(
             app,
-            ["--progress", "connector", "slack", "conversations"],
+            ["--progress", "slack", "conversations"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
-    # Even with progress forced on, the reporter accepts advance().
     record.kwargs["reporter"].advance(1)
 
 
@@ -506,10 +440,9 @@ def test_conversations_progress_flag_forces_reporter(
 def test_conversations_empty_table_emits_header_and_stderr_hint(
     _slack_token_env: None,
 ) -> None:
-    """No matches → table still shows the header; hint goes to stderr."""
     runner = CliRunner()
     with _patch_list_conversations([], record=_CallRecord()):
-        result = runner.invoke(app, ["connector", "slack", "conversations"])
+        result = runner.invoke(app, ["slack", "conversations"])
 
     assert result.exit_code == 0
     assert "ID" in result.stdout
@@ -519,12 +452,11 @@ def test_conversations_empty_table_emits_header_and_stderr_hint(
 def test_conversations_empty_filter_hint_includes_filter_string(
     _slack_token_env: None,
 ) -> None:
-    """The empty-state stderr hint quotes the filter value for self-correction."""
     runner = CliRunner()
     with _patch_list_conversations([], record=_CallRecord()):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--filter", "nope"],
+            ["slack", "conversations", "--filter", "nope"],
         )
 
     assert result.exit_code == 0
@@ -533,12 +465,11 @@ def test_conversations_empty_filter_hint_includes_filter_string(
 
 
 def test_conversations_empty_toml_emits_empty_array(_slack_token_env: None) -> None:
-    """No matches with ``--format toml`` still emits ``channels = []``."""
     runner = CliRunner()
     with _patch_list_conversations([], record=_CallRecord()):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--format", "toml"],
+            ["slack", "conversations", "--format", "toml"],
         )
 
     assert result.exit_code == 0
@@ -550,14 +481,13 @@ def test_conversations_empty_toml_emits_empty_array(_slack_token_env: None) -> N
 def test_conversations_empty_json_emits_empty_array_no_stderr_hint(
     _slack_token_env: None,
 ) -> None:
-    """``--format json`` empty result → ``[]`` on stdout, no stderr hint."""
     import json as _json
 
     runner = CliRunner()
     with _patch_list_conversations([], record=_CallRecord()):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--format", "json"],
+            ["slack", "conversations", "--format", "json"],
         )
 
     assert result.exit_code == 0
@@ -569,7 +499,6 @@ def test_conversations_empty_json_emits_empty_array_no_stderr_hint(
 
 
 def test_conversations_config_error_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Missing token → ``ConfigError`` → exit 1 + sanitised stderr."""
     monkeypatch.delenv("OPSHUB_CONNECTOR_SLACK_TOKEN", raising=False)
 
     def _no_secret(_key: str) -> str | None:
@@ -578,7 +507,7 @@ def test_conversations_config_error_exits_1(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr("opshub.core.secrets.get_secret", _no_secret)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "slack", "conversations"])
+    result = runner.invoke(app, ["slack", "conversations"])
 
     assert result.exit_code == 1, result.stdout + result.stderr
     assert "not configured" in result.stderr.lower() or "Error:" in result.stderr
@@ -587,14 +516,13 @@ def test_conversations_config_error_exits_1(monkeypatch: pytest.MonkeyPatch) -> 
 def test_conversations_connector_failed_error_exits_1_with_scope(
     _slack_token_env: None,
 ) -> None:
-    """``missing_scope`` from the iterator → exit 1 + scope name on stderr."""
     failure = ConnectorFailedError(
         "Slack users.conversations failed: missing_scope "
         "(needed: 'im:read'). See ADR-0018 §Decision (7) ..."
     )
     runner = CliRunner()
     with _patch_list_conversations([], record=_CallRecord(), raises=failure):
-        result = runner.invoke(app, ["connector", "slack", "conversations"])
+        result = runner.invoke(app, ["slack", "conversations"])
 
     assert result.exit_code == 1, result.stdout + result.stderr
     assert "missing_scope" in result.stderr
@@ -603,11 +531,10 @@ def test_conversations_connector_failed_error_exits_1_with_scope(
 
 
 def test_conversations_invalid_format_exits_2(_slack_token_env: None) -> None:
-    """Unknown ``--format`` value → usage error (exit 2) listing valid options."""
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["connector", "slack", "conversations", "--format", "yaml"],
+        ["slack", "conversations", "--format", "yaml"],
     )
 
     assert result.exit_code == 2, result.stdout + result.stderr
@@ -621,7 +548,7 @@ def test_conversations_invalid_format_exits_2(_slack_token_env: None) -> None:
 
 
 def test_conversations_help_does_not_import_slack_sdk() -> None:
-    """``connector slack conversations --help`` keeps ``slack_sdk`` off the cold-start path."""
+    """``slack conversations --help`` keeps ``slack_sdk`` off the cold-start path."""
     import sys
 
     saved = {
@@ -631,12 +558,12 @@ def test_conversations_help_does_not_import_slack_sdk() -> None:
         runner = CliRunner()
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--help"],
+            ["slack", "conversations", "--help"],
         )
         assert result.exit_code == 0, result.stdout
         assert not any(
             name == "slack_sdk" or name.startswith("slack_sdk.") for name in sys.modules
-        ), "slack_sdk leaked onto cold-start path via 'connector slack conversations --help'"
+        ), "slack_sdk leaked onto cold-start path via 'slack conversations --help'"
     finally:
         sys.modules.update(saved)
 
@@ -645,15 +572,12 @@ def test_conversations_help_does_not_import_slack_sdk() -> None:
 
 
 def test_conversations_table_truncates_long_purpose(_slack_token_env: None) -> None:
-    """The PURPOSE column truncates at the documented cap; JSON keeps the full string."""
     long_purpose = "X" * 200
     rows = [_public_row(purpose=long_purpose)]
     runner = CliRunner()
     with _patch_list_conversations(rows, record=_CallRecord()):
-        table_result = runner.invoke(app, ["connector", "slack", "conversations"])
-        json_result = runner.invoke(
-            app, ["connector", "slack", "conversations", "--format", "json"]
-        )
+        table_result = runner.invoke(app, ["slack", "conversations"])
+        json_result = runner.invoke(app, ["slack", "conversations", "--format", "json"])
 
     assert table_result.exit_code == 0
     assert "…" in table_result.stdout
@@ -668,14 +592,12 @@ def _row_with_activity(
     *,
     last_activity_ts: float,
 ) -> SlackConversation:
-    """Clone ``base`` with an explicit ``last_activity_ts`` (frozen dataclass copy)."""
     from dataclasses import replace
 
     return replace(base, last_activity_ts=last_activity_ts)
 
 
 def test_parse_since_relative_days() -> None:
-    """``"7d"`` → ``now() - 7 days`` (within a small wall-clock tolerance)."""
     from datetime import UTC, datetime, timedelta
 
     from opshub.cli._slack_conversations import parse_since
@@ -688,7 +610,6 @@ def test_parse_since_relative_days() -> None:
 
 
 def test_parse_since_relative_weeks() -> None:
-    """``"2w"`` → ``now() - 14 days``."""
     from datetime import UTC, datetime, timedelta
 
     from opshub.cli._slack_conversations import parse_since
@@ -700,7 +621,6 @@ def test_parse_since_relative_weeks() -> None:
 
 
 def test_parse_since_absolute_iso_date_defaults_to_utc() -> None:
-    """``"2026-05-01"`` → ``datetime(2026, 5, 1, 0, 0, 0, UTC)``."""
     from datetime import UTC, datetime
 
     from opshub.cli._slack_conversations import parse_since
@@ -709,17 +629,14 @@ def test_parse_since_absolute_iso_date_defaults_to_utc() -> None:
 
 
 def test_parse_since_absolute_iso_with_timezone_normalised_to_utc() -> None:
-    """A tz-aware ISO string is converted to UTC equivalent."""
     from datetime import UTC, datetime
 
     from opshub.cli._slack_conversations import parse_since
 
-    # 2026-05-01T09:00:00+09:00 is 2026-05-01T00:00:00Z
     assert parse_since("2026-05-01T09:00:00+09:00") == datetime(2026, 5, 1, tzinfo=UTC)
 
 
 def test_parse_since_zulu_suffix_accepted() -> None:
-    """``"...Z"`` is rewritten to ``+00:00`` so :func:`datetime.fromisoformat` accepts it."""
     from datetime import UTC, datetime
 
     from opshub.cli._slack_conversations import parse_since
@@ -728,7 +645,6 @@ def test_parse_since_zulu_suffix_accepted() -> None:
 
 
 def test_parse_since_rejects_empty() -> None:
-    """Empty / whitespace input → :class:`typer.BadParameter`."""
     import typer
 
     from opshub.cli._slack_conversations import parse_since
@@ -740,12 +656,6 @@ def test_parse_since_rejects_empty() -> None:
 
 
 def test_parse_since_rejects_unknown_unit() -> None:
-    """``"7x"`` / ``"5h"`` (hours unsupported) / ``"30m"`` → :class:`typer.BadParameter`.
-
-    Hours / minutes / months / years are intentionally unsupported —
-    the discovery command's filter granularity is days. Operators who
-    need finer cuts can pass an absolute ISO datetime.
-    """
     import typer
 
     from opshub.cli._slack_conversations import parse_since
@@ -761,11 +671,6 @@ def test_parse_since_rejects_unknown_unit() -> None:
 
 
 def test_parse_since_rejects_bare_integer() -> None:
-    """``"30"`` (no unit suffix) → :class:`typer.BadParameter`.
-
-    Without a unit the value is ambiguous (days? seconds since
-    epoch?). Forcing the unit suffix removes the foot-gun.
-    """
     import typer
 
     from opshub.cli._slack_conversations import parse_since
@@ -775,7 +680,6 @@ def test_parse_since_rejects_bare_integer() -> None:
 
 
 def test_conversations_since_flag_propagates(_slack_token_env: None) -> None:
-    """``--since 7d`` forwards a tz-aware datetime to the iterator."""
     from datetime import UTC, datetime, timedelta
 
     record = _CallRecord()
@@ -784,7 +688,7 @@ def test_conversations_since_flag_propagates(_slack_token_env: None) -> None:
     with _patch_list_conversations([], record=record):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--since", "7d"],
+            ["slack", "conversations", "--since", "7d"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
@@ -796,11 +700,10 @@ def test_conversations_since_flag_propagates(_slack_token_env: None) -> None:
 
 
 def test_conversations_since_invalid_value_exits_2(_slack_token_env: None) -> None:
-    """Unknown ``--since`` value → usage error (exit 2, no API call)."""
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["connector", "slack", "conversations", "--since", "garbage"],
+        ["slack", "conversations", "--since", "garbage"],
     )
 
     assert result.exit_code == 2, result.stdout + result.stderr
@@ -809,11 +712,6 @@ def test_conversations_since_invalid_value_exits_2(_slack_token_env: None) -> No
 
 
 def test_conversations_default_sort_groups_by_type(_slack_token_env: None) -> None:
-    """Mixed-type rows sort into ``public → private → mpim → im`` buckets.
-
-    Within each bucket the no-``--since`` sort is ``display_name`` asc
-    (case-insensitive), so the visible order is fully deterministic.
-    """
     rows = [
         _im_row("D1", peer="zelda"),
         _mpim_row("G-mpim-A", participants=("alice", "bob")),
@@ -828,15 +726,11 @@ def test_conversations_default_sort_groups_by_type(_slack_token_env: None) -> No
     with _patch_list_conversations(rows, record=record):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--format", "toml"],
+            ["slack", "conversations", "--format", "toml"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
-    # Extract the id order from the TOML emission line-by-line. The
-    # ids on consecutive ``  "X",`` lines reflect post-sort ordering.
     id_order = [line.split('"')[1] for line in result.stdout.splitlines() if line.startswith('  "')]
-    # Expected: public (alphabetical by name) → private → mpim (by
-    # display_name = "alice, bob" < "dave, eve") → im (alice < zelda).
     assert id_order == [
         "C-pub-A",
         "C-pub-B",
@@ -851,7 +745,6 @@ def test_conversations_default_sort_groups_by_type(_slack_token_env: None) -> No
 def test_conversations_since_sort_orders_by_activity_desc(
     _slack_token_env: None,
 ) -> None:
-    """With ``--since`` set, rows within each bucket sort by ``last_activity_ts`` desc."""
     rows = [
         _row_with_activity(_public_row("C-old", name="alpha"), last_activity_ts=1_000_000.0),
         _row_with_activity(_public_row("C-new", name="zulu"), last_activity_ts=2_000_000.0),
@@ -861,31 +754,28 @@ def test_conversations_since_sort_orders_by_activity_desc(
     with _patch_list_conversations(rows, record=_CallRecord()):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--since", "30d", "--format", "toml"],
+            ["slack", "conversations", "--since", "30d", "--format", "toml"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
     id_order = [line.split('"')[1] for line in result.stdout.splitlines() if line.startswith('  "')]
-    # Within ``public`` bucket: ``C-new`` (ts=2M) before ``C-old`` (ts=1M).
-    # Then ``im`` bucket trails.
     assert id_order == ["C-new", "C-old", "D1"]
 
 
 def test_conversations_since_table_shows_last_activity_column(
     _slack_token_env: None,
 ) -> None:
-    """``--since`` enables the ``LAST_ACTIVITY`` column with UTC YYYY-MM-DD values."""
     rows = [
         _row_with_activity(
             _public_row("C1", name="general"),
-            last_activity_ts=1_717_200_000.0,  # 2024-06-01 04:00:00 UTC
+            last_activity_ts=1_717_200_000.0,
         ),
     ]
     runner = CliRunner()
     with _patch_list_conversations(rows, record=_CallRecord()):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--since", "30d"],
+            ["slack", "conversations", "--since", "30d"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
@@ -896,11 +786,10 @@ def test_conversations_since_table_shows_last_activity_column(
 def test_conversations_no_since_table_omits_last_activity_column(
     _slack_token_env: None,
 ) -> None:
-    """Without ``--since``, ``LAST_ACTIVITY`` is hidden so #366's layout is preserved."""
     rows = [_public_row("C1")]
     runner = CliRunner()
     with _patch_list_conversations(rows, record=_CallRecord()):
-        result = runner.invoke(app, ["connector", "slack", "conversations"])
+        result = runner.invoke(app, ["slack", "conversations"])
 
     assert result.exit_code == 0
     assert "LAST_ACTIVITY" not in result.stdout
@@ -909,7 +798,6 @@ def test_conversations_no_since_table_omits_last_activity_column(
 def test_conversations_since_json_includes_last_activity_ts(
     _slack_token_env: None,
 ) -> None:
-    """``--since`` + ``--format json`` → ``last_activity_ts`` populated in payload."""
     import json as _json
 
     rows = [_row_with_activity(_public_row("C1", name="general"), last_activity_ts=1_717_200_000.0)]
@@ -918,7 +806,6 @@ def test_conversations_since_json_includes_last_activity_ts(
         result = runner.invoke(
             app,
             [
-                "connector",
                 "slack",
                 "conversations",
                 "--since",
@@ -936,11 +823,6 @@ def test_conversations_since_json_includes_last_activity_ts(
 def test_conversations_no_since_json_omits_last_activity_ts(
     _slack_token_env: None,
 ) -> None:
-    """Without ``--since``, ``last_activity_ts`` is omitted from JSON entirely.
-
-    Keeps #366's payload contract intact for operators who never opt
-    into activity probing — no meaningless nulls in their pipeline.
-    """
     import json as _json
 
     rows = [_public_row("C1")]
@@ -948,7 +830,7 @@ def test_conversations_no_since_json_omits_last_activity_ts(
     with _patch_list_conversations(rows, record=_CallRecord()):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--format", "json"],
+            ["slack", "conversations", "--format", "json"],
         )
 
     assert result.exit_code == 0
@@ -959,14 +841,12 @@ def test_conversations_no_since_json_omits_last_activity_ts(
 def test_conversations_since_toml_comment_includes_activity_date(
     _slack_token_env: None,
 ) -> None:
-    """``--since`` + ``--format toml`` → comment includes ``last YYYY-MM-DD``."""
     rows = [_row_with_activity(_public_row("C1", name="general"), last_activity_ts=1_717_200_000.0)]
     runner = CliRunner()
     with _patch_list_conversations(rows, record=_CallRecord()):
         result = runner.invoke(
             app,
             [
-                "connector",
                 "slack",
                 "conversations",
                 "--since",
@@ -983,15 +863,6 @@ def test_conversations_since_toml_comment_includes_activity_date(
 def test_conversations_warnings_from_iterator_surface_on_stderr_in_order(
     _slack_token_env: None,
 ) -> None:
-    """Iterator-populated warnings flush to stderr in append order after the spinner closes.
-
-    Pin the CLI boundary: the driver passes a ``warnings`` list to
-    ``list_conversations``, then echoes each entry on stderr in the
-    order the iterator appended them. Regression in either direction
-    (driver swallowing warnings, or re-ordering them) would miss the
-    per-type ``missing_scope`` UX from #374.
-    """
-
     def _fake_list(auth: Any, **kwargs: Any) -> Iterator[SlackConversation]:
         bucket_obj = kwargs.get("warnings")
         if isinstance(bucket_obj, list):
@@ -1008,7 +879,7 @@ def test_conversations_warnings_from_iterator_surface_on_stderr_in_order(
     ):
         result = runner.invoke(
             app,
-            ["connector", "slack", "conversations", "--since", "7d"],
+            ["slack", "conversations", "--since", "7d"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
@@ -1021,21 +892,10 @@ def test_conversations_warnings_from_iterator_surface_on_stderr_in_order(
 
 
 def test_sort_rows_activity_mode_pushes_missing_ts_to_bucket_tail() -> None:
-    """``_sort_rows(by_activity=True)`` parks ``last_activity_ts is None`` at bucket end.
-
-    The docstring marks the ``None`` branch as defensive (``--since``
-    should always populate the ts), but the branch is reachable if a
-    thin proxy returns a non-numeric ts that ``_fetch_last_activity_ts``
-    cannot parse — we keep the row, with ``None`` ts. The CLI sort
-    must place such rows last within their type bucket so the
-    presented order does not falsely promote a "no signal" row above
-    a row with a real recent ts.
-    """
     from opshub.cli._slack_conversations import _sort_rows  # pyright: ignore[reportPrivateUsage]
 
     rows = [
         _row_with_activity(_public_row("C-mid", name="charlie"), last_activity_ts=1_500_000.0),
-        # ``last_activity_ts=None`` via the dataclass default — public bucket fallback.
         _public_row("C-none", name="bravo"),
         _row_with_activity(_public_row("C-new", name="alpha"), last_activity_ts=2_000_000.0),
     ]
@@ -1045,20 +905,7 @@ def test_sort_rows_activity_mode_pushes_missing_ts_to_bucket_tail() -> None:
     assert [r.id for r in result] == ["C-new", "C-mid", "C-none"]
 
 
-# ----- audit followup: defensive arm + edge case coverage ---------------
-
-
 def test_parse_since_rejects_overflowingly_large_amount() -> None:
-    """``parse_since('99999999999d')`` → :class:`typer.BadParameter` (not raw OverflowError).
-
-    The relative grammar accepts ``\\d+`` without an upper bound, so a
-    typo (or paste from another tool) can produce an integer that
-    overflows :class:`datetime.timedelta`. The guard in ``parse_since``
-    translates the overflow into the documented exit-code-2
-    ``typer.BadParameter`` contract; this test pins that translation
-    so a future refactor of the relative-form code cannot accidentally
-    drop the guard and surface an unfriendly traceback to operators.
-    """
     import typer
 
     from opshub.cli._slack_conversations import parse_since
@@ -1071,26 +918,17 @@ def test_parse_since_rejects_overflowingly_large_amount() -> None:
 def test_conversations_since_json_drops_only_none_rows_in_mixed_payload(
     _slack_token_env: None,
 ) -> None:
-    """JSON renderer drops ``last_activity_ts`` per-row when ``None``, keeps it when populated.
-
-    Earlier tests pin the all-populated and all-``None`` cases in
-    isolation. This mixed payload — one populated row + one defensive
-    ``None`` row in the same emission — exercises the per-row pop
-    logic so a regression that strips the key from every row (or
-    none) is caught.
-    """
     import json as _json
 
     rows = [
         _row_with_activity(_public_row("C-pop", name="alpha"), last_activity_ts=1_717_200_000.0),
-        _public_row("C-none", name="bravo"),  # dataclass default → last_activity_ts=None
+        _public_row("C-none", name="bravo"),
     ]
     runner = CliRunner()
     with _patch_list_conversations(rows, record=_CallRecord()):
         result = runner.invoke(
             app,
             [
-                "connector",
                 "slack",
                 "conversations",
                 "--since",
@@ -1103,26 +941,12 @@ def test_conversations_since_json_drops_only_none_rows_in_mixed_payload(
     assert result.exit_code == 0
     payload = _json.loads(result.stdout)
     assert len(payload) == 2
-    # Key by id so the assertion does not couple to ``_sort_rows``
-    # tie-break behaviour — a separate test pins the sort order, and
-    # this test only cares about the per-row ``last_activity_ts``
-    # pop logic.
     by_id = {row["id"]: row for row in payload}
     assert by_id["C-pop"]["last_activity_ts"] == 1_717_200_000.0
     assert "last_activity_ts" not in by_id["C-none"]
 
 
 def test_sort_rows_unknown_type_falls_to_tail_bucket() -> None:
-    """``_sort_rows`` parks rows of an unrecognised ``type`` after all known buckets.
-
-    Defensive arm: a future code path that adds a new conversation
-    type to Slack but forgets to extend :data:`_TYPE_BUCKET_ORDER`
-    would land its rows at the bottom rather than crash the sort
-    (the type literal is enforced at the dataclass level so this
-    requires a typing-bypassed payload, e.g. a thin proxy or a
-    forward-compat schema). The Python runtime does not enforce
-    :class:`typing.Literal`, so ``type='unknown'`` constructs fine.
-    """
     from typing import cast
 
     from opshub.cli._slack_conversations import _sort_rows  # pyright: ignore[reportPrivateUsage]
@@ -1130,7 +954,7 @@ def test_sort_rows_unknown_type_falls_to_tail_bucket() -> None:
 
     unknown = SlackConversation(
         id="X-future",
-        type=cast(ConversationType, "future_kind"),  # Literal-bypass for the defensive arm
+        type=cast(ConversationType, "future_kind"),
         name=None,
         display_name="future-kind-conversation",
         is_private=False,
@@ -1147,5 +971,4 @@ def test_sort_rows_unknown_type_falls_to_tail_bucket() -> None:
 
     result = _sort_rows(rows, by_activity=False)
 
-    # Known buckets (public → im) come first, unknown bucket lands last.
     assert [r.id for r in result] == ["C-pub", "D-dm", "X-future"]

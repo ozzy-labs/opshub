@@ -44,7 +44,7 @@ def _reset_registry() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction
     opshub.connectors.github`` runs ``register_connector(GitHubConnector())``).
     Once the module is in ``sys.modules``, a later ``import
     opshub.connectors.github`` (e.g. from inside ``cli/connector.py``
-    during ``opshub connector sync github``) is a no-op — registration
+    during ``opshub github sync``) is a no-op — registration
     does NOT re-run. If this fixture only called ``unregister_all`` on
     teardown, any subsequent test that drives the CLI (Phase 3 / 7
     integration tests) would observe an empty registry and
@@ -223,7 +223,7 @@ def test_github_connector_findable_after_registry_reset_fixture() -> None:
     Regression for the test-isolation bug where ``_reset_registry``
     wiped the global registry and import-side-effect re-registration
     did not fire (``opshub.connectors.github`` already in
-    ``sys.modules``), causing later ``opshub connector sync github``
+    ``sys.modules``), causing later ``opshub github sync``
     integration tests to return exit code 2 ("unknown connector").
 
     This test does not need to exercise the teardown directly — it only

@@ -19,7 +19,7 @@ GitHub connector tests monkeypatch ``opshub.connectors.github.api`` so
 the suite never reaches the network. The mocking shape mirrors
 :mod:`tests.integration.test_github_connector_lifecycle` from PR #55;
 the D1 variant drives the connector through the **CLI**
-(``opshub connector sync github``) rather than the service directly, so
+(``opshub github sync``) rather than the service directly, so
 the full sync-bracket + cursor-persistence + summary-stdout contract is
 exercised end-to-end.
 """
@@ -157,7 +157,7 @@ def test_github_connector_to_inbox_e2e(
     isolated_env: _PathsDict,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``opshub connector sync github`` → 4 items observed → inbox triage.
+    """``opshub github sync`` → 4 items observed → inbox triage.
 
     Drives the full sub-issue B surface through the shipped CLI:
 
@@ -165,7 +165,7 @@ def test_github_connector_to_inbox_e2e(
        (``OPSHUB_CONNECTOR_GITHUB_REPO`` / ``OPSHUB_CONNECTOR_GITHUB_PAT``)
        and mock the three GitHub fetch primitives to return 2 issues +
        1 PR + 1 notification — exactly the documented Phase 3 MVP scope.
-    2. Invoke ``opshub connector sync github`` and assert the documented
+    2. Invoke ``opshub github sync`` and assert the documented
        one-line summary (``"synced github: 4 item(s) observed"``).
     3. Inspect the event log + projections:
        * 10 new events on top of the post-init baseline:
@@ -199,7 +199,7 @@ def test_github_connector_to_inbox_e2e(
     _patch_github_api(monkeypatch, issues=issues, pulls=pulls, notifications=notifications)
 
     # ---- 2. CLI sync -----------------------------------------------------
-    code, out, _ = _invoke(["connector", "sync", "github"])
+    code, out, _ = _invoke(["github", "sync"])
     assert code == 0, out
     # The summary line is the documented PR #48 shape; pinning the exact
     # wording catches accidental refactors of ``cli/connector.py``.
@@ -388,7 +388,7 @@ def test_phase3_workspace_generate_includes_phase3_entities_idempotent(
         pulls=[_make_github_item("pull_request", "owner/repo#10", updated_at=t)],
         notifications=[],
     )
-    code, out, _ = _invoke(["connector", "sync", "github"])
+    code, out, _ = _invoke(["github", "sync"])
     assert code == 0, out
     assert "synced github: 2 item(s) observed" in out, out
 

@@ -393,7 +393,7 @@ def test_slack_failure_records_sync_failed(
     _install_slack_fetcher(monkeypatch, error=error)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "slack"])
+    result = runner.invoke(app, ["slack", "sync"])
     assert result.exit_code == 1, scenario
 
     engine = create_engine_for_sqlite(isolated_env["db_path"])
@@ -449,7 +449,7 @@ def test_slack_partial_success_persists_yielded_messages(
     )
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "slack"])
+    result = runner.invoke(app, ["slack", "sync"])
     assert result.exit_code == 1, result.stdout
 
     engine = create_engine_for_sqlite(isolated_env["db_path"])
@@ -503,7 +503,7 @@ def test_ms365_calendar_failure_records_per_endpoint_sync_failed(
     _install_ms365_fetcher(monkeypatch, calendar_error=ConnectorFailedError(error_message))
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "ms365"])
+    result = runner.invoke(app, ["ms365", "sync"])
     # Per-endpoint failures are isolated: the connector-level sync
     # completes successfully with observed_count=0.
     assert result.exit_code == 0, (scenario, result.stdout, result.stderr)
@@ -549,7 +549,7 @@ def test_ms365_outlook_partial_success_persists_prefix(
     )
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "ms365"])
+    result = runner.invoke(app, ["ms365", "sync"])
     # Per-endpoint failure semantics: connector-level sync still
     # completes; the CLI exits 0.
     assert result.exit_code == 0, result.stdout
@@ -597,7 +597,7 @@ def test_box_failure_records_sync_failed(
     _install_box_stub(error=ConnectorFailedError(error_message))
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "box"])
+    result = runner.invoke(app, ["box", "sync"])
     assert result.exit_code == 1, (scenario, result.stdout, result.stderr)
 
     engine = create_engine_for_sqlite(isolated_env["db_path"])
@@ -633,7 +633,7 @@ def test_box_partial_success_persists_prefix(
     )
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "box"])
+    result = runner.invoke(app, ["box", "sync"])
     assert result.exit_code == 1, result.stdout
 
     engine = create_engine_for_sqlite(isolated_env["db_path"])

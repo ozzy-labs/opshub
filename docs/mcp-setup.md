@@ -26,21 +26,21 @@ Running `opshub mcp serve` without the extras prints a clear install hint and ex
 
 If the `connectors-slack` extras are enabled and the host will surface Slack data via `find-document` / `search` / `recall.search`, the User Token (`xoxp-...`) must carry the right scopes ([ADR-0018](adr/0018-slack-token-principal.md) §Decision (7)):
 
-**Discovery listing (`opshub connector slack conversations`)** uses the `*:read` scopes:
+**Discovery listing (`opshub slack conversations`)** uses the `*:read` scopes:
 
 | Purpose | Scope | Required for |
 | --- | --- | --- |
-| public channel listing | `channels:read` | `opshub connector slack conversations` (default) |
-| user name lookup | `users:read` | DM / MPIM name resolution in `opshub connector slack conversations` |
-| private channel listing | `groups:read` | `--types ...,private` in `opshub connector slack conversations`, private channel sync |
-| DM listing | `im:read` | `--types ...,im` in `opshub connector slack conversations`, DM sync |
-| MPIM listing | `mpim:read` | `--types ...,mpim` in `opshub connector slack conversations`, MPIM sync |
+| public channel listing | `channels:read` | `opshub slack conversations` (default) |
+| user name lookup | `users:read` | DM / MPIM name resolution in `opshub slack conversations` |
+| private channel listing | `groups:read` | `--types ...,private` in `opshub slack conversations`, private channel sync |
+| DM listing | `im:read` | `--types ...,im` in `opshub slack conversations`, DM sync |
+| MPIM listing | `mpim:read` | `--types ...,mpim` in `opshub slack conversations`, MPIM sync |
 
-**Message sync (`opshub connector sync slack`) and the `--since` activity filter** additionally need the matching `*:history` scopes:
+**Message sync (`opshub slack sync`) and the `--since` activity filter** additionally need the matching `*:history` scopes:
 
 | Purpose | Scope | Required for |
 | --- | --- | --- |
-| public channel message history | `channels:history` | `opshub connector sync slack`, `opshub connector slack conversations --since <when>` for public channels ([#374](https://github.com/ozzy-labs/opshub/issues/374)) |
+| public channel message history | `channels:history` | `opshub slack sync`, `opshub slack conversations --since <when>` for public channels ([#374](https://github.com/ozzy-labs/opshub/issues/374)) |
 | private channel message history | `groups:history` | private channel sync, `--since` for private channels |
 | DM message history | `im:history` | DM sync, `--since` for DMs |
 | MPIM message history | `mpim:history` | MPIM sync, `--since` for MPIMs |
@@ -115,7 +115,7 @@ The 14 skills are:
 | read | `pr-review` | "PR #N レビューして" / "この差分どう?" |
 | read | `find-document` | "Box にあったあの資料" / "<キーワード>含むファイル" |
 | read | `meeting-prep` (Phase 12 H2) | "来週の会議準備" / "明日のミーティング前確認" |
-| read | `research` (Phase 12 H2) | "<X> について調べて" / "<トピック> 網羅的に教えて" |
+| read | `research` (Phase 12 H2) | "`<X>` について調べて" / "`<トピック>` 網羅的に教えて" |
 | read | `external-brief` (Phase 12 H3) | "上司向け週次報告" / "クライアント向け進捗まとめ" |
 | read | `decision-rationale` (Phase 12 H3) | "あの決定はなぜ" / "X を選んだ理由" |
 | read | `handoff-draft` (Phase 12 H5) | "引き継ぎ書作って" / "handoff 書く" |
@@ -164,7 +164,7 @@ opshub's MCP server enforces three security boundaries on the server side. The a
 
 Tool input schemas never accept tokens. Connector credentials are resolved inside `opshub` via the keyring path (ADR-0014) and never leak into tool arguments, tool results, or the agent's transcript.
 
-If you store new connector tokens, use `opshub connector auth set <name>` — the agent never sees the token.
+If you store new connector tokens, use `opshub <connector> auth set` (e.g. `opshub slack auth set`, `opshub github auth set`; Phase 17 ADR-0031) — the agent never sees the token.
 
 ### Read tools are safe to auto-approve, writes are not (ADR-0022 §(c))
 
@@ -328,9 +328,9 @@ Tool arguments and tool outputs are deliberately **not** logged — they may con
 | `MCP extras missing. Install with: uv sync --extra mcp`  | `mcp` extras not installed.                                               |
 | Agent host shows zero tools after connecting             | `opshub init` not run yet (the engine wiring opens the SQLite store).     |
 | `recall.search` fails with a ConfigError                 | No embedder backend configured. See `[embedding]` in `opshub.toml`.       |
-| `connector.sync` fails with `ConnectorSyncFailed`        | Connector credentials missing. Run `opshub connector auth set <name>`.    |
+| `connector.sync` fails with `ConnectorSyncFailed`        | Connector credentials missing. Run `opshub <connector> auth set` (e.g. `opshub slack auth set`).    |
 | `unknown connector` error from `connector.sync`          | Connector extras not installed (`--extra connectors-<name>`).             |
-| `connector.sync google_workspace` fails with `ConfigError: ... client_id`| Google OAuth client not configured. Set `[connectors.google_workspace] client_id` / `client_secret` (see `docs/google-workspace-setup.md`) and re-run `opshub connector auth set google_workspace`. |
+| `connector.sync google_workspace` fails with `ConfigError: ... client_id`| Google OAuth client not configured. Set `[connectors.google_workspace] client_id` / `client_secret` (see `docs/google-workspace-setup.md`) and re-run `opshub google_workspace auth set`. |
 
 ### 8.1 Debugging `opshub mcp serve` itself (Phase 14)
 
@@ -380,7 +380,7 @@ encrypted-DB issues) see [`docs/troubleshooting.md`](troubleshooting.md).
 
 ## 9. Related
 
-- [ADR-0022: MCP Server Surface](adr/0022-mcp-server-surface.md) — the invariants this doc operationalises.
-- [ADR-0004: Agent Runtime Boundary](adr/0004-agent-runtime-boundary.md) — Phase 10 形A (opshub provides MCP + Agent Skills, the brain lives in the external host).
-- [ADR-0014: SaaS Token Storage](adr/0014-saas-token-storage.md) — the keyring path that keeps tokens out of the MCP boundary.
-- [Phase 10 plan §3 Sub-issue C / §4-C](phase-10-plan.md) — the planning ticket for the MCP surface.
+* [ADR-0022: MCP Server Surface](adr/0022-mcp-server-surface.md) — the invariants this doc operationalises.
+* [ADR-0004: Agent Runtime Boundary](adr/0004-agent-runtime-boundary.md) — Phase 10 形A (opshub provides MCP + Agent Skills, the brain lives in the external host).
+* [ADR-0014: SaaS Token Storage](adr/0014-saas-token-storage.md) — the keyring path that keeps tokens out of the MCP boundary.
+* [Phase 10 plan §3 Sub-issue C / §4-C](phase-10-plan.md) — the planning ticket for the MCP surface.

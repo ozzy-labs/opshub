@@ -8,7 +8,7 @@ precedent.
 
 Importing this module triggers ``register_connector(BoxConnector())``
 as an import side effect so the CLI driver
-(``opshub connector sync box``) can discover the connector through
+(``opshub box sync``) can discover the connector through
 :func:`opshub.connectors.discover_connectors`. Heavy dependencies
 (``boxsdk``, ``opshub.core.secrets`` → ``keyring``,
 ``opshub.core.config``) are deferred until

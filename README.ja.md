@@ -78,7 +78,7 @@ Phase 12（2026-05-31）でアシスタント Skill レパートリーを 5 → 
 | 「Box にあった X の資料」「Word / Excel / PPT 探して」「あの Google Doc」「Sheets 探して」「あの Gmail」「Gmail に来てた件」「Google Calendar の予定」 | `find-document` | Slack / Box / GitHub / MS365 / Teams / Box Drive / OneDrive Drive / Google Workspace / Gmail / Google Calendar を本文ベースで横断検索（Phase 11 で Office 文書本文も対象、Phase 12 H1 で `search` FTS5 を MCP 経由で直接利用、Phase 13 で Google Docs / Slides / Sheets を Drive API export + markitdown 経由で取り込み、Phase 14 で Gmail (`gmail_message`) と Google Calendar (`google_calendar`) を Gmail API + Calendar API 経由で取り込み、Outlook / ms365_calendar と symmetric） |
 | 「Teams スレッド要約して」 | `personal-brief` / `find-document` | Phase 11 で取り込んだ Teams chat 本文に対する横断 recall |
 | 「明日の会議準備」「次のミーティング前に context」 | `meeting-prep` (Phase 12) | 対象 calendar event の目的 / 過去関連やりとり / 関連 decisions / 参考 sources を集約 |
-| 「<X> について調べて」「<トピック> 網羅的に」 | `research` (Phase 12) | トピック横断調査（semantic recall + FTS5 + graph 拡張 + LLM 統合要約） |
+| 「`<X>` について調べて」「`<トピック>` 網羅的に」 | `research` (Phase 12) | トピック横断調査（semantic recall + FTS5 + graph 拡張 + LLM 統合要約） |
 | 「上司向け週次報告」「クライアント向け進捗まとめ」 | `external-brief` (Phase 12) | 外向き report（完了 task + 確定 decision 中心、tone 制御）— pair = personal-brief |
 | 「あの決定はなぜ」「X を選んだ理由」 | `decision-rationale` (Phase 12) | 決定 + 直接の根拠 source + 先行 decision を `graph.trace` で provenance 遡って提示 |
 | 「受信箱整理して」「inbox 仕分けて」 | `inbox-triage` (Phase 12、HITL) | 未処理 inbox を集めて action 候補を生成、user 個別承認分のみ保存 |
@@ -128,8 +128,8 @@ OpsHub は LLM なしでも動作します — `task` / `decision` / `inbox` /
 有効化するには、いずれかを設定してください:
 
 ```bash
-opshub connector auth set llm:anthropic       # Anthropic Claude（推奨）
-opshub connector auth set llm:openai          # OpenAI
+opshub llm auth set anthropic       # Anthropic Claude（推奨）
+opshub llm auth set openai          # OpenAI
 # または完全ローカルで:
 ollama serve && ollama pull llama3.2:3b
 # その後 ~/.config/opshub/config.toml で [llm] backend = "ollama" を設定
@@ -185,23 +185,23 @@ opshub handoff open --from agent:claude --to ozzy --topic "review"
 opshub handoff close <handoff-id> --note "merged"
 
 # Connectors (Phase 3 + Phase 7, ADR-0010 / ADR-0014)
-opshub connector auth set github                      # GitHub PAT を OS keychain に保存
-opshub connector sync github                          # 差分同期 (OPSHUB_CONNECTOR_GITHUB_REPO=owner/repo)
-opshub connector auth set connector:slack             # Slack OAuth token を OS keychain に保存 (User Token 推奨、Bot Token も可 — ADR-0018)
-opshub connector sync slack                           # 差分同期 ([connectors.slack] channels)
-opshub connector auth set connector:ms365             # OAuth paste-code (Microsoft Graph Calendar / OneDrive / Outlook)
-opshub connector sync ms365                           # endpoint ごとの差分同期
-opshub connector auth set connector:box               # OAuth paste-code (Box Events API)
-opshub connector sync box                             # 差分同期 (Box stream_position cursor)
-opshub connector sync box_drive                       # Phase 9: ローカル Box Drive mount を scan (docs/box-drive-setup.md)
-opshub connector sync onedrive_drive                  # Phase 11: ローカル OneDrive Desktop mount を scan (docs/onedrive-drive-setup.md)
-opshub connector auth set connector:teams             # Phase 11: Microsoft Graph User Token を OS keychain に保存 (Chat.Read、docs/teams-setup.md)
-opshub connector sync teams                           # Phase 11: Graph chat delta + 失効時 fallback
-opshub connector auth set google_workspace            # Phase 14: Google OAuth paste-code、Drive + Gmail + Calendar の 3 connector で principal 共有 (drive.readonly + gmail.readonly + calendar.readonly、1 回の再 consent で 3 つ全て反映、docs/google-workspace-setup.md)
-opshub connector sync google_workspace                # Phase 13: Drive API v3 changes.list cursor + 失効時 fallback (content_extraction = true で Workspace export → markitdown 経路)
-opshub connector sync google_mail                     # Phase 14: Gmail API v1 users.history.list delta + 7 日 TTL fallback (message 単位、Outlook と symmetric な本文抽出)
-opshub connector sync google_calendar                 # Phase 14: Calendar API v3 events.list(syncToken=...) + 410 GONE fallback (master event only + override 別 record、MS365 Calendar と symmetric)
-opshub connector list                                 # 登録済 connector を表示
+opshub github auth set                      # GitHub PAT を OS keychain に保存
+opshub github sync                          # 差分同期 (OPSHUB_CONNECTOR_GITHUB_REPO=owner/repo)
+opshub slack auth set             # Slack OAuth token を OS keychain に保存 (User Token 推奨、Bot Token も可 — ADR-0018)
+opshub slack sync                           # 差分同期 ([connectors.slack] channels)
+opshub ms365 auth set             # OAuth paste-code (Microsoft Graph Calendar / OneDrive / Outlook)
+opshub ms365 sync                           # endpoint ごとの差分同期
+opshub box auth set               # OAuth paste-code (Box Events API)
+opshub box sync                             # 差分同期 (Box stream_position cursor)
+opshub box_drive sync                       # Phase 9: ローカル Box Drive mount を scan (docs/box-drive-setup.md)
+opshub onedrive_drive sync                  # Phase 11: ローカル OneDrive Desktop mount を scan (docs/onedrive-drive-setup.md)
+opshub teams auth set             # Phase 11: Microsoft Graph User Token を OS keychain に保存 (Chat.Read、docs/teams-setup.md)
+opshub teams sync                           # Phase 11: Graph chat delta + 失効時 fallback
+opshub google_workspace auth set            # Phase 14: Google OAuth paste-code、Drive + Gmail + Calendar の 3 connector で principal 共有 (drive.readonly + gmail.readonly + calendar.readonly、1 回の再 consent で 3 つ全て反映、docs/google-workspace-setup.md)
+opshub google_workspace sync                # Phase 13: Drive API v3 changes.list cursor + 失効時 fallback (content_extraction = true で Workspace export → markitdown 経路)
+opshub google_mail sync                     # Phase 14: Gmail API v1 users.history.list delta + 7 日 TTL fallback (message 単位、Outlook と symmetric な本文抽出)
+opshub google_calendar sync                 # Phase 14: Calendar API v3 events.list(syncToken=...) + 410 GONE fallback (master event only + override 別 record、MS365 Calendar と symmetric)
+opshub connectors                                 # 登録済 connector を表示
 
 # Workspace + projections
 opshub workspace ingest                               # workspace/inbox/*.md を ingest (Phase 3)
@@ -210,7 +210,7 @@ opshub workspace generate                             # projections から markd
 opshub projections rebuild                            # イベントストアから projections を再構築 (idempotent)
 
 # Semantic recall (Phase 4, ADR-0012)
-opshub connector auth set embedder:openai             # OpenAI API key を OS keychain に保存
+opshub embedder auth set openai             # OpenAI API key を OS keychain に保存
 opshub embeddings rebuild                             # task/decision/inbox/source の本文を bulk embed (Phase 10 で本文ベースに、ADR-0020)
 opshub embeddings status                              # backend + entity 種別ごとの embedded vs pending を表示
 opshub embeddings drain                               # pending な embedding をリトライ (auto-embed hook の保険)
@@ -223,7 +223,7 @@ opshub search "deploy AND failure" --raw              # FTS5 boolean / phrase / 
 opshub search "channel ID" --connector slack          # connector を限定
 
 # Briefing (Phase 5, ADR-0015)
-opshub connector auth set llm:anthropic               # Anthropic API key を OS keychain に保存
+opshub llm auth set anthropic               # Anthropic API key を OS keychain に保存
 opshub brief "phase 5 progress"                       # LLM-backed briefing (markdown を stdout へ)
 opshub brief "phase 5 progress" --save                # <workspace>/briefings/ にも保存
 opshub brief "phase 5 progress" --format json         # JSON 形式 (briefing_id / model / tokens / source_refs)

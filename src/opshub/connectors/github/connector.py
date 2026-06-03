@@ -2,7 +2,7 @@
 
 Composes the B1 auth helper + B2 fetch primitives into the
 :class:`opshub.connectors.base.Connector` Protocol contract. Driven
-by the ``opshub connector sync github`` CLI in
+by the ``opshub github sync`` CLI in
 :mod:`opshub.cli.connector` (A5 placeholder, now wired through this
 class).
 

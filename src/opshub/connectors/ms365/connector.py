@@ -2,7 +2,7 @@
 
 Composes the B1 auth helper + B2 fetcher + B3 mapper into the
 :class:`opshub.connectors.base.Connector` Protocol contract. Driven
-by the ``opshub connector sync ms365`` CLI in
+by the ``opshub ms365 sync`` CLI in
 :mod:`opshub.cli.connector`.
 
 Endpoint groups
@@ -16,7 +16,7 @@ groups with **independent** cursors:
 * Outlook — ``/me/messages``, cursor :data:`CURSOR_OUTLOOK`.
 
 A failure in one group must NOT stall the other two — operators
-running ``opshub connector sync ms365`` expect a partial sync to
+running ``opshub ms365 sync`` expect a partial sync to
 record what it could rather than block on the first 429. The
 connector therefore catches :class:`ConnectorFailedError` per group
 and records a :class:`ConnectorSyncFailed` event with the sanitised
@@ -125,7 +125,7 @@ class MS365Connector:
         # ``MS365Auth`` / ``MS365Fetcher`` constructors trigger ``msal`` /
         # ``httpx`` imports on first call, which is acceptable here
         # because :meth:`sync` is only reached from the CLI command
-        # callback (``opshub connector sync ms365``), never the
+        # callback (``opshub ms365 sync``), never the
         # ``opshub --help`` cold path.
         from opshub.connectors.ms365.auth import MS365Auth
         from opshub.connectors.ms365.fetcher import MS365Fetcher

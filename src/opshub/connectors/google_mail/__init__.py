@@ -15,7 +15,7 @@ Module surface (Phase 14 plan §3 Sub-issue G3 5-module structure):
 * :mod:`opshub.connectors.google_auth.auth` — OAuth helper (Phase 14
   G2, #294). Shared with :mod:`opshub.connectors.google_workspace` and
   the upcoming :mod:`opshub.connectors.google_calendar` (G4 #296) so a
-  single ``opshub connector auth set google_workspace`` paste-code run
+  single ``opshub google_workspace auth set`` paste-code run
   consents to all three Google read scopes
   (``drive.readonly + gmail.readonly + calendar.readonly``).
 * :mod:`opshub.connectors.google_mail.client` — ``httpx``-backed Gmail
@@ -33,12 +33,12 @@ Module surface (Phase 14 plan §3 Sub-issue G3 5-module structure):
   (Phase 14 plan §1 OQ8 — vendor-brand discriminator parallel to
   ``ms365_outlook``).
 * :mod:`opshub.connectors.google_mail.connector` — composition layer
-  that the registry exposes via ``opshub connector sync google_mail``.
+  that the registry exposes via ``opshub google_mail sync``.
 * :mod:`opshub.connectors.google_mail.settings` — re-export shim for
   :class:`opshub.core.config.GoogleMailConnectorSettings`.
 
 Importing this package registers :class:`GoogleMailConnector` with the
-process-wide registry so ``opshub connector sync google_mail``
+process-wide registry so ``opshub google_mail sync``
 discovers it (mirrors the Phase 3 GitHub / Phase 7 MS365 / Box / Phase
 11 Teams / Phase 13 Google Workspace pattern). Heavy SDK imports
 (``httpx``) stay lazy inside the auth + client constructors so the

@@ -37,7 +37,7 @@ _SECRET_KEY = "connector:github:pat"
 __all__ = ["GITHUB_PAT_SECRET_KEY", "get_github_token", "test_token"]
 
 #: Keyring key used to store the GitHub PAT. Exposed so the CLI command
-#: ``opshub connector auth set github`` writes to the same key the
+#: ``opshub github auth set`` writes to the same key the
 #: connector reads at sync time — i.e. this constant is the contract
 #: between the CLI writer and the connector reader.
 GITHUB_PAT_SECRET_KEY = _SECRET_KEY
@@ -55,7 +55,7 @@ def get_github_token() -> str:
     if token is None:
         raise ConfigError(
             "GitHub PAT is not configured; run "
-            "`opshub connector auth set github` or set "
+            "`opshub github auth set` or set "
             "OPSHUB_CONNECTOR_GITHUB_PAT in the environment"
         )
     return token

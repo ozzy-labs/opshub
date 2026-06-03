@@ -76,7 +76,7 @@ Phase 10 実装状況: **本文取り込み + provenance タグの拡張** ([ADR
 | Connector | 経路 | source_type | 認証 | Extras |
 |---|---|---|---|---|
 | GitHub | Web API (PyGithub) | `github_issue` / `github_pr` / etc. | PAT (`core/secrets` + keyring) | `[connectors-github]` |
-| Slack | Web API (slack-sdk)。conversation 一覧は `opshub connector slack conversations` (`users.conversations` 経由、joined-only default + DM/MPIM 統合、`--format toml` で `[connectors.slack] channels` 用 snippet 出力、`--all` で `conversations.list` workspace-wide fallback、type 別固定ソート (`public → private → mpim → im`) + `--since 7d` / `--since 2026-05-01` で最終メッセージ ts による activity フィルター ([#374](https://github.com/ozzy-labs/opshub/issues/374))、Phase 14.x #341 / #366) で取得 | `slack_message` | User Token (`xoxp-`) / Bot Token (`xoxb-`) | `[connectors-slack]` |
+| Slack | Web API (slack-sdk)。conversation 一覧は `opshub slack conversations` (Phase 17 ADR-0031 で `opshub connector slack conversations` から rename、`users.conversations` 経由、joined-only default + DM/MPIM 統合、`--format toml` で `[connectors.slack] channels` 用 snippet 出力、`--all` で `conversations.list` workspace-wide fallback、type 別固定ソート (`public → private → mpim → im`) + `--since 7d` / `--since 2026-05-01` で最終メッセージ ts による activity フィルター ([#374](https://github.com/ozzy-labs/opshub/issues/374))、Phase 14.x #341 / #366) で取得 | `slack_message` | User Token (`xoxp-`) / Bot Token (`xoxb-`) | `[connectors-slack]` |
 | Microsoft 365 | Web API (msgraph、Phase 11 で outlook 本文 deep retention) | `ms365_calendar` / `ms365_onedrive` / `ms365_outlook` | OAuth paste-code (msal) | `[connectors-ms365]` |
 | Box | Web API (boxsdk) | `box_event` | OAuth paste-code (boxsdk) | `[connectors-box]` |
 | Box Drive (FS) | Local FS scan (`os.scandir()` + `stat()`、ADR-0019。Phase 11 で `content_extraction` opt-in 経路を追加し Office 文書 (`.docx`/`.xlsx`/`.pptx`) を markitdown 抽出) | `box_drive_file` / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck` | なし (OS daemon に委譲、`opshub.toml` 設定のみ) | `[office]` (extraction 利用時) |
@@ -86,7 +86,7 @@ Phase 10 実装状況: **本文取り込み + provenance タグの拡張** ([ADR
 | Gmail (Phase 14) | Gmail API v1 (`users.messages.list` initial + `users.history.list` delta + 7 日 TTL 失効時 full-pass fallback、Phase 14 ADR-0010 改訂 (i)/(j)/(k)/(l)、Outlook と symmetric な message 単位 mapper、body = text/plain 優先 → text/html 生保持 / markitdown なし / 添付 retain なし / `[Labels: ...]` prepend / `[gmail body truncated]` tag / threadId field) | `gmail_message` | OAuth paste-code (`connectors/google_auth/` 共有、Refresh Token rotation 書き戻し、Phase 14 で 3-scope) | `[connectors-google-workspace]` (httpx 共有) |
 | Google Calendar (Phase 14) | Calendar API v3 (`events.list(syncToken=...)` + 410 GONE 失効時 full-pass + `timeMin` / `timeMax` window fallback、Phase 14 ADR-0010 改訂 (i)/(j)/(k)/(l)、MS365 Calendar と symmetric な master event only + override 別 record、summary = `start_iso - end_iso (N attendees)` / RRULE field / attendee body 埋め込み) | `google_calendar` | OAuth paste-code (`connectors/google_auth/` 共有、Refresh Token rotation 書き戻し、Phase 14 で 3-scope) | `[connectors-google-workspace]` (httpx 共有) |
 
-長時間 `opshub connector sync <name>` 中の進捗表示は CLI driver 側で `_ProgressSourceProxy` (`src/opshub/cli/connector.py` L37-65) が source service を透過プロキシでラップし、`observe()` 成功ごとに `advance(1)` する形で実現する。`Connector` Protocol および 10 connector 本体は無改修で、進捗表示は connector 層の不変条件 (差分 fetch / cursor 保存 / event 発行依頼) を一切変えない。詳細は [ADR-0026](adr/0026-cli-progress-reporting.md) を参照。
+長時間 `opshub <connector> sync` (Phase 17 ADR-0031 で `opshub connector sync <name>` から per-noun group に再編) 中の進捗表示は CLI driver 側で `_ProgressSourceProxy` (`src/opshub/cli/_connector_common.py`) が source service を透過プロキシでラップし、`observe()` 成功ごとに `advance(1)` する形で実現する。`Connector` Protocol および 10 connector 本体は無改修で、進捗表示は connector 層の不変条件 (差分 fetch / cursor 保存 / event 発行依頼) を一切変えない。詳細は [ADR-0026](adr/0026-cli-progress-reporting.md) を参照。
 
 ### 2.2 Application Services
 
@@ -115,7 +115,7 @@ semantic 索引層は **Pluggable Embedder + Pluggable VectorStore** として�
 - **Embed 対象**: task title / decision text / inbox_item summary / source summary (ADR-0005 整合、full body は対象外)。briefing / extracted action items は Phase 5+ で追加
 - **Storage**: sqlite-vec 仮想テーブル (backend ごと dim 別: `embeddings_vec_local` 1024-dim / `embeddings_vec_openai` 1536-dim / `embeddings_vec_voyage` 1024-dim) + `embeddings` projection (`entity_type`, `entity_id`, `model_id`, `model_version`, `dim`, `created_at`) で rowid JOIN
 - **Refresh**: Phase 4 MVP は CLI-driven のみ — `opshub embeddings rebuild [--entity-type X] [--limit N]` で `(model_id, model_version)` 未 embed の行のみ処理 (冪等)。event 駆動自動 embed (projector hook + 背景 queue) は Phase 5
-- **Backend 切替**: `~/.config/opshub/config.toml` の `[embedding]` セクションで `local` / `openai` / `voyage` / `disabled` を選択。デフォルトは `disabled` (CI / 初回 install 体験を軽く保つため、ADR-0012 §決定の確定)。OpenAI / Voyage の API key は `opshub connector auth set embedder:openai` / `embedder:voyage` で OS keychain に保存 (ADR-0014 整合)
+- **Backend 切替**: `~/.config/opshub/config.toml` の `[embedding]` セクションで `local` / `openai` / `voyage` / `disabled` を選択。デフォルトは `disabled` (CI / 初回 install 体験を軽く保つため、ADR-0012 §決定の確定)。OpenAI / Voyage の API key は `opshub embedder auth set openai` / `opshub embedder auth set voyage` で OS keychain に保存 (ADR-0014 整合、Phase 17 ADR-0031 で `opshub connector auth set embedder:*` から rename)
 - **Recall**: vector + SQL filter の hybrid search を CLI から提供 (`opshub recall "<query>" [--type X] [--state Y] [--format table|json|md]`)。backend 切替直後で `(model_id, model_version)` が ズレた場合は `ConfigError` + "rebuild required" 案内で fail-fast
 - **重複検出**: `opshub embeddings find-duplicates [--threshold 0.92] [--entity-type source]` で nearest-neighbor scan を offline 解析用に提供。connector sync 経路の auto-detect は Phase 5+
 
@@ -134,7 +134,7 @@ ADR-0015 で Pluggable LLM Client (`LLMClient` Protocol、ADR-0009 vendor-neutra
 
 CLI: `opshub brief "<topic>" [--scope all] [--max-sources N] [--max-tokens N] [--save] [--format md|json]`. `[llm] backend = "disabled"` 状態では exit 2 + 案内 を返す。`--save` 指定時は `<workspace.root>/briefings/<slug>-<briefing-id>.md` に markdown を書出。
 
-LLM backend は `[llm] backend` で切替: `disabled` (Phase 5 default) / `anthropic` (`claude-haiku-4-5-20251001` 推奨) / `openai` (`gpt-4o-mini` 推奨)。API key は ADR-0014 (`core/secrets` + keyring + env override) を再利用し、`opshub connector auth set llm:anthropic` 等で保存する。
+LLM backend は `[llm] backend` で切替: `disabled` (Phase 5 default) / `anthropic` (`claude-haiku-4-5-20251001` 推奨) / `openai` (`gpt-4o-mini` 推奨)。API key は ADR-0014 (`core/secrets` + keyring + env override) を再利用し、`opshub llm auth set anthropic` 等で保存する (Phase 17 ADR-0031 で `opshub connector auth set llm:*` から rename)。
 
 補助: Phase 4 で deferred になっていた event-driven auto-embed を `[embedding] auto = true` opt-in で導入。`AutoEmbedHook.maybe_embed(event)` が `TaskCreated` / `DecisionRecorded` / `ItemEnqueued` / `SourceObserved` 系 event の post-commit hook として同期的に `EmbeddingService.embed_one_if_pending` を呼ぶ。失敗は log のみで originating event は roll back しない (Phase 4 NOT EXISTS retry を再利用、次の `opshub embeddings drain` / `rebuild` で retry)。
 
@@ -173,7 +173,7 @@ Phase 3 で確立した connector framework (ADR-0010 + ADR-0014 + ADR-0005) を
 
 各 connector の sync は cursor-based (`connector_cursors` projection を再利用)。MS365 は 3 endpoint × 3 cursor key (`ms365:calendar` / `ms365:onedrive` / `ms365:outlook`) を独立管理し、1 endpoint failure が他の endpoint sync を blocking しない。
 
-CLI: `opshub connector auth set connector:<slack|ms365|box>` でクレデンシャル保存、`opshub connector sync <name>` で取り込み。Phase 5 brief / Phase 6 propose は新 source_type を automatic に活用 (RecallService が `sources` projection 横断 query する設計のため)。
+CLI: `opshub <slack|ms365|box> auth set` でクレデンシャル保存、`opshub <slack|ms365|box> sync` で取り込み (Phase 17 ADR-0031 で旧 `opshub connector auth set connector:<name>` / `opshub connector sync <name>` から per-noun group に再編、旧 form は廃止)。Phase 5 brief / Phase 6 propose は新 source_type を automatic に活用 (RecallService が `sources` projection 横断 query する設計のため)。
 
 connector-side automatic `SourceReferenced` 発行 (Slack message URL parse / GitHub issue link parse 等) は Phase 8.x で各 connector mapper を拡張する形で対応。
 
@@ -246,8 +246,11 @@ manual `link add` で束ねる経路が将来開いている (`source_type` 分�
 **`Connector` Protocol freeze**: Phase 7 4 connector で確立した
 `Connector` Protocol (ADR-0010) を変えずに `auth layer を OS-level Box
 Drive 認証への依存に置換` する形で 5 つ目の connector category を 1 connector
-分の特殊化として閉じ込めた。`opshub connector auth set connector:box_drive` は
-actionable error で reject される (paste-code 不要、`opshub.toml` 設定を案内)。
+分の特殊化として閉じ込めた。Phase 9 当時の no-op reject (旧
+`opshub connector auth set connector:box_drive`) は Phase 17 (ADR-0031 §決定 (6))
+で「command 不在で Typer が exit 2 + Usage:」に置換された (`opshub box_drive auth set`
+は登録されておらず Typer の "No such command" 経路で fail-fast、`opshub.toml`
+への案内は `--help` で surface)。
 
 詳細は [ADR-0019: Local-filesystem-backed Connector](adr/0019-local-filesystem-backed-connector.md)
 と [docs/box-drive-setup.md](box-drive-setup.md) を参照。Phase 9.x の outlook

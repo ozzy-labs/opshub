@@ -661,7 +661,7 @@ def test_calendar_401_insufficient_scope_actionable_message() -> None:
     # scope so the operator can act without grepping docs.
     message = str(exc_info.value)
     assert "calendar.readonly" in message
-    assert "opshub connector auth set google_workspace" in message
+    assert "opshub google_workspace auth set" in message
     # No retry on the re-consent path — the recovery is operator
     # action, not exponential backoff.
     assert call_count["n"] == 1

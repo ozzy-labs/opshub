@@ -1,6 +1,6 @@
 """Connector sync run events (Phase 3, ADR-0002, ADR-0010).
 
-Each connector sync (e.g. ``opshub connector sync github``) emits a
+Each connector sync (e.g. ``opshub github sync``) emits a
 ``started`` event, zero or more :class:`SourceObserved` events as it
 walks the external API, and exactly one terminal event — either
 :class:`ConnectorSyncCompleted` (success) or

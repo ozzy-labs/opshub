@@ -184,7 +184,7 @@ class TeamsFetcher:
     single sync.
 
     The class is **not** thread-safe — Phase 11 syncs run sequentially
-    inside ``opshub connector sync teams`` (one connector at a time
+    inside ``opshub teams sync`` (one connector at a time
     per process), so a per-call lock would be needless overhead.
     """
 

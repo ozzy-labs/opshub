@@ -18,6 +18,7 @@ ADR-0010 内に並立する。
 Phase 13 で 8 つ目の connector として追加され (Web API 経路)、Phase 14 で
 Gmail + Calendar を加えて opshub 全体で 10 connector 体制になった。
 Phase 10 で確立した本文ローカル保持 ([ADR-0020](adr/0020-full-local-content-retention.md))
+
 + 暗号化 ([ADR-0021](adr/0021-encryption-at-rest.md)) と同じ規律で
 `google_doc` / `google_slides` / `google_sheets` / `google_workspace_file` (Phase 13)
 + `gmail_message` / `google_calendar` (Phase 14) を `sources` projection に persist
@@ -68,13 +69,13 @@ operator が事前に Google Cloud Console で OAuth client を登録する
    3 つすべて必須。Phase 13 までは `drive.readonly` 単独だったが、
    Phase 14 plan §1 OQ6 + §X.1 で「1 Google account = 1 principal、
    Drive / Gmail / Calendar を 1 回の consent で取得」を確定):
-   - `https://www.googleapis.com/auth/drive.readonly` (必須、Drive 取り込み)
-   - `https://www.googleapis.com/auth/gmail.readonly` (必須、Phase 14 G3
-     Gmail 取り込み。Phase 14 完了済、`opshub connector sync google_mail` で利用。
+   + `https://www.googleapis.com/auth/drive.readonly` (必須、Drive 取り込み)
+   + `https://www.googleapis.com/auth/gmail.readonly` (必須、Phase 14 G3
+     Gmail 取り込み。Phase 14 完了済、`opshub google_mail sync` で利用。
      scope は事前に
      consent しておく方が `incremental authorization` の re-prompt を避
      けられる)
-   - `https://www.googleapis.com/auth/calendar.readonly` (必須、Phase 14
+   + `https://www.googleapis.com/auth/calendar.readonly` (必須、Phase 14
      G4 Google Calendar 取り込み。同上)
 
    `drive.metadata.readonly` は `drive.readonly` の subset なので併記
@@ -131,7 +132,7 @@ paths:
 ## 3. paste-code OAuth flow
 
 ```bash
-opshub connector auth set google_workspace
+opshub google_workspace auth set
 ```
 
 実行すると次の手順が走る (MS365 / Box の paste-code flow と対称):
@@ -155,7 +156,7 @@ opshub connector auth set google_workspace
 
 ```bash
 export OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN="<refresh-token>"
-opshub connector sync google_workspace
+opshub google_workspace sync
 ```
 
 env var を設定すると keyring lookup を skip する。CI / container 等では
@@ -164,7 +165,7 @@ env var を設定すると keyring lookup を skip する。CI / container 等�
 ## 4. sync 実行
 
 ```bash
-opshub connector sync google_workspace
+opshub google_workspace sync
 ```
 
 差分検出は Drive API v3 `changes.list` の `startPageToken` cursor で行う。
@@ -228,33 +229,33 @@ Drive `files.watch` push notification は禁止 = 形 A 整合):
 
 ```cron
 # crontab -e
-0 */2 * * * opshub connector sync google_workspace
+0 */2 * * * opshub google_workspace sync
 ```
 
 ## 制約事項
 
-- **添付ファイル本文以外の Drive Comments / Suggestions は取り込まれない**
++ **添付ファイル本文以外の Drive Comments / Suggestions は取り込まれない**
   (Phase 13 MVP は files の本文 + metadata のみ)。決定経緯の context source
   としての Comments / Suggestions 取り込みは Phase 15+ candidate
   (Phase 14 では Gmail + Calendar が優先され着手せず)。
-- **画像 OCR なし** (Phase 13 から繰り越し、Phase 14 を経て再 defer、Phase 15+ candidate)。
-- **書き戻し非対応** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7)。
++ **画像 OCR なし** (Phase 13 から繰り越し、Phase 14 を経て再 defer、Phase 15+ candidate)。
++ **書き戻し非対応** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7)。
   Drive write API (`files.update` / `files.create` / `files.copy` /
   `comments.create` / `permissions.*`) は connector に実装しない。
   返信下書きは `opshub propose generate --reply-to <source-id>` で **下書き**
   のみ生成可能 (送信は手動コピペ)。
-- **Drive `files.watch` push notification 禁止** (ADR-0010 §Phase 13 改訂 (e)
++ **Drive `files.watch` push notification 禁止** (ADR-0010 §Phase 13 改訂 (e)
   §禁止事項拡張)。`changes.list` poll のみ。能動性混入 (形 A 抵触) を防ぐ。
-- **`google_workspace_file` (catch-all、非 native) は metadata-only**。
++ **`google_workspace_file` (catch-all、非 native) は metadata-only**。
   Drive にアップロードされた PDF / 画像 / フォルダ等を区別したい場合は
   `external_id` (= Drive fileId) や `title` で post-filter。
-- **token は keyring か env で operator が管理** (opshub 側で自動 refresh は
++ **token は keyring か env で operator が管理** (opshub 側で自動 refresh は
   done、ただし rotation 書き戻し済)。長期失効 (90+ 日 inactive、
   scope revocation 等) で `invalid_grant` が返ったら再 auth が必要。
-- **Shared Drives (Team Drives) のサポート**: Phase 13 G3 着手時に
++ **Shared Drives (Team Drives) のサポート**: Phase 13 G3 着手時に
   `supportsAllDrives=true + includeItemsFromAllDrives=true` を含めるかを
   確定 (OQ10)。
-- **multi-account 非対応** (single-slot principal、Phase 13 plan §Alternatives
++ **multi-account 非対応** (single-slot principal、Phase 13 plan §Alternatives
   §7)。operator 個人 GCP + 業務 Workspace の併用は Phase 15+ で
   multi-account extension として検討。
 
@@ -262,8 +263,8 @@ Drive `files.watch` push notification は禁止 = 形 A 整合):
 
 ### `401 Unauthorized` / `Invalid Credentials`
 
-access token が expire したか refresh に失敗。`opshub connector sync
-google_workspace` が自動 refresh するはずだが、refresh も失敗した場合は
+access token が expire したか refresh に失敗。`opshub google_workspace sync`
+が自動 refresh するはずだが、refresh も失敗した場合は
 refresh token 自体が revoked / invalidated されている。Step 3 の paste-code
 flow を再実行して refresh token を取り直す。
 
@@ -297,8 +298,8 @@ Google docs)。connector は exponential backoff (1s/2s/4s, max 3 retries) で
 ### content_extraction = true で markitdown エラー
 
 `uv tool install "ozzylabs-opshub[office]"` で `[office]` extras を入れて
-いない可能性。markitdown 経路は extras gated。`opshub connector sync
-google_workspace` 時に `ConfigError: markitdown not installed` の skip_reason
+いない可能性。markitdown 経路は extras gated。`opshub google_workspace sync`
+時に `ConfigError: markitdown not installed` の skip_reason
 が出ていたら extras 追加 + 再 sync。
 
 ## Phase 14: Gmail + Google Calendar 追加 setup
@@ -315,13 +316,13 @@ fallback_window_days = 30          # users.history.list 7-day TTL invalidation f
 ```
 
 ```bash
-opshub connector sync google_mail
+opshub google_mail sync
 ```
 
-- **API**: Gmail API v1 — `users.messages.list` (initial sync) + `users.messages.get(format=full)` (本文取得) + `users.history.list` (delta)
-- **Cursor**: History API `startHistoryId` を `connector_cursors` に保存。7 日 TTL 失効時 (HTTP 404) は `connector.history_list.expired` WARNING を出して `users.messages.list` の full-pass fallback ([ADR-0010](adr/0010-connector-contract.md) §Phase 14 改訂 (j) で delta-cursor 型一般に generalize)
-- **Mapper**: Outlook ([ADR-0020](adr/0020-full-local-content-retention.md) Phase 11 deep retention) と symmetric。`source_type=gmail_message`、body = text/plain 優先 → text/html 生保持 / markitdown なし / 添付 retain なし、`[Labels: ...]` prepend、`[gmail body truncated: N / M chars]` tag、threadId field 保持 (thread aggregation projection は Phase 15+ defer)
-- **OAuth**: 上記 `connector:google_workspace:refresh_token` slot を共有。Phase 14 で scope が `drive.readonly + gmail.readonly + calendar.readonly` の 3 scope 固定 list に拡張済 — Phase 13 までに setup を済ませていた operator は **Step 3 の paste-code flow を 1 回再実行** して新 scope を再 consent する必要がある (詳細は [`docs/upgrading.md`](upgrading.md) §Phase 14 節)
++ **API**: Gmail API v1 — `users.messages.list` (initial sync) + `users.messages.get(format=full)` (本文取得) + `users.history.list` (delta)
++ **Cursor**: History API `startHistoryId` を `connector_cursors` に保存。7 日 TTL 失効時 (HTTP 404) は `connector.history_list.expired` WARNING を出して `users.messages.list` の full-pass fallback ([ADR-0010](adr/0010-connector-contract.md) §Phase 14 改訂 (j) で delta-cursor 型一般に generalize)
++ **Mapper**: Outlook ([ADR-0020](adr/0020-full-local-content-retention.md) Phase 11 deep retention) と symmetric。`source_type=gmail_message`、body = text/plain 優先 → text/html 生保持 / markitdown なし / 添付 retain なし、`[Labels: ...]` prepend、`[gmail body truncated: N / M chars]` tag、threadId field 保持 (thread aggregation projection は Phase 15+ defer)
++ **OAuth**: 上記 `connector:google_workspace:refresh_token` slot を共有。Phase 14 で scope が `drive.readonly + gmail.readonly + calendar.readonly` の 3 scope 固定 list に拡張済 — Phase 13 までに setup を済ませていた operator は **Step 3 の paste-code flow を 1 回再実行** して新 scope を再 consent する必要がある (詳細は [`docs/upgrading.md`](upgrading.md) §Phase 14 節)
 
 ### Google Calendar (`google_calendar` connector)
 
@@ -335,14 +336,14 @@ enabled = true
 ```
 
 ```bash
-opshub connector sync google_calendar
+opshub google_calendar sync
 ```
 
-- **API**: Calendar API v3 — `events.list(syncToken=...)` (delta) + `events.list(timeMin, timeMax, singleEvents=false, showDeleted=true)` (full-pass、initial sync / 410 fallback)
-- **Cursor**: `syncToken` を `connector_cursors` に保存。410 GONE (`SyncTokenExpiredError`) 失効時は `connector.events_list.expired` WARNING を出して `time_min_days` + `time_max_days` window walk fallback (`singleEvents=false` + `showDeleted=true` pinned、ADR-0010 §Phase 14 改訂 (j))
-- **Mapper**: MS365 Calendar (Phase 7) と symmetric。`source_type=google_calendar`、master event only (`recurringEventId` 無し)。Google API は recurring の override (`recurringEventId` + `originalStartTime` 持ち) を独立 event として返すため、それも **`google_calendar` source_type の独立 record として emit** + body に `Override of: <master_id> (originalStart: <iso>)` back-pointer を追加。summary = `f"{start_iso} - {end_iso} ({attendees_count} attendees)"`、attendee email list / 議題 (description) / 会議室 (location) を body に追記、RRULE は field 保持 (instance 展開 projection は Phase 15+ で ms365 / google 両 calendar 同時)
-- **OAuth**: Gmail と同じ shared principal、同 keyring slot、同 re-consent (Phase 14 で 3 scope 固定 list)
-- **MVP scope**: primary calendar のみ。secondary calendar (operator が複数 calendar を持つケース) は Phase 15+ extension
++ **API**: Calendar API v3 — `events.list(syncToken=...)` (delta) + `events.list(timeMin, timeMax, singleEvents=false, showDeleted=true)` (full-pass、initial sync / 410 fallback)
++ **Cursor**: `syncToken` を `connector_cursors` に保存。410 GONE (`SyncTokenExpiredError`) 失効時は `connector.events_list.expired` WARNING を出して `time_min_days` + `time_max_days` window walk fallback (`singleEvents=false` + `showDeleted=true` pinned、ADR-0010 §Phase 14 改訂 (j))
++ **Mapper**: MS365 Calendar (Phase 7) と symmetric。`source_type=google_calendar`、master event only (`recurringEventId` 無し)。Google API は recurring の override (`recurringEventId` + `originalStartTime` 持ち) を独立 event として返すため、それも **`google_calendar` source_type の独立 record として emit** + body に `Override of: <master_id> (originalStart: <iso>)` back-pointer を追加。summary = `f"{start_iso} - {end_iso} ({attendees_count} attendees)"`、attendee email list / 議題 (description) / 会議室 (location) を body に追記、RRULE は field 保持 (instance 展開 projection は Phase 15+ で ms365 / google 両 calendar 同時)
++ **OAuth**: Gmail と同じ shared principal、同 keyring slot、同 re-consent (Phase 14 で 3 scope 固定 list)
++ **MVP scope**: primary calendar のみ。secondary calendar (operator が複数 calendar を持つケース) は Phase 15+ extension
 
 ### Mapper symmetry pin test
 
@@ -354,19 +355,19 @@ intentional か判断すること。
 
 ## 関連 docs
 
-- [ADR-0010: Connector Contract](adr/0010-connector-contract.md) (Phase 13 改訂 (e)/(f)/(g)/(h) + **Phase 14 改訂 (i)/(j)/(k)/(l)/(m)**)
-- [ADR-0014: SaaS Token Storage](adr/0014-saas-token-storage.md) (Phase 13 改訂 = rotation pin リスト 3 件目、**Phase 14 改訂 = google_workspace slot scope 拡張**)
-- [ADR-0020: Full Local Content Retention](adr/0020-full-local-content-retention.md)
-- [ADR-0025: Office Document Content Extraction](adr/0025-office-document-content-extraction.md) (Phase 13 改訂 (d') + (j))
-- [Phase 13 Plan](phase-13-plan.md)
-- [Phase 14 Plan](phase-14-plan.md)
-- [Upgrading guide — Phase 14](upgrading.md#phase-14-gmail--google-calendar-connectors) (re-consent 手順)
-- [SECURITY.md](../SECURITY.md) "Phase 13 — Google Workspace ingest" 節 + "Phase 14 — Gmail + Google Calendar ingest" 節
-- Google Drive API v3: <https://developers.google.com/drive/api/v3>
-- Google Drive API v3 changes.list: <https://developers.google.com/drive/api/v3/manage-changes>
-- Google Drive API v3 files.export: <https://developers.google.com/drive/api/v3/reference/files/export>
-- Gmail API v1: <https://developers.google.com/gmail/api>
-- Gmail API v1 users.history.list: <https://developers.google.com/gmail/api/v1/reference/users/history/list>
-- Google Calendar API v3: <https://developers.google.com/calendar/api>
-- Google Calendar API v3 events.list (syncToken): <https://developers.google.com/calendar/api/v3/reference/events/list>
-- Google OAuth 2.0 for installed apps: <https://developers.google.com/identity/protocols/oauth2/native-app>
++ [ADR-0010: Connector Contract](adr/0010-connector-contract.md) (Phase 13 改訂 (e)/(f)/(g)/(h) + **Phase 14 改訂 (i)/(j)/(k)/(l)/(m)**)
++ [ADR-0014: SaaS Token Storage](adr/0014-saas-token-storage.md) (Phase 13 改訂 = rotation pin リスト 3 件目、**Phase 14 改訂 = google_workspace slot scope 拡張**)
++ [ADR-0020: Full Local Content Retention](adr/0020-full-local-content-retention.md)
++ [ADR-0025: Office Document Content Extraction](adr/0025-office-document-content-extraction.md) (Phase 13 改訂 (d') + (j))
++ [Phase 13 Plan](phase-13-plan.md)
++ [Phase 14 Plan](phase-14-plan.md)
++ [Upgrading guide — Phase 14](upgrading.md#phase-14-gmail--google-calendar-connectors) (re-consent 手順)
++ [SECURITY.md](../SECURITY.md) "Phase 13 — Google Workspace ingest" 節 + "Phase 14 — Gmail + Google Calendar ingest" 節
++ Google Drive API v3: <https://developers.google.com/drive/api/v3>
++ Google Drive API v3 changes.list: <https://developers.google.com/drive/api/v3/manage-changes>
++ Google Drive API v3 files.export: <https://developers.google.com/drive/api/v3/reference/files/export>
++ Gmail API v1: <https://developers.google.com/gmail/api>
++ Gmail API v1 users.history.list: <https://developers.google.com/gmail/api/v1/reference/users/history/list>
++ Google Calendar API v3: <https://developers.google.com/calendar/api>
++ Google Calendar API v3 events.list (syncToken): <https://developers.google.com/calendar/api/v3/reference/events/list>
++ Google OAuth 2.0 for installed apps: <https://developers.google.com/identity/protocols/oauth2/native-app>

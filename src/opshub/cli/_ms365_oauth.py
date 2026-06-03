@@ -71,7 +71,7 @@ def run_paste_code_flow() -> None:
             "Set it in opshub.toml (or via "
             "OPSHUB_CONNECTORS__MS365__CLIENT_ID) with the Azure AD "
             "app's application (client) ID, then re-run "
-            "`opshub connector auth set connector:ms365`.",
+            "`opshub ms365 auth set`.",
             err=True,
         )
         raise typer.Exit(code=2)
