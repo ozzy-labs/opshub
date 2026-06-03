@@ -5,6 +5,20 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2](https://github.com/ozzy-labs/opshub/compare/v0.3.1...v0.3.2) (2026-06-03)
+
+
+### Added
+
+* **mcp:** add slack.demand.list + wire to assistant skills (Phase 18-C, ADR-0033) ([#434](https://github.com/ozzy-labs/opshub/issues/434)) ([db82b42](https://github.com/ozzy-labs/opshub/commit/db82b422cb67911d23544d169a0098ec97916af0))
+* **projections:** slack_demand_digest projection + debug CLI (Phase 18-B) ([#433](https://github.com/ozzy-labs/opshub/issues/433)) ([c28ff63](https://github.com/ozzy-labs/opshub/commit/c28ff630803fda7819a6a16616875d8c92067693))
+
+
+### Documentation
+
+* **adr:** add ADR-0033 Slack mention/DM demand digest (Phase 18-A) ([#431](https://github.com/ozzy-labs/opshub/issues/431)) ([b8a8b6b](https://github.com/ozzy-labs/opshub/commit/b8a8b6bda107693fcb0617bdc30dbc9ab56667e7))
+* **adr:** fix ADR-0033 input schema to match slack.demand.list implementation ([#435](https://github.com/ozzy-labs/opshub/issues/435)) ([3e59b5e](https://github.com/ozzy-labs/opshub/commit/3e59b5ec23a9e7820f24c4dfde563083b10dea48))
+
 ## [0.3.1](https://github.com/ozzy-labs/opshub/compare/v0.3.0...v0.3.1) (2026-06-03)
 
 
