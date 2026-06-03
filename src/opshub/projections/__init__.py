@@ -41,6 +41,10 @@ from opshub.projections.locks import LocksProjection, locks_table
 from opshub.projections.proposals import ProposalsProjection, proposals_table
 from opshub.projections.rebuild import rebuild_all
 from opshub.projections.registry import all_projections
+from opshub.projections.slack_demand_digest import (
+    SlackDemandDigestProjection,
+    slack_demand_digest_table,
+)
 from opshub.projections.sources import SourcesProjection, sources_table
 from opshub.projections.tasks import TasksProjection, tasks_table
 from opshub.projections.work_sessions import WorkSessionsProjection, work_sessions_table
@@ -58,6 +62,7 @@ __all__ = [
     "LocksProjection",
     "Projection",
     "ProposalsProjection",
+    "SlackDemandDigestProjection",
     "SourcesProjection",
     "TasksProjection",
     "WorkSessionsProjection",
@@ -73,6 +78,7 @@ __all__ = [
     "locks_table",
     "proposals_table",
     "rebuild_all",
+    "slack_demand_digest_table",
     "sources_table",
     "tasks_table",
     "work_sessions_table",

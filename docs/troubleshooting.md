@@ -381,6 +381,45 @@ Error: ConfigError: [embedding] backend "grok" is not a valid choice
 - [`src/opshub/core/config.py`](../src/opshub/core/config.py) — `Settings` (pydantic-settings) の SSOT
 - §1 / §2 の global verbosity フラグ / 環境変数も同じ優先順位 (`CLI フラグ > 環境変数 > デフォルト`) で揃えている
 
+### 3.11 Slack の自分宛 mention / DM digest が反映されない
+
+Phase 18-B ([ADR-0033](adr/0033-slack-mention-demand-digest.md)) で導入された `slack_demand_digest` projection が空のままになる、`opshub slack mentions list` が想定行を返さない、`<@self>` mention が hit していないように見えるケース。
+
+**前提**: 本 projection は新 fetch を持たず、`opshub slack sync` が append した既存 `SourceObserved` event を消費する純粋な下流追加。Self user id (Slack `U...` id) は projection 初期化時に Slack `auth.test()` 経由で 1 度だけ解決し cache する ([ADR-0033 §決定 (f)](adr/0033-slack-mention-demand-digest.md))。
+
+**症状別の切り分け**:
+
+| 症状 | 確認手順 |
+|---|---|
+| `opshub slack mentions list` が空 | (1) `opshub slack sync` を実行済みか確認 / (2) sync 後に `opshub projections rebuild` を実行 (新 projection 登録後は **既存 event を流し直す必要がある**) |
+| DM だけ出て mention が hit しない | `auth.test` が失敗していて self user id が解決できていない可能性。`opshub slack auth test` で確認。一時的な workaround として `OPSHUB_SLACK_SELF_USER_ID=U12345` を export してから `opshub projections rebuild` 実行 (CI / headless 用、本番でも有効) |
+| 一部 channel が `private` でなく `public` に classify されている | `SourceObserved` event は raw payload を持たないため、projection は channel id prefix (`C` / `G` / `D`) で type を判定する ([ADR-0033 §決定 (b)](adr/0033-slack-mention-demand-digest.md))。`G...` channel は全て `private` に collapse (mpim は body の `<@self>` 経路で別途検知される) |
+| mention の `FROM` 列が常に `-` | Phase 18-B の `SourceObserved` event は author の Slack ID を持たない (`title` に display name は載るが id は載らない)。FROM 列に user id を埋めるのは Phase 19+ の connector 拡張に依存 (ADR-0033 §Consequences §scope 外) |
+| MPIM の demand が出ない | MPIM 自体は `dm` row として出ない (Slack DM = `D...` のみ)。MPIM 内の `<@self>` mention は `demand_kind=mention` で hit する (body 経路) |
+
+**手動で再構築する**:
+
+```bash
+opshub projections rebuild
+# 既存 event を全 projection に流し直す。slack_demand_digest を含む 14 projection が冪等に再構築される。
+opshub slack mentions list                       # default (all types, all kinds, limit 50)
+opshub slack mentions list --types im,mpim       # DM + MPIM のみ
+opshub slack mentions list --demand-kind mention # mention のみ
+opshub slack mentions list --format json | jq .  # JSON 出力 (full row schema)
+```
+
+**典型エラー**:
+
+- 出力に `slack_demand_digest: cannot resolve operator self user id` warning が出る → `opshub slack auth set` で User Token (`xoxp-`) を保存し、`opshub slack auth test` で `user_id` を確認、`opshub projections rebuild` を再実行する。または `OPSHUB_SLACK_SELF_USER_ID=U...` を export してから rebuild する
+- mention 行の channel が `private` でなく `public` で表示される → ADR-0033 §決定 (b) の channel id prefix-based classification によるもの。private と mpim の区別が必要なら `opshub slack conversations` 出力と突き合わせる
+
+**関連**:
+
+- [ADR-0033 Slack mention / DM demand digest](adr/0033-slack-mention-demand-digest.md) — 設計根拠 + 6 軸決定の SSOT
+- [`src/opshub/projections/slack_demand_digest.py`](../src/opshub/projections/slack_demand_digest.py) — projection 実装 (self user id cascade / mention literal / DM prefix 判定)
+- [`src/opshub/db/migrations/versions/0029_create_slack_demand_digest.py`](../src/opshub/db/migrations/versions/0029_create_slack_demand_digest.py) — table schema (natural key + 2 CHECK + FK + 2 INDEX)
+- Phase 18-C で MCP `slack.demand.list` tool が同 projection 上に薄く乗る予定 ([#430](https://github.com/ozzy-labs/opshub/issues/430))
+
 ## 4. セキュリティ注意書き
 
 `-v` / `-vv` / `--debug` / `--log-file` を使うときに operator が知っておくこと:

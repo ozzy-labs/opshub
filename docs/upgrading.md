@@ -665,3 +665,50 @@ sync_all() {
 - **BREAKING CHANGE → major version bump**. The Phase 17-B PR's commit message carries `feat!:` + `BREAKING CHANGE:` footer so `release-please` flips the next release to a major version. No deprecation alias is shipped (ADR-0031 §決定 (7)).
 - **One new ADR + zero revisions** — Phase 17 = 1 new + 0 revisions (Phase 11 = 1 new + 2 revisions → Phase 12 = 0 + 3 → Phase 13 = 0 + 3 → Phase 14 = 0 + 2 → Phase 15 = 1 + 0 → **Phase 17 = 1 + 0**, Phase 16 was non-ADR-touching skill distribution work).
 - Full rationale and rejected alternatives: [ADR-0031](adr/0031-cli-command-surface-organization.md). Phase 17-A delivered the ADR (PR [#412](https://github.com/ozzy-labs/opshub/pull/412)); Phase 17-B delivers the implementation + tests + this docs section.
+
+## Phase 18-B: Slack mention / DM demand digest projection
+
+Phase 18-B ([ADR-0033](adr/0033-slack-mention-demand-digest.md), epic [#426](https://github.com/ozzy-labs/opshub/issues/426)) materialises a per-channel × per-demand-kind digest of the most recent Slack message that demands the operator's attention (`<@self>` mention or DM). No new fetch / connector / mapper / event is added — the new `slack_demand_digest` projection consumes the existing `SourceObserved` event stream emitted by the Phase 7 Slack connector (ADR-0033 §決定 (a), ADR-0002 event-sourced architecture is preserved). The Phase 18-C follow-up will surface this read model to assistant skills via a new MCP `slack.demand.list` tool.
+
+### Apply the new migration and rebuild
+
+The schema lands as migration `0029_create_slack_demand_digest`. Existing operators converge by running the new revision and a one-shot full projection rebuild so historical Slack events populate the digest table:
+
+```bash
+uv tool upgrade opshub
+opshub db migrate                  # applies 0029_create_slack_demand_digest
+opshub projections rebuild         # replays the event log into every projection,
+                                   # including slack_demand_digest
+```
+
+The rebuild is idempotent and replay-order-independent (`last_demand_ts < excluded.last_demand_ts` guard on the upsert). Subsequent `opshub slack sync` runs incrementally update the digest as new Slack events arrive — no recurring rebuild is required.
+
+### Self user id resolution
+
+The projection needs the operator's Slack `U...` id to spot the `<@self_user_id>` literal in message bodies. Resolution order (first non-empty wins):
+
+1. The Slack `auth.test()` cache — succeeds for any operator who has run `opshub slack auth set` + `opshub slack auth test` previously.
+2. The `OPSHUB_SLACK_SELF_USER_ID` environment variable — useful for CI / headless docker / WSL2 sandboxes where the keyring is not reachable but the operator already knows their Slack id.
+
+If neither resolves, the projection logs a single warning and skips mention detection for the remainder of the rebuild; DM detection (which only needs the channel id prefix) still works. See [`docs/troubleshooting.md`](troubleshooting.md) §3.11 for the diagnostic recipe.
+
+### Debug CLI: `opshub slack mentions list`
+
+A read-only CLI exposes the digest projection for operator inspection during rollout / incidents:
+
+```bash
+opshub slack mentions list                       # default (all types, all kinds, limit 50)
+opshub slack mentions list --types im,mpim       # DM + MPIM only
+opshub slack mentions list --demand-kind mention # mention rows only
+opshub slack mentions list --format json | jq .  # JSON output (full row schema)
+```
+
+The first-class skill surface (`next-actions` / `personal-brief` / `inbox-triage`) lands in Phase 18-C as the MCP `slack.demand.list` tool ([ADR-0033 §決定 (c)](adr/0033-slack-mention-demand-digest.md)); the CLI is debug-only.
+
+### Phase 18-B specifics
+
+- **DB head** = `0029_create_slack_demand_digest` (Phase 18-B). Phase 18-B ships one migration.
+- **No new extras** — the projection lives entirely on the existing `[connectors-slack]` foundation (slack-sdk for the optional `auth.test()` self-id resolution) and stdlib SQLite. Operators who have already configured Slack need no additional install steps.
+- **No CLI breaking changes** — `opshub slack mentions list` is a new sub-group under the existing Phase 17 noun-first `opshub slack` group ([ADR-0031](adr/0031-cli-command-surface-organization.md) §決定 (4)).
+- **No new ADR — implements [ADR-0033](adr/0033-slack-mention-demand-digest.md)** (delivered in Phase 18-A docs-only PR [#431](https://github.com/ozzy-labs/opshub/pull/431)).
+- **Forward-compat enum headroom** — the `demand_kind` CHECK constraint admits `{"mention", "dm", "mpim"}` (3-value SSOT per ADR-0033 §決定 (b) §不変条件 #2). Phase 18-B writes `mention` and `dm` only; group-DM `<@self>` mentions land in the mention row. A Phase 19+ MPIM-specific refinement can start writing `mpim` rows without a schema migration.

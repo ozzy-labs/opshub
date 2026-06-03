@@ -102,7 +102,9 @@ CLI / Connector / Agent から渡された command を受け、ドメイン的�
 
 ### 2.4 Projection Layer
 
-current state の relational view。`tasks` / `sources` / `inbox_items` / `decisions` / `links` / `work_sessions` / `agent_runs` / `locks` / `connector_cursors` 等。すべて event 列から rebuildable。
+current state の relational view。`tasks` / `sources` / `inbox_items` / `decisions` / `links` / `work_sessions` / `agent_runs` / `locks` / `connector_cursors` / `slack_demand_digest` 等。すべて event 列から rebuildable。
+
+Phase 18-B ([ADR-0033](adr/0033-slack-mention-demand-digest.md)) で `slack_demand_digest` projection を追加。Slack の `SourceObserved` event を消費し、`(channel_id, demand_kind)` 単位で **自分宛 mention / DM の最終 demand timestamp + excerpt** を materialise する。新 connector / fetcher / mapper / event は追加せず純粋な下流追加 (ADR-0002 整合)。物理 schema は migration `0029_create_slack_demand_digest`、登録は `projections/registry.py:all_projections()` で `SourcesProjection` の後。Self user id は projection 初期化時に Slack `auth.test()` 経由で解決し cache する (`OPSHUB_SLACK_SELF_USER_ID` 環境変数 override 可)。CLI debug 表面は `opshub slack mentions list --types ... --demand-kind ... --format table|json|md`。skill 出口は Phase 18-C で MCP `slack.demand.list` tool として追加予定 ([ADR-0033 §決定 (c)](adr/0033-slack-mention-demand-digest.md))。
 
 ### 2.5 Graph Layer
 
@@ -453,6 +455,7 @@ agent は `opshub` CLI 経由で操作。直接 SQL / 直接 markdown 書き換�
 | `briefings` | projection | Phase 5 (✅ 実装済) | LLM briefing 結果 (`id` / `topic` / `scope` / `markdown` / `source_refs` JSON / `model_id` / `model_version` / `tokens_in` / `tokens_out` / `generated_at`)、再生成は新 row として追記 (event-sourced trace 維持) |
 | `proposals` | projection | Phase 6 (✅ 実装済) | LLM proposal candidates (`id` / `topic` / `scope` / `briefing_id` / `candidates` JSON / `candidate_states` JSON (`pending` \| `applied` \| `rejected`) / `model_id` / `model_version` / `tokens_in` / `tokens_out` / `generated_at`)、`(proposal_id, candidate_index)` を natural key とした per-candidate state machine (ADR-0016 §決定 (d)) |
 | `links` | projection | Phase 8 (✅ 実装済) | entity 間 graph 関係 (ADR-0017、4 自動抽出 + manual link CRUD、natural key `(from_*, to_*, link_type)` UPSERT、bidirectional 2 INDEX) |
+| `slack_demand_digest` | projection | Phase 18-B (✅ 実装済、migration 0029、ADR-0033) | Slack 自分宛 demand (@mention / DM) の最終発火 timestamp + excerpt。natural key `(channel_id, demand_kind)`、`demand_kind ∈ {"mention","dm","mpim"}` (Phase 18-B では `mention` / `dm` のみ write、`mpim` は ADR-0033 §決定 (b) §不変条件 #2 の 3 値 enum SSOT を継承した forward-compat 枠)、`channel_type ∈ {"im","mpim","private","public"}`、`last_source_id` FK → `sources.id` (provenance、ondelete SET NULL)、`ix_slack_demand_digest_last_demand_ts DESC` + `ix_slack_demand_digest_type_ts` 2 INDEX。replay-order-independent (`last_demand_ts < excluded.last_demand_ts` guard) |
 | `projects` | projection | Phase 3+ | task / decision のグルーピング (lock scope は Phase 2 で予約のみ) |
 
 ### 4.2 Event 命名規約
