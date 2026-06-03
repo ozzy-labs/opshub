@@ -343,7 +343,7 @@ When `content_extraction = true`, the connector calls Drive API `files.export(fi
 
 Non-native files (the catch-all `google_workspace_file` source_type — Drive returns 403 `fileNotExportable` for them) stay metadata-only regardless of `content_extraction`.
 
-### New source_types
+### New source_types (Phase 13)
 
 Four new `source_type` discriminators land in `sources` ([ADR-0025](adr/0025-office-document-content-extraction.md) §決定 (d')):
 
@@ -373,10 +373,12 @@ If you already configured the `google_workspace` connector in Phase 13, **your e
 
 1. **Re-register scopes in the Google Cloud Console.** Open your existing OAuth client → OAuth consent screen → **Add or Remove Scopes** → add `gmail.readonly` and `calendar.readonly` (`drive.readonly` is already there from Phase 13). Submit for verification if your project is in production mode. Full walkthrough: [`docs/google-workspace-setup.md`](google-workspace-setup.md) §Scopes.
 2. **Re-run the paste-code flow once.** A single re-consent applies to all three connectors:
+
    ```bash
    opshub connector auth set google_workspace
    # browser opens with the new 3-scope consent screen; paste the code back
    ```
+
    The keyring slot stays the same (`connector:google_workspace:refresh_token`), so existing env override `OPSHUB_CONNECTOR_GOOGLE_WORKSPACE_REFRESH_TOKEN` continues to work — just refresh its value once.
 3. **Existing `google_workspace` sync continues to work** unchanged after re-consent. The Drive endpoint still uses `drive.readonly`; the extra scopes are unused there.
 
@@ -433,7 +435,7 @@ Summaries follow `f"{start_iso} - {end_iso} ({attendees_count} attendees)"`; att
 - **External write-back is still forbidden** ([ADR-0010](adr/0010-connector-contract.md) §禁止事項 7). Gmail `send` API and Calendar `events.insert` / `events.patch` / `events.delete` are deliberately not implemented. Push notifications (`users.watch` for Gmail / Calendar `events.watch`) are also forbidden — both connectors poll only ([ADR-0010](adr/0010-connector-contract.md) §Phase 14 改訂 (i)).
 - **No new ADRs** — Phase 14 continues the single-revision trajectory (Phase 11 = 1 new + 2 revisions → Phase 12 = 0 new + 3 revisions → Phase 13 = 0 new + 3 revisions → **Phase 14 = 0 new + 2 revisions**).
 
-### New source_types
+### New source_types (Phase 14)
 
 Two new `source_type` discriminators land in `sources` ([ADR-0010](adr/0010-connector-contract.md) §Phase 14 改訂 (l)):
 
@@ -443,6 +445,7 @@ Two new `source_type` discriminators land in `sources` ([ADR-0010](adr/0010-conn
 | Google Calendar event (master or override) | `google_calendar` | summary = `start_iso - end_iso (N attendees)`; attendee email list / description / location in body; RRULE field; override emitted as separate record with `Override of: <master_id>` back-pointer in body |
 
 Both flow through the existing `find-document` / `search` / `recall.search` / `meeting-prep` / `meeting-followup` / `personal-brief` / `next-actions` paths — no skill-side changes required.
+
 - Full setup (GCP project, OAuth consent screen, scopes, troubleshooting): [`docs/google-workspace-setup.md`](google-workspace-setup.md).
 
 ## Phase 14: Gmail + Google Calendar (G2 — shared Google OAuth foundation, scope expansion)
@@ -542,3 +545,89 @@ The Phase 12 H1 MCP `search` tool ([ADR-0022](adr/0022-mcp-server-surface.md) §
 - **No new ADRs other than ADR-0028** — Phase 15 = 1 new + 0 revisions (Phase 11 = 1 new + 2 revisions → Phase 12 = 0 + 3 → Phase 13 = 0 + 3 → Phase 14 = 0 + 2 → **Phase 15 = 1 + 0**).
 - **MCP `search` tool contract (ADR-0022 §決定 (f)) is unchanged**.
 - Full plan and rejected alternatives: [`docs/phase-15-plan.md`](phase-15-plan.md). Troubleshooting recipe for Japanese queries that still appear to miss: [`docs/troubleshooting.md`](troubleshooting.md) §3.6.
+
+## Phase 17: CLI surface 再編 (noun-first / per-noun group) — **BREAKING CHANGE**
+
+Phase 17 ([ADR-0031](adr/0031-cli-command-surface-organization.md), epic [#409](https://github.com/ozzy-labs/opshub/issues/409)) reorganises the CLI from the legacy 3-level `opshub connector <verb> <name>` layout into per-noun 2-level groups (`opshub <connector> <verb>`). The legacy `opshub connector` group is **fully removed** with no backward-compat alias (opshub is pre-userbase; ADR-0031 §決定 (7)).
+
+### Migration table
+
+| Legacy (≤ v0.2.x) | New (≥ v0.3.0) |
+|---|---|
+| `opshub connector list` | `opshub connectors` |
+| `opshub connector sync slack` | `opshub slack sync` |
+| `opshub connector sync github` | `opshub github sync` |
+| `opshub connector sync ms365` | `opshub ms365 sync` |
+| `opshub connector sync box` | `opshub box sync` |
+| `opshub connector sync teams` | `opshub teams sync` |
+| `opshub connector sync google_workspace` | `opshub google_workspace sync` |
+| `opshub connector sync google_mail` | `opshub google_mail sync` |
+| `opshub connector sync google_calendar` | `opshub google_calendar sync` |
+| `opshub connector sync box_drive` | `opshub box_drive sync` |
+| `opshub connector sync onedrive_drive` | `opshub onedrive_drive sync` |
+| `opshub connector slack conversations [...]` | `opshub slack conversations [...]` |
+| `opshub connector auth set slack` (or `connector:slack`) | `opshub slack auth set` |
+| `opshub connector auth set github` | `opshub github auth set` |
+| `opshub connector auth set connector:ms365` | `opshub ms365 auth set` |
+| `opshub connector auth set connector:box` | `opshub box auth set` |
+| `opshub connector auth set connector:teams` | `opshub teams auth set` |
+| `opshub connector auth set google_workspace` | `opshub google_workspace auth set` |
+| `opshub connector auth set embedder:openai` | `opshub embedder auth set openai` |
+| `opshub connector auth set embedder:voyage` | `opshub embedder auth set voyage` |
+| `opshub connector auth set llm:anthropic` | `opshub llm auth set anthropic` |
+| `opshub connector auth set llm:openai` | `opshub llm auth set openai` |
+| `opshub connector auth test github` | `opshub github auth test` |
+| `opshub connector auth test slack` (or `connector:slack`) | `opshub slack auth test` |
+| `opshub connector auth test connector:ms365` | `opshub ms365 auth test` |
+| `opshub connector auth test connector:box` | `opshub box auth test` |
+| `opshub connector auth test google_workspace` | `opshub google_workspace auth test` |
+| `opshub connector auth set connector:box_drive` (no-op reject) | *(not registered — Typer exits 2 with "No such command")* |
+| `opshub connector auth set connector:onedrive_drive` (no-op reject) | *(not registered — Typer exits 2 with "No such command")* |
+
+### What is unchanged
+
+- **Keyring slot names** (e.g. `connector:slack:token`, `connector:google_workspace:refresh_token`, `embedder:openai:api_key`, `llm:anthropic:api_key`) are **unchanged** — only the CLI command surface moves. Operators do **not** need to re-run `auth set` after the upgrade; the stored tokens remain valid.
+- **Environment variable overrides** (`OPSHUB_CONNECTOR_SLACK_TOKEN`, `OPSHUB_CONNECTOR_GITHUB_PAT`, `OPSHUB_CONNECTOR_TEAMS_TOKEN`, `OPSHUB_DB_ENCRYPTION_KEY`, etc.) are **unchanged**. Existing CI / cron configurations continue to work.
+- **stdout / stderr output shapes** are byte-identical: `synced <name>: N item(s) observed` (stdout, success) / `sync failed: <Type>` (stderr, failure). Scripts grepping the legacy markers keep working.
+- **MCP tool surface** ([ADR-0022](adr/0022-mcp-server-surface.md)) is **unchanged** — MCP tool names (`connector.sync`, `recall.search`, etc.) are independent of the CLI group naming.
+- **`Connector` Protocol** ([ADR-0010](adr/0010-connector-contract.md)) and the `connectors/<name>/` package layout (`auth.py` + `fetcher.py` + `mapper.py` + `connector.py`) are **unchanged**.
+
+### Migration tips
+
+**cron / launchd entries**: rewrite every line that invokes `opshub connector sync <name>`. The new path is shorter:
+
+```cron
+# Before
+0 */2 * * * opshub connector sync slack
+
+# After
+0 */2 * * * opshub slack sync
+```
+
+**Shell aliases / functions**: if you wrapped the legacy CLI in shell helpers, audit them. For example:
+
+```sh
+# Before
+sync_all() {
+  opshub connector sync slack
+  opshub connector sync github
+  opshub connector sync ms365
+}
+
+# After
+sync_all() {
+  opshub slack sync
+  opshub github sync
+  opshub ms365 sync
+}
+```
+
+**Recovery scripts**: error-handling scripts that grep the failure summary (`sync failed: <Type>`) keep working — the summary line shape is byte-identical. Only the command invocation changes.
+
+### Phase 17 specifics
+
+- **No DB migration**. Phase 17 is CLI-surface-only.
+- **No new extras**. Existing `[connectors-*]` / `[office]` / `[secrets]` / `[encryption]` extras gates are unchanged.
+- **BREAKING CHANGE → major version bump**. The Phase 17-B PR's commit message carries `feat!:` + `BREAKING CHANGE:` footer so `release-please` flips the next release to a major version. No deprecation alias is shipped (ADR-0031 §決定 (7)).
+- **One new ADR + zero revisions** — Phase 17 = 1 new + 0 revisions (Phase 11 = 1 new + 2 revisions → Phase 12 = 0 + 3 → Phase 13 = 0 + 3 → Phase 14 = 0 + 2 → Phase 15 = 1 + 0 → **Phase 17 = 1 + 0**, Phase 16 was non-ADR-touching skill distribution work).
+- Full rationale and rejected alternatives: [ADR-0031](adr/0031-cli-command-surface-organization.md). Phase 17-A delivered the ADR (PR [#412](https://github.com/ozzy-labs/opshub/pull/412)); Phase 17-B delivers the implementation + tests + this docs section.

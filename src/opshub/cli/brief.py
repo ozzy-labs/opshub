@@ -149,7 +149,7 @@ def brief_command(
         typer.echo(
             "[llm] backend is disabled; configure 'anthropic' or 'openai' "
             "in opshub.toml (or set OPSHUB_LLM_BACKEND env var) and run "
-            "`opshub connector auth set llm:<backend>` to store the API key.",
+            "`opshub llm auth set <backend>` to store the API key.",
             err=True,
         )
         raise typer.Exit(code=2)

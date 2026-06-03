@@ -26,7 +26,7 @@ Optional history scopes (enable per use case): ``groups:history``
 DMs), ``search:read`` (search.messages, User Token only),
 ``files:read`` (files metadata).
 
-Listing scopes for ``opshub connector slack conversations`` (#366,
+Listing scopes for ``opshub slack conversations`` (#366,
 ``users.conversations``): ``channels:read`` + ``users:read`` are
 already covered by the MVP set. Add ``groups:read`` to include
 private channels, ``im:read`` to include DMs, ``mpim:read`` to
@@ -53,7 +53,7 @@ from opshub.core.errors import ConfigError
 __all__ = ["SLACK_TOKEN_SECRET_KEY", "SlackAuth"]
 
 #: Keyring key used to store the Slack OAuth access token. Exposed so
-#: the CLI command ``opshub connector auth set slack`` writes to the
+#: the CLI command ``opshub slack auth set`` writes to the
 #: same key the connector reads at sync time — i.e. this constant is
 #: the contract between the CLI writer and the connector reader
 #: (mirrors the Phase 3 GitHub PAT precedent). The suffix is
@@ -97,7 +97,7 @@ class SlackAuth:
         if not token:
             raise ConfigError(
                 "Slack OAuth token is not configured; run "
-                "`opshub connector auth set slack` or set "
+                "`opshub slack auth set` or set "
                 "OPSHUB_CONNECTOR_SLACK_TOKEN in the environment"
             )
         if not (token.startswith("xoxp-") or token.startswith("xoxb-")):

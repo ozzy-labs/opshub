@@ -3,7 +3,7 @@
 Composes :class:`GoogleWorkspaceAuth` + :class:`GmailClient` +
 :func:`map_gmail_message` into the
 :class:`opshub.connectors.base.Connector` Protocol contract. Driven
-by ``opshub connector sync google_mail`` in
+by ``opshub google_mail sync`` in
 :mod:`opshub.cli.connector`.
 
 Single cursor + TTL fallback (ADR-0010 §Phase 14 改訂 (j))

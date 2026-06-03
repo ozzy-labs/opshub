@@ -95,7 +95,7 @@ def run_paste_code_flow() -> None:
             "Set it in opshub.toml (or via "
             "OPSHUB_CONNECTORS__GOOGLE_WORKSPACE__CLIENT_ID) with the Google "
             "Cloud OAuth client (Installed Application type) ID, then re-run "
-            "`opshub connector auth set google_workspace`.",
+            "`opshub google_workspace auth set`.",
             err=True,
         )
         raise typer.Exit(code=2)

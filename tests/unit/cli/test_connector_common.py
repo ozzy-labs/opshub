@@ -1,33 +1,30 @@
-"""Tests for ``opshub connector sync`` ``--debug`` opt-in error trail.
+"""Tests for the shared sync driver (Phase 17-B, ADR-0031).
 
-Phase 14 T3 (#320, parent epic #317): the connector sync failure path
-gains an opt-in debug trail wired off ``OPSHUB_DEBUG=1`` (T2's root
-callback sets the env var when ``--debug`` / ``-vv`` is passed, and
-the operator can set it directly for the MCP subprocess path).
+The legacy ``tests/unit/cli/test_connector.py`` + ``test_connector_debug.py``
+pinned the driver invariants on the old ``opshub connector sync <name>``
+surface. Phase 17-B moved the driver into
+:mod:`opshub.cli._connector_common` and exposes 10 thin per-noun
+wrappers (``opshub <connector> sync``). The invariants are now
+asserted via the per-noun surface (``opshub <connector> sync``) using
+a stub connector registered under one of the real noun names.
 
-Three invariants pinned here:
+Invariants pinned here (carried over from the legacy tests):
 
-1. **R3 — default regression**: with ``OPSHUB_DEBUG`` unset / falsy,
-   sync failure prints **only** ``sync failed: <TypeName>`` to stderr
-   and persists ``error_message=<TypeName>`` to the event log via
-   :meth:`SourceService.record_sync_failure`. No exception message
-   body, no traceback — the byte-for-byte same surface as before T3.
-2. **R2 / R4 — opt-in debug trail**: with ``OPSHUB_DEBUG=1`` the
-   failure path additionally writes a sanitised exception message +
-   a sanitised traceback to **stderr**. Stdout (the summary line) is
-   unchanged so scripts piping the CLI keep working. Every known
-   token shape (``sk-`` / ``ghp_`` / ``github_pat_`` / ``xox*-`` /
-   ``AKIA`` / ``AIza`` / ``Bearer …`` / JWT) is rewritten to its
-   marker form before any byte hits the terminal — the regex set
-   lives in :mod:`opshub.core.sanitise` and is shared with the
-   structlog redaction processor (T1) and the MCP boundary redactor
-   (:mod:`opshub.mcp._redact`).
-3. **Event-log permanence**: the ``error_message`` parameter passed
-   to ``record_sync_failure`` stays ``type(exc).__name__`` even when
-   ``--debug`` is on — the audit row never grows a token surface.
-
-The horizontal-redaction check (point 3 in #320's test plan) lives
-in :func:`test_bind_connector_log_does_not_leak_tokens` below.
+1. Unknown name → exit 2 with the "unknown connector" message
+   listing available registered names.
+2. ``_ProgressSourceProxy`` advances the reporter once per successful
+   ``observe`` and zero times for non-observe attribute access /
+   raising observes.
+3. ``OPSHUB_DEBUG`` default → only the type-name summary on stderr,
+   no message body, no traceback, ``record_sync_failure(error_message=<TypeName>)``.
+4. ``OPSHUB_DEBUG=1`` → sanitised exception message + sanitised
+   traceback appear on stderr; the event-log row's
+   ``error_message`` stays ``<TypeName>`` (never widens).
+5. Every known token shape (``sk-`` / ``ghp_`` / ``github_pat_`` /
+   ``xox*-`` / ``AKIA`` / ``AIza`` / ``Bearer …`` / JWT) is rewritten
+   to its marker form before any byte hits stderr.
+6. The truthy table in :mod:`opshub.cli._connector_common` mirrors
+   :data:`opshub.core.logging._TRUTHY` (drift pin).
 """
 
 from __future__ import annotations
@@ -38,6 +35,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from opshub.cli._connector_common import _ProgressSourceProxy  # pyright: ignore[reportPrivateUsage]
 from opshub.cli.app import app
 from opshub.connectors import (
     SyncResult,
@@ -52,9 +50,9 @@ from tests._secrets import (
     FAKE_SLACK_BOT_TOKEN,
 )
 
-# Build the canonical token shapes locally (mirrors
-# ``tests/unit/core/test_logging.py``) so a missing ``tests/_secrets``
-# entry surfaces as an import error rather than a silent skip.
+# Build the canonical token shapes locally so a missing
+# ``tests/_secrets`` entry surfaces as an import error rather than a
+# silent skip.
 FAKE_SK_KEY = "sk-" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ12345"
 FAKE_GHP_KEY = "ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
 FAKE_BEARER_TAIL = "abc.def.ghi.jkl.mno.pqr.stu.vwx.yz1234567890"
@@ -62,17 +60,25 @@ FAKE_BEARER_HEADER = f"Bearer {FAKE_BEARER_TAIL}"
 
 
 # ============================================================================
-# Test scaffolding — stub connector + recording source service
+# Scaffolding — stub connector + recording source service
 # ============================================================================
 
 
-class _RecordingSource:
-    """In-memory ``SourceService`` stand-in.
+class _CountingReporter:
+    """Stand-in :class:`ProgressReporter` recording advance calls."""
 
-    Captures the ``error_message`` argument :meth:`record_sync_failure`
-    receives so the R3 invariant (event-log permanence = type name
-    only) is directly assertable.
-    """
+    def __init__(self) -> None:
+        self.count = 0
+
+    def advance(self, n: int = 1) -> None:
+        self.count += n
+
+    def update(self, *, total: int | None = None, description: str | None = None) -> None:
+        del total, description
+
+
+class _RecordingSource:
+    """In-memory ``SourceService`` stand-in."""
 
     def __init__(self) -> None:
         self.cursor_set_calls: list[tuple[str, Any, bool]] = []
@@ -87,14 +93,13 @@ class _RecordingSource:
     def record_sync_failure(self, name: str, *, error_message: str) -> None:
         self.failure_calls.append((name, error_message))
 
-    # No observe() — the failing connectors here raise before any items
-    # land. ``_ProgressSourceProxy.__getattr__`` would forward any
-    # missing attribute to this object; an ``AttributeError`` at that
-    # point would surface as a test failure, which is what we want.
-
 
 class _FailingConnector:
-    """Connector whose ``sync`` always raises a chosen exception."""
+    """Connector whose ``sync`` always raises a chosen exception.
+
+    Registered under one of the real connector noun names so the per-
+    noun ``sync`` callback can dispatch to it via the registry.
+    """
 
     def __init__(self, name: str, exc: BaseException) -> None:
         self.name = name
@@ -116,14 +121,103 @@ def _reset_registry() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction
 def _recording_source(  # pyright: ignore[reportUnusedFunction]
     monkeypatch: pytest.MonkeyPatch,
 ) -> _RecordingSource:
-    """Patch ``_build_source_service`` to hand back a recording stub."""
+    """Patch ``_build_source_service`` (in the shared driver) to hand back a stub."""
     source = _RecordingSource()
 
     def _fake_builder(*, actor: str) -> _RecordingSource:
         return source
 
-    monkeypatch.setattr("opshub.cli.connector._build_source_service", _fake_builder)
+    monkeypatch.setattr("opshub.cli._connector_common._build_source_service", _fake_builder)
     return source
+
+
+# ============================================================================
+# Unknown connector → exit 2 (carried over from legacy test_connector)
+# ============================================================================
+
+
+def test_sync_unknown_name_exits_2_with_helpful_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Asking ``sync`` for a name the registry does not know is a usage error.
+
+    The shared driver eagerly imports every connector subpackage, so
+    the live registry contains real noun names by the time the
+    ``unknown connector`` arm fires. To exercise the path we patch
+    :func:`discover_connectors` to return an empty list so the
+    driver surfaces ``available: (none)``.
+    """
+
+    def _empty_registry() -> list[Any]:
+        return []
+
+    monkeypatch.setattr(
+        "opshub.connectors.discover_connectors",
+        _empty_registry,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["github", "sync"])
+    assert result.exit_code == 2
+    assert "github" in result.stderr
+    assert "(none)" in result.stderr
+
+
+# ============================================================================
+# _ProgressSourceProxy — observe counting (carried over)
+# ============================================================================
+
+
+def test_progress_proxy_advances_reporter_once_per_observe() -> None:
+    """Each successful ``observe`` bumps the progress counter by one."""
+
+    class _FakeSource:
+        def __init__(self) -> None:
+            self.observed: list[dict[str, object]] = []
+
+        def observe(self, **kwargs: object) -> tuple[str, str]:
+            self.observed.append(kwargs)
+            return ("source-id", "inbox-id")
+
+    reporter = _CountingReporter()
+    inner = _FakeSource()
+    proxy = _ProgressSourceProxy(inner, reporter)
+
+    out = proxy.observe(external_id="x", title="t")
+
+    assert out == ("source-id", "inbox-id")
+    assert inner.observed == [{"external_id": "x", "title": "t"}]
+    assert reporter.count == 1
+
+
+def test_progress_proxy_forwards_other_attributes_without_counting() -> None:
+    """Non-observe calls (cursor_set, ...) forward and do not advance."""
+
+    class _FakeSource:
+        def cursor_set(self, name: str, value: str | None, *, sync_started: bool) -> str:
+            return f"{name}:{value}:{sync_started}"
+
+    reporter = _CountingReporter()
+    proxy = _ProgressSourceProxy(_FakeSource(), reporter)
+
+    assert proxy.cursor_set("slack", "ts-1", sync_started=False) == "slack:ts-1:False"
+    assert reporter.count == 0
+
+
+def test_progress_proxy_does_not_count_failed_observe() -> None:
+    """A raising ``observe`` must not inflate the counter."""
+
+    class _BoomSource:
+        def observe(self, **kwargs: object) -> tuple[str, str]:
+            del kwargs
+            raise RuntimeError("boom")
+
+    reporter = _CountingReporter()
+    proxy = _ProgressSourceProxy(_BoomSource(), reporter)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        proxy.observe(external_id="x")
+    assert reporter.count == 0
 
 
 # ============================================================================
@@ -139,25 +233,16 @@ class TestDefaultRegressionR3:
         monkeypatch: pytest.MonkeyPatch,
         _recording_source: _RecordingSource,
     ) -> None:
-        # Hard-clear OPSHUB_DEBUG so an operator's shell environment
-        # cannot perturb the regression check.
         monkeypatch.delenv("OPSHUB_DEBUG", raising=False)
         secret_message = f"401 sk={FAKE_SK_KEY}"
-        register_connector(_FailingConnector("stub", RuntimeError(secret_message)))
+        register_connector(_FailingConnector("github", RuntimeError(secret_message)))
 
-        result = CliRunner().invoke(app, ["connector", "sync", "stub"])
+        result = CliRunner().invoke(app, ["github", "sync"])
 
         assert result.exit_code == 1
-        # The summary line is byte-identical to the pre-T3 surface.
         assert "sync failed: RuntimeError" in result.stderr
-        # The exception **message** must not appear anywhere on stderr
-        # — neither raw, nor sanitised. R3 (event log + terminal) keeps
-        # the default surface free of any message body at all.
         assert secret_message not in result.stderr
-        # The marker (``sk-***``) only appears under ``--debug``; its
-        # absence here pins the gated semantics.
         assert "sk-***" not in result.stderr
-        # No traceback frames either.
         assert "Traceback" not in result.stderr
 
     def test_default_failure_event_log_has_type_name_only(
@@ -166,28 +251,23 @@ class TestDefaultRegressionR3:
         _recording_source: _RecordingSource,
     ) -> None:
         monkeypatch.delenv("OPSHUB_DEBUG", raising=False)
-        register_connector(_FailingConnector("stub", RuntimeError(f"upstream said {FAKE_GHP_KEY}")))
+        register_connector(
+            _FailingConnector("github", RuntimeError(f"upstream said {FAKE_GHP_KEY}"))
+        )
 
-        CliRunner().invoke(app, ["connector", "sync", "stub"])
+        CliRunner().invoke(app, ["github", "sync"])
 
-        assert _recording_source.failure_calls == [("stub", "RuntimeError")]
+        assert _recording_source.failure_calls == [("github", "RuntimeError")]
 
     def test_default_stdout_unchanged_on_failure(
         self,
         monkeypatch: pytest.MonkeyPatch,
         _recording_source: _RecordingSource,
     ) -> None:
-        """The stdout summary line shape stays the same.
-
-        Failing syncs do not print a stdout summary at all — the
-        success-only line lives after ``cursor_set(sync_started=False)``.
-        We assert stdout is empty so a future refactor cannot smuggle
-        the exception message onto stdout by accident.
-        """
         monkeypatch.delenv("OPSHUB_DEBUG", raising=False)
-        register_connector(_FailingConnector("stub", ValueError("benign")))
+        register_connector(_FailingConnector("github", ValueError("benign")))
 
-        result = CliRunner().invoke(app, ["connector", "sync", "stub"])
+        result = CliRunner().invoke(app, ["github", "sync"])
 
         assert result.exit_code == 1
         assert result.stdout == ""
@@ -207,14 +287,12 @@ class TestDebugOptInR2R4:
         _recording_source: _RecordingSource,
     ) -> None:
         monkeypatch.setenv("OPSHUB_DEBUG", "1")
-        register_connector(_FailingConnector("stub", RuntimeError(f"401 sk={FAKE_SK_KEY}")))
+        register_connector(_FailingConnector("github", RuntimeError(f"401 sk={FAKE_SK_KEY}")))
 
-        result = CliRunner().invoke(app, ["connector", "sync", "stub"])
+        result = CliRunner().invoke(app, ["github", "sync"])
 
         assert result.exit_code == 1
-        # Summary line still present.
         assert "sync failed: RuntimeError" in result.stderr
-        # Sanitised message + traceback now present.
         assert "sk-***" in result.stderr
         assert FAKE_SK_KEY not in result.stderr
         assert "Traceback" in result.stderr
@@ -225,13 +303,12 @@ class TestDebugOptInR2R4:
         monkeypatch: pytest.MonkeyPatch,
         _recording_source: _RecordingSource,
     ) -> None:
-        """Event log permanence: ``--debug`` must not widen the audit row."""
         monkeypatch.setenv("OPSHUB_DEBUG", "1")
-        register_connector(_FailingConnector("stub", RuntimeError(f"401 sk={FAKE_SK_KEY}")))
+        register_connector(_FailingConnector("github", RuntimeError(f"401 sk={FAKE_SK_KEY}")))
 
-        CliRunner().invoke(app, ["connector", "sync", "stub"])
+        CliRunner().invoke(app, ["github", "sync"])
 
-        assert _recording_source.failure_calls == [("stub", "RuntimeError")]
+        assert _recording_source.failure_calls == [("github", "RuntimeError")]
 
     def test_debug_stdout_remains_empty_on_failure(
         self,
@@ -239,9 +316,9 @@ class TestDebugOptInR2R4:
         _recording_source: _RecordingSource,
     ) -> None:
         monkeypatch.setenv("OPSHUB_DEBUG", "1")
-        register_connector(_FailingConnector("stub", ValueError("v")))
+        register_connector(_FailingConnector("github", ValueError("v")))
 
-        result = CliRunner().invoke(app, ["connector", "sync", "stub"])
+        result = CliRunner().invoke(app, ["github", "sync"])
 
         assert result.stdout == ""
 
@@ -284,17 +361,10 @@ class TestDebugOptInR2R4:
         raw_token: str,
         marker: str,
     ) -> None:
-        """R4 — every token shape recognised by ``core/sanitise`` is rewritten.
-
-        The same regex set powers the T1 structlog processor and the
-        :mod:`opshub.mcp._redact` MCP-boundary redactor, so this is
-        also a horizontal contract: anything that surfaces here must
-        match what those callers strip.
-        """
         monkeypatch.setenv("OPSHUB_DEBUG", "1")
-        register_connector(_FailingConnector("stub", RuntimeError(exception_message)))
+        register_connector(_FailingConnector("github", RuntimeError(exception_message)))
 
-        result = CliRunner().invoke(app, ["connector", "sync", "stub"])
+        result = CliRunner().invoke(app, ["github", "sync"])
 
         assert result.exit_code == 1
         assert raw_token not in result.stderr, (
@@ -314,11 +384,10 @@ class TestDebugOptInR2R4:
         _recording_source: _RecordingSource,
         truthy_value: str,
     ) -> None:
-        """Mirror the truthy table in :mod:`opshub.core.logging`."""
         monkeypatch.setenv("OPSHUB_DEBUG", truthy_value)
-        register_connector(_FailingConnector("stub", RuntimeError(f"401 sk={FAKE_SK_KEY}")))
+        register_connector(_FailingConnector("github", RuntimeError(f"401 sk={FAKE_SK_KEY}")))
 
-        result = CliRunner().invoke(app, ["connector", "sync", "stub"])
+        result = CliRunner().invoke(app, ["github", "sync"])
 
         assert "sk-***" in result.stderr, f"truthy {truthy_value!r} did not enable debug"
         assert "Traceback" in result.stderr
@@ -334,14 +403,37 @@ class TestDebugOptInR2R4:
         falsy_value: str,
     ) -> None:
         monkeypatch.setenv("OPSHUB_DEBUG", falsy_value)
-        register_connector(_FailingConnector("stub", RuntimeError(f"401 sk={FAKE_SK_KEY}")))
+        register_connector(_FailingConnector("github", RuntimeError(f"401 sk={FAKE_SK_KEY}")))
 
-        result = CliRunner().invoke(app, ["connector", "sync", "stub"])
+        result = CliRunner().invoke(app, ["github", "sync"])
 
-        # Default surface only.
         assert "sk-***" not in result.stderr
         assert "Traceback" not in result.stderr
         assert "sync failed: RuntimeError" in result.stderr
+
+
+# ============================================================================
+# Drift pin — ``_DEBUG_TRUTHY`` mirrors ``opshub.core.logging._TRUTHY``
+# ============================================================================
+
+
+class TestDebugTruthyDriftPin:
+    """The two truthy tables must stay in sync."""
+
+    def test_cli_truthy_table_matches_core_logging(self) -> None:
+        from opshub.cli._connector_common import (
+            _DEBUG_TRUTHY,  # pyright: ignore[reportPrivateUsage]
+        )
+        from opshub.core.logging import (
+            _TRUTHY as CORE_TRUTHY,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        assert _DEBUG_TRUTHY == CORE_TRUTHY, (
+            "opshub.cli._connector_common._DEBUG_TRUTHY drifted from "
+            "opshub.core.logging._TRUTHY. The two tables must accept the "
+            "same set of strings for OPSHUB_DEBUG so the CLI in-process "
+            "path and the MCP subprocess path agree on what 'truthy' means."
+        )
 
 
 # ============================================================================
@@ -356,25 +448,10 @@ class TestHorizontalRedaction:
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A token mistakenly bound onto a connector logger is redacted.
-
-        T1's redaction processor sits on the structlog pipeline
-        unconditionally (see :func:`opshub.core.logging.configure_logging`).
-        Verify the processor itself rewrites token-shaped values when a
-        ``bind(connector=name)`` chain feeds it an event-dict — this is
-        the horizontal contract every connector relies on for WARN /
-        DEBUG paths. We exercise the processor in-process (rather than
-        scraping rendered stderr) so the test is independent of
-        process-scope ``configure_logging`` ordering across the suite.
-        """
         from opshub.core.logging import (
             _redaction_processor,  # pyright: ignore[reportPrivateUsage]
         )
 
-        # Simulate what ``structlog`` would feed the processor after a
-        # ``bind(connector="test-connector").warning("...", api_key=...)``
-        # chain: the bound kwargs are merged into the event dict before
-        # the processor pipeline runs.
         event_dict = {
             "event": f"upstream auth failure: {FAKE_BEARER_HEADER}",
             "connector": "test-connector",
@@ -383,49 +460,12 @@ class TestHorizontalRedaction:
         }
         result = _redaction_processor(None, "warning", event_dict)
 
-        # No raw token shape survives in any value.
         for key, value in result.items():
             if isinstance(value, str):
                 assert FAKE_SK_KEY not in value, f"sk- token leaked into {key!r}"
                 assert FAKE_GHP_KEY not in value, f"ghp_ token leaked into {key!r}"
                 assert FAKE_BEARER_TAIL not in value, f"Bearer token leaked into {key!r}"
-        # And the markers are visible so the operator sees *something*.
         assert "sk-***" in result["api_key"]
         assert "ghp_***" in result["header"]
         assert "Bearer ***" in result["event"]
-        # Non-token values pass through untouched.
         assert result["connector"] == "test-connector"
-
-
-# ============================================================================
-# Drift pin — ``_DEBUG_TRUTHY`` mirrors ``opshub.core.logging._TRUTHY``
-# ============================================================================
-
-
-class TestDebugTruthyDriftPin:
-    """The two truthy tables must stay in sync.
-
-    ``opshub.cli.connector`` inlines its own copy of the truthy
-    accept-list (rather than importing from :mod:`opshub.core.logging`)
-    so the ``test_cli_imports`` static check stays green
-    (ADR-0001 cold-start whitelist forbids top-level ``opshub.core``
-    imports in CLI modules). The downside is divergence risk — a
-    future PR that extends ``OPSHUB_DEBUG`` to also accept ``y`` /
-    ``Y`` in :mod:`opshub.core.logging` could silently leave the CLI
-    layer behind. This drift-pin makes the divergence a test failure.
-    """
-
-    def test_cli_truthy_table_matches_core_logging(self) -> None:
-        from opshub.cli.connector import (
-            _DEBUG_TRUTHY,  # pyright: ignore[reportPrivateUsage]
-        )
-        from opshub.core.logging import (
-            _TRUTHY as CORE_TRUTHY,  # pyright: ignore[reportPrivateUsage]
-        )
-
-        assert _DEBUG_TRUTHY == CORE_TRUTHY, (
-            "opshub.cli.connector._DEBUG_TRUTHY drifted from "
-            "opshub.core.logging._TRUTHY. The two tables must accept the "
-            "same set of strings for OPSHUB_DEBUG so the CLI in-process "
-            "path and the MCP subprocess path agree on what 'truthy' means."
-        )

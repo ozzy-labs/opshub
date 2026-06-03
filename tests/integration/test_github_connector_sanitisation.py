@@ -1,4 +1,4 @@
-"""Pins the CLI-level exception sanitisation for ``opshub connector sync github``.
+"""Pins the CLI-level exception sanitisation for ``opshub github sync``.
 
 The CLI driver in :mod:`opshub.cli.connector` catches every exception
 raised inside :meth:`Connector.sync` and records a
@@ -106,7 +106,7 @@ def test_connector_sync_github_sanitises_exception_message(
     _patch_github_fetcher_to_raise(monkeypatch, error=RuntimeError(_EXCEPTION_MESSAGE))
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "github"])
+    result = runner.invoke(app, ["github", "sync"])
 
     # CLI driver maps ``Exception`` → sanitised event + exit code 1.
     assert result.exit_code == 1, result.stdout

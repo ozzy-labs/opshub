@@ -32,8 +32,8 @@ Cold-start guard: this module imports nothing heavier than
 are imported lazily where they are needed (the fetcher uses ``httpx``;
 the auth helper itself never imports ``msal`` because we accept a
 pre-resolved token via keyring rather than running the OAuth flow
-in-process — the operator drives that via a one-shot ``opshub connector
-auth set connector:teams`` invocation that stores the resulting token
+in-process — the operator drives that via a one-shot
+``opshub teams auth set`` invocation that stores the resulting token
 verbatim).
 """
 
@@ -44,8 +44,8 @@ from opshub.core.errors import ConfigError
 __all__ = ["TEAMS_TOKEN_SECRET_KEY", "TeamsAuth"]
 
 #: Keyring key used to store the Teams Microsoft Graph User Token.
-#: Exposed so the CLI command ``opshub connector auth set
-#: connector:teams`` writes to the same key the connector reads at sync
+#: Exposed so the CLI command ``opshub teams auth set``
+#: writes to the same key the connector reads at sync
 #: time — i.e. this constant is the contract between the CLI writer
 #: and the connector reader (mirrors the Phase 7 Slack / MS365 / Box
 #: precedent). The suffix is ``token`` (not ``user_token`` /
@@ -92,7 +92,7 @@ class TeamsAuth:
         if not token:
             raise ConfigError(
                 "Teams Microsoft Graph token is not configured; run "
-                "`opshub connector auth set connector:teams` or set "
+                "`opshub teams auth set` or set "
                 "OPSHUB_CONNECTOR_TEAMS_TOKEN in the environment"
             )
         self._token = token

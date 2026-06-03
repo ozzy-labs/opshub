@@ -2,7 +2,7 @@
 
 Composes the A1 auth helper, the A2 fetcher, and the A3 mapper into the
 :class:`opshub.connectors.base.Connector` Protocol contract so the
-CLI driver (``opshub connector sync slack``) can resolve and run a
+CLI driver (``opshub slack sync``) can resolve and run a
 Slack sync end-to-end. This module is the Slack analogue of
 :class:`opshub.connectors.github.connector.GitHubConnector` and follows
 its conventions exactly so a future "common sync orchestrator" refactor
@@ -281,7 +281,7 @@ class SlackConnector:
         Lazy-imports :mod:`opshub.core.config` so the connectors
         package import path stays free of pydantic-settings — cold
         start (ADR-0001) only pays for this when the operator
-        actually runs ``opshub connector sync slack``.
+        actually runs ``opshub slack sync``.
         """
         from opshub.core.config import OpsHubSettings
 

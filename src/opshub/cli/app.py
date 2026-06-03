@@ -22,7 +22,7 @@ deliberately deferred (lazy import inside the callback body) so that
 ``opshub --help`` and ``opshub --version`` do not pay for the
 structlog import and configuration. The resolved
 :class:`~opshub.core.logging.LogSettings` is stored on the Typer
-``Context`` (``ctx.obj``) so subcommands (notably ``connector sync``
+``Context`` (``ctx.obj``) so subcommands (notably ``<connector> sync``
 and ``mcp serve`` in T3) can read the ``debug`` flag without
 re-resolving. ``--debug`` and ``-vv`` additionally set
 ``OPSHUB_DEBUG=1`` in the environment so that subprocess paths (MCP
@@ -38,23 +38,35 @@ import typer
 
 from opshub import __version__
 from opshub.cli.agent import agent_app
+from opshub.cli.box import box_app
+from opshub.cli.box_drive import box_drive_app
 from opshub.cli.brief import register as register_brief
-from opshub.cli.connector import connector_app
+from opshub.cli.connectors import connectors_app
 from opshub.cli.decision import decision_app
+from opshub.cli.embedder import embedder_app
 from opshub.cli.embeddings import embeddings_app
+from opshub.cli.github import github_app
+from opshub.cli.google_calendar import google_calendar_app
+from opshub.cli.google_mail import google_mail_app
+from opshub.cli.google_workspace import google_workspace_app
 from opshub.cli.graph import graph_app
 from opshub.cli.handoff import handoff_app
 from opshub.cli.inbox import inbox_app
 from opshub.cli.link import link_app
+from opshub.cli.llm import llm_app
 from opshub.cli.lock import lock_app
 from opshub.cli.mcp import mcp_app
+from opshub.cli.ms365 import ms365_app
+from opshub.cli.onedrive_drive import onedrive_drive_app
 from opshub.cli.projections import projections_app
 from opshub.cli.propose import propose_app
 from opshub.cli.recall import register as register_recall
 from opshub.cli.search import register as register_search
 from opshub.cli.session import session_app
 from opshub.cli.skills import skills_app
+from opshub.cli.slack import slack_app
 from opshub.cli.task import task_app
+from opshub.cli.teams import teams_app
 from opshub.cli.workspace import workspace_app
 
 app = typer.Typer(
@@ -79,7 +91,23 @@ app.add_typer(handoff_app)
 app.add_typer(session_app)
 app.add_typer(agent_app)
 app.add_typer(workspace_app)
-app.add_typer(connector_app)
+# Phase 17-B (ADR-0031): per-noun connector groups replace the legacy
+# ``opshub connector <verb>`` 3-level surface. Order matches the
+# Phase 7 / 9 / 11 / 13 / 14 introduction order so the ``--help``
+# listing follows the chronological codebase narrative.
+app.add_typer(slack_app)
+app.add_typer(github_app)
+app.add_typer(ms365_app)
+app.add_typer(box_app)
+app.add_typer(teams_app)
+app.add_typer(google_workspace_app)
+app.add_typer(google_mail_app)
+app.add_typer(google_calendar_app)
+app.add_typer(box_drive_app)
+app.add_typer(onedrive_drive_app)
+app.add_typer(connectors_app)
+app.add_typer(embedder_app)
+app.add_typer(llm_app)
 app.add_typer(propose_app)
 app.add_typer(link_app)
 app.add_typer(graph_app)

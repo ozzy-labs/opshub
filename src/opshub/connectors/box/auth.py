@@ -161,7 +161,7 @@ class BoxAuth:
         if not client_secret:
             raise ConfigError(
                 "Box client_secret is not configured; run "
-                "`opshub connector auth set connector:box` to provide the "
+                "`opshub box auth set` to provide the "
                 "client_secret for your Box developer app (or set the "
                 "OPSHUB_CONNECTOR_BOX_CLIENT_SECRET env var override)"
             )
@@ -258,7 +258,7 @@ class BoxAuth:
         if not refresh_token:
             raise ConfigError(
                 "Box refresh token is not configured; run "
-                "`opshub connector auth set connector:box` to complete "
+                "`opshub box auth set` to complete "
                 "the OAuth flow (or set the "
                 "OPSHUB_CONNECTOR_BOX_REFRESH_TOKEN env var override)"
             )
@@ -276,7 +276,7 @@ class BoxAuth:
             raise ConfigError(
                 f"Box token refresh failed: {type(exc).__name__}. "
                 "The stored refresh token may have been revoked; re-run "
-                "`opshub connector auth set connector:box` to re-auth."
+                "`opshub box auth set` to re-auth."
             ) from exc
 
         # ``boxsdk.OAuth2`` is untyped so ``access_token`` is ``Any``;

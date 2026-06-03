@@ -553,7 +553,7 @@ def test_gmail_401_insufficient_scope_actionable_message() -> None:
     # Actionable message names the recovery command and the
     # missing scope so the operator can act without grepping docs.
     assert "gmail.readonly" in message
-    assert "opshub connector auth set google_workspace" in message
+    assert "opshub google_workspace auth set" in message
     # No retry on the re-consent path — the recovery is operator
     # action, not exponential backoff.
     assert calls["n"] == 1

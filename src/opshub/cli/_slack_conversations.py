@@ -1,7 +1,7 @@
-"""Formatters + driver for ``opshub connector slack conversations`` (#366).
+"""Formatters + driver for ``opshub slack conversations`` (#366).
 
 Replaces the original ``_slack_channels`` helper from #341. The wrapper
-in :mod:`opshub.cli.connector` calls
+in :mod:`opshub.cli.slack` calls
 :func:`opshub.connectors.slack.conversations.list_conversations` —
 which iterates ``users.conversations`` (default) or
 ``conversations.list`` (``--all``) — and renders the result in one of
@@ -246,10 +246,10 @@ def run_conversations_command(
     all: bool,
     since: datetime | None = None,
 ) -> None:
-    """Drive ``opshub connector slack conversations`` end-to-end.
+    """Drive ``opshub slack conversations`` end-to-end.
 
-    This is the seam :mod:`opshub.cli.connector` calls. The handler in
-    ``connector.py`` is intentionally thin so the lazy-import
+    This is the seam :mod:`opshub.cli.slack` calls. The handler in
+    ``slack.py`` is intentionally thin so the lazy-import
     bookkeeping stays in one place and this helper covers the
     operator-visible behaviour.
 

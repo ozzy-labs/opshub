@@ -10,7 +10,7 @@ connector with the process-wide registry as an import side effect —
 mirroring the Phase 3 GitHub + Phase 7 Slack / MS365 / Box precedents.
 
 Importing this module triggers ``register_connector(BoxDriveConnector())``
-so the CLI driver (``opshub connector sync box_drive``) can discover
+so the CLI driver (``opshub box_drive sync``) can discover
 the connector through :func:`opshub.connectors.discover_connectors`.
 Heavy dependencies (:class:`OpsHubSettings`,
 :func:`box_drive_default_root_path`, SQLAlchemy ``sources_table``)

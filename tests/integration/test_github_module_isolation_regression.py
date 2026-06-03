@@ -229,7 +229,7 @@ def test_b_victim_can_patch_test_token_after_polluter(
     monkeypatch.setattr(github_auth, "test_token", fake_test_token)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "auth", "test", "github"])
+    result = runner.invoke(app, ["github", "auth", "test"])
 
     assert result.exit_code == 0, (
         f"auth test github failed after a polluter test ran first.\n"

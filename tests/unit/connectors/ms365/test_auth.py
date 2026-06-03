@@ -346,7 +346,7 @@ def test_get_access_token_raises_when_no_refresh_token(
             auth.get_access_token()
 
     message = str(excinfo.value)
-    assert "opshub connector auth set connector:ms365" in message
+    assert "opshub ms365 auth set" in message
 
 
 def test_get_access_token_raises_on_refresh_failure(
@@ -367,7 +367,7 @@ def test_get_access_token_raises_on_refresh_failure(
 
     message = str(excinfo.value)
     assert "Token has been revoked" in message
-    assert "opshub connector auth set connector:ms365" in message
+    assert "opshub ms365 auth set" in message
 
 
 # ----- _extract_code helper ----------------------------------------------

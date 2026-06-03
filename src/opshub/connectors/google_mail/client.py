@@ -225,7 +225,7 @@ class GmailClient:
     so the connection pool is reused across pages.
 
     The class is **not** thread-safe — Phase 14 syncs run sequentially
-    inside ``opshub connector sync google_mail`` (one connector at a
+    inside ``opshub google_mail sync`` (one connector at a
     time per process), so a per-call lock would be needless overhead.
     """
 
@@ -555,7 +555,7 @@ class GmailClient:
                 raise GoogleAuthError(
                     "Gmail request returned 401 insufficient_scope. "
                     "The stored refresh token does not grant gmail.readonly. "
-                    "Re-run: opshub connector auth set google_workspace"
+                    "Re-run: opshub google_workspace auth set"
                 )
             if response.status_code >= 400:
                 raise ConnectorFailedError(

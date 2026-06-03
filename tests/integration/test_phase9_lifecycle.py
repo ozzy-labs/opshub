@@ -14,7 +14,7 @@ Phase 3 ``SourceService`` + Phase 1 event store + Phase 9 step A2
 What this pins
 --------------
 
-- ``opshub connector list`` surfaces ``box_drive`` so operators
+- ``opshub connectors`` surfaces ``box_drive`` so operators
   discover the connector even before they enable it (ADR-0019 §決定
   (a) — actionable presence regardless of ``enabled`` flag).
 - **Pass 1** — three files exist in ``root_path`` → three
@@ -207,7 +207,7 @@ def test_box_drive_lifecycle_2_pass_sync(
 
     Pass 1 (cold start)
         Three files exist in ``root_path`` (one in a subdir to exercise
-        the recursive walk). ``opshub connector sync box_drive`` is
+        the recursive walk). ``opshub box_drive sync`` is
         invoked. Expected: three new ``sources`` rows under
         ``connector_name='box_drive'`` with
         ``source_type='box_drive_file'`` and populated ``fingerprint``;
@@ -217,7 +217,7 @@ def test_box_drive_lifecycle_2_pass_sync(
         - ``a.txt`` is modified (content + mtime advanced).
         - ``c.txt`` is deleted.
         - ``d.md`` is added.
-        ``opshub connector sync box_drive`` is invoked. Expected: two
+        ``opshub box_drive sync`` is invoked. Expected: two
         new :class:`SourceObserved` events (``a.txt`` upserted with a
         refreshed fingerprint + ``d.md`` minted as a new row). The
         ``c.txt`` row remains in ``sources`` (ADR-0019 §決定 (e)
@@ -237,10 +237,10 @@ def test_box_drive_lifecycle_2_pass_sync(
     # Pre-condition: ``connector list`` surfaces ``box_drive``.
     # ------------------------------------------------------------------
     runner = CliRunner()
-    list_result = runner.invoke(app, ["connector", "list"])
+    list_result = runner.invoke(app, ["connectors"])
     assert list_result.exit_code == 0, list_result.stdout
     assert "box_drive" in list_result.stdout, (
-        "box_drive connector must surface in `opshub connector list` so "
+        "box_drive connector must surface in `opshub connectors` so "
         "operators can discover it even before opting in (ADR-0019 §決定 (a))."
     )
 
@@ -254,7 +254,7 @@ def test_box_drive_lifecycle_2_pass_sync(
     _write_file(drive_root / "sub" / "b.md", "b body", mtime_ns=mtime_b_pass1)
     _write_file(drive_root / "c.txt", "to be deleted", mtime_ns=mtime_c_pass1)
 
-    pass1 = runner.invoke(app, ["connector", "sync", "box_drive"])
+    pass1 = runner.invoke(app, ["box_drive", "sync"])
     assert pass1.exit_code == 0, pass1.stdout + (pass1.stderr or "")
     assert "synced box_drive: 3 item(s) observed" in pass1.stdout, pass1.stdout
     # Issue #316 post-merge audit: ``opshub connector sync`` drives the
@@ -315,7 +315,7 @@ def test_box_drive_lifecycle_2_pass_sync(
     # so any sub-ns Linux quirks settle (cheap, deterministic).
     time.sleep(0.01)
 
-    pass2 = runner.invoke(app, ["connector", "sync", "box_drive"])
+    pass2 = runner.invoke(app, ["box_drive", "sync"])
     assert pass2.exit_code == 0, pass2.stdout + (pass2.stderr or "")
     # ADR-0019 §決定 (d) — only ``a.txt`` (modified) and ``d.md``
     # (added) yield :class:`SourceObserved`. ``c.txt`` (deleted) is

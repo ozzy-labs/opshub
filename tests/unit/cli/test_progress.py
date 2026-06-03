@@ -152,9 +152,13 @@ def test_rich_reporter_update_changes_total() -> None:
 
 
 def test_root_no_progress_flag_sets_preference() -> None:
-    """``--no-progress`` on the root command records the preference."""
+    """``--no-progress`` on the root command records the preference.
+
+    Phase 17-B (ADR-0031): the legacy ``connector list`` was renamed to
+    ``connectors`` (plural noun, no verb).
+    """
     runner = CliRunner()
-    result = runner.invoke(app, ["--no-progress", "connector", "list"])
+    result = runner.invoke(app, ["--no-progress", "connectors"])
     assert result.exit_code == 0, result.stdout
     assert _progress._preference is False  # pyright: ignore[reportPrivateUsage]
 
@@ -162,7 +166,7 @@ def test_root_no_progress_flag_sets_preference() -> None:
 def test_root_progress_flag_sets_preference() -> None:
     """``--progress`` on the root command records the preference."""
     runner = CliRunner()
-    result = runner.invoke(app, ["--progress", "connector", "list"])
+    result = runner.invoke(app, ["--progress", "connectors"])
     assert result.exit_code == 0, result.stdout
     assert _progress._preference is True  # pyright: ignore[reportPrivateUsage]
 

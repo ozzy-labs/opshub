@@ -162,7 +162,7 @@ def stub_secrets(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     """Stub :mod:`opshub.core.secrets` with an in-process dict.
 
     Returns the dict so tests can pre-populate it (simulating a prior
-    ``opshub connector auth set connector:box`` invocation) and assert
+    ``opshub box auth set`` invocation) and assert
     on what the auth flow wrote afterwards. Using ``setattr`` on the
     actual module means lazy imports inside :class:`BoxAuth` resolve
     to our stubs without us touching the keyring backend.
@@ -244,7 +244,7 @@ def test_init_loads_client_secret_from_secrets_when_not_supplied(
 def test_init_raises_when_client_secret_missing(stub_secrets: dict[str, str]) -> None:
     """Empty keyring + no explicit secret → actionable ConfigError.
 
-    The error must mention ``opshub connector auth set connector:box``
+    The error must mention ``opshub box auth set``
     so the operator can self-service.
     """
     with pytest.raises(ConfigError) as excinfo:
@@ -252,7 +252,7 @@ def test_init_raises_when_client_secret_missing(stub_secrets: dict[str, str]) ->
 
     message = str(excinfo.value)
     assert "client_secret" in message
-    assert "opshub connector auth set connector:box" in message
+    assert "opshub box auth set" in message
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +426,7 @@ def test_get_access_token_raises_when_no_refresh_token(
 
     message = str(excinfo.value)
     assert "refresh token" in message
-    assert "opshub connector auth set connector:box" in message
+    assert "opshub box auth set" in message
 
 
 def test_get_access_token_raises_on_refresh_failure(

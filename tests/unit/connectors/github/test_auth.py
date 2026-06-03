@@ -5,7 +5,7 @@ that adds two concrete behaviours on top:
 
 1. A fixed keyring key (``"connector:github:pat"``) exposed via the
    :data:`GITHUB_PAT_SECRET_KEY` constant. This is the contract between
-   the CLI writer (``opshub connector auth set github``) and the
+   the CLI writer (``opshub github auth set``) and the
    connector reader.
 2. A friendly :class:`ConfigError` when the token is absent from both
    keyring and the ``OPSHUB_CONNECTOR_GITHUB_PAT`` env-var override,
@@ -140,7 +140,7 @@ def test_get_github_token_raises_config_error_when_unset(
         get_github_token()
 
     message = str(excinfo.value)
-    assert "opshub connector auth set github" in message
+    assert "opshub github auth set" in message
     assert "OPSHUB_CONNECTOR_GITHUB_PAT" in message
 
 

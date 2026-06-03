@@ -183,7 +183,7 @@ class MS365Fetcher:
     groups within a single sync.
 
     The class is **not** thread-safe — Phase 7 syncs run sequentially
-    inside ``opshub connector sync ms365`` (one connector at a time per
+    inside ``opshub ms365 sync`` (one connector at a time per
     process), so a per-call lock would be needless overhead.
     """
 

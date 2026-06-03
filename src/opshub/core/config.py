@@ -206,7 +206,7 @@ class SlackConnectorSettings(BaseModel):
     ``enabled = False`` is the default per Phase 7 plan §1 #2 — every
     SaaS connector is opt-in so a fresh ``uv tool install`` never tries
     to reach Slack on first run. Operators flip the flag and populate
-    ``channels`` after running ``opshub connector auth set slack`` to
+    ``channels`` after running ``opshub slack auth set`` to
     store the OAuth access token.
 
     ``channels`` is the list of Slack channel ids
@@ -282,7 +282,7 @@ class BoxConnectorSettings(BaseModel):
     Per phase-7-plan §1 #2, the connector defaults to ``enabled = false``
     so a fresh install never tries to talk to Box without an explicit
     opt-in. Operators set ``enabled = true`` after running
-    ``opshub connector auth set connector:box``.
+    ``opshub box auth set``.
     """
 
     enabled: bool = False

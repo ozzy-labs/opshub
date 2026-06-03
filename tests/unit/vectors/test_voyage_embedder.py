@@ -190,7 +190,7 @@ def test_missing_api_key_raises_config_error(monkeypatch: pytest.MonkeyPatch) ->
 
     voyage_cls.assert_not_called()
     message = str(excinfo.value)
-    assert "opshub connector auth set embedder:voyage" in message
+    assert "opshub embedder auth set voyage" in message
     assert "OPSHUB_EMBEDDER_VOYAGE_API_KEY" in message
 
 

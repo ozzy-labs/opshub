@@ -43,7 +43,7 @@ from opshub.llm.schema import pydantic_to_tool_schema
 __all__ = ["OPENAI_API_KEY_SECRET", "OpenAILLMClient"]
 
 #: Keyring key used to store the OpenAI LLM API key. Exposed so a future
-#: ``opshub connector auth set llm:openai`` CLI (Phase 5 step A5) writes
+#: ``opshub llm auth set openai`` CLI (Phase 5 step A5) writes
 #: to the exact key this client reads at completion time.
 OPENAI_API_KEY_SECRET = "llm:openai:api_key"
 
@@ -303,7 +303,7 @@ class OpenAILLMClient:
 
                 raise ConfigError(
                     "OpenAI LLM API key not configured. Run "
-                    "`opshub connector auth set llm:openai` or set "
+                    "`opshub llm auth set openai` or set "
                     "OPSHUB_LLM_OPENAI_API_KEY in the environment."
                 )
             self._client = openai_module.OpenAI(api_key=api_key)

@@ -287,7 +287,7 @@ class DriveClient:
     call) so the connection pool is reused across pages.
 
     The class is **not** thread-safe — Phase 13 syncs run sequentially
-    inside ``opshub connector sync google_workspace`` (one connector
+    inside ``opshub google_workspace sync`` (one connector
     at a time per process), so a per-call lock would be needless
     overhead.
     """

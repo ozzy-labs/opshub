@@ -32,7 +32,7 @@ from opshub.vectors.embedder import EmbeddingResult
 __all__ = ["VOYAGE_API_KEY_SECRET", "VoyageEmbedder"]
 
 #: Keyring key used to store the Voyage API key. Exposed so the CLI
-#: command ``opshub connector auth set embedder:voyage`` writes to the
+#: command ``opshub embedder auth set voyage`` writes to the
 #: exact same key this embedder reads at embed time.
 VOYAGE_API_KEY_SECRET = "embedder:voyage:api_key"
 
@@ -147,7 +147,7 @@ class VoyageEmbedder:
 
                 raise ConfigError(
                     "Voyage API key not configured. Run "
-                    "`opshub connector auth set embedder:voyage` or set "
+                    "`opshub embedder auth set voyage` or set "
                     "OPSHUB_EMBEDDER_VOYAGE_API_KEY in the environment."
                 )
             self._client = voyageai_module.Client(api_key=api_key)

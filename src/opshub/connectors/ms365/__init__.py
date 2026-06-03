@@ -7,7 +7,7 @@ step B2 adds the Microsoft Graph fetcher
 (:mod:`opshub.connectors.ms365.connector`) into the framework registry.
 
 Importing this package now registers :class:`MS365Connector` with the
-process-wide registry so ``opshub connector sync ms365`` can discover
+process-wide registry so ``opshub ms365 sync`` can discover
 it (mirrors the Phase 3 GitHub pattern). Heavy SDK imports (``msal``,
 ``httpx``) stay lazy inside :class:`MS365Auth` / :class:`MS365Fetcher`
 constructors — importing this package itself only pulls in the

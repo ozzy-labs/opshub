@@ -82,7 +82,7 @@ class NoOpLLMClient:
         raise ConfigError(
             "[llm] backend is disabled; configure 'anthropic' or 'openai' "
             "in opshub.toml (or set OPSHUB_LLM_BACKEND env var) and run "
-            "`opshub connector auth set llm:<backend>` to store the API key."
+            "`opshub llm auth set <backend>` to store the API key."
         )
 
     def complete_structured(
@@ -106,7 +106,7 @@ class NoOpLLMClient:
         raise ConfigError(
             "[llm] backend is disabled; configure 'anthropic' or 'openai' "
             "in opshub.toml (or set OPSHUB_LLM_BACKEND env var) and run "
-            "`opshub connector auth set llm:<backend>` to store the API key."
+            "`opshub llm auth set <backend>` to store the API key."
         )
 
 

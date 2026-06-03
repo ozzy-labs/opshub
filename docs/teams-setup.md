@@ -78,7 +78,7 @@ PY
 ### (a) keyring 経由 (推奨、長期保管)
 
 ```bash
-opshub connector auth set connector:teams
+opshub teams auth set
 # プロンプトに従って token を貼り付け
 ```
 
@@ -92,7 +92,7 @@ alternative は principal-neutral にこの 1 slot を共有する
 
 ```bash
 export OPSHUB_CONNECTOR_TEAMS_TOKEN="<access_token>"
-opshub connector sync teams
+opshub teams sync
 ```
 
 env var を設定すると keyring lookup を skip する。CI / container 等では
@@ -121,7 +121,7 @@ senders:
 ## 5. sync 実行
 
 ```bash
-opshub connector sync teams
+opshub teams sync
 ```
 
 差分検出は Microsoft Graph の `@odata.deltaLink` で行う。
@@ -148,7 +148,7 @@ OS scheduler を operator が設定する (常駐 daemon は Phase 11 scope 外)
 
 ```cron
 # crontab -e
-0 */2 * * * opshub connector sync teams
+0 */2 * * * opshub teams sync
 ```
 
 ## 制約事項

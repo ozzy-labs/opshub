@@ -290,7 +290,7 @@ class BoxFetcher:
                     raise ConnectorFailedError(
                         "Box events API returned 401 after token refresh; "
                         "the stored refresh token may be revoked — run "
-                        "`opshub connector auth set connector:box` to re-auth"
+                        "`opshub box auth set` to re-auth"
                     ) from exc
                 if exc.status == 429:
                     delay = _retry_after_seconds(exc, attempt=attempt)

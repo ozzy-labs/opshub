@@ -3,7 +3,7 @@
 Composes :class:`opshub.connectors.onedrive_drive.scanner.OneDriveDriveScanner`
 + :func:`opshub.connectors.onedrive_drive.mapper.map_scanned_file`
 into the :class:`opshub.connectors.base.Connector` Protocol contract.
-Driven by the ``opshub connector sync onedrive_drive`` CLI; identical
+Driven by the ``opshub onedrive_drive sync`` CLI; identical
 control flow to the Phase 9 ``BoxDriveConnector`` (the local-FS
 contract is shared per ADR-0019 §(j)).
 
@@ -64,7 +64,7 @@ class OneDriveDriveConnector:
     the only behavioural differences are:
 
     * ``name`` = ``"onedrive_drive"`` (vs ``"box_drive"``) so the
-      CLI dispatcher routes ``opshub connector sync onedrive_drive``
+      CLI dispatcher routes ``opshub onedrive_drive sync``
       here.
     * Settings come from ``connectors.onedrive_drive`` rather than
       ``connectors.box_drive``.

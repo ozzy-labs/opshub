@@ -23,7 +23,7 @@ Why integration-level (not pure unit):
   documented Phase 3 behaviour; a unit test against a stubbed service
   cannot prove it.
 
-The CLI driver (``opshub connector sync github``) lives in
+The CLI driver (``opshub github sync``) lives in
 ``cli/connector.py`` and has its own surface (cursor bracket +
 exception sanitisation). That path is exercised by the placeholder
 tests shipped with PR #48 / PR #51; this module focuses purely on the
@@ -345,4 +345,4 @@ def test_sync_with_no_token_raises_config_error(
     # points the user at both configuration surfaces.
     message = str(excinfo.value)
     assert "OPSHUB_CONNECTOR_GITHUB_PAT" in message
-    assert "opshub connector auth set github" in message
+    assert "opshub github auth set" in message

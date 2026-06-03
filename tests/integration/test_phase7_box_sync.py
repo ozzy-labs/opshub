@@ -1,4 +1,4 @@
-"""End-to-end ``opshub connector sync box`` lifecycle (Phase 7 step C3).
+"""End-to-end ``opshub box sync`` lifecycle (Phase 7 step C3).
 
 Drives the CLI surface against a real SQLite database, with the Box
 :class:`BoxFetcher` replaced by a programmable stub so the suite never
@@ -9,7 +9,7 @@ touches the network / ``boxsdk`` SDK / keyring. Each test:
 2. Replaces the registered :class:`BoxConnector` with one carrying a
    stub fetcher factory so the connector's I/O boundary is fully under
    the test's control.
-3. Invokes ``opshub connector sync box`` through
+3. Invokes ``opshub box sync`` through
    :class:`typer.testing.CliRunner`.
 4. Asserts the on-disk effect — sources, inbox items, cursor
    advancement, and (for failures) ``ConnectorSyncFailed`` events.
@@ -219,7 +219,7 @@ def _reset_registry() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction
 
 
 # ----------------------------------------------------------------------
-# Happy path: ``opshub connector sync box`` persists sources + cursor
+# Happy path: ``opshub box sync`` persists sources + cursor
 # ----------------------------------------------------------------------
 
 
@@ -245,7 +245,7 @@ def test_box_sync_creates_sources(isolated_env: _PathsDict) -> None:
     )
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "box"])
+    result = runner.invoke(app, ["box", "sync"])
 
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
     assert "synced box: 2 item(s) observed" in result.stdout
@@ -296,7 +296,7 @@ def test_box_sync_is_idempotent(isolated_env: _PathsDict) -> None:
 
     runner = CliRunner()
 
-    first = runner.invoke(app, ["connector", "sync", "box"])
+    first = runner.invoke(app, ["box", "sync"])
     assert first.exit_code == 0, first.stdout + (first.stderr or "")
     assert _row_count(db_path, "sources") == 1
     assert _cursor_value(db_path, "box") == "pos-1"
@@ -304,7 +304,7 @@ def test_box_sync_is_idempotent(isolated_env: _PathsDict) -> None:
     # Second invocation runs with the persisted cursor as input. The
     # stub returns an empty page — no new observations, sources count
     # stays at 1, cursor remains at "pos-1".
-    second = runner.invoke(app, ["connector", "sync", "box"])
+    second = runner.invoke(app, ["box", "sync"])
     assert second.exit_code == 0, second.stdout + (second.stderr or "")
     assert "synced box: 0 item(s) observed" in second.stdout
     assert _row_count(db_path, "sources") == 1
@@ -336,7 +336,7 @@ def test_box_sync_records_failure_event(isolated_env: _PathsDict) -> None:
     )
 
     runner = CliRunner()
-    result = runner.invoke(app, ["connector", "sync", "box"])
+    result = runner.invoke(app, ["box", "sync"])
 
     # ---- CLI surface ---------------------------------------------------
     assert result.exit_code == 1

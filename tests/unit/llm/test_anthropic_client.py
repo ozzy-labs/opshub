@@ -323,7 +323,7 @@ def test_missing_api_key_raises_config_error(monkeypatch: pytest.MonkeyPatch) ->
 
     anthropic_cls.assert_not_called()
     message = str(excinfo.value)
-    assert "opshub connector auth set llm:anthropic" in message
+    assert "opshub llm auth set anthropic" in message
     assert "OPSHUB_LLM_ANTHROPIC_API_KEY" in message
 
 

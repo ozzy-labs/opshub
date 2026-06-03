@@ -198,7 +198,7 @@ invariants hold at every verbosity level:
   `traceback.format_exception` output and pipes the result through
   `sanitise_error_message`. The CLI never prints a raw `str(exc)`.
 - **Connector sync stays type-name only by default (R3).** The default
-  `opshub connector sync <name>` failure path writes only the exception
+  `opshub <connector> sync` failure path writes only the exception
   **type name** to the `ConnectorSyncFailed` event and to the one-line
   `sync failed: <Type>` summary on **stderr**. The exception message
   is never persisted there. (The success path — `synced <name>: N

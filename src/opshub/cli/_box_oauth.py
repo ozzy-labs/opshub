@@ -75,7 +75,7 @@ def run_paste_code_flow() -> None:
             "Set it in opshub.toml (or via "
             "OPSHUB_CONNECTORS__BOX__CLIENT_ID) with your Box developer "
             "app's client id, then re-run "
-            "`opshub connector auth set connector:box`.",
+            "`opshub box auth set`.",
             err=True,
         )
         raise typer.Exit(code=2)

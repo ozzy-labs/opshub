@@ -69,7 +69,7 @@ CI / container では env 経由が便利。
 ## sync 実行
 
 ```bash
-opshub connector sync box_drive
+opshub box_drive sync
 ```
 
 差分検出は `sources.fingerprint` 列 (Phase 9 step A2 / migration 0017)
@@ -81,12 +81,13 @@ opshub connector sync box_drive
 
 ```cron
 # crontab -e
-0 */6 * * * opshub connector sync box_drive
+0 */6 * * * opshub box_drive sync
 ```
 
 ## 認証
 
-`opshub connector auth set connector:box_drive` は **意図的に reject** される。
+`opshub box_drive auth set` は **登録されていない** (Phase 17 ADR-0031 §決定 (6))。
+コマンドを叩くと Typer が `No such command 'auth'` で exit 2 する。
 `box_drive` は OS-level Box Drive 認証 (Web Box ログイン状態を OS daemon が
 保持) に依存しているため、opshub 側で token を持たない
 ([ADR-0019](adr/0019-local-filesystem-backed-connector.md) §決定 (a))。
@@ -105,7 +106,7 @@ opshub から見える唯一の設定は `opshub.toml` 内の
   `sources` 行は stale row として残る。`opshub source list --stale` で
   炙り出す機能は Phase 9.x 候補。
 - **watch mode なし** (ADR-0019 §決定 (i))。Phase 9 MVP は scan-only。
-  `opshub connector sync box_drive` を operator が cron 等で叩く前提。
+  `opshub box_drive sync` を operator が cron 等で叩く前提。
   inotify / FSEvents / CldAPI callback による push 駆動更新は Phase 9.x
   で filewatch backend として抽象化予定。
 
@@ -126,7 +127,7 @@ WSL2 で `mountvol` 設定が未実施、または `wsl --shutdown` 後の再起
 Box Drive client 側の同期が完了しているか確認 (`ls -la <root>/<file>` で
 mtime が最新か)。Box Drive は file が変更されたタイミングと OS 側に
 mtime が反映されるタイミングに lag がある (特に大きい file)。
-`opshub connector sync box_drive` を数分後にもう一度実行する。
+`opshub box_drive sync` を数分後にもう一度実行する。
 
 ### 100k+ files で sync が時間がかかる
 
