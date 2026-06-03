@@ -36,24 +36,26 @@ If the `connectors-slack` extras are enabled and the host will surface Slack dat
 | DM listing | `im:read` | `--types ...,im` in `opshub slack conversations`, DM sync |
 | MPIM listing | `mpim:read` | `--types ...,mpim` in `opshub slack conversations`, MPIM sync |
 
-**Engagement-axis activity (`opshub slack conversations --since <when>` default, Phase 19-B)** needs `search:read` so the discovery command can build the per-channel index of the operator's own most-recent post via `search.messages`:
+**Engagement-axis activity (`opshub slack conversations --sort=last_self_post` or `--sort=name + --since`, Phase 19-D [ADR-0035](adr/0035-slack-sort-axis-consolidation.md) §(c) §(d))** needs `search:read` so the discovery command can build the per-channel index of the operator's own most-recent post via `search.messages`:
 
 | Purpose | Scope | Required for |
 | --- | --- | --- |
-| engagement axis lookup | `search:read` | `opshub slack conversations --since <when>` default ([ADR-0034](adr/0034-slack-engagement-axis.md)); **User Token only** — Bot Tokens cannot hold `search:read`, opt back into the any-author probe with `--activity=any` if you cannot grant the scope |
+| engagement axis lookup | `search:read` | `opshub slack conversations --sort=last_self_post` (explicit) **or** `--sort=name + --since` (engagement-axis implicit default per ADR-0035 §(d)); **User Token only** — Bot Tokens cannot hold `search:read`, opt back into the any-author probe with `--sort=last_activity` if you cannot grant the scope |
 
-**Any-author activity (`opshub slack conversations --since <when> --activity=any`, legacy [#374](https://github.com/ozzy-labs/opshub/issues/374)) and `opshub slack sync`** need the matching `*:history` scopes:
+**Any-author activity (`opshub slack conversations --sort=last_activity --since <when>`, legacy [#374](https://github.com/ozzy-labs/opshub/issues/374)) and `opshub slack sync`** need the matching `*:history` scopes:
 
 | Purpose | Scope | Required for |
 | --- | --- | --- |
-| public channel message history | `channels:history` | `opshub slack sync`, `opshub slack conversations --since <when> --activity=any` for public channels |
-| private channel message history | `groups:history` | private channel sync, `--activity=any` for private channels |
-| DM message history | `im:history` | DM sync, `--activity=any` for DMs |
-| MPIM message history | `mpim:history` | MPIM sync, `--activity=any` for MPIMs |
+| public channel message history | `channels:history` | `opshub slack sync`, `opshub slack conversations --sort=last_activity --since <when>` for public channels |
+| private channel message history | `groups:history` | private channel sync, `--sort=last_activity` for private channels |
+| DM message history | `im:history` | DM sync, `--sort=last_activity` for DMs |
+| MPIM message history | `mpim:history` | MPIM sync, `--sort=last_activity` for MPIMs |
 
-Bot Tokens (`xoxb-...`) work as an alternative principal, but the bot must be `/invite`d into every channel it should see (ADR-0018 §Decision (2)). Bot Tokens **cannot** satisfy the engagement axis (`search:read` is a User-Token-only scope); the discovery command surfaces an explicit `ConfigError` recommending `--activity=any` when a Bot Token is detected on the engagement path ([ADR-0034](adr/0034-slack-engagement-axis.md) §決定).
+Bot Tokens (`xoxb-...`) work as an alternative principal, but the bot must be `/invite`d into every channel it should see (ADR-0018 §Decision (2)). Bot Tokens **cannot** satisfy the engagement axis (`search:read` is a User-Token-only scope); the discovery command surfaces an explicit `ConfigError` recommending `--sort=last_activity` when a Bot Token is detected on the engagement path ([ADR-0034](adr/0034-slack-engagement-axis.md) §決定, [ADR-0035](adr/0035-slack-sort-axis-consolidation.md) §(f)).
 
-The `*:history` scopes are checked per type only on the any-author axis: when `--activity=any --since <when>` is used and one of them is missing, that conversation type is dropped from the activity-filtered output and a single warning surfaces on stderr (other types continue to flow, `exit 0`). The discovery listing itself (no `--since`) only needs the `*:read` scopes.
+Note that `--since` alone (without `--sort`) takes the engagement axis as its implicit default (ADR-0035 §(d)), so it requires `search:read` even though no `--sort=last_self_post` is spelled out. Bot Token users and `search:read`-less User Token users should pass `--sort=last_activity` explicitly to fall back to the any-author probe.
+
+The `*:history` scopes are checked per type only on the any-author axis: when `--sort=last_activity --since <when>` is used and one of them is missing, that conversation type is dropped from the activity-filtered output and a single warning surfaces on stderr (other types continue to flow, `exit 0`). The discovery listing itself (no `--since`, default `--sort=name`) only needs the `*:read` scopes.
 
 ## 2. Initialise the database
 

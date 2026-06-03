@@ -817,3 +817,78 @@ Either pin `--activity=any` to keep the field name stable, or update the consume
 - **BREAKING CHANGE → minor version bump while pre-1.0.** `opshub` is in the `0.x` line where any minor can change the public surface (SemVer §4). Phase 19-B's Conventional Commit prefix is `feat(slack):` (not `feat!:`) because the breaking change rule for `release-please` only forces a major bump on `0.x` when the operator opts in explicitly. Operators reading this section before upgrading are the intended trigger for the docs-side awareness.
 - **One new ADR + zero revisions** — Phase 19 = 1 new + 0 revisions (Phase 11 = 1 new + 2 revisions → Phase 12 = 0 + 3 → Phase 13 = 0 + 3 → Phase 14 = 0 + 2 → Phase 15 = 1 + 0 → Phase 17 = 1 + 0 → Phase 18 was 0 new + ADR-0033 forward-pinned across A/B/C → **Phase 19 = 1 new + 0 revisions**).
 - Full rationale and rejected alternatives: [ADR-0034](adr/0034-slack-engagement-axis.md). Phase 19-A delivered the ADR ([#440](https://github.com/ozzy-labs/opshub/issues/440)); Phase 19-B delivers the implementation + tests + this docs section.
+
+## Phase 19-D: `opshub slack conversations` sort axis consolidation — **BREAKING CHANGE**
+
+Phase 19-D ([ADR-0035](adr/0035-slack-sort-axis-consolidation.md), epic [#448](https://github.com/ozzy-labs/opshub/issues/448)) supersedes the Phase 19-B `--activity={mine|any}` CLI surface with a unified `--sort=name|last_self_post|last_activity` flag, flips the default `--format` from `table` to `toml`, and pins the default sort to `name` (independent of `--since`). The engagement-axis signal source (search.messages-backed self-post index), Bot Token rejection, `search:read` requirement, field disjointness invariant, and `--all` × engagement-axis non-coexistence are **all inherited from ADR-0034 unchanged**; only the CLI vocabulary is reshuffled. opshub is pre-userbase, so ADR-0035 ships **no compat shim** (per the standing pre-userbase posture).
+
+### What changes (breaking)
+
+1. **`--activity` flag fully removed.** Use `--sort` instead. Mapping:
+
+   | Old (pre-19-D) | New (19-D) |
+   | --- | --- |
+   | `--activity=mine --since <X>` | `--sort=last_self_post --since <X>` |
+   | `--activity=any --since <X>` | `--sort=last_activity --since <X>` |
+   | `--since <X>` (no `--activity`) | `--since <X>` (no `--sort`) — engagement axis stays the implicit default per ADR-0035 §(d), behaviour identical |
+
+2. **Default `--format` is now `toml`.** The primary use case is pasting the output into `[connectors.slack] channels` in `opshub.toml`; the default switch removes the `--format toml` tax. Pass `--format=table` to reproduce the pre-19-D rendering (eyeball / debug / script-compatible).
+
+3. **`--since` no longer flips the within-bucket sort.** Pre-19-D: passing `--since` flipped the sort from `display_name` ascending to activity-ts descending. Post-19-D: default sort is `name` regardless of `--since`; pass `--sort=last_self_post` (engagement axis ts) or `--sort=last_activity` (any-author axis ts) when you want the ts-descending listing.
+
+4. **Implicit `--since 90d` cutoff when `--sort=last_self_post|last_activity` is used without `--since`.** A one-shot stderr notice surfaces (`notice: --sort=<sort> defaulted to --since 90d to cap probe cost; pass --since explicitly to override.`) so the choice is observable. Pass `--since` explicitly to override (e.g. `--since 365d` for a year-wide probe).
+
+5. **`--sort=name + --since` keeps the engagement-axis `search:read` requirement.** ADR-0035 §(d): when `--sort` is not specified and `--since` is set, the adapter takes the engagement axis as its implicit default. Bot Token users and `search:read`-less User Token users will see `ConfigError` / `ConnectorFailedError` exactly as on the explicit `--sort=last_self_post` path. Workaround: pass `--sort=last_activity` explicitly to fall back to the any-author probe (requires `*:history` scopes instead).
+
+### Restoring the pre-19-D `--activity=mine` / `--activity=any` behaviour
+
+```bash
+opshub slack conversations --sort=last_self_post --since 30d   # engagement axis (was --activity=mine --since 30d)
+opshub slack conversations --sort=last_activity --since 30d    # any-author axis (was --activity=any --since 30d)
+opshub slack conversations --since 30d                          # engagement-axis implicit default (was --since 30d with no --activity)
+opshub slack conversations --format=table                       # pre-19-D default table rendering
+```
+
+### Indexing-lag notice rename
+
+The Phase 19-B indexing-lag advisory is rewritten to match the new flag vocabulary:
+
+```text
+notice: search.messages may lag by minutes; use --sort=last_activity for live activity.
+```
+
+The behaviour is unchanged — the notice still surfaces once per call on the engagement-axis path, still ignores `-q` / `OPSHUB_LOG_LEVEL`, and is still suppressed by switching to `--sort=last_activity` ([ADR-0034](adr/0034-slack-engagement-axis.md) §(i) inherited by [ADR-0035](adr/0035-slack-sort-axis-consolidation.md) §(f)).
+
+### JSON consumer impact
+
+The field-switching rule from Phase 19-B is inherited verbatim — only the flag name changes:
+
+| invocation | populated ts field | absent ts field |
+| --- | --- | --- |
+| `--sort=last_self_post --since <X>` (or `--sort=name + --since <X>`) | `last_self_post_ts` | `last_activity_ts` |
+| `--sort=last_activity --since <X>` | `last_activity_ts` | `last_self_post_ts` |
+| `--sort=name` (no `--since`) | (both absent) | (both absent) |
+| `--sort=last_self_post` (no `--since`, implicit 90d) | `last_self_post_ts` | `last_activity_ts` |
+| `--sort=last_activity` (no `--since`, implicit 90d) | `last_activity_ts` | `last_self_post_ts` |
+
+Pin `--sort=last_activity` to keep `last_activity_ts` stable, or update the consumer to read whichever of the two fields is present.
+
+### `--all` × engagement-axis combination matrix (inherited from ADR-0034 §(h), extended)
+
+| `--all` | `--sort` | `--since` | result |
+| --- | --- | --- | --- |
+| no | any | any | OK |
+| yes | `name` | unset | OK (no probe runs) |
+| yes | `name` | set | **rejected** (engagement-axis implicit default) |
+| yes | `last_self_post` | any | **rejected** (engagement-axis explicit) |
+| yes | `last_activity` | any | OK (any-axis is workspace-wide safe) |
+
+Rejection message: `Error: --all is incompatible with engagement-axis sort (--sort=last_self_post or --sort=name + --since; search.messages indexes only self-member channels); use --sort=last_activity for workspace-wide activity.` (exit 1).
+
+### Phase 19-D specifics
+
+- **No DB migration.** Phase 19-D is CLI / connector / docs surface only.
+- **No new extras.** The change reuses `[connectors-slack]` (slack-sdk).
+- **BREAKING CHANGE in Conventional Commits.** The implementation PR uses the `feat(slack)!:` prefix so `release-please` cuts a CHANGELOG `BREAKING CHANGE:` entry. Pre-1.0 SemVer keeps the version bump in the minor lane (`0.3.x → 0.4.0`).
+- **One new ADR (ADR-0035) + one partial supersede (ADR-0034 §(b) §(g) §(h) §(i) §不変条件 2 — CLI surface only).** The decision body of ADR-0034 (engagement axis source, Bot Token rejection, no silent fallback, field disjointness, `--all` × engagement-axis non-coexistence, indexing-lag notice) carries forward unchanged; only the CLI flag spelling is rewritten.
+- Full rationale and rejected alternatives: [ADR-0035](adr/0035-slack-sort-axis-consolidation.md). Phase 19-D-1 delivered the ADR + supersede notice ([#451](https://github.com/ozzy-labs/opshub/pull/451)); Phase 19-D-2 delivers the implementation + tests + this docs section ([#450](https://github.com/ozzy-labs/opshub/issues/450)).

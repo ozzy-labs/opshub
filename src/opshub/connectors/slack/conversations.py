@@ -5,30 +5,42 @@ Iterates Slack's ``users.conversations`` API (default) — or
 ``all=True`` — and yields :class:`SlackConversation` rows so the CLI surface
 can render a human-friendly table / TOML snippet / JSON payload.
 
-Engagement axis (Phase 19-B, ADR-0034)
---------------------------------------
+Sort axis (Phase 19-D, ADR-0035; supersedes ADR-0034 §(b) §(g) §(h) §(i) CLI surface)
+-------------------------------------------------------------------------------------
 
-When ``since`` is set the caller now picks between two activity semantics:
+The caller selects a sort key via ``sort``; the activity-probe axis is
+derived from the sort key + ``since`` combination:
 
-* ``activity="mine"`` (default) — "channels where I actually wrote
-  something". We call ``search.messages`` **once** with
-  ``query=f"from:<@{self_user_id}>"`` + ``oldest=since`` and build a
-  per-channel index of the operator's own most-recent post ts.
-  Listing rows are kept only when the channel appears in the index; the
-  retained ts lands on :attr:`SlackConversation.last_self_post_ts`. This
-  matches the "discoverability of my Slack engagement" use case far
-  better than the legacy any-author probe — operators paste-into-toml
-  the channels they speak in, not the channels marketing broadcasts
-  into.
-* ``activity="any"`` — pre-19-B behaviour: one
-  ``conversations.history?limit=1&oldest=<since>`` call per row,
-  ``last_activity_ts`` populated, broadcast / announcement-only
-  channels included.
+* ``sort="last_self_post"`` (engagement axis, ADR-0034 §(a)). One
+  ``search.messages`` call with ``query=f"from:<@{self_user_id}>"`` +
+  ``oldest=since`` builds a per-channel index of the operator's own
+  most-recent post ts. Listing rows are kept only when the channel
+  appears in the index; the retained ts lands on
+  :attr:`SlackConversation.last_self_post_ts`. Bot Tokens cannot hold
+  ``search:read`` so the helper raises :class:`ConfigError` and
+  recommends ``--sort=last_activity``.
+* ``sort="last_activity"`` (any-author axis, #374 pre-19-B). One
+  ``conversations.history?limit=1&oldest=<since>`` per row,
+  ``last_activity_ts`` populated, broadcast / announcement-only channels
+  included. Requires ``*:history`` for the requested ``types``.
+* ``sort="name"`` (default) + ``since != None`` — engagement-axis
+  implicit default (ADR-0035 §(d)). Same probe + Bot Token / scope
+  semantics as ``sort="last_self_post"`` but the listing keeps name
+  ordering and shows the ``LAST_POST`` column / ``last_self_post_ts``
+  field.
+* ``sort="name"`` + ``since == None`` — no probe. Both axis fields
+  remain ``None`` and the JSON renderer drops them.
 
-The two fields stay disjoint per row: mine writes only
-``last_self_post_ts`` (any-axis field stays ``None``), any writes only
-``last_activity_ts``. The JSON renderer drops whichever field is ``None``
-so consumers see exactly one axis per row.
+When ``sort in ("last_self_post", "last_activity")`` is paired with
+``since=None``, the helper applies an implicit ``since = now_utc() -
+timedelta(days=90)`` cutoff to cap probe cost (chatty workspaces /
+``search.messages`` paging) and emits the ADR-0035 §(e) notice once
+to stderr.
+
+The two fields stay disjoint per row: engagement-axis paths write only
+``last_self_post_ts`` (the any-axis field stays ``None``), any-axis
+paths write only ``last_activity_ts``. The JSON renderer drops whichever
+field is ``None`` so consumers see exactly one axis per row.
 
 Motivation (over the original ``list_channels`` helper)
 -------------------------------------------------------
@@ -130,10 +142,12 @@ so the redaction stance (ADR-0027) is uniform across the connector.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from opshub.connectors.slack._retry import retry_on_rate_limit
 from opshub.core.errors import ConfigError, ConnectorFailedError
+from opshub.core.time import now_utc
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -145,9 +159,9 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CONVERSATION_TYPES",
-    "ActivityAxis",
     "ConversationType",
     "SlackConversation",
+    "SortKey",
     "list_conversations",
 ]
 
@@ -180,11 +194,22 @@ _API_TYPE_TOKEN: dict[ConversationType, str] = {
     "mpim": "mpim",
 }
 
-#: Activity axis literal (Phase 19-B, ADR-0034). ``"mine"`` is the
-#: engagement axis (search.messages-backed, default) and ``"any"``
-#: preserves the Phase 17 #374 any-author probe so an operator can
-#: opt back into the old behaviour with ``--activity=any``.
-ActivityAxis = Literal["mine", "any"]
+#: Sort-key literal (Phase 19-D, ADR-0035). ``"name"`` is the default
+#: (display_name within type bucket, ADR-0035 §(b)); ``"last_self_post"``
+#: triggers the engagement axis (search.messages-backed, ADR-0034 §(a));
+#: ``"last_activity"`` triggers the any-author axis (one
+#: ``conversations.history`` call per row, #374 pre-19-B). The key name
+#: maps 1:1 to the populated dataclass field
+#: (``last_self_post_ts`` / ``last_activity_ts``) so CLI / JSON / DB
+#: schema share one vocabulary (ADR-0035 §(c) §不採用案 2/3).
+SortKey = Literal["name", "last_self_post", "last_activity"]
+
+#: Default implicit cutoff applied when ``sort in ("last_self_post",
+#: "last_activity")`` is paired with ``since=None`` (ADR-0035 §(e)).
+#: 90 days balances "recent enough to be discoverable" against the
+#: ``search.messages`` page budget on chatty workspaces. ``--since``
+#: overrides explicitly.
+_IMPLICIT_CUTOFF_DAYS = 90
 
 #: Per-page size for ``search.messages`` engagement-index calls. Slack
 #: caps page-based pagination at ``count*page <= 10000``; ``count=100``
@@ -201,7 +226,7 @@ _SEARCH_MESSAGES_PAGE_SIZE = 100
 #: so an operator who sees a freshly-posted channel missing from the
 #: output has a documented cause to map to (ADR-0034 §(i)).
 _INDEXING_LAG_NOTICE = (
-    "notice: search.messages may lag by minutes; use --activity=any for live activity."
+    "notice: search.messages may lag by minutes; use --sort=last_activity for live activity."
 )
 
 #: ``conversations.history`` scope required to fetch the last-message ts
@@ -271,20 +296,21 @@ class SlackConversation:
     last_activity_ts:
         Unix epoch seconds of the most recent message in the
         conversation **regardless of author**, populated only on the
-        ``activity="any"`` path (one extra ``conversations.history``
-        call per row). ``None`` on the ``activity="mine"`` path or when
-        ``since`` is not set — the JSON renderer drops the key in that
+        ``sort="last_activity"`` path (one extra ``conversations.history``
+        call per row). ``None`` on the engagement-axis paths
+        (``sort="last_self_post"`` or ``sort="name"`` + ``since``) and
+        when no probe runs — the JSON renderer drops the key in that
         case so the discovery payload stays free of meaningless nulls
         when the operator did not opt into the any-axis probe.
     last_self_post_ts:
         Unix epoch seconds of the operator's own most-recent post in
-        the conversation, populated only on the engagement axis
-        (``activity="mine"``) when ``since`` is set. ``None`` on the
-        ``activity="any"`` path or when ``since`` is not set. The two
-        axis fields are disjoint by design — see ADR-0034 §(g)
-        ("axes are orthogonal; one row carries one axis ts") so a JSON
-        consumer can branch on field presence without re-reading the
-        invocation flags.
+        the conversation, populated on the engagement-axis paths
+        (``sort="last_self_post"`` or ``sort="name"`` + ``since``,
+        ADR-0035 §(c) §(d)). ``None`` on the ``sort="last_activity"``
+        path or when no probe runs. The two axis fields are disjoint by
+        design — see ADR-0034 §(g) ("axes are orthogonal; one row
+        carries one axis ts") so a JSON consumer can branch on field
+        presence without re-reading the invocation flags.
     """
 
     id: str
@@ -308,7 +334,7 @@ def list_conversations(
     limit: int | None = None,
     all: bool = False,
     since: datetime | None = None,
-    activity: ActivityAxis = "mine",
+    sort: SortKey = "name",
     warnings: list[str] | None = None,
     reporter: ProgressReporter | None = None,
 ) -> Iterator[SlackConversation]:
@@ -347,14 +373,25 @@ def list_conversations(
         paste-into-opshub.toml workflow.
     since:
         When non-``None``, filter rows by recent activity. The actual
-        probe strategy depends on ``activity`` (see below). ``since``
+        probe strategy depends on ``sort`` (see below). ``since``
         must be a tz-aware :class:`datetime.datetime`; the helper does
-        not normalise — callers should pre-attach UTC.
-    activity:
-        Selects the activity axis when ``since`` is set (no effect when
-        ``since`` is ``None``). ADR-0034:
+        not normalise — callers should pre-attach UTC. When
+        ``sort in ("last_self_post", "last_activity")`` is paired with
+        ``since=None``, the helper applies an implicit
+        ``now_utc() - timedelta(days=90)`` cutoff and emits an ADR-0035
+        §(e) notice once to stderr to cap probe cost.
+    sort:
+        Selects the sort key + activity-probe axis (ADR-0035):
 
-        * ``"mine"`` (default, Phase 19-B engagement axis): one
+        * ``"name"`` (default) — display_name within type bucket. When
+          ``since`` is ``None`` no probe runs and both axis fields stay
+          ``None``. When ``since`` is set the helper takes the
+          ADR-0035 §(d) implicit engagement-axis path: one
+          ``search.messages`` call indexes the operator's own posts and
+          rows missing from the index are dropped; the retained ts
+          lands on :attr:`SlackConversation.last_self_post_ts` but the
+          listing keeps name order.
+        * ``"last_self_post"`` (engagement axis, ADR-0034 §(a)): one
           ``search.messages`` paginated call before the listing loop
           (``query="from:<@<self>>"`` + ``oldest=since`` +
           ``sort=timestamp,sort_dir=desc``) builds a per-channel index
@@ -365,8 +402,8 @@ def list_conversations(
           ``last_activity_ts`` stays ``None``. Bot Tokens cannot hold
           ``search:read`` — the helper raises
           :class:`~opshub.core.errors.ConfigError` on principal
-          mismatch and recommends ``--activity=any``.
-        * ``"any"``: pre-19-B behaviour. One
+          mismatch and recommends ``--sort=last_activity``.
+        * ``"last_activity"`` (any-author axis, pre-19-B): one
           ``conversations.history?limit=1&oldest=<since>`` per surviving
           row; ``last_activity_ts`` populated, ``last_self_post_ts``
           stays ``None``. Required scope set is
@@ -440,6 +477,23 @@ def list_conversations(
     # workspace.
     user_name_cache: dict[str, str] = {}
 
+    # Resolve the activity-probe axis from the sort key + since
+    # combination (ADR-0035). ``engagement_axis`` covers both the
+    # explicit ``sort="last_self_post"`` path (§(c)) and the implicit
+    # default for ``sort="name"`` + ``since != None`` (§(d)). The
+    # ``sort="last_activity"`` path falls through to the per-row
+    # ``conversations.history`` (any-author) branch below by leaving
+    # ``self_post_index`` ``None``.
+    engagement_axis = sort == "last_self_post" or (sort == "name" and since is not None)
+
+    # Apply the implicit cutoff (ADR-0035 §(e)) when an explicit ts-sort
+    # was requested without a ``--since`` value. ``sort="name"`` +
+    # ``since=None`` keeps both axis fields ``None`` (no probe at all);
+    # this branch only triggers for the two explicit ts-axis modes.
+    if since is None and sort in ("last_self_post", "last_activity"):
+        since = now_utc() - timedelta(days=_IMPLICIT_CUTOFF_DAYS)
+        _emit_implicit_cutoff_notice(sort=sort)
+
     # Pre-compute the ``oldest`` token Slack expects on
     # ``conversations.history`` calls — a stringified unix epoch with
     # optional fractional part. ``None`` short-circuits the per-row
@@ -460,7 +514,8 @@ def list_conversations(
     # Connect channels does not see 50 lines of stderr noise.
     inaccessible_history_counts: dict[str, int] = {}
 
-    # Engagement-axis (``activity="mine"``) state. Built lazily before
+    # Engagement-axis (``sort="last_self_post"`` or implicit-default
+    # ``sort="name"`` + ``since``, ADR-0035 §(c) §(d)) state. Built lazily before
     # the first row that needs it so workspaces with no since-filter
     # never pay for the principal check or the ``search.messages``
     # round-trip. ``self_post_index`` is set to ``None`` until the
@@ -470,7 +525,7 @@ def list_conversations(
     # below" and "any-axis path".
     self_post_index: dict[str, float] | None = None
     referenced_channel_ids: set[str] | None = None
-    if since_ts is not None and activity == "mine":
+    if since_ts is not None and engagement_axis:
         # Reject Bot Tokens early: ``search:read`` is a User Token-only
         # scope, so a Bot Token can never satisfy the engagement axis.
         # The check runs *before* the index fetch so the operator sees
@@ -482,7 +537,7 @@ def list_conversations(
             raise ConfigError(
                 "Slack Bot Token cannot satisfy `search:read` "
                 "(engagement axis); use a User Token (`xoxp-`) "
-                "or rerun with --activity=any."
+                "or rerun with --sort=last_activity."
             )
         self_user_id = principal_info.get("user_id") or ""
         # Indexing-lag advisory: emit before the fetch so the operator
@@ -543,8 +598,9 @@ def list_conversations(
                 continue
             if since_ts is not None:
                 if self_post_index is not None:
-                    # Engagement axis (``activity="mine"``): the
-                    # pre-built index is the source of truth. Rows
+                    # Engagement axis (``sort="last_self_post"`` or
+                    # ``sort="name"`` + ``since``, ADR-0035 §(c) §(d)):
+                    # the pre-built index is the source of truth. Rows
                     # absent from the index are dropped (the operator
                     # has not written there since ``since``); the
                     # retained ts lands on ``last_self_post_ts`` and
@@ -1158,6 +1214,31 @@ def _emit_indexing_lag_notice() -> None:
     print(_INDEXING_LAG_NOTICE, file=sys.stderr)
 
 
+def _emit_implicit_cutoff_notice(*, sort: SortKey) -> None:
+    """Emit the ADR-0035 §(e) implicit-cutoff notice to stderr.
+
+    Triggered once per ``list_conversations`` call when the operator
+    asked for a ts-axis sort (``--sort=last_self_post`` or
+    ``--sort=last_activity``) without specifying ``--since``. The
+    helper applies a ``90d`` cutoff to cap probe cost (``search.messages``
+    page consumption / per-row ``conversations.history`` call budget)
+    and surfaces the notice so the choice is observable rather than
+    silent magic. Explicit ``--since`` overrides the implicit cap.
+
+    Goes through ``sys.stderr`` (matches :func:`_emit_indexing_lag_notice`'s
+    one-shot advisory pattern). ADR-0035 §(e) pins the wording —
+    keep the format string in lock-step with the test fixture in
+    ``tests/unit/connectors/slack/test_conversations.py``.
+    """
+    import sys
+
+    print(
+        f"notice: --sort={sort} defaulted to --since 90d to cap probe "
+        "cost; pass --since explicitly to override.",
+        file=sys.stderr,
+    )
+
+
 def _fetch_self_post_index(
     *,
     client: Any,
@@ -1345,8 +1426,10 @@ def _to_connector_failed_search(exc: Any) -> ConnectorFailedError:
         return ConnectorFailedError(
             f"Slack search.messages failed: missing_scope "
             f"(needed: {needed!r}). User Token must hold "
-            f"'search:read' for --activity=mine. Rerun with "
-            f"--activity=any if you cannot grant the scope. "
+            f"'search:read' for --sort=last_self_post (or "
+            f"--sort=name combined with --since, which falls back to "
+            f"the engagement axis per ADR-0035 §(d)). Rerun with "
+            f"--sort=last_activity if you cannot grant the scope. "
             f"See ADR-0018 §Decision (7) or "
             f"https://api.slack.com/scopes for the scope catalogue."
         )
