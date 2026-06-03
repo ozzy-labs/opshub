@@ -138,56 +138,19 @@ def build_connector_sync_handler(engine: Engine) -> ToolHandler:
     _ = engine
 
     async def handler(arguments: Mapping[str, Any]) -> str:
-        # The connector discovery path lives inline in the CLI today
-        # (``opshub.cli.connector``). Mirror that import set here so
-        # the MCP path covers the same connectors without depending on
-        # the CLI module (which would pull typer into the request
-        # path).
-        try:
-            import opshub.connectors.github  # pyright: ignore[reportUnusedImport]
-        except ImportError:
-            pass
-        try:
-            import opshub.connectors.slack  # pyright: ignore[reportUnusedImport]
-        except ImportError:
-            pass
-        try:
-            import opshub.connectors.ms365  # pyright: ignore[reportUnusedImport]
-        except ImportError:
-            pass
-        try:
-            import opshub.connectors.box  # pyright: ignore[reportUnusedImport]
-        except ImportError:
-            pass
-        try:
-            import opshub.connectors.box_drive  # pyright: ignore[reportUnusedImport]
-        except ImportError:
-            pass
-        try:
-            # Phase 11 audit Cluster B (H4): MCP must register the same
-            # connector set as the CLI — Teams and OneDrive Drive
-            # shipped in Phase 11 but the MCP write handler never
-            # imported them, so ``connector.sync`` from an MCP client
-            # raised "unknown connector" for both names. Side-effect
-            # imports register the connector with the global registry
-            # via :func:`opshub.connectors._registry.register_connector`.
-            import opshub.connectors.teams  # pyright: ignore[reportUnusedImport]
-        except ImportError:
-            pass
-        try:
-            import opshub.connectors.onedrive_drive  # pyright: ignore[reportUnusedImport]
-        except ImportError:
-            pass
-        try:
-            # Phase 13 G3 (ADR-0010 §Phase 13 改訂): Google Workspace
-            # ships in Phase 13 so the MCP write handler must register
-            # it here too — same Cluster B audit precedent that pulled
-            # Teams + OneDrive Drive in (otherwise ``connector.sync``
-            # via MCP would raise "unknown connector" for the bare
-            # ``google_workspace`` name). Side-effect import.
-            import opshub.connectors.google_workspace  # noqa: F401  # pyright: ignore[reportUnusedImport]
-        except ImportError:
-            pass
+        # Mirror the CLI connector set so MCP ``connector.sync``
+        # accepts every name the CLI does. Until Phase 17-B / the
+        # _discovery extraction this import block was duplicated
+        # inline here, and the inline copy missed
+        # ``google_calendar`` / ``google_mail`` when Phase 14 landed.
+        # ``import_connector_modules`` is the SSOT shared with the
+        # ``opshub <connector> sync`` driver
+        # (``opshub.cli._connector_common``) and the ``opshub
+        # connectors`` list command; it imports nothing typer-related
+        # so this request path stays free of the CLI framework.
+        from opshub.connectors._discovery import import_connector_modules
+
+        import_connector_modules()
 
         from opshub.cli._wiring import build_source_service
         from opshub.connectors import discover_connectors
