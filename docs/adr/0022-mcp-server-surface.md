@@ -258,3 +258,4 @@ write (5): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` /
 - [ADR-0002: Event-Sourced Architecture](0002-event-sourced-architecture.md) — MCP 呼び出しを event log に載せない (§Alternatives #7) 根拠。
 - [ADR-0001: Python Stack](0001-python-stack.md) — `mcp` extras / `mcp-otel` extras を core dependency にしない配布制約。
 - [Phase 10 Plan §3 Sub-issue C / §4-C / §8 Open Q #3 / #3b](../phase-10-plan.md) — 本 ADR が確定する論点の起票元。
+- [ADR-0031: CLI Command Surface Organization](0031-cli-command-surface-organization.md) — CLI 表面 (top-level group の組織方針) は ADR-0031 で確定。CLI と MCP は **並列の agent-facing surface** で、本 ADR が pin する MCP tool surface (stdio / token passthrough 禁止 / read/write 分離 / context 効率 / OTel naming) は CLI 表面再編とは独立で **不変** (MCP tool 名 `recall.search` / `task.create` / `connector.sync` 等は ADR-0031 の CLI 再編に伴って変更しない)。

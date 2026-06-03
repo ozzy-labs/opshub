@@ -105,3 +105,4 @@ Phase 7 (epic #113) で Slack / Microsoft 365 / Box の 3 新規 connector を�
 - Phase 3 epic: #43
 - Phase 13 plan §1 OQ4 / §2 改訂 ADR (`docs/phase-13-plan.md`)
 - Phase 14 plan §1 OQ6 / §2 改訂 ADR (`docs/phase-14-plan.md`) — Google Workspace slot scope 拡張 + shared auth foundation 抽出 (本 ADR §Phase 7 Validation 節 Phase 14 改訂)
+- [ADR-0031: CLI Command Surface Organization](0031-cli-command-surface-organization.md) — `auth set` / `auth test` の CLI コマンド階層 (per-noun group、`opshub <name> auth set`) は ADR-0031 で確定。本 ADR が pin する keyring key 規約 (`connector:<name>:<purpose>`) / env var override 命名 (`OPSHUB_CONNECTOR_<NAME>_<PURPOSE>`) / `core/secrets` 薄ラッパー / `secrets` extras 隔離 / rotation 書き戻し義務は CLI 表面再編とは独立で **不変**
