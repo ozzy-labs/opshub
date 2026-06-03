@@ -139,7 +139,7 @@ def test_mention_in_public_channel_inserts_mention_row(engine: Engine) -> None:
     assert row["channel_type"] == "public"
     assert row["channel_name"] == "general"
     assert row["demand_kind"] == "mention"
-    assert row["last_demand_ts"] == pytest.approx(1700000000.000100)
+    assert row["last_demand_ts"] == pytest.approx(1700000000.000100)  # pyright: ignore[reportUnknownMemberType]
     assert row["last_demand_excerpt"] == "hey <@U_SELF> can you take a look?"
     assert row["last_demand_permalink"] == "https://example.slack.com/archives/C/p1"
     assert row["last_source_id"] == event.aggregate_id
@@ -283,7 +283,7 @@ def test_upsert_idempotent_same_ts(engine: Engine) -> None:
     with engine.connect() as conn:
         rows = conn.execute(select(slack_demand_digest_table)).mappings().all()
     assert len(rows) == 1
-    assert rows[0]["last_demand_ts"] == pytest.approx(1700000006.000600)
+    assert rows[0]["last_demand_ts"] == pytest.approx(1700000006.000600)  # pyright: ignore[reportUnknownMemberType]
 
 
 def test_newer_ts_overwrites_existing_row(engine: Engine) -> None:
@@ -308,7 +308,7 @@ def test_newer_ts_overwrites_existing_row(engine: Engine) -> None:
 
     with engine.connect() as conn:
         row = conn.execute(select(slack_demand_digest_table)).mappings().one()
-    assert row["last_demand_ts"] == pytest.approx(1700000008.000800)
+    assert row["last_demand_ts"] == pytest.approx(1700000008.000800)  # pyright: ignore[reportUnknownMemberType]
     assert row["last_demand_excerpt"] == f"<@{_SELF_USER_ID}> later"
 
 
@@ -332,7 +332,7 @@ def test_older_ts_does_not_overwrite_newer_row(engine: Engine) -> None:
 
     with engine.connect() as conn:
         row = conn.execute(select(slack_demand_digest_table)).mappings().one()
-    assert row["last_demand_ts"] == pytest.approx(1700000010.001000)
+    assert row["last_demand_ts"] == pytest.approx(1700000010.001000)  # pyright: ignore[reportUnknownMemberType]
     assert row["last_demand_excerpt"] == f"<@{_SELF_USER_ID}> later"
 
 

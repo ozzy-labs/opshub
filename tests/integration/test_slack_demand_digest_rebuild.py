@@ -180,8 +180,8 @@ def test_rebuild_materialises_demand_digest(migrated_engine: Engine) -> None:
     ]
     # Mention row carries the newest (and only) qualifying ts for the
     # public channel — 1700000010, not the 1700000005 mention-of-other.
-    assert snapshot[0]["last_demand_ts"] == pytest.approx(1700000010.000010)
-    assert snapshot[1]["last_demand_ts"] == pytest.approx(1700000020.000020)
+    assert snapshot[0]["last_demand_ts"] == pytest.approx(1700000010.000010)  # pyright: ignore[reportUnknownMemberType]
+    assert snapshot[1]["last_demand_ts"] == pytest.approx(1700000020.000020)  # pyright: ignore[reportUnknownMemberType]
     # Channel type classification.
     assert snapshot[0]["channel_type"] == "public"
     assert snapshot[1]["channel_type"] == "im"
@@ -228,7 +228,7 @@ def test_rebuild_is_idempotent(migrated_engine: Engine) -> None:
     # ts for ``C400REPLAY``.
     keyed = {(row["channel_id"], row["demand_kind"]): row for row in first}
     assert set(keyed) == {("C400REPLAY", "mention"), ("D500REPLAYDM", "dm")}
-    assert keyed[("C400REPLAY", "mention")]["last_demand_ts"] == pytest.approx(1700000200.000200)
+    assert keyed[("C400REPLAY", "mention")]["last_demand_ts"] == pytest.approx(1700000200.000200)  # pyright: ignore[reportUnknownMemberType]
 
 
 def test_rebuild_with_no_slack_events_produces_no_digest_rows(
