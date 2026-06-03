@@ -74,7 +74,7 @@ Phase 13 では Google Workspace native 形式 (`google_doc` / `google_slides` /
 | 安全策 | 仕組み |
 |---|---|
 | 取り込み除外 (excludes) | `~/.config/opshub/excludes.yaml` で channel / sender / repo / path を除外 ([ADR-0020](adr/0020-full-local-content-retention.md) §(b)) |
-| 保存時暗号化 | SQLCipher で DB 丸ごと AES-256、鍵は OS keychain (`opshub.toml` の `[storage] encryption = true` で opt-in、[ADR-0021](adr/0021-encryption-at-rest.md)) |
+| 保存時暗号化 | SQLCipher で DB 丸ごと AES-256、鍵は OS keychain (`opshub.toml` の `[storage] encryption = true` で opt-in、[ADR-0021](adr/0021-encryption-at-rest.md)。TOML は起動時に毎回読まれ env が優先される。詳細は [ADR-0032](adr/0032-runtime-toml-config-loading.md)) |
 | 認証情報の本文からの分離 | SaaS トークンは `core/secrets` + keyring 経由 ([ADR-0014](adr/0014-saas-token-storage.md))、本文 / event payload には混入させない |
 | provenance タグ | 外部由来の本文は `origin="external"` + `trust="untrusted"` で取り込み、LLM は指示でなく参照素材として扱う ([ADR-0020](adr/0020-full-local-content-retention.md) §(e) + [ADR-0015](adr/0015-llm-usage-strategy.md) §決定 (f)) |
 

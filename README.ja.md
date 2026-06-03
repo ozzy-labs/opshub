@@ -64,6 +64,8 @@ opshub propose apply <proposal-id> 0                  # オペレーター承認
 状態はすべて XDG ディレクトリ配下に保存されます。`OPSHUB_*` 環境変数で上書
 き可能です（例: `OPSHUB_STORAGE__DB_PATH=/custom/path.sqlite`）。
 
+`opshub init` は `~/.config/opshub/config.toml` を作成します。手で編集すると **次回起動から反映** されます（再 install / 再 init は不要）。優先順位は `init args > env > toml > defaults` ([ADR-0032](docs/adr/0032-runtime-toml-config-loading.md))。`OPSHUB_*` 環境変数は TOML より優先（CI / headless 用）、`OPSHUB_CONFIG_DIR=<dir>` で config ディレクトリの位置を上書きできます。不正値は起動時 `ConfigError` で fail-fast（詳細は [`docs/troubleshooting.md` §3.10](docs/troubleshooting.md)）。
+
 ## アシスタントに頼む
 
 エージェント host を MCP 経由で繋ぐと（[エージェント host を接続する (MCP)](#エージェント-host-を接続する-mcp) を参照）、自然文でアシスタントに頼めるようになります。エージェントが裏で適切な OpsHub コマンドを呼びます。
