@@ -1,7 +1,7 @@
 # 0022. MCP Server Surface
 
-- Status: Accepted (revised 2026-05-31 for Phase 12 H1 widening)
-- Date: 2026-05-30 (initial); 2026-05-31 (Phase 12 H1 改訂: + `search` FTS5 + `propose.apply` HITL idempotent + 4 read tools 物理列ベース時間フィルタ + MCP 引数名 → projection 物理列 写像表追加)
+- Status: Accepted (revised 2026-06-03 for Phase 18 補遺: `slack.demand.list` の追加根拠を §決定 (f) 補遺で pin)
+- Date: 2026-05-30 (initial); 2026-05-31 (Phase 12 H1 改訂: + `search` FTS5 + `propose.apply` HITL idempotent + 4 read tools 物理列ベース時間フィルタ + MCP 引数名 → projection 物理列 写像表追加); 2026-06-03 (Phase 18 補遺: 新 read tool `slack.demand.list` の追加根拠を §決定 (f) 末尾に追記。ADR-0033 で詳細を pin、5 不変条件は継承、本 ADR の write tool 集合 / annotation pattern は不変)
 - Deciders: ozzy
 
 ## Context
@@ -166,6 +166,25 @@ write (5): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` /
 - **`search` schema に `raw_query` 不在**: `test_search_does_not_expose_raw_query` が input_schema の properties を点検。CLI の `--raw-query` は power-user 経路として残るが MCP 面には出さない
 - **時間フィルタの物理列写像**: `test_list_tools_expose_physical_column_time_filters` が tool → (`*_after`, `*_before`) の対応表を pin。drift は即時 fail
 
+#### Phase 18 補遺 (`slack.demand.list` の追加根拠)
+
+[ADR-0033: Slack Mention / DM Demand Digest](0033-slack-mention-demand-digest.md) で
+新 read tool `slack.demand.list` を本 ADR の MCP surface に追加することを pin した
+(Phase 18 [#426](https://github.com/ozzy-labs/opshub/issues/426))。本 ADR の 5 不変条件
+(stdio 一択 / token passthrough 禁止 / read/write 分離 / context 効率 / OTel naming) は
+すべて継承する。
+
+- 新 read tool として `ReadCategory` 系列に追加 — annotation は `readOnlyHint=true,
+  destructiveHint=false, idempotent=true, openWorldHint=false` (`recall.search` /
+  `search` と同パターン、SQLite ローカル `slack_demand_digest` projection 読み取り
+  のみ)
+- 入力 `types` argument は `slack_demand_digest.demand_kind` 物理列 (`{"mention",
+  "dm", "mpim"}`) に直接写像する (本 ADR §決定 (f-3) 物理列ベース時間フィルタと同方針
+  = MCP 引数を projection 物理列に最短で写像する原則の延長)
+- 入力 `since` argument は `slack_demand_digest.last_demand_ts` 物理列に写像 (半開区間)
+- 実装 PR は Phase 18-C ([#430](https://github.com/ozzy-labs/opshub/issues/430)) で
+  `src/opshub/mcp/_registry.py` に登録し、register policy guard test を更新する
+
 ## Consequences
 
 ### Positive
@@ -259,3 +278,4 @@ write (5): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` /
 - [ADR-0001: Python Stack](0001-python-stack.md) — `mcp` extras / `mcp-otel` extras を core dependency にしない配布制約。
 - [Phase 10 Plan §3 Sub-issue C / §4-C / §8 Open Q #3 / #3b](../phase-10-plan.md) — 本 ADR が確定する論点の起票元。
 - [ADR-0031: CLI Command Surface Organization](0031-cli-command-surface-organization.md) — CLI 表面 (top-level group の組織方針) は ADR-0031 で確定。CLI と MCP は **並列の agent-facing surface** で、本 ADR が pin する MCP tool surface (stdio / token passthrough 禁止 / read/write 分離 / context 効率 / OTel naming) は CLI 表面再編とは独立で **不変** (MCP tool 名 `recall.search` / `task.create` / `connector.sync` 等は ADR-0031 の CLI 再編に伴って変更しない)。
+- [ADR-0033: Slack Mention / DM Demand Digest](0033-slack-mention-demand-digest.md) — Phase 18 で本 ADR の MCP surface に新 read tool `slack.demand.list` を追加する根拠。本 ADR §決定 (f) 補遺 (Phase 18) で詳細を pin。5 不変条件は継承、新規 invariant の追加なし (write tool 集合に変化なし、annotation pattern は既存 read tool と同)。
