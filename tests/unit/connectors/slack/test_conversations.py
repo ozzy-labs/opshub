@@ -1932,6 +1932,38 @@ def test_fetch_self_post_index_falls_back_to_legacy_page_pagination(
     assert {r.id for r in results} == {"C1", "C2"}
 
 
+def test_fetch_self_post_index_page_pagination_handles_missing_total_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Page pagination tolerates ``paging.pages`` None / missing (edge response shape).
+
+    Slack's documented ``search.messages`` response carries
+    ``paging.page`` + ``paging.pages``, but operator-observed responses
+    (Enterprise Grid proxies, partial SDK shapes) occasionally omit
+    ``pages`` or report it as null. The helper must short-circuit
+    cleanly after the first page rather than looping forever or
+    raising ``ConnectorFailedError`` — the ``paging.pages is None``
+    guard at ``conversations.py:1283-1287`` pins this.
+    """
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    c1_ts = _recent_ts(seconds_ago=60)
+    # ``page=1`` only, ``pages`` is None (the legacy-shape edge case).
+    client.search_messages.return_value = _search_response(
+        [_search_match("C1", f"{c1_ts:.6f}")],
+        page=1,
+        pages=None,
+    )
+    _patch_webclient(monkeypatch, client)
+
+    # Must not raise (``ConnectorFailedError`` would surface here) and
+    # must terminate after one page.
+    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+
+    assert client.search_messages.call_count == 1
+    assert {r.id for r in results} == {"C1"}
+
+
 def test_fetch_self_post_index_empty_response_drops_all_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2217,6 +2249,48 @@ def test_list_conversations_mine_axis_engagement_index_orphan_logged_at_debug(
     assert debug_calls[0].kwargs["engagement_index_orphan"] == 1
     assert debug_calls[0].kwargs["index_size"] == 2
     assert debug_calls[0].kwargs["listing_size"] == 1
+
+
+def test_list_conversations_mine_axis_engagement_index_orphan_not_logged_when_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``orphan_count == 0`` → no ``engagement_index_orphan`` debug log emitted.
+
+    Pins the ``if orphan_count <= 0: return`` guard at
+    ``conversations.py:1377-1378``. When every channel in the
+    ``search.messages`` index also appears in the listing (no Slack
+    Connect / archived / type-filtered drift), the helper must stay
+    silent — emitting a zero-counter debug event would be noise that
+    operators reading ``--debug`` traces would have to filter out.
+    """
+    # Listing returns C1 and C2; index also has exactly C1 and C2 (no
+    # orphan). orphan_count == 0 must short-circuit before the log
+    # call.
+    page = _list_response([_public_channel("C1"), _public_channel("C2")])
+    client = _build_client(list_pages=[page])
+    client.search_messages.return_value = _search_response(
+        [
+            _search_match("C1", f"{_recent_ts(seconds_ago=60):.6f}"),
+            _search_match("C2", f"{_recent_ts(seconds_ago=120):.6f}"),
+        ]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    mock_logger = MagicMock()
+    mock_get_logger = MagicMock(return_value=mock_logger)
+    import opshub.core.logging as _logging_module
+
+    monkeypatch.setattr(_logging_module, "get_logger", mock_get_logger)
+
+    list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+
+    # No ``engagement_index_orphan`` debug entry must be present.
+    debug_calls = [
+        c
+        for c in mock_logger.debug.call_args_list
+        if c.args and c.args[0] == "slack.conversations.engagement_index_orphan"
+    ]
+    assert debug_calls == []
 
 
 def test_list_conversations_mine_axis_search_429_retries_and_eventually_raises(

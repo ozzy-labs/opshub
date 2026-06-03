@@ -232,8 +232,14 @@ runtime に 1 度だけ `notice: search.messages may lag by minutes; use
 - `_progress.indeterminate` の spinner description ([ADR-0026](0026-cli-progress-reporting.md))
   とは独立した一行通知。spinner description は作業相 (`"listing
   conversations + engagement"`)、notice は signal 特性 (lag) を伝える
-- structlog 経路ではなく直接 stderr 出力 (`-q` で suppress 可能、`--quiet`
-  検討は実装 PR で確定)
+- `_emit_indexing_lag_notice` は 1 度限りの teaching message として
+  常時 stderr に emit、`-q` / `OPSHUB_LOG_LEVEL` の影響を受けない
+  (完全 suppress したい場合は `--activity=any` を明示する)。
+  structlog 経路ではなく直接 `print(..., file=sys.stderr)` で出力する
+  ため [ADR-0027](0027-observability-and-troubleshooting-logging.md) の
+  verbosity 制御とは独立した経路。verbosity 制御 (structlog) と
+  one-shot teaching notice の責務を二重化しないことで設計を simple に
+  保つ
 - 「常に毎回出す」は uninformative なので 1 invocation あたり 1 度のみ
 
 ## 不変条件
@@ -257,6 +263,11 @@ runtime に 1 度だけ `notice: search.messages may lag by minutes; use
    を silently 書き換えない (§(g))
 6. **`--all` + `--activity=mine` は `ConfigError` で reject** — silent な
    集合 trim はしない (§(h))
+7. **indexing-lag notice (`_emit_indexing_lag_notice`) は 1 度限り常時
+   emit、`-q` / `OPSHUB_LOG_LEVEL` で suppress しない** — 完全に
+   suppress したい場合は `--activity=any` を明示する。verbosity 制御
+   ([ADR-0027](0027-observability-and-troubleshooting-logging.md)) と
+   one-shot teaching notice の責務を二重化しない (§(i))
 
 ## Consequences
 
