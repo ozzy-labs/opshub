@@ -1011,7 +1011,7 @@ def test_list_conversations_since_calls_history_per_row(
     client.conversations_history.side_effect = _history
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), sort="last_activity"))
 
     assert [c.id for c in results] == ["C1"]
     # ``last_activity_ts`` is a float parsed from the Slack ts string;
@@ -1055,7 +1055,7 @@ def test_list_conversations_since_passes_oldest_to_slack(
     from datetime import UTC, datetime
 
     since = datetime(2026, 5, 1, tzinfo=UTC)
-    list(list_conversations(_auth(), since=since, activity="any"))
+    list(list_conversations(_auth(), since=since, sort="last_activity"))
 
     call_kwargs = client.conversations_history.call_args.kwargs
     assert call_kwargs["channel"] == "C1"
@@ -1109,7 +1109,12 @@ def test_list_conversations_since_missing_scope_disables_type_with_warning(
 
     warnings: list[str] = []
     results = list(
-        list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+        list_conversations(
+            _auth(),
+            since=_since_dt(days_ago=7),
+            warnings=warnings,
+            sort="last_activity",
+        ),
     )
 
     assert [c.id for c in results] == ["G1"]
@@ -1175,7 +1180,12 @@ def test_list_conversations_since_missing_scope_per_type_warnings_are_independen
 
     warnings: list[str] = []
     results = list(
-        list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+        list_conversations(
+            _auth(),
+            since=_since_dt(days_ago=7),
+            warnings=warnings,
+            sort="last_activity",
+        ),
     )
 
     # Only the private row (whose history call succeeded) survived.
@@ -1211,7 +1221,7 @@ def test_list_conversations_since_warnings_none_drops_silently(
     )
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), sort="last_activity"))
     # No warnings collector ⇒ the row is still dropped, but no
     # exception escapes — the helper stays caller-agnostic.
     assert results == []
@@ -1244,7 +1254,7 @@ def test_list_conversations_since_history_429_is_retried(
     sleep_mock = MagicMock()
     monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), sort="last_activity"))
 
     assert len(results) == 1
     sleep_mock.assert_called_once_with(1)
@@ -1274,7 +1284,7 @@ def test_list_conversations_since_history_non_429_raises_connector_failed(
     _patch_webclient(monkeypatch, client)
 
     with pytest.raises(ConnectorFailedError) as excinfo:
-        list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
+        list(list_conversations(_auth(), since=_since_dt(days_ago=7), sort="last_activity"))
 
     assert "conversations.history" in str(excinfo.value)
     assert "xoxb-test" not in str(excinfo.value)
@@ -1329,7 +1339,12 @@ def test_list_conversations_since_channel_not_found_skips_row_aggregates_warning
 
     warnings: list[str] = []
     results = list(
-        list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+        list_conversations(
+            _auth(),
+            since=_since_dt(days_ago=7),
+            warnings=warnings,
+            sort="last_activity",
+        ),
     )
 
     assert [c.id for c in results] == ["C1", "C2"]
@@ -1390,7 +1405,12 @@ def test_list_conversations_since_not_in_channel_skips_row(
 
     warnings: list[str] = []
     results = list(
-        list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+        list_conversations(
+            _auth(),
+            since=_since_dt(days_ago=7),
+            warnings=warnings,
+            sort="last_activity",
+        ),
     )
 
     assert [c.id for c in results] == ["C1"]
@@ -1447,7 +1467,12 @@ def test_list_conversations_since_inaccessible_warning_aggregates_per_error_code
 
     warnings: list[str] = []
     results = list(
-        list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+        list_conversations(
+            _auth(),
+            since=_since_dt(days_ago=7),
+            warnings=warnings,
+            sort="last_activity",
+        ),
     )
 
     assert [c.id for c in results] == ["C1", "C2"]
@@ -1475,7 +1500,12 @@ def test_list_conversations_since_inaccessible_warning_omitted_when_none(
 
     warnings: list[str] = []
     list(
-        list_conversations(_auth(), since=_since_dt(days_ago=7), warnings=warnings, activity="any"),
+        list_conversations(
+            _auth(),
+            since=_since_dt(days_ago=7),
+            warnings=warnings,
+            sort="last_activity",
+        ),
     )
 
     assert warnings == []
@@ -1529,7 +1559,7 @@ def test_list_conversations_since_inaccessible_warning_emitted_under_limit_cap(
             since=_since_dt(days_ago=7),
             limit=1,
             warnings=warnings,
-            activity="any",
+            sort="last_activity",
         )
     )
 
@@ -1566,7 +1596,7 @@ def test_list_conversations_since_inaccessible_warnings_none_drops_silently(
     )
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), sort="last_activity"))
     assert results == []
 
 
@@ -1634,7 +1664,7 @@ def test_list_conversations_since_drops_row_when_history_ts_is_non_numeric(
     }
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), sort="last_activity"))
 
     assert results == []
 
@@ -1693,7 +1723,7 @@ def test_list_conversations_since_inaccessible_emits_per_row_debug_log(
 
     monkeypatch.setattr(_logging_module, "get_logger", mock_get_logger)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), sort="last_activity"))
 
     # Sibling row still flows; only the offending row is dropped.
     assert [c.id for c in results] == ["C1"]
@@ -1732,7 +1762,7 @@ def test_list_conversations_since_drops_row_when_messages_field_is_not_a_list(
     }
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), sort="last_activity"))
 
     assert results == []
 
@@ -2096,7 +2126,12 @@ def test_list_conversations_mine_axis_emits_indexing_lag_notice_once(
     # Two separate calls — each must emit the notice exactly once.
     list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
     captured_first = capsys.readouterr()
-    assert "search.messages may lag" in captured_first.err
+    # Pin the full ADR-0035 §(f) string so a future rename of
+    # ``--sort=last_activity`` shows up as a test diff, not silent drift.
+    expected = (
+        "notice: search.messages may lag by minutes; use --sort=last_activity for live activity."
+    )
+    assert expected in captured_first.err
     assert captured_first.err.count("search.messages may lag") == 1
 
     # Second invocation; stderr is captured fresh per readouterr().
@@ -2108,13 +2143,13 @@ def test_list_conversations_mine_axis_emits_indexing_lag_notice_once(
 def test_list_conversations_any_axis_preserves_legacy_behaviour(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """activity='any' calls conversations.history per row; search.messages stays unused."""
+    """sort='last_activity' calls conversations.history per row; search.messages stays unused."""
     page = _list_response([_public_channel("C1")])
     client = _build_client(list_pages=[page])
     client.conversations_history.return_value = _history_response([{"ts": "1717200000.000000"}])
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), activity="any"))
+    results = list(list_conversations(_auth(), since=_since_dt(days_ago=7), sort="last_activity"))
 
     assert client.search_messages.call_count == 0
     assert client.conversations_history.call_count == 1
@@ -2196,7 +2231,7 @@ def test_list_conversations_mine_axis_search_error_codes_endpoint_qualified(
 def test_list_conversations_mine_axis_bot_token_principal_raises_config_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``activity='mine'`` + Bot Token → ``ConfigError`` with documented remediation."""
+    """engagement-axis sort + Bot Token → ``ConfigError`` with documented remediation."""
     import opshub.core.errors as _errors_mod
 
     page = _list_response([_public_channel("C1")])
@@ -2209,7 +2244,7 @@ def test_list_conversations_mine_axis_bot_token_principal_raises_config_error(
     message = str(excinfo.value)
     assert "Bot Token" in message
     assert "search:read" in message
-    assert "--activity=any" in message
+    assert "--sort=last_activity" in message
     assert "xoxb-bot" not in message
     # search.messages must not be called when the principal check fails.
     assert client.search_messages.call_count == 0
@@ -2332,18 +2367,274 @@ def test_list_conversations_mine_axis_search_429_retries_and_eventually_raises(
     assert client.search_messages.call_count == 3
 
 
-def test_list_conversations_no_since_with_mine_activity_skips_search_messages(
+def test_list_conversations_no_since_with_default_sort_skips_search_messages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``since=None`` short-circuits engagement axis regardless of ``activity`` value."""
+    """``since=None`` + ``sort="name"`` short-circuits both probe paths."""
     page = _list_response([_public_channel("C1")])
     client = _build_client(list_pages=[page])
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth_with_user(monkeypatch), activity="mine"))
+    results = list(list_conversations(_auth_with_user(monkeypatch)))
 
     assert client.search_messages.call_count == 0
     assert client.conversations_history.call_count == 0
     assert len(results) == 1
     assert results[0].last_self_post_ts is None
     assert results[0].last_activity_ts is None
+
+
+# ----- ADR-0035 sort axis consolidation ----------------------------------
+
+
+def test_list_conversations_sort_name_with_since_falls_back_to_engagement_axis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``sort="name"`` + ``--since`` runs the engagement-axis probe (ADR-0035 §(d))."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.users_conversations.return_value = page
+    client.search_messages.return_value = _search_response(
+        [_search_match("C1", f"{_recent_ts(seconds_ago=60):.6f}")]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(
+        list_conversations(
+            _auth_with_user(monkeypatch),
+            since=_since_dt(days_ago=7),
+            sort="name",
+        )
+    )
+
+    # search.messages was walked (engagement axis); per-row history did not.
+    assert client.search_messages.call_count >= 1
+    assert client.conversations_history.call_count == 0
+    assert len(results) == 1
+    # Engagement-axis ts populated; any-axis stays None (ADR-0034 §(g)).
+    assert results[0].last_self_post_ts is not None
+    assert results[0].last_activity_ts is None
+
+
+def test_list_conversations_sort_last_self_post_with_explicit_since(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``sort="last_self_post"`` + explicit ``--since`` skips the implicit cutoff notice."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.users_conversations.return_value = page
+    client.search_messages.return_value = _search_response(
+        [_search_match("C1", f"{_recent_ts(seconds_ago=60):.6f}")]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(
+        list_conversations(
+            _auth_with_user(monkeypatch),
+            since=_since_dt(days_ago=7),
+            sort="last_self_post",
+        )
+    )
+
+    captured = capsys.readouterr()
+    # Explicit --since suppresses the implicit-cutoff notice; the
+    # indexing-lag advisory still fires on the engagement path.
+    assert "defaulted to --since 90d" not in captured.err
+    assert "search.messages may lag" in captured.err
+    assert len(results) == 1
+    assert results[0].last_self_post_ts is not None
+
+
+def test_list_conversations_sort_last_activity_with_explicit_since(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``sort="last_activity"`` + explicit ``--since`` uses the any-axis probe + no notices."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.conversations_history.return_value = _history_response([{"ts": "1717200000.000000"}])
+    _patch_webclient(monkeypatch, client)
+
+    results = list(
+        list_conversations(
+            _auth(),
+            since=_since_dt(days_ago=7),
+            sort="last_activity",
+        )
+    )
+
+    captured = capsys.readouterr()
+    # Explicit --since on the any-axis path suppresses *both* notices.
+    assert "defaulted to --since 90d" not in captured.err
+    assert "search.messages may lag" not in captured.err
+    assert client.search_messages.call_count == 0
+    assert client.conversations_history.call_count == 1
+    assert len(results) == 1
+    assert results[0].last_activity_ts == 1717200000.0
+
+
+def test_list_conversations_sort_last_self_post_without_since_applies_implicit_cutoff(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``sort="last_self_post"`` + no ``--since`` → implicit 90d cutoff + notice (ADR-0035 §(e))."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.users_conversations.return_value = page
+    client.search_messages.return_value = _search_response(
+        [_search_match("C1", f"{_recent_ts(seconds_ago=60):.6f}")]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(
+        list_conversations(
+            _auth_with_user(monkeypatch),
+            sort="last_self_post",
+        )
+    )
+
+    captured = capsys.readouterr()
+    expected_notice = (
+        "notice: --sort=last_self_post defaulted to --since 90d to cap "
+        "probe cost; pass --since explicitly to override."
+    )
+    assert expected_notice in captured.err
+    # Exactly one occurrence per call.
+    assert captured.err.count("defaulted to --since 90d") == 1
+    # Engagement-axis probe ran with the implicit cutoff in effect.
+    assert client.search_messages.call_count >= 1
+    assert len(results) == 1
+    assert results[0].last_self_post_ts is not None
+
+
+def test_list_conversations_sort_last_activity_without_since_applies_implicit_cutoff(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``sort="last_activity"`` + no ``--since`` → implicit 90d cutoff + notice (ADR-0035 §(e))."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.conversations_history.return_value = _history_response(
+        [{"ts": f"{_recent_ts(seconds_ago=60):.6f}"}]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    results = list(list_conversations(_auth(), sort="last_activity"))
+
+    captured = capsys.readouterr()
+    expected_notice = (
+        "notice: --sort=last_activity defaulted to --since 90d to cap "
+        "probe cost; pass --since explicitly to override."
+    )
+    assert expected_notice in captured.err
+    assert captured.err.count("defaulted to --since 90d") == 1
+    # any-axis probe ran with the implicit cutoff.
+    assert client.search_messages.call_count == 0
+    assert client.conversations_history.call_count == 1
+    assert len(results) == 1
+    assert results[0].last_activity_ts is not None
+
+
+def test_list_conversations_implicit_cutoff_notice_emits_once_per_call(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Two ``list_conversations`` calls each emit the cutoff notice exactly once."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.users_conversations.side_effect = None
+    client.users_conversations.return_value = page
+    client.search_messages.return_value = _search_response(
+        [_search_match("C1", f"{_recent_ts(seconds_ago=60):.6f}")]
+    )
+    _patch_webclient(monkeypatch, client)
+
+    list(list_conversations(_auth_with_user(monkeypatch), sort="last_self_post"))
+    captured_first = capsys.readouterr()
+    assert captured_first.err.count("defaulted to --since 90d") == 1
+
+    list(list_conversations(_auth_with_user(monkeypatch), sort="last_self_post"))
+    captured_second = capsys.readouterr()
+    assert captured_second.err.count("defaulted to --since 90d") == 1
+
+
+def test_list_conversations_sort_name_without_since_emits_no_notices(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``sort="name"`` + no ``--since`` → no notice + no probe."""
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    list(list_conversations(_auth_with_user(monkeypatch)))
+
+    captured = capsys.readouterr()
+    assert "defaulted to --since 90d" not in captured.err
+    assert "search.messages may lag" not in captured.err
+
+
+def test_list_conversations_bot_token_rejected_for_sort_name_plus_since(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bot Token + ``sort="name"`` + ``--since`` → ``ConfigError`` (engagement-axis implicit)."""
+    import opshub.core.errors as _errors_mod
+
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    _patch_webclient(monkeypatch, client)
+
+    with pytest.raises(_errors_mod.ConfigError) as excinfo:
+        list(
+            list_conversations(
+                _auth_with_bot(monkeypatch),
+                since=_since_dt(days_ago=7),
+                sort="name",
+            )
+        )
+
+    message = str(excinfo.value)
+    assert "Bot Token" in message
+    assert "search:read" in message
+    assert "--sort=last_activity" in message
+    assert client.search_messages.call_count == 0
+
+
+def test_list_conversations_missing_search_read_for_sort_name_plus_since(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``sort="name"`` + ``--since`` + missing ``search:read`` → ``ConnectorFailedError``."""
+    import slack_sdk.errors as _errors
+
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+
+    resp = MagicMock()
+    resp.status_code = 403
+
+    def _get_missing_search_read(key: str, default: object = None) -> object:
+        return {"error": "missing_scope", "needed": "search:read"}.get(key, default)
+
+    resp.get = _get_missing_search_read
+    resp.headers = {}
+    client.search_messages.side_effect = _errors.SlackApiError(  # type: ignore[no-untyped-call]
+        message="missing_scope",
+        response=resp,
+    )
+    _patch_webclient(monkeypatch, client)
+
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(
+            list_conversations(
+                _auth_with_user(monkeypatch),
+                since=_since_dt(days_ago=7),
+                sort="name",
+            )
+        )
+
+    message = str(excinfo.value)
+    assert "search.messages" in message
+    assert "missing_scope" in message
+    assert "--sort=last_self_post" in message
+    assert "--sort=last_activity" in message

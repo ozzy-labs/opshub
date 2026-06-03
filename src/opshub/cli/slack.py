@@ -109,9 +109,14 @@ def slack_auth_test() -> None:
 @slack_app.command("conversations")
 def slack_conversations(
     output_format: str = typer.Option(
-        "table",
+        "toml",
         "--format",
-        help="Output format: table | toml | json.",
+        help=(
+            "Output format: table | toml | json. Default 'toml' "
+            "(ADR-0035 §(a)): the primary use case is pasting the "
+            "output into [connectors.slack] channels in opshub.toml. "
+            "Pass --format=table to reproduce the pre-19-D default."
+        ),
     ),
     filter_substring: str | None = typer.Option(
         None,
@@ -143,7 +148,9 @@ def slack_conversations(
         help=(
             "Use conversations.list (workspace-wide) instead of "
             "users.conversations (joined-only). conversations.list does "
-            "not return DM/MPIM rows."
+            "not return DM/MPIM rows. Incompatible with the engagement "
+            "axis (--sort=last_self_post or --sort=name combined with "
+            "--since), which only indexes self-member channels."
         ),
     ),
     since: str | None = typer.Option(
@@ -151,25 +158,31 @@ def slack_conversations(
         "--since",
         help=(
             "Filter by recent activity. Accepts a relative duration "
-            "(e.g. 7d, 2w) or an ISO date (e.g. 2026-05-01). With "
-            "--activity=mine (default, Phase 19-B engagement axis) it "
-            "triggers one search.messages call ahead of the listing "
-            "(requires search:read on a User Token); with "
-            "--activity=any (legacy, #374) it triggers one "
-            "conversations.history?limit=1 per row (requires *:history "
-            "for the requested --types)."
+            "(e.g. 7d, 2w) or an ISO date (e.g. 2026-05-01). The probe "
+            "axis is selected by --sort (ADR-0035 §(c) §(d)): "
+            "--sort=last_self_post (engagement axis, requires "
+            "search:read on a User Token) runs one search.messages "
+            "call ahead of the listing; --sort=last_activity (any-"
+            "author axis) runs one conversations.history?limit=1 per "
+            "row (requires *:history for the requested --types); "
+            "--sort=name combined with --since takes the engagement "
+            "axis as its implicit default. With --sort=last_self_post "
+            "or --sort=last_activity but no --since, an implicit 90-"
+            "day cutoff is applied (notice on stderr)."
         ),
     ),
-    activity: str = typer.Option(
-        "mine",
-        "--activity",
+    sort: str = typer.Option(
+        "name",
+        "--sort",
         help=(
-            "Activity axis when --since is set (ADR-0034). "
-            "'mine' (default) = channels you wrote in (engagement axis, "
-            "search.messages-backed, requires search:read User Token); "
-            "'any' = legacy behaviour (any-author activity, "
-            "conversations.history per-row, includes broadcast / "
-            "announcement-only channels)."
+            "Sort key (ADR-0035 §(c)): "
+            "'name' (default) = display_name within type bucket; "
+            "'last_self_post' = engagement-axis ts descending "
+            "(requires search:read User Token); "
+            "'last_activity' = any-author-axis ts descending "
+            "(requires *:history per --types). With --sort=name and "
+            "--since the engagement axis still runs as the implicit "
+            "default for the ts filter / column."
         ),
     ),
 ) -> None:
@@ -180,27 +193,27 @@ def slack_conversations(
     ``opshub.toml``. Discovering those ids by hand (Slack Web UI →
     "Copy link") is painful in busy workspaces; this command surfaces
     every conversation the configured token participates in
-    (channels + DMs + MPIMs) so the operator can paste the
-    ``--format toml`` output straight into the config file.
+    (channels + DMs + MPIMs) so the operator can paste the default
+    ``--format=toml`` output straight into the config file.
 
     Exit codes:
 
     * ``0`` — conversations listed (zero matches is **not** an error).
     * ``1`` — config error (no token / SDK extras missing /
-      ``--all + --activity=mine`` rejection) or runtime API failure
+      ``--all`` + engagement-axis rejection) or runtime API failure
       (``invalid_auth`` / ``missing_scope`` on the listing or
       ``search.messages`` call / exhausted 429 retries / Bot Token on
-      the engagement axis per ADR-0034).
+      the engagement axis per ADR-0034 §(d) / ADR-0035 §(f)).
     * ``2`` — usage error (unknown ``--format`` / ``--types`` /
-      ``--since`` / ``--activity`` value).
+      ``--since`` / ``--sort`` value).
 
     See :mod:`opshub.cli._slack_conversations` for the renderer
     implementation and sort / output-format details (table / toml /
     json).
     """
     from opshub.cli._slack_conversations import (
-        ACTIVITY_CHOICES,
         FORMAT_CHOICES,
+        SORT_CHOICES,
         parse_since,
         parse_types,
         run_conversations_command,
@@ -214,27 +227,30 @@ def slack_conversations(
         )
         raise typer.Exit(code=2)
 
-    if activity not in ACTIVITY_CHOICES:
+    if sort not in SORT_CHOICES:
         # typer.BadParameter exits with code 2 — matches --format above.
         raise typer.BadParameter(
-            f"unknown --activity value {activity!r}; choose one of {', '.join(ACTIVITY_CHOICES)}",
-            param_hint="--activity",
+            f"unknown --sort value {sort!r}; choose one of {', '.join(SORT_CHOICES)}",
+            param_hint="--sort",
         )
 
-    # --all + --activity=mine is mutually exclusive (ADR-0034 §(h)).
-    # search.messages only indexes messages the principal could see —
-    # asking for "workspace-wide channels where I posted" is logically
-    # the same as the joined-only listing, so silently trimming the
-    # result set would hide the contradiction. The conflict only
-    # surfaces when the engagement axis actually applies (``--since``
-    # is set); without ``--since`` the activity-axis is moot and
-    # ``--all`` just expands the listing scope, matching the legacy
-    # #366 / #374 contract.
-    if all_conversations and activity == "mine" and since is not None:
+    # --all is incompatible with the engagement axis (ADR-0034 §(h),
+    # ADR-0035 §(f) §組合せ拒否マトリクス). search.messages only
+    # indexes messages the principal could see, so asking for
+    # "workspace-wide channels where I posted" is logically the same
+    # as the joined-only listing; silently trimming the result set
+    # would hide the contradiction. The engagement axis fires on both
+    # the explicit ``--sort=last_self_post`` path and the implicit
+    # ``--sort=name`` + ``--since`` default (ADR-0035 §(d)); reject
+    # both combinations. ``--sort=last_activity`` is workspace-wide
+    # safe (per-row history call needs no self-membership).
+    engagement_axis_requested = sort == "last_self_post" or (sort == "name" and since is not None)
+    if all_conversations and engagement_axis_requested:
         typer.echo(
-            "Error: --all is incompatible with --activity=mine "
-            "(search.messages indexes only self-member channels); "
-            "use --activity=any for workspace-wide activity.",
+            "Error: --all is incompatible with engagement-axis sort "
+            "(--sort=last_self_post or --sort=name + --since; "
+            "search.messages indexes only self-member channels); "
+            "use --sort=last_activity for workspace-wide activity.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -252,7 +268,7 @@ def slack_conversations(
             include_archived=include_archived,
             all=all_conversations,
             since=parsed_since,
-            activity=activity,  # pyright: ignore[reportArgumentType]
+            sort=sort,  # pyright: ignore[reportArgumentType]
         )
     except ConfigError as exc:
         typer.echo(f"Error: {exc}", err=True)
