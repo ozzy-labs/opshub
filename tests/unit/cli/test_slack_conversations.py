@@ -1619,3 +1619,145 @@ def test_conversations_sort_last_activity_table_regression_byte_identical_phase1
 # Phase 19-B does not need a redundant copy here; the existing test
 # already covers the ``--help`` lazy-import contract for the renamed
 # command.
+
+
+# ----- ADR-0035 §(e) implicit-cutoff notice CLI integration ---------------
+#
+# The connector-layer tests in ``tests/unit/connectors/slack/test_conversations.py``
+# (``test_list_conversations_sort_last_self_post_without_since_applies_implicit_cutoff``
+# / ``test_list_conversations_implicit_cutoff_notice_emits_once_per_call``)
+# pin the helper's behaviour with substring matches. The CLI-layer
+# tests below pin the **literal wording** of the operator-visible
+# notice end-to-end through Typer / CliRunner's stderr capture so a
+# future refactor that breaks the wording (or routes the notice to the
+# wrong stream) regresses here instead of slipping to operators.
+#
+# Approach: ``_patch_list_conversations`` swaps the connector entry
+# point for a fake iterator; to exercise the notice on the CLI path
+# we have the fake invoke the real ``_emit_implicit_cutoff_notice``
+# helper (same SSOT used by ``list_conversations``). This validates
+# the CLI capture surface without re-importing the entire engagement
+# probe (the connector-layer tests already cover that).
+
+
+def _patch_list_conversations_emitting_cutoff_notice(
+    rows: list[SlackConversation],
+    *,
+    record: _CallRecord,
+) -> AbstractContextManager[MagicMock]:
+    """Patch ``list_conversations`` so it emits the real cutoff notice helper.
+
+    The fake iterator calls
+    :func:`opshub.connectors.slack.conversations._emit_implicit_cutoff_notice`
+    with the resolved ``sort`` kwarg before yielding rows — same SSOT
+    as the production code path (ADR-0035 §(e)). This pins that the
+    literal wording produced by the connector helper reaches the
+    operator through the CLI's stderr capture without re-implementing
+    the engagement-axis probe in the test double.
+    """
+
+    def _fake_list(auth: Any, **kwargs: Any) -> Iterator[SlackConversation]:
+        # Import the production-side helper inline so the test fake
+        # shares the SSOT wording with ``list_conversations``.
+        # ``_emit_implicit_cutoff_notice`` is module-private; the
+        # pragma annotates the deliberate cross-module access.
+        from opshub.connectors.slack.conversations import (
+            _emit_implicit_cutoff_notice,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        record.auth_token = getattr(auth, "token", None)
+        record.kwargs = dict(kwargs)
+        sort_key: Any = kwargs.get("sort", "name")
+        since_kw = kwargs.get("since")
+        # Mirror the production guard at conversations.py:493-495:
+        # the notice only fires for explicit ts-axis sorts with no
+        # ``--since``.
+        if since_kw is None and sort_key in ("last_self_post", "last_activity"):
+            _emit_implicit_cutoff_notice(sort=sort_key)
+        yield from rows
+
+    return patch(
+        "opshub.connectors.slack.conversations.list_conversations",
+        side_effect=_fake_list,
+    )
+
+
+def test_conversations_sort_last_self_post_implicit_cutoff_notice_emits_literal_to_stderr(
+    _slack_token_env: None,
+) -> None:
+    """``--sort=last_self_post`` (no ``--since``) → ADR-0035 §(e) literal notice on stderr.
+
+    The wording is load-bearing for operator UX (it names the flag the
+    operator passed and the override mechanism); any reword should be
+    a deliberate test diff, not silent drift.
+    """
+    expected_notice = (
+        "notice: --sort=last_self_post defaulted to --since 90d to cap probe "
+        "cost; pass --since explicitly to override."
+    )
+    record = _CallRecord()
+    runner = CliRunner()
+    with _patch_list_conversations_emitting_cutoff_notice([], record=record):
+        first = runner.invoke(
+            app,
+            ["slack", "conversations", "--sort", "last_self_post"],
+        )
+        second = runner.invoke(
+            app,
+            ["slack", "conversations", "--sort", "last_self_post"],
+        )
+
+    assert first.exit_code == 0, first.stdout + first.stderr
+    assert second.exit_code == 0, second.stdout + second.stderr
+    # Literal wording, full string (not just a substring).
+    assert expected_notice in first.stderr
+    assert expected_notice in second.stderr
+    # Per-call dedupe: each CLI invocation emits the notice exactly once
+    # (matches the connector-layer
+    # ``test_list_conversations_implicit_cutoff_notice_emits_once_per_call``
+    # pattern at the CLI surface).
+    assert first.stderr.count("defaulted to --since 90d") == 1
+    assert second.stderr.count("defaulted to --since 90d") == 1
+
+
+def test_conversations_sort_last_activity_implicit_cutoff_notice_emits_literal_to_stderr(
+    _slack_token_env: None,
+) -> None:
+    """``--sort=last_activity`` (no ``--since``) → ADR-0035 §(e) literal notice on stderr."""
+    expected_notice = (
+        "notice: --sort=last_activity defaulted to --since 90d to cap probe "
+        "cost; pass --since explicitly to override."
+    )
+    record = _CallRecord()
+    runner = CliRunner()
+    with _patch_list_conversations_emitting_cutoff_notice([], record=record):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--sort", "last_activity"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert expected_notice in result.stderr
+    assert result.stderr.count("defaulted to --since 90d") == 1
+
+
+def test_conversations_sort_with_explicit_since_skips_cutoff_notice(
+    _slack_token_env: None,
+) -> None:
+    """``--sort=last_self_post --since 30d`` → no implicit-cutoff notice.
+
+    Explicit ``--since`` overrides the implicit 90d cap, so the
+    advisory must stay silent (ADR-0035 §(e)). Pins the negative path
+    at the CLI surface so a future refactor that unconditionally emits
+    the notice surfaces here.
+    """
+    record = _CallRecord()
+    runner = CliRunner()
+    with _patch_list_conversations_emitting_cutoff_notice([], record=record):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--sort", "last_self_post", "--since", "30d"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "defaulted to --since 90d" not in result.stderr
