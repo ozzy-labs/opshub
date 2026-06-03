@@ -35,6 +35,20 @@ def connectors_list(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is not None:
         return
 
+    # Connector packages register themselves with the process-wide
+    # registry as an import-side-effect (``register_connector(...)``
+    # at module top). The Phase 17-B refactor (PR #414) split the old
+    # ``opshub connector list`` into this new surface but forgot to
+    # carry over the import call, so on a fresh process the registry
+    # is empty and the command misleadingly reported "no connectors
+    # registered" even though every connector was wired in-tree.
+    # ``import_connector_modules`` is the shared helper that both
+    # this CLI surface and ``opshub.mcp._writes::connector.sync`` now
+    # call (see ``opshub.connectors._discovery``).
+    from opshub.connectors._discovery import import_connector_modules
+
+    import_connector_modules()
+
     from opshub.connectors import discover_connectors
 
     connectors = discover_connectors()
