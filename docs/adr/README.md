@@ -104,6 +104,7 @@ NNNN-kebab-case-title.md
 | 0028 | [FTS5 sources_fts tokenizer choice (trigram + short-query LIKE fallback)](0028-fts5-japanese-tokenizer.md) | Accepted |
 | 0029 | [Distribute Assistant Skills via opshub Package Bundling](0029-distribute-assistant-skills-via-opshub-package.md) | Accepted |
 | 0030 | [Slack Thread Reply Ingestion Policy](0030-slack-thread-reply-ingestion.md) | Accepted |
+| 0031 | [CLI Command Surface Organization](0031-cli-command-surface-organization.md) | Accepted |
 
 ## Open Questions
 

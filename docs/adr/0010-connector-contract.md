@@ -497,3 +497,4 @@ Phase 13 改訂 (h) で `connector:google_workspace:refresh_token` keyring slot 
 - [Phase 11 Plan §2 ADR 構成 + §3 Sub-issue F](../phase-11-plan.md)
 - [Phase 13 Plan §2 改訂 ADR + §3 Sub-issue G](../phase-13-plan.md) — Google Workspace コネクタ (本 ADR §Phase 13 改訂 (e)-(h))
 - [Phase 14 Plan §2 改訂 ADR + §3 Sub-issue G](../phase-14-plan.md) — Gmail + Google Calendar コネクタ (本 ADR §Phase 14 改訂 (i)-(m))
+- [ADR-0031: CLI Command Surface Organization](0031-cli-command-surface-organization.md) — connector の CLI dispatch surface (top-level group の組織方針 / noun-first / per-noun group) は ADR-0031 で確定。本 ADR の Connector Protocol + 責務 / 禁止事項 / 改訂 (a)-(m) は CLI 表面再編とは独立で **不変**

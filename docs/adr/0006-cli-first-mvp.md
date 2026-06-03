@@ -102,4 +102,5 @@ CLI の設計原則:
 
 - [Principles 4 (Agent Runtime Boundary)](../principles.md)
 - [ADR-0004: Agent Runtime Boundary](0004-agent-runtime-boundary.md)
+- [ADR-0031: CLI Command Surface Organization](0031-cli-command-surface-organization.md) — CLI top-level group の組織方針 (noun-first / per-noun group / 2 階層) は本 ADR の延長として ADR-0031 で確定。ADR-0006 §決定 の 4 原則 (`--format` 切替 / read 副作用なし / write `--dry-run` / permission 摩擦削減) は ADR-0031 でも維持
 - 知識 MCP: `ai/platform/mcp-protocol` (将来 MCP 追加時の参照)
