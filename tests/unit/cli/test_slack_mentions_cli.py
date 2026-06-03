@@ -268,7 +268,7 @@ def test_list_format_json_returns_full_row_schema(
         ["slack", "mentions", "list", "--format", "json"],
     )
     assert result.exit_code == 0, result.stdout
-    payload = json.loads(result.stdout)
+    payload: list[dict[str, object]] = json.loads(result.stdout)
     assert isinstance(payload, list)
     assert len(payload) == 3
     # Each row carries every column documented in the JSON schema —
