@@ -1,8 +1,19 @@
 # 0034. Slack Engagement Axis (Self-Posted Last Activity)
 
-- Status: Accepted
+- Status: Accepted (**partially superseded by [ADR-0035](0035-slack-sort-axis-consolidation.md) — CLI surface only**)
 - Date: 2026-06-03
 - Deciders: opshub maintainers
+
+> **Partial supersede notice** (Phase 19-D / [ADR-0035](0035-slack-sort-axis-consolidation.md)):
+> ADR-0035 が本 ADR の §(b) §(g) §(h) §(i) §不変条件 2 の **CLI 表現を rename**
+> する (`--activity={mine|any}` → `--sort=name|last_self_post|last_activity`、
+> default format `table` → `toml`、default sort `name` 固定 + `--since` 暗黙
+> engagement、`--sort=last_*` 単独時の暗黙 `--since 90d` cutoff)。
+> **decision の本質 (engagement 信号源 §(a) / `search:read` 利用条件 §(c) /
+> Bot Token 不可 §(d) / silent fallback なし §(e) / projection 化 scope 外
+> §(f) / field 二重化解消 §(g) motivation / indexing-lag notice §(i) /
+> §不変条件 3, 5, 6, 7) は完全継承され、本 ADR は引き続き有効**。
+> 該当 section にはインライン注記 + ADR-0035 へのリンクを追加してある。
 
 ## Context
 
@@ -114,6 +125,13 @@ max ts を取って `SlackConversation` row に貼る。projection 化はしな�
 
 ### (b) `opshub slack conversations --since` default を engagement 基準に切替
 
+> **Updated by [ADR-0035](0035-slack-sort-axis-consolidation.md) §(b) §(c) §(d)** —
+> CLI 表記は `--activity=mine` → `--sort=last_self_post` (engagement 軸明示) /
+> `--activity=any` → `--sort=last_activity` (activity 軸明示) / `--sort=name`
+> (default、`--since` 単独時は engagement 軸を暗黙 default) に rename。
+> default sort は `name` 固定 (`--since` の有無で flip しない、ADR-0035 §(b))。
+> engagement 軸を default 経路として採用する decision の本質は不変。
+
 旧挙動 (activity = any message) は `--activity=any` で opt-in 保護。
 default は `--activity=mine` (engagement)。pre-userbase ([memory:
 opshub-pre-userbase-compat-stance]) のため compat shim なし。
@@ -181,6 +199,15 @@ engagement 信号は ad-hoc `search.messages` call のみで生成し、
 
 ### (g) `SlackConversation` field semantic 二重化を解消
 
+> **Updated by [ADR-0035](0035-slack-sort-axis-consolidation.md) §(c) §(f)** —
+> table 列 label の動的切替トリガーが `--activity` flag から `--sort` flag に
+> rename される (`--sort=last_self_post` → `LAST_POST` 列 /
+> `--sort=last_activity` → `LAST_ACTIVITY` 列 / `--sort=name` + `--since` 単独
+> → `LAST_POST` 列 暗黙 engagement)。field 二重化解消の decision motivation
+> (JSON consumer が semantic を確定可能 / hybrid sort 余地 / silent semantic
+> shift 回避) は完全継承、新 field 追加 / JSON renderer 経路 / DB field 名
+> (`last_self_post_ts` / `last_activity_ts`) は不変。
+
 mine モード用に **新 field `last_self_post_ts: float | None = None`** を
 追加し、any モード既存 `last_activity_ts: float | None = None` と分離
 する。JSON renderer は populated 側のみ emit (両方 null なら両方省略、
@@ -201,6 +228,13 @@ overload) — JSON consumer が `--activity` flag を見ないと「この ts �
 を判別できず、silent semantic shift で誤利用される
 
 ### (h) `--all` (workspace-wide listing) と `--activity=mine` は併用不可
+
+> **Updated by [ADR-0035](0035-slack-sort-axis-consolidation.md) §(f)** —
+> 非両立条件の組合せが拡張される: `--all + --sort=last_self_post` (engagement
+> 軸明示) および `--all + --sort=name + --since` (暗黙 engagement、ADR-0035
+> §(d)) の両方が `ConfigError` で reject される。activity 軸 (`--sort=last_activity`)
+> は self-member 制約がないため `--all` と組合せ可能。silent な集合 trim を
+> しない decision の本質は不変。
 
 `search.messages` は self が member の channel しか index hit しないため、
 `--all` (`conversations.list` 経由の workspace-wide listing、operator が
@@ -223,6 +257,15 @@ UX になる。`ConfigError` で reject し、operator に明示的に
   compat shim 不要、最初から正しい end-state を出す
 
 ### (i) indexing-lag UX (明示 notice)
+
+> **Updated by [ADR-0035](0035-slack-sort-axis-consolidation.md) §(f)** —
+> notice 文言の `--activity=any` 表記は `--sort=last_activity` に rename
+> される (`notice: search.messages may lag by minutes; use --sort=last_activity
+> for live activity.`)。1 度だけ stderr emit する behaviour / `-q` /
+> `OPSHUB_LOG_LEVEL` で suppress しない一貫性 / `_progress.indeterminate`
+> spinner description との独立性は完全継承。ADR-0035 §(e) の暗黙 cutoff
+> notice (`notice: --sort=<sort> defaulted to --since 90d ...`) は本 notice
+> とは別経路で、engagement 軸 + cutoff なし時は両方 emit され得る。
 
 mine モードは Slack 内部 indexing pipeline 経由のため数分〜数十分の lag が
 出る (ADR-0033 §採用しなかった代替 §1 で indexing lag を指摘済)。CLI
@@ -252,6 +295,13 @@ runtime に 1 度だけ `notice: search.messages may lag by minutes; use
 2. **`opshub slack conversations --since` の default semantics は
    engagement (`--activity=mine`)** — 旧挙動 (any) は `--activity=any` で
    opt-in (§(b))
+   - **Updated by [ADR-0035](0035-slack-sort-axis-consolidation.md) §(b)
+     §(c) §(d) §不変条件 2, 3, 4**: CLI 表記は `--activity={mine|any}` →
+     `--sort=name|last_self_post|last_activity`、default sort は `name` 固定
+     (`--since` の有無で flip しない)、`--sort=name + --since` 単独時は
+     engagement 軸 (`last_self_post`) を暗黙 default として probe + cutoff
+     filter。engagement 軸を default 経路として採用する decision の本質は
+     不変。
 3. **`search:read` 欠落 / Bot Token 利用時は明示エラー、silent fallback
    しない** (§(e))
 4. **demand 軸 ([ADR-0033](0033-slack-mention-demand-digest.md)
@@ -425,5 +475,12 @@ epic [#438](https://github.com/ozzy-labs/opshub/issues/438) で 2 PR に
   — §(d) §不変条件 4 で defer された engagement 軸を本 ADR で解除。demand
   軸 (ADR-0033 受信) と engagement 軸 (本 ADR 発信) は orthogonal で共存。
   ADR-0033 §(d) で本 ADR を cross-ref
+- [ADR-0035: Slack Sort Axis Consolidation](0035-slack-sort-axis-consolidation.md)
+  — 本 ADR §(b) §(g) §(h) §(i) §不変条件 2 の **CLI 表現を部分 supersede**
+  する (`--activity={mine|any}` → `--sort=name|last_self_post|last_activity`、
+  default format / default sort / 暗黙 cutoff の rename)。engagement 信号源
+  / `search:read` 利用条件 / Bot Token 不可 / silent fallback なし /
+  projection 化 scope 外 / field 二重化解消 motivation / indexing-lag notice
+  の decision 本質は完全継承され、本 ADR は引き続き有効
 - Phase 19 epic [#438](https://github.com/ozzy-labs/opshub/issues/438) —
   本 ADR の起票元、2 PR 分割 (19-A / 19-B) の SSOT
