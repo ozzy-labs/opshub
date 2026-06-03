@@ -5,6 +5,21 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1](https://github.com/ozzy-labs/opshub/compare/v0.3.0...v0.3.1) (2026-06-03)
+
+
+### Added
+
+* **config:** load opshub.toml at runtime via TomlConfigSettingsSource ([#418](https://github.com/ozzy-labs/opshub/issues/418)) ([#423](https://github.com/ozzy-labs/opshub/issues/423)) ([144b640](https://github.com/ozzy-labs/opshub/commit/144b640fe9aa5c327fc09d2b2c5dcd9c2085e569))
+
+
+### Documentation
+
+* **adr:** ADR-0032 runtime TOML config loading + cross-refs ([#421](https://github.com/ozzy-labs/opshub/issues/421)) ([c99416b](https://github.com/ozzy-labs/opshub/commit/c99416b15fd156a42b7b374f2a20c5adfb425be5)), closes [#417](https://github.com/ozzy-labs/opshub/issues/417)
+* **adr:** fix ADR-0032 reference to --print-paths flag ([#424](https://github.com/ozzy-labs/opshub/issues/424)) ([1c01a63](https://github.com/ozzy-labs/opshub/commit/1c01a63f57f11c2eacbd5b7dce90749e63ec18b7))
+* align operator-facing docs with ADR-0032 TOML loading ([#420](https://github.com/ozzy-labs/opshub/issues/420)) ([bec0bc9](https://github.com/ozzy-labs/opshub/commit/bec0bc9e36f0e6614782a3674f2ee7f74873160c))
+* **config:** post-[#416](https://github.com/ozzy-labs/opshub/issues/416) audit followup — cross-ref ADR-0032 from setup docs and starter TOML ([#425](https://github.com/ozzy-labs/opshub/issues/425)) ([e046478](https://github.com/ozzy-labs/opshub/commit/e04647893fd818cdf2b01a36a70f7475d35556c0))
+
 ## [0.3.0](https://github.com/ozzy-labs/opshub/compare/v0.2.11...v0.3.0) (2026-06-03)
 
 
