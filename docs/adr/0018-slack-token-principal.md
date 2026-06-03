@@ -115,3 +115,4 @@ Slack connector の token principal を **User Token first-class** に転換す�
 - [ADR-0005: External Content Minimization](0005-external-content-minimization.md) — token 可視範囲が広がっても保存内容は変わらない (summary ≤ 200 chars enforce)
 - [Principles 1: Local-first](../principles.md) — personal Operational Memory positioning の根拠
 - Phase 7 Sub A: Slack connector ([#110](https://github.com/ozzy-labs/opshub/issues/110)) — 本 ADR 起票の起点となった実装
+- [ADR-0033: Slack Mention / DM Demand Digest](0033-slack-mention-demand-digest.md) — 本 ADR §決定 7 で MVP として登録する `channels:read` / `channels:history` (User Token) または invite 済 channel の Bot Token 同等 scope のみで、@mention / DM / MPIM の demand 信号検出が完結する (`search:read` scope 追加不要)。ADR-0033 §(a) §不変条件 7 で本 ADR を cross-ref
