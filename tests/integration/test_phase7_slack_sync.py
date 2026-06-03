@@ -1076,7 +1076,9 @@ def test_slack_sync_works_without_github_extra(
     point at **different** module objects, and a later test that does
     ``import opshub.connectors.github.auth as github_auth`` +
     ``monkeypatch.setattr(github_auth, "test_token", ...)`` patches the
-    parent-attr module while the ``auth test`` verifier dispatch (today: ``opshub.cli._auth_common.run_auth_test``; pre-Phase-17-B: ``opshub.cli.connector._resolve_auth_test_verifier``)
+    parent-attr module while the ``auth test`` verifier dispatch
+    (today: :func:`opshub.cli._auth_common.run_auth_test`; pre-Phase-17-B:
+    the deleted ``opshub.cli.connector._resolve_auth_test_verifier``)
     looks up ``test_token`` via the ``sys.modules`` entry — the patch
     does not take effect and ``opshub github auth test`` calls
     the real ``test_token``. We pin a deterministic post-condition here:
@@ -1101,7 +1103,9 @@ def test_slack_sync_works_without_github_extra(
     # ``opshub.connectors.github.auth`` (the parent attribute) points at
     # the new one. Later tests that ``import opshub.connectors.github.auth
     # as github_auth`` resolve via the parent attribute and patch the new
-    # module, while the ``auth test`` verifier dispatch (today: ``opshub.cli._auth_common.run_auth_test``; pre-Phase-17-B: ``opshub.cli.connector._resolve_auth_test_verifier``)
+    # module, while the ``auth test`` verifier dispatch
+    # (today: ``opshub.cli._auth_common.run_auth_test``; pre-Phase-17-B:
+    # the deleted ``opshub.cli.connector._resolve_auth_test_verifier``)
     # does ``from opshub.connectors.github.auth import test_token`` which
     # resolves via the ``sys.modules`` entry — the patch silently misses
     # and the call hits the real ``test_token`` → 1 / keyring error
