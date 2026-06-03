@@ -263,6 +263,67 @@ async def test_connector_sync_handler_dispatches_onedrive_drive_name(
 
 
 @pytest.mark.asyncio
+async def test_connector_sync_handler_dispatches_google_calendar_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``connector.sync`` with ``name="google_calendar"`` reaches ``.sync()``.
+
+    Phase 14 added Google Calendar but the MCP write handler's
+    inline import block was not updated (the same shape of CLI / MCP
+    drift Phase 11 closed for Teams + OneDrive Drive). PR #437
+    closed the gap by routing the MCP handler through
+    :func:`opshub.connectors._discovery.import_connector_modules`;
+    this test is the behavioural counterpart to the static source
+    pin (``test_discovery_helper_imports_google_calendar_connector``)
+    — it proves the name resolves through the handler end-to-end,
+    not just that the import line exists in source.
+    """
+    from opshub.mcp._writes import build_connector_sync_handler
+
+    stub_service = _StubSourceService()
+    _install_stub_source_service(monkeypatch, stub_service)
+    stub_connector = _install_stub_connector(monkeypatch, "google_calendar")
+
+    handler = build_connector_sync_handler(engine=cast("Any", None))
+    raw = await handler({"name": "google_calendar"})
+
+    assert stub_connector.sync_called is True
+    payload = cast("dict[str, Any]", json.loads(raw))
+    assert payload["ok"] is True
+    assert payload["connector"] == "google_calendar"
+    assert payload["observed_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_connector_sync_handler_dispatches_google_mail_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``connector.sync`` with ``name="google_mail"`` reaches ``.sync()``.
+
+    Symmetric to the Google Calendar test — Gmail was the second
+    Phase 14 connector the pre-PR-#437 inline MCP import block
+    silently missed. The static source pin
+    (``test_discovery_helper_imports_google_mail_connector``) shows
+    the import line exists in ``_discovery``; this test shows the
+    handler actually dispatches when the name comes in.
+    """
+    from opshub.mcp._writes import build_connector_sync_handler
+
+    stub_service = _StubSourceService()
+    _install_stub_source_service(monkeypatch, stub_service)
+    stub_connector = _install_stub_connector(monkeypatch, "google_mail")
+
+    handler = build_connector_sync_handler(engine=cast("Any", None))
+    raw = await handler({"name": "google_mail"})
+
+    assert stub_connector.sync_called is True
+    payload = cast("dict[str, Any]", json.loads(raw))
+    assert payload["ok"] is True
+    assert payload["connector"] == "google_mail"
+    assert payload["observed_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_connector_sync_handler_unknown_name_raises_opshub_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
