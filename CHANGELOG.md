@@ -5,6 +5,22 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/ozzy-labs/opshub/compare/v0.3.3...v0.4.0) (2026-06-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **slack:** consolidate sort axis (drop --activity, add --sort) + toml as default format (Phase 19-D-2) ([#453](https://github.com/ozzy-labs/opshub/issues/453))
+
+### Added
+
+* **slack:** consolidate sort axis (drop --activity, add --sort) + toml as default format (Phase 19-D-2) ([#453](https://github.com/ozzy-labs/opshub/issues/453)) ([7960f4b](https://github.com/ozzy-labs/opshub/commit/7960f4b6bc98e2b20fc0eee6b76b69e5f86dd085))
+
+
+### Documentation
+
+* **adr:** add ADR-0035 slack sort axis consolidation (Phase 19-D-1) ([#451](https://github.com/ozzy-labs/opshub/issues/451)) ([cad637e](https://github.com/ozzy-labs/opshub/commit/cad637ea55f586a320927d053f1662e6c78c1da5))
+
 ## [0.3.3](https://github.com/ozzy-labs/opshub/compare/v0.3.2...v0.3.3) (2026-06-03)
 
 
