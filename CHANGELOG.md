@@ -5,6 +5,23 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/ozzy-labs/opshub/compare/v0.2.11...v0.3.0) (2026-06-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* reorganise CLI command surface to noun-first per-noun group (Phase 17-B) ([#414](https://github.com/ozzy-labs/opshub/issues/414))
+
+### Added
+
+* reorganise CLI command surface to noun-first per-noun group (Phase 17-B) ([#414](https://github.com/ozzy-labs/opshub/issues/414)) ([6be57e9](https://github.com/ozzy-labs/opshub/commit/6be57e93b90f56c465ee1ffa3370bb888dbc311e))
+
+
+### Documentation
+
+* **adr:** ADR-0031 — CLI command surface organization (Phase 17-A) ([#412](https://github.com/ozzy-labs/opshub/issues/412)) ([e2cf1c2](https://github.com/ozzy-labs/opshub/commit/e2cf1c22954827303a8d9cbaa6e87ab5b40dce44))
+* **upgrading:** rewrite legacy opshub connector ... examples to Phase 17 form ([#415](https://github.com/ozzy-labs/opshub/issues/415)) ([e6530c2](https://github.com/ozzy-labs/opshub/commit/e6530c2bededb56659e10718503cdb64c0be21fa))
+
 ## [0.2.11](https://github.com/ozzy-labs/opshub/compare/v0.2.10...v0.2.11) (2026-06-02)
 
 
