@@ -112,19 +112,28 @@ event を消費する **専用 projection + 専用 MCP tool** として最小実
 passthrough 禁止 / read/write 分離 / context 効率 / OTel naming) を継承する読み取り
 tool であり、Phase 18-C で `_registry.py` に追加する。
 
-- **入力 schema (論理形)**: `since` (ISO 8601、optional、default 直近 30 日 — physical
-  column 写像 = `slack_demand_digest.last_demand_ts`) / `types` (`demand_kind` 配列、
-  optional、default 全 3 値) / `limit` (optional、default 50)
-- **出力 schema (論理形)**: `[{channel_id, channel_name, demand_kind, last_demand_ts,
-  excerpt, permalink, source_id}]` のリスト + `truncated` / `next_offset` pagination
+- **入力 schema (論理形)**: 4 引数すべて optional。
+  - `types` (string 配列、enum = `im` / `mpim` / `private` / `public`、default 全 4 値)
+    — channel 種別フィルタ。物理列写像 = `slack_demand_digest.channel_type`
+  - `demand_kinds` (string 配列、enum = `mention` / `dm` / `mpim`、default 全 3 値)
+    — demand 種別フィルタ。物理列写像 = `slack_demand_digest.demand_kind`
+  - `since_ts` (number、Slack epoch float、optional、default なし) — physical column
+    写像 = `slack_demand_digest.last_demand_ts` (これより strict に古い row を除外)
+  - `limit` (integer、optional、default 50、max 200)
+  - `order` (string、enum = `last_demand_desc` の 1 値固定、default 同値) — §(e)
+    で type tier を採用しないため Phase 18 では唯一の値。Phase 19+ で `oldest_first`
+    等の追加を想定した forward-compat 余地として宣言だけ取る
+- **出力 schema (論理形)**: `[{channel_id, channel_type, channel_name, demand_kind,
+  last_demand_ts, last_demand_user_id, last_demand_excerpt, last_demand_permalink,
+  last_source_id}]` のリスト + `total` / `truncated` / `next_offset` pagination
   hint ([ADR-0022 §決定 (d)](0022-mcp-server-surface.md) context 効率に整合)
 - **annotation**: `readOnlyHint=true, destructiveHint=false, idempotent=true,
   openWorldHint=false` (`recall.search` / `search` / `task.list` 等の既存 read tool と
   同パターン、SQLite ローカルのみ)
-- **type 写像**: 入力 `types` argument は `slack_demand_digest.demand_kind` 物理列に
-  直接写像する (Phase 12 H1 で `task.list` / `inbox.list` / `decision.list` /
-  `source.list` の時間フィルタを物理列ベースに正規化した方針、[ADR-0022
-  §決定 (f-3)](0022-mcp-server-surface.md) の延長)
+- **物理列写像方針**: `types` → `channel_type`、`demand_kinds` → `demand_kind`、
+  `since_ts` → `last_demand_ts` がいずれも物理列に直接写像する (Phase 12 H1 で
+  `task.list` / `inbox.list` / `decision.list` / `source.list` の時間フィルタを物理
+  列ベースに正規化した方針、[ADR-0022 §決定 (f-3)](0022-mcp-server-surface.md) の延長)
 - 不採用案 1 (既存 `inbox.list` 透過): §(b) の inbox 統合不採用と整合
 - 不採用案 2 (`recall.search` 透過): demand 信号は本文 substring 検索ではなく
   「mention parse + channel_type 判定 + last_ts upsert」のパスがあり、`recall.search`
@@ -236,7 +245,8 @@ projection が mention parse / DM 判定で必要とする self user_id は、`S
 ### Scope 外 (Phase 19+ 候補)
 
 - **demand decay / TTL** — 6 ヶ月前の DM を top に置かない weighting / aging。現状は
-  `last_demand_ts` 降順 + `--since` filter のみ
+  `last_demand_ts` 降順 + MCP tool `slack.demand.list` の `since_ts` 引数による下限
+  打ち切りのみ (CLI `opshub slack mentions list` には `--since` 等の時間フィルタなし)
 - **archived channel handling** — archive 済 channel の demand row を停止 or 除外する
   論理。現状は archive 後も最終 demand 状態が残る
 - **self user_id rotation handling** — 再認証で user_id が変わる edge case の
