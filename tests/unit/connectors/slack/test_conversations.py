@@ -2638,3 +2638,43 @@ def test_list_conversations_missing_search_read_for_sort_name_plus_since(
     assert "missing_scope" in message
     assert "--sort=last_self_post" in message
     assert "--sort=last_activity" in message
+
+
+def test_list_conversations_bot_token_with_sort_last_activity_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bot Token + ``sort="last_activity"`` → no ``ConfigError`` (any axis).
+
+    Positive regression pin for ADR-0034 §(d) / ADR-0035 §(c): the
+    any-author axis runs through ``conversations.history`` which only
+    needs the ``*:history`` scope set (Bot Tokens can satisfy that).
+    The engagement-axis Bot-Token rejection is pinned by
+    ``test_list_conversations_mine_axis_bot_token_principal_raises_config_error``
+    and ``test_list_conversations_bot_token_rejected_for_sort_name_plus_since``;
+    without this counterpart a future refactor that tightened the
+    principal gate too far (e.g. rejecting Bot Tokens for *every*
+    ts-axis sort) would slip through the negative-path coverage.
+    """
+    page = _list_response([_public_channel("C1")])
+    client = _build_client(list_pages=[page])
+    client.conversations_history.return_value = _history_response([{"ts": "1717200000.000000"}])
+    _patch_webclient(monkeypatch, client)
+
+    # Must not raise — Bot Token + last_activity is the documented
+    # any-axis path that does not touch ``search.messages``.
+    results = list(
+        list_conversations(
+            _auth_with_bot(monkeypatch),
+            since=_since_dt(days_ago=7),
+            sort="last_activity",
+        )
+    )
+
+    assert len(results) == 1
+    # any-axis populates ``last_activity_ts`` and leaves
+    # ``last_self_post_ts`` ``None`` (engagement axis untouched).
+    assert results[0].last_activity_ts == 1717200000.0
+    assert results[0].last_self_post_ts is None
+    # ``search.messages`` must stay untouched on the any axis.
+    assert client.search_messages.call_count == 0
+    assert client.conversations_history.call_count == 1
