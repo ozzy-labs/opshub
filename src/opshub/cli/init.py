@@ -40,7 +40,13 @@ __all__ = ["STARTER_CONFIG_TOML", "init_command"]
 # ``--force`` overwrite. The leading comment documents how env-var overrides
 # map to TOML sections (``OPSHUB_STORAGE__DB_PATH`` -> ``[storage].db_path``).
 STARTER_CONFIG_TOML = """\
-# OpsHub configuration. Override per-section via OPSHUB_<SECTION>__<FIELD> env vars.
+# OpsHub configuration. Loaded on every startup (ADR-0032).
+# Precedence: init args > env > toml > defaults.
+#
+# Common env vars:
+#   OPSHUB_<SECTION>__<FIELD>     nested fields (e.g. OPSHUB_EMBEDDING__BACKEND=local)
+#   OPSHUB_CONFIG_DIR=<dir>       relocate this config directory (TOML / DB / keyring)
+#   OPSHUB_LLM_BACKEND=<backend>  single-underscore shortcut for [llm] backend
 [storage]
 # db_path = "/custom/path/opshub.sqlite"
 
