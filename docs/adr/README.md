@@ -105,6 +105,7 @@ NNNN-kebab-case-title.md
 | 0029 | [Distribute Assistant Skills via opshub Package Bundling](0029-distribute-assistant-skills-via-opshub-package.md) | Accepted |
 | 0030 | [Slack Thread Reply Ingestion Policy](0030-slack-thread-reply-ingestion.md) | Accepted |
 | 0031 | [CLI Command Surface Organization](0031-cli-command-surface-organization.md) | Accepted |
+| 0032 | [Runtime TOML Config Loading](0032-runtime-toml-config-loading.md) | Accepted |
 
 ## Open Questions
 

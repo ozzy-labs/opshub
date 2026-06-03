@@ -226,6 +226,8 @@ fallback_window_days = 30  # default 30; 0 = disable fallback (非推奨)
 
 本契約 §(c) は Graph delta query を持つ全 connector (Phase 7 ms365 outlook / onedrive / Phase 11 teams) に適用される。Phase 7 既存 connector への適用は Phase 11 で **forward-compat** に追加 (既存 cursor 値は opaque string として扱われ、TTL 失効を検知した時点で fallback が起動する、breaking change なし)。
 
+Phase 18 改訂: `fallback_window_days` の `opshub.toml` 上書きは [ADR-0032](0032-runtime-toml-config-loading.md) の TOML 読込経路で実装される。
+
 ### Phase 11 改訂 (d) — Teams User Token principal (ADR-0014 keyring 経由、Bot Token は alternative)
 
 Phase 11 Sub-issue F5 (#238) Teams connector の認証 principal を **User Token** に確定する。Slack ADR-0018 (`xoxp-` user token を採用、bot token は却下) と同パターン。

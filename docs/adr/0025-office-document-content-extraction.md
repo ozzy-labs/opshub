@@ -59,6 +59,8 @@ max_extracted_chars = 500000   # default 500_000; 0 = unlimited (非推奨)
 - **2 段防御** — ファイルサイズだけだと「100 sheets × 1KB cell」の中サイズ workbook がテキストでは 5MB 級に膨れるケースを取りこぼす。抽出後テキスト長で再防御する
 - **operator override** — 個人 / 部門ごとに「Excel 大きめ容認」「PPT スライド全文必須」等の需要差を `opshub.toml` で吸収
 
+Phase 18 改訂: `[office]` セクション (`max_file_size_mb` / `max_extracted_chars`) の TOML 読込経路は [ADR-0032](0032-runtime-toml-config-loading.md) で実装される。
+
 ### (c) 抽出失敗 fail-safe = **warning log + `body=None`** で SourceObserved 発行継続
 
 markitdown が例外を投げる (ファイル破損 / パスワード保護 / 未対応サブ形式 / OOM 等) 場合、`core/document_extract.py` は例外を catch し:
@@ -113,6 +115,8 @@ max_cells_per_workbook = 50000  # default 50000
 - **全シート対象** — 多くの社内 Excel は「Sheet1 = ダッシュボード / Sheet2-N = 詳細」構造で、Sheet1 だけだと recall の網羅性が劣化する
 - **10K + 50K cells** — 50K cells ≒ 250 行 × 200 列 ≒ 通常業務 Excel の上位 95%ile を covers。これを超える Excel (1M cells 級の data dump) は recall 対象として有用性が低く、防御層で truncate して運用可能
 - **truncate 注記** — operator / agent が「ここで truncated されている」事実を `body` 内テキストから読み取れるようにする (sanitised state を hidden にしない)
+
+Phase 18 改訂: `[office.excel]` セクション (`max_cells_per_sheet` / `max_cells_per_workbook`) の TOML 読込経路は [ADR-0032](0032-runtime-toml-config-loading.md) で実装される。
 
 ### (f) PowerPoint 抽出範囲 = **本文 + ノート**両方含む / 画像 OCR は Phase 12+ defer
 

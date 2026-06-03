@@ -39,6 +39,8 @@ DB 暗号鍵は keyring service `"opshub"` の専用 key (`db:encryption_key`) �
 - **既存の暗号化 DB かつ鍵不在** — 復号不能。actionable error (`db:encryption_key が見つかりません。OPSHUB_DB_ENCRYPTION_KEY env var を設定するか keyring を確認してください`) で fail-fast し、誤って新規平文 DB を作らない。
 - **暗号化無効 (opt-out)** — `[storage] encryption = false` で平文 DB を許容する (CI / 一時環境 / 暗号化を望まない operator 向け)。default は `encryption = false` (opt-in)。本文を保持する以上 sensitive workload を扱う operator は明示的に opt-in する。cold-install footprint を保つため SQLCipher 依存は extras (`encryption`) で隔離 (§(d))。
 
+Phase 18 改訂: `[storage] encryption` の TOML 読込経路は [ADR-0032](0032-runtime-toml-config-loading.md) で実装される。
+
 ### (c) 列暗号化は却下
 
 `sources.body` / event payload 列のみをアプリ層で暗号化する案は却下する (§Alternatives #1)。理由は平文露出面の網羅困難 + FTS との非互換 (本 ADR §Context)。
