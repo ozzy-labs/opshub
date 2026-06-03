@@ -1,6 +1,6 @@
 """Pins the CLI-level exception sanitisation for ``opshub github sync``.
 
-The CLI driver in :mod:`opshub.cli.connector` catches every exception
+The CLI driver in :mod:`opshub.cli._connector_common` catches every exception
 raised inside :meth:`Connector.sync` and records a
 :class:`ConnectorSyncFailed` event with ``error_message=type(exc).__name__``
 — the exception **type name only**, never the original message — so
@@ -93,7 +93,7 @@ def test_connector_sync_github_sanitises_exception_message(
 ) -> None:
     """A fetcher exception with a token in the message → only the type name persists.
 
-    The contract under test (per :mod:`opshub.cli.connector`):
+    The contract under test (per :mod:`opshub.cli._connector_common`):
 
     * CLI exits with code 1.
     * The :class:`ConnectorSyncFailed` event's ``error_message`` field

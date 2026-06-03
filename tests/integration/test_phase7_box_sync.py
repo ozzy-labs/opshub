@@ -320,7 +320,7 @@ def test_box_sync_is_idempotent(isolated_env: _PathsDict) -> None:
 def test_box_sync_records_failure_event(isolated_env: _PathsDict) -> None:
     """A fetcher exception surfaces as a :class:`ConnectorSyncFailed` event.
 
-    The CLI driver in :mod:`opshub.cli.connector` is responsible for
+    The CLI driver in :mod:`opshub.cli._connector_common` is responsible for
     catching the connector-side exception, sanitising the message to
     ``type(exc).__name__``, and recording the failure event via
     :meth:`SourceService.record_sync_failure`. This test pins the

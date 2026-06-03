@@ -1,12 +1,12 @@
 """Interactive OAuth paste-code flow for the Box connector.
 
-Phase 7 step C1 keeps the generic ``opshub connector auth set <name>``
-surface (Phase 3 step A5) as the single entry point operators learn,
-but the Box connector cannot use the plain "prompt for a token string"
-branch — its credential is an OAuth refresh token that only exists
-after a successful authorization-code exchange with Box. We therefore
-intercept the ``connector:box`` target in :mod:`opshub.cli.connector`
-and dispatch to this helper, which:
+The Box connector cannot use the plain "prompt for a token string"
+auth branch — its credential is an OAuth refresh token that only
+exists after a successful authorization-code exchange with Box. The
+per-noun ``opshub box auth set`` callback in :mod:`opshub.cli.box`
+(Phase 17-B / ADR-0031 split, pre-Phase-17-B this lived in the
+generic ``opshub connector auth set box`` dispatch inside
+``opshub.cli.connector``) therefore dispatches to this helper, which:
 
 1. Reads ``[connectors.box] client_id`` from the loaded
    :class:`opshub.core.config.OpsHubSettings`. The empty default for
@@ -31,7 +31,7 @@ The helper lives behind a ``_`` prefix so the static cold-start guard
 (``tests/integration/test_cli_imports``) does not require this file to
 keep its module-level imports inside the whitelist — private helpers
 are excluded from the parametrised test. The public
-:mod:`opshub.cli.connector` module still defers its ``_box_oauth``
+:mod:`opshub.cli.box` module still defers its ``_box_oauth``
 import inside the command callback to preserve the ADR-0001
 cold-start budget for operators who never touch Box.
 
@@ -61,8 +61,8 @@ def run_paste_code_flow() -> None:
       path (which would surface as the underlying :class:`ConfigError`).
     """
     # Lazy imports keep this module's import cost negligible — the
-    # parent ``opshub.cli.connector`` already defers loading us until
-    # the operator actually targets ``connector:box``.
+    # parent ``opshub.cli.box`` already defers loading us until
+    # the operator actually invokes ``opshub box auth set``.
     from opshub.connectors.box import BOX_CLIENT_SECRET_SECRET_KEY, BoxAuth
     from opshub.core.config import OpsHubSettings
     from opshub.core.secrets import set_secret

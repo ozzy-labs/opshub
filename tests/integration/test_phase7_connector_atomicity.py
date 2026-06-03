@@ -14,8 +14,8 @@ function each):
    successfully then raises mid-iterator. The successfully-yielded items
    must persist; the failing item must not; a ``ConnectorSyncFailed``
    event must record the exception type only (ADR-0005 + sanitisation
-   contract from :mod:`opshub.cli.connector` /
-   :class:`MS365Connector._run_endpoint`).
+   contract from :func:`opshub.cli._connector_common.run_connector_sync`
+   / :class:`MS365Connector._run_endpoint`).
 
 Why we pin all three:
 
@@ -24,7 +24,7 @@ Why we pin all three:
   must cover.
 - Each connector has a *different* failure rail: Slack and Box let
   the connector-level loop surface failures (the CLI driver in
-  :mod:`opshub.cli.connector` catches them); MS365 swallows
+  :mod:`opshub.cli._connector_common` catches them); MS365 swallows
   per-endpoint failures and records ``ConnectorSyncFailed`` inside
   :meth:`MS365Connector._run_endpoint` so other endpoints can still
   run.
@@ -383,7 +383,7 @@ def test_slack_failure_records_sync_failed(
     """Both pre-iteration failure modes record a single sync_failed event.
 
     The CLI driver's ``try / except`` arm
-    (:func:`opshub.cli.connector.connector_sync`) catches every
+    (:func:`opshub.cli._connector_common.run_connector_sync`) catches every
     exception, records ``ConnectorSyncFailed`` with
     ``type(exc).__name__`` only, and exits 1. The successful-source
     projections must stay empty because the fetcher never reached the
@@ -433,7 +433,7 @@ def test_slack_partial_success_persists_yielded_messages(
 
     * 2 ``sources`` rows + 2 ``inbox_items`` rows persist (the prefix).
     * 1 ``connector.sync_failed`` row is appended (the failure).
-    * Exit code is 1 — :func:`opshub.cli.connector.connector_sync`
+    * Exit code is 1 — :func:`opshub.cli._connector_common.run_connector_sync`
       treats any non-config failure path as a process-level fail.
     """
     prefix: list[tuple[str, RawSlackMessage, str | None]] = [

@@ -66,9 +66,12 @@ from pathlib import Path
 
 import pytest
 
-# The ``opshub connector sync`` CLI imports every registered connector
-# package as a side effect (see :mod:`opshub.cli.connector`), and the
-# Phase 3 GitHub connector imports ``httpx`` at module-load time
+# The ``opshub <connector> sync`` CLI imports every registered connector
+# package as a side effect (see
+# :func:`opshub.connectors._discovery.import_connector_modules` which
+# the per-noun driver in :mod:`opshub.cli._connector_common` calls
+# before discovery), and the Phase 3 GitHub connector imports ``httpx``
+# at module-load time
 # through its ``api`` submodule. Skip rather than fail when the
 # ``connectors-github`` extras are absent so installations that only
 # enabled the box_drive connector still pass the rest of the test

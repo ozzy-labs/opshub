@@ -1,12 +1,13 @@
 """Interactive OAuth paste-code flow for the Microsoft 365 connector.
 
-Phase 7 step B1 keeps the generic ``opshub connector auth set <name>``
-surface (Phase 3 step A5) as the single entry point operators learn,
-but the Microsoft 365 connector cannot use the plain "prompt for a
-token string" branch — its credential is an OAuth refresh token that
+The Microsoft 365 connector cannot use the plain "prompt for a token
+string" auth branch — its credential is an OAuth refresh token that
 only exists after a successful authorization-code exchange with
-Microsoft. We therefore intercept the ``connector:ms365`` target in
-:mod:`opshub.cli.connector` and dispatch to this helper, which:
+Microsoft. The per-noun ``opshub ms365 auth set`` callback in
+:mod:`opshub.cli.ms365` (Phase 17-B / ADR-0031 split, pre-Phase-17-B
+this lived in the generic ``opshub connector auth set ms365`` dispatch
+inside ``opshub.cli.connector``) therefore dispatches to this helper,
+which:
 
 1. Reads ``[connectors.ms365] client_id`` / ``authority`` from the
    loaded :class:`opshub.core.config.OpsHubSettings`. The empty default
@@ -23,9 +24,9 @@ The helper lives behind a ``_`` prefix so the static cold-start guard
 (``tests/integration/test_cli_imports``) does not require this file to
 keep its module-level imports inside the whitelist — private helpers
 are excluded from the parametrised test. The public
-:mod:`opshub.cli.connector` module still defers its
-``_ms365_oauth`` import inside the command callback to preserve the
-ADR-0001 cold-start budget for operators who never touch MS365.
+:mod:`opshub.cli.ms365` module still defers its ``_ms365_oauth``
+import inside the command callback to preserve the ADR-0001
+cold-start budget for operators who never touch MS365.
 
 Heavy imports (``msal`` via the auth module, ``opshub.core.config``,
 ``opshub.core.secrets``) all happen inside :func:`run_paste_code_flow`
@@ -53,8 +54,8 @@ def run_paste_code_flow() -> None:
       surface as the underlying :class:`ConfigError`).
     """
     # Lazy imports keep this module's import cost negligible — the
-    # parent ``opshub.cli.connector`` already defers loading us until
-    # the operator actually targets ``connector:ms365``.
+    # parent ``opshub.cli.ms365`` already defers loading us until
+    # the operator actually invokes ``opshub ms365 auth set``.
     from opshub.connectors.ms365.auth import MS365Auth
     from opshub.core.config import OpsHubSettings
     from opshub.core.errors import ConfigError

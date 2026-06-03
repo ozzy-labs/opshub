@@ -1,12 +1,13 @@
 """Interactive OAuth paste-code flow for the Google Workspace connector.
 
-Phase 13 G3 keeps the generic ``opshub connector auth set <name>``
-surface (Phase 3 step A5) as the single entry point operators learn,
-but the Google Workspace connector cannot use the plain "prompt for a
-token string" branch — its credential is an OAuth refresh token that
-only exists after a successful authorization-code exchange with
-Google. We therefore intercept the ``google_workspace`` target in
-:mod:`opshub.cli.connector` and dispatch to this helper, which:
+The Google Workspace connector cannot use the plain "prompt for a
+token string" auth branch — its credential is an OAuth refresh token
+that only exists after a successful authorization-code exchange with
+Google. The per-noun ``opshub google_workspace auth set`` callback in
+:mod:`opshub.cli.google_workspace` (Phase 17-B / ADR-0031 split,
+pre-Phase-17-B this lived in the generic ``opshub connector auth set
+google_workspace`` dispatch inside ``opshub.cli.connector``) therefore
+dispatches to this helper, which:
 
 1. Reads ``[connectors.google_workspace] client_id`` /
    ``client_secret`` / ``redirect_uri`` from the loaded
@@ -34,7 +35,7 @@ The helper lives behind a ``_`` prefix so the static cold-start guard
 (``tests/integration/test_cli_imports``) does not require this file to
 keep its module-level imports inside the whitelist — private helpers
 are excluded from the parametrised test. The public
-:mod:`opshub.cli.connector` module still defers its
+:mod:`opshub.cli.google_workspace` module still defers its
 ``_google_workspace_oauth`` import inside the command callback to
 preserve the ADR-0001 cold-start budget for operators who never touch
 Google Workspace.
@@ -79,8 +80,9 @@ def run_paste_code_flow() -> None:
       :class:`ConfigError`).
     """
     # Lazy imports keep this module's import cost negligible — the
-    # parent ``opshub.cli.connector`` already defers loading us until
-    # the operator actually targets ``google_workspace``.
+    # parent ``opshub.cli.google_workspace`` already defers loading us
+    # until the operator actually invokes ``opshub google_workspace
+    # auth set``.
     # Phase 14 G2 (#294): the OAuth helper lives in the shared
     # ``google_auth`` package so Gmail / Calendar can reuse it.
     from opshub.connectors.google_auth.auth import GoogleWorkspaceAuth
