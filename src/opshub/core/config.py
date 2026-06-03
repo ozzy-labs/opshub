@@ -25,6 +25,7 @@ lowest: ``init args`` > env > dotenv > **toml** > file_secret > defaults.
 from __future__ import annotations
 
 import os
+import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
@@ -924,7 +925,7 @@ class OpsHubSettings(BaseSettings):
             toml_settings: PydanticBaseSettingsSource = TomlConfigSettingsSource(
                 settings_cls, toml_file=toml_path
             )
-        except Exception as exc:  # pragma: no cover - exact subclass varies by tomllib
+        except tomllib.TOMLDecodeError as exc:
             # ``TomlConfigSettingsSource`` raises ``tomllib.TOMLDecodeError``
             # synchronously from its constructor when the file is malformed.
             # Surface it as our project-level :class:`ConfigError` so the
