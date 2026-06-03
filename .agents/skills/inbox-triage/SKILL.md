@@ -33,6 +33,22 @@ input:
 
 戻り値の `items[]` から「処理が必要そう」なものを host LLM が判定する。期間で絞りたい場合は `created_after` / `created_before`（ISO 8601、`inbox_items.created_at` 半開区間、Phase 12 H1 で追加）を併用する。
 
+### Step 1b (Phase 18-C、補強): Slack demand 信号で priority 順を補強する
+
+Slack 由来の mention / DM は既に Phase 7 connector 経由で取り込まれているため `inbox_items` ではなく `sources` 行として存在する (`source_type=slack_message`)。とはいえ「自分宛に未処理で残っている mention / DM」を inbox の triage 候補と並べて確認したい場合は、`slack.demand.list` を補助的に呼んで priority 順位を補強できる:
+
+```text
+tool: slack.demand.list
+input:
+  demand_kinds: ["dm", "mention"]
+  limit: 20
+  order: "last_demand_desc"
+```
+
+戻り値の `items[]` (`channel_id` / `channel_name` / `demand_kind` / `last_demand_ts` / `last_demand_excerpt` / `last_demand_permalink` / `last_source_id`) は「inbox 候補」そのものではなく **priority 補強用の external signal**。本 skill の triage 対象 (Step 2 で `propose.generate` に渡す素材) は引き続き `inbox.list` の row。Slack mention / DM 自体は既に inbox row として `sources` に存在し、必要なら `last_source_id` から `source.get` で本文を引ける。
+
+Phase 18-C ([ADR-0033 §決定 (c)](../../adr/0033-slack-mention-demand-digest.md)) で追加された `slack.demand.list` は read-only / `readOnlyHint=true` / `openWorldHint=false` (local SQLite のみ、Slack API 不発火)。Slack への投稿 / reaction は本 skill scope 外 (ADR-0010 §禁止事項 7)。
+
 ### Step 2: 候補を生成（write tool、HITL boundary）
 
 ```text
@@ -106,7 +122,7 @@ input:
 
 ## 自律範囲 / HITL boundary
 
-- **read tool (`inbox.list`)** — host LLM 自律 OK
+- **read tool (`inbox.list` / `slack.demand.list`)** — host LLM 自律 OK
 - **write tool (`propose.generate`)** — LLM round-trip を伴う durable write、`destructiveHint=true`。ホストは人確認を取る（ADR-0022 §(c)）
 - **write tool (`propose.apply`)** — `read_only=false`、durable state を変える。ホストは必ずユーザーに「これを保存しますか?」と確認する（ADR-0016 §決定 (c) auto-apply 禁止）
 
@@ -125,7 +141,8 @@ input:
 - ADR-0010 §禁止事項 7（write-back 禁止契約、Phase 11 で Teams 追加）
 - ADR-0016 (Action Loop、§決定 (c) auto-apply 禁止、§決定 (l) draft 系統一方針 + `mode` 引数射程)
 - ADR-0017 §(e)+(f)（graph 1-hop expand）
-- ADR-0022 (MCP Server Surface、Phase 12 H1 改訂で `propose.apply` 露出、read/write 分離)
+- ADR-0022 (MCP Server Surface、Phase 12 H1 改訂で `propose.apply` 露出、Phase 18 補遺で `slack.demand.list` 追加、read/write 分離)
+- ADR-0033 (Slack mention / DM demand digest、Phase 18) — `slack.demand.list` で priority 補強する根拠
 - PR #231 (MCP `propose.generate` write tool)
 - Phase 12 H1 (`docs/phase-12-plan.md` §3 H1、`propose.apply` 露出 + 時間フィルタ追加)
 - Phase 12 H4 (`docs/phase-12-plan.md` §3 H4、本 skill 含む HITL write 3 skill の追加)

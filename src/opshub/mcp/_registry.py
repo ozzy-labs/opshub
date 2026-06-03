@@ -73,6 +73,15 @@ class ReadCategory(StrEnum):
     # (phrase quoting stays default — hosts may supply free-form
     # token streams without tripping FTS5 syntax).
     SEARCH = "search"
+    # Phase 18-C (ADR-0033 §決定 (c) + ADR-0022 §決定 (f) 補遺):
+    # ``slack.demand.list`` exposes the Phase 18-B
+    # ``slack_demand_digest`` projection to the assistant skills
+    # (``next-actions`` / ``personal-brief`` / ``inbox-triage``) so
+    # they can surface Slack ``<@self>`` mentions and DM activity as
+    # "next to read" priority signals. Read-only — local SQLite only,
+    # no Slack API round-trip (the projection consumes already-stored
+    # ``SourceObserved`` events).
+    SLACK_DEMAND_LIST = "slack.demand.list"
 
 
 class WriteCategory(StrEnum):
@@ -846,6 +855,92 @@ def build_tool_specs(
             policy=_policy_for_read(),
             category=ReadCategory.SEARCH,
             handler=handlers["search"],
+        ),
+        # ------------------------------------------------------------------
+        # Phase 18-C (ADR-0033 §決定 (c)) — ``slack.demand.list`` exposes the
+        # Phase 18-B ``slack_demand_digest`` projection to assistant skills
+        # so they can surface Slack ``<@self>`` mentions and DM activity as
+        # "next to read" priority signals. Read-only over local SQLite; the
+        # projection itself consumes already-stored ``SourceObserved``
+        # events, so no Slack API round-trip happens at MCP call time.
+        # ADR-0033 §決定 (e) freezes the order at ``last_demand_desc`` for
+        # Phase 18 — the ``order`` argument is reserved for forward
+        # compatibility (oldest_first / static type tiers would land here).
+        # ------------------------------------------------------------------
+        ToolSpec(
+            name="slack.demand.list",
+            title="List Slack demand digest rows",
+            description=(
+                "List ``slack_demand_digest`` rows materialised from Slack"
+                " ``<@self>`` mentions and DM/MPIM activity (ADR-0033). Filterable"
+                " by ``types`` (channel kind), ``demand_kinds`` (mention / dm /"
+                " mpim), and ``since_ts`` (Slack epoch lower bound on the last"
+                " demand). Order is fixed at ``last_demand_desc`` (newest first)."
+                " Read-only over local SQLite — no Slack API round-trip; the"
+                " digest is rebuilt from already-stored ``SourceObserved`` events"
+                " by the Phase 18-B projection."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "types": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["im", "mpim", "private", "public"],
+                        },
+                        "description": (
+                            "Restrict to these Slack channel types. Maps 1:1 to"
+                            " ``slack_demand_digest.channel_type``. Defaults to"
+                            " all four when omitted."
+                        ),
+                        "uniqueItems": True,
+                    },
+                    "demand_kinds": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["mention", "dm", "mpim"],
+                        },
+                        "description": (
+                            "Restrict to these demand signal kinds. Maps 1:1 to"
+                            " ``slack_demand_digest.demand_kind``. Defaults to"
+                            " all three when omitted."
+                        ),
+                        "uniqueItems": True,
+                    },
+                    "since_ts": {
+                        "type": "number",
+                        "description": (
+                            "Slack epoch float lower bound on"
+                            " ``slack_demand_digest.last_demand_ts`` (rows"
+                            " strictly older than this value are excluded)."
+                        ),
+                        "minimum": 0.0,
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "default": 50,
+                    },
+                    "order": {
+                        "type": "string",
+                        "enum": ["last_demand_desc"],
+                        "default": "last_demand_desc",
+                        "description": (
+                            "Result ordering. Fixed at ``last_demand_desc`` for"
+                            " Phase 18 (ADR-0033 §決定 (e) — no static type"
+                            " tier); the argument is reserved for future"
+                            " orderings (e.g. ``oldest_first``)."
+                        ),
+                    },
+                },
+                "additionalProperties": False,
+            },
+            policy=_policy_for_read(),
+            category=ReadCategory.SLACK_DEMAND_LIST,
+            handler=handlers["slack.demand.list"],
         ),
         # ------------------------------------------------------------------
         # Step 1 widening — HITL-boundary write tool (proposal generation).

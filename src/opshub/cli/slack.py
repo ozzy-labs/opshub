@@ -235,10 +235,7 @@ def slack_mentions_list(
     demand_kind: str | None = typer.Option(
         None,
         "--demand-kind",
-        help=(
-            "Comma-separated demand kinds to include (``mention,dm``). "
-            "Default: no filter."
-        ),
+        help=("Comma-separated demand kinds to include (``mention,dm``). Default: no filter."),
     ),
     limit: int = typer.Option(
         50,

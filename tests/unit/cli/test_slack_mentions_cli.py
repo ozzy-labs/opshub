@@ -206,9 +206,7 @@ def test_list_types_filter_rejects_unknown_value(
 # ---- filter: --demand-kind ------------------------------------------------
 
 
-def test_list_demand_kind_filter_dm_only(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_list_demand_kind_filter_dm_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """``--demand-kind dm`` returns only DM rows."""
     db_path = _isolate_env(monkeypatch, tmp_path)
     runner = CliRunner()
@@ -293,9 +291,7 @@ def test_list_format_json_returns_full_row_schema(
     assert payload[0]["channel_id"] == "D300CCC"
 
 
-def test_list_format_unknown_rejected(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_list_format_unknown_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """An unknown ``--format`` value raises a ValidationError (exit 2)."""
     _isolate_env(monkeypatch, tmp_path)
     runner = CliRunner()
@@ -352,9 +348,7 @@ def test_list_empty_json_returns_empty_array(
 # ---- limit ----------------------------------------------------------------
 
 
-def test_list_limit_caps_row_count(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_list_limit_caps_row_count(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """``--limit 1`` returns only the most recent demand row."""
     db_path = _isolate_env(monkeypatch, tmp_path)
     runner = CliRunner()

@@ -69,7 +69,7 @@ opshub mcp tools -f json   # JSON form (matches the MCP annotations)
 
 The output reflects the policy-as-data registry in `src/opshub/mcp/_registry.py`. Read tools advertise `readOnlyHint=true`; write tools advertise `readOnlyHint=false` + `destructiveHint=true`. Hosts that honour the hints (Claude Code 等) will auto-approve reads and require human confirmation for writes (ADR-0022 §(c)).
 
-Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1):
+Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1 + Phase 18-C):
 
 | Kind  | Name                          | Purpose                                                          |
 | ----- | ----------------------------- | ---------------------------------------------------------------- |
@@ -85,6 +85,7 @@ Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1):
 | read  | `source.get`                  | Fetch one source row by ULID                                      |
 | read  | `embeddings.find_duplicates`  | Scan embeddings for near-duplicate pairs above a threshold        |
 | read  | `search`                      | Body-level FTS5 search (Phase 12 H1, phrase-quoted by default)    |
+| read  | `slack.demand.list`           | List Slack `<@self>` mention / DM digest rows (Phase 18-C, ADR-0033) |
 | write | `task.create`                 | Create a new task                                                 |
 | write | `inbox.add`                   | Add an inbox item                                                 |
 | write | `connector.sync`              | Trigger a registered connector's sync                             |
@@ -97,6 +98,10 @@ Step 1 widening (post Phase 10) added the 7 new read tools and the HITL write `p
 * **`propose.apply` (HITL write, Phase 12 H1)** — apply a previously-generated proposal candidate. **Idempotent**: the second call for the same `(proposal_id, candidate_index)` returns `{ok: true, already_applied: true, applied_entity_type: ..., applied_entity_id: ...}` instead of raising, by catching `OpsHubError("already applied")` and walking the event log to recover the historical entity tuple. `WriteCategory.PROPOSE_APPLY` annotation = `readOnlyHint=false, destructiveHint=false, idempotentHint=true` (the first MCP write tool to advertise `destructive=false`, the others remain `destructive=true`).
 * **Physical-column time filters (Phase 12 H1)** — `task.list` accepts `updated_after` / `updated_before` (filters `tasks.updated_at`); `inbox.list` accepts `created_after` / `created_before` (`inbox_items.created_at`); `decision.list` accepts `recorded_after` / `recorded_before` (`decisions.recorded_at`); `source.list` accepts `observed_after` / `observed_before` (`sources.observed_at`). All ISO 8601, optional, `>= after` / `< before` half-open intervals. Physical-column naming (rather than business concepts like `completed_after`) keeps the projection schema and the MCP argument names aligned.
 * **`propose.generate` `mode` argument (Phase 12 H4)** — accepts `inbox_triage` / `source_extract` / `meeting_followup` (the persist-bearing dispatch keys, ADR-0016 §決定 (l)(b)). `mode` is mutually exclusive with `reply_to_source_id`; the implicit `reply_draft` mode is signalled by `reply_to_source_id` alone. `handoff_draft` / `announcement_draft` skills do **not** route through `propose.generate` because they are text-only (no persist boundary, ADR-0016 §決定 (l)(a)).
+
+Phase 18-C ([ADR-0033 §決定 (c)](adr/0033-slack-mention-demand-digest.md), `ReadCategory.SLACK_DEMAND_LIST`) added one new read tool:
+
+* **`slack.demand.list` (read, Phase 18-C)** — list rows from the Phase 18-B `slack_demand_digest` projection, optionally filtered by `types` (channel kinds `im` / `mpim` / `private` / `public`), `demand_kinds` (`mention` / `dm` / `mpim`), and `since_ts` (Slack epoch lower bound). Read-only over local SQLite — no Slack API round-trip; the projection consumes already-stored `SourceObserved` events. Order is fixed at `last_demand_desc` (newest first); the `order` argument is reserved for forward compatibility. Used by `next-actions` (priority signal), `personal-brief` (period summary), and `inbox-triage` (auxiliary priority).
 
 Phase 12 H1 also unified the original 5 skills (`personal-brief`, `next-actions`, `reply-draft`, `pr-review`, `find-document`) on the MCP surface — they call MCP tools directly instead of falling back to the CLI shell. Phase 12 H2-H5 added 9 new skills on top (see `docs/assistant-agent.md` for the 14-skill catalog).
 

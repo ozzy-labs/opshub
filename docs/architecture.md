@@ -273,7 +273,7 @@ Drive 認証への依存に置換` する形で 5 つ目の connector category �
 - **Context-efficient returns** — `recall.search` / list 系は本文ではなく 200 文字 snippet を返す (ADR-0022 §(d))。データ持ち出し面と LLM context の両方を縮小。
 - **OTel GenAI naming** — `gen_ai.operation.name=execute_tool` / `gen_ai.tool.name=<name>` / `gen_ai.tool.call.id=<ulid>` を structlog に記録 (将来 `mcp-otel` extras で exporter に出す、ADR-0022 §(e))。
 
-Phase 10 C2 baseline + Step 1 widening (PR #231) + Phase 12 H1 (ADR-0022 改訂 §決定 (f)) で出荷した tool 一覧 (`src/opshub/mcp/_registry.py`、計 17 tools = read 12 + write 5):
+Phase 10 C2 baseline + Step 1 widening (PR #231) + Phase 12 H1 (ADR-0022 改訂 §決定 (f)) + Phase 18-C (ADR-0033 §決定 (c)) で出荷した tool 一覧 (`src/opshub/mcp/_registry.py`、計 18 tools = read 13 + write 5):
 
 | Kind | Name | 目的 |
 |---|---|---|
@@ -294,6 +294,7 @@ Phase 10 C2 baseline + Step 1 widening (PR #231) + Phase 12 H1 (ADR-0022 改訂 
 | write | `connector.sync` | 登録済 connector の sync を発火 (HITL、外部 API hit) |
 | write | `propose.generate` | LLM proposal 生成 (HITL、Step 1 widening + Phase 12 H4 で `mode` 引数追加 = `inbox_triage` / `source_extract` / `meeting_followup`、persist 経路を持つ dispatch key に限定、ADR-0016 §決定 (l)(b)) |
 | write | `propose.apply` | **Phase 12 H1 新規** — proposal candidate を apply (HITL、`WriteCategory.PROPOSE_APPLY`、`destructive=false` + `idempotent=true`。handler 層で `OpsHubError("already applied")` catch → `{ok:true, already_applied:true, applied_entity_type, applied_entity_id}` に正規化して idempotent annotation を成立させる) |
+| read | `slack.demand.list` | **Phase 18-C 新規** — Slack mention / DM demand digest 取得 (`ReadCategory.SLACK_DEMAND_LIST`、`types` / `demand_kinds` / `since_ts` / `limit` / `order` 引数、`readOnlyHint=true` / `destructiveHint=false` / `openWorldHint=false` = local SQLite のみ Slack API 不発火、Phase 18-B `slack_demand_digest` projection を読む。ADR-0033 §決定 (c)) |
 
 MCP セットアップ手順は [docs/mcp-setup.md](mcp-setup.md) を参照。エージェント host (Claude Code 等) が subprocess として `opshub mcp serve` を spawn し、stdin / stdout で MCP プロトコルを話す。
 

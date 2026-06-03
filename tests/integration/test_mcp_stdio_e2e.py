@@ -128,6 +128,8 @@ _EXPECTED_TOOL_NAMES: frozenset[str] = frozenset(
         # Phase 12 H1 widening (ADR-0022 改訂 §決定 (f)).
         "search",
         "propose.apply",
+        # Phase 18-C widening (ADR-0033 §決定 (c)).
+        "slack.demand.list",
     }
 )
 

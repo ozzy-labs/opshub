@@ -219,9 +219,7 @@ def test_dm_with_self_mention_writes_both_rows(engine: Engine) -> None:
     with engine.connect() as conn:
         rows = (
             conn.execute(
-                select(slack_demand_digest_table).order_by(
-                    slack_demand_digest_table.c.demand_kind
-                )
+                select(slack_demand_digest_table).order_by(slack_demand_digest_table.c.demand_kind)
             )
             .mappings()
             .all()

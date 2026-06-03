@@ -323,6 +323,8 @@ _NEW_TOOL_NAMES = (
     # Phase 12 H1 (ADR-0022 改訂): FTS5 search + HITL propose.apply.
     "search",
     "propose.apply",
+    # Phase 18-C (ADR-0033 §決定 (c)): Slack mention / DM demand digest.
+    "slack.demand.list",
 )
 
 
@@ -365,6 +367,7 @@ def test_new_tool_input_schemas_are_closed(specs: list[Any], tool_name: str) -> 
             "propose.apply",
             {"proposal_id": "x", "candidate_index": 0, "evil": "leak"},
         ),
+        ("slack.demand.list", {"limit": 10, "evil": "leak"}),
     ],
 )
 def test_new_tool_input_schemas_reject_unknown_field(
