@@ -10,6 +10,8 @@
 
 Phase 14.x ([#366](https://github.com/ozzy-labs/opshub/issues/366) で `slack channels` → `slack conversations` 刷新) で `opshub connector slack conversations` も同基盤に乗り、Phase 14.x ([#374](https://github.com/ozzy-labs/opshub/issues/374) で `--since` activity filter 追加) では同じ indeterminate spinner を使いつつ description を `--since` の有無で動的に切り替える運用 (no-`--since` 時 = `"listing conversations"`、`--since` 時 = `"listing conversations + activity"`) で 2 段の作業 (listing pages + per-row `conversations.history?limit=1`) を単一の spinner に集約している。両者とも `_progress.indeterminate(description)` を 1 context で開き、description 文字列で operator に作業相を示す pattern (determinate を 2 段重ねない) を採用。
 
+Phase 19 ([ADR-0034](0034-slack-engagement-axis.md)) で `opshub slack conversations --since` の default が engagement 軸 (`--activity=mine`、`search.messages?query=from:@me` 経由で自分の最終発言 ts を集計) に切り替わり、spinner description は 2 形態に拡張される: `--activity=any` 経路 (旧挙動) は引き続き `"listing conversations + activity"`、`--activity=mine` 経路 (新 default) は `"listing conversations + engagement"`。いずれも `_progress.indeterminate(description)` 単一 context で listing pages + engagement / activity 補強の 2 段作業を集約する pattern を踏襲し、determinate を 2 段重ねない原則は不変 ([ADR-0034](0034-slack-engagement-axis.md) §(b) §(i))。`--activity=mine` 経路の indexing-lag notice (`notice: search.messages may lag by minutes; ...`) は spinner description とは独立した stderr 一行通知 (ADR-0034 §(i)) で、本 ADR の進捗表示 contract には含めない。
+
 設計上の制約:
 
 - **ADR-0001 cold-start**: `opshub --help` は ~300ms 以内。`cli/*.py` は重い import をモジュール先頭に置けない（`tests/integration/test_cli_imports.py` が静的に強制、`test_cold_start` が wall-clock を強制）。
@@ -64,3 +66,4 @@ Phase 14.x ([#366](https://github.com/ozzy-labs/opshub/issues/366) で `slack ch
 - [ADR-0010 Connector Contract](0010-connector-contract.md) — 無改修で進捗を載せた `Connector` 契約。
 - Issue #316（対応方針）、PR #323（共通基盤 + connector sync）、#325（embeddings / projections）。
 - Issue [#366](https://github.com/ozzy-labs/opshub/issues/366) (slack conversations を基盤に追加)、Issue [#374](https://github.com/ozzy-labs/opshub/issues/374) / PR [#375](https://github.com/ozzy-labs/opshub/pull/375) (`--since` 経路の 2 段 description 運用)。
+- [ADR-0034 Slack Engagement Axis](0034-slack-engagement-axis.md) — `--activity=mine` (新 default) 経路の spinner description (`"listing conversations + engagement"`) を本 ADR の 2 段 description 運用に追加する根拠。indexing-lag notice は本 ADR scope 外 (ADR-0034 §(i))。

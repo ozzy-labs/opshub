@@ -147,7 +147,16 @@ tool であり、Phase 18-C で `_registry.py` に追加する。
 のみ** を提供し、engagement は将来必要なら別 sort / 別 tool として追加する
 (Phase 19+ 候補)。
 
-理由:
+> **Update (Phase 19 / [ADR-0034](0034-slack-engagement-axis.md))**: 本 §(d) で
+> Phase 19+ 候補として defer した engagement 軸は、Phase 19 で
+> [ADR-0034](0034-slack-engagement-axis.md) として独立 ADR 化し、defer 解除した。
+> ad-hoc `search.messages?query=from:@me` 経由で `opshub slack conversations`
+> の sort 切替 (`--activity=mine` default) として実装され、projection 化は scope 外
+> (ADR-0034 §(a) §(f))。本 ADR §不変条件 4 (「engagement 軸は Phase 18 scope 外」)
+> は ADR-0034 で別 ADR scope に閉じた形で解除される (本 ADR の demand 軸 projection
+> 経路には影響なし、両 axis は orthogonal)。
+
+理由 (Phase 18 時点):
 
 - demand 軸が「次に読むべき未処理」という最優先ユーザー要望に直接答える
 - 2 軸同時導入は read model schema が 2 軸 × 3 値 で複雑化し、最初の出荷で過剰機構
@@ -251,7 +260,10 @@ projection が mention parse / DM 判定で必要とする self user_id は、`S
   論理。現状は archive 後も最終 demand 状態が残る
 - **self user_id rotation handling** — 再認証で user_id が変わる edge case の
   cache invalidation + projection partial rebuild (§(f) 参照)
-- **engagement 軸** — 自分の最終投稿日時 (§(d) 参照)
+- **engagement 軸** — 自分の最終投稿日時 (§(d) 参照)。Phase 19 で
+  [ADR-0034](0034-slack-engagement-axis.md) として defer 解除済 (`opshub slack
+  conversations --activity=mine` 経路、ad-hoc `search.messages` ベース、projection
+  化は scope 外)。本 ADR の demand projection 経路とは orthogonal で相互依存なし
 - **Slack 以外の SaaS への demand 信号拡張** — Gmail (To: self / inbox label) /
   MS Teams (mention) / Calendar (organizer = others, attendee = self の未応答 invite)
 
@@ -365,5 +377,10 @@ epic [#426](https://github.com/ozzy-labs/opshub/issues/426) で 3 PR に分割�
   も自動的に検知できる。late thread reply の取りこぼしは ADR-0030 と同じ将来オプション
 - [ADR-0031: CLI Command Surface Organization](0031-cli-command-surface-organization.md)
   — debug CLI `opshub slack mentions list` を per-noun group に置く根拠 (§決定 (4))
+- [ADR-0034: Slack Engagement Axis (Self-Posted Last Activity)](0034-slack-engagement-axis.md)
+  — 本 ADR §(d) §不変条件 4 で Phase 19+ 候補として defer された engagement 軸を
+  ADR-0034 で別 ADR scope に閉じた形で解除。demand 軸 (本 ADR 受信、`slack.demand.list`)
+  と engagement 軸 (ADR-0034 発信、`opshub slack conversations`) は orthogonal で
+  共存し、相互依存なし
 - Phase 18 epic [#426](https://github.com/ozzy-labs/opshub/issues/426) — 本 ADR の
   起票元、3 PR 分割 (18-A / 18-B / 18-C) と Scope 外項目の SSOT

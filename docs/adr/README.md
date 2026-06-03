@@ -107,6 +107,7 @@ NNNN-kebab-case-title.md
 | 0031 | [CLI Command Surface Organization](0031-cli-command-surface-organization.md) | Accepted |
 | 0032 | [Runtime TOML Config Loading](0032-runtime-toml-config-loading.md) | Accepted |
 | 0033 | [Slack Mention / DM Demand Digest](0033-slack-mention-demand-digest.md) | Accepted |
+| 0034 | [Slack Engagement Axis (Self-Posted Last Activity)](0034-slack-engagement-axis.md) | Accepted |
 
 ## Open Questions
 
