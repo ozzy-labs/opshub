@@ -5,6 +5,24 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3](https://github.com/ozzy-labs/opshub/compare/v0.3.2...v0.3.3) (2026-06-03)
+
+
+### Added
+
+* **slack:** engagement-axis sort for opshub slack conversations (Phase 19-B) ([#445](https://github.com/ozzy-labs/opshub/issues/445)) ([9ff334a](https://github.com/ozzy-labs/opshub/commit/9ff334acb7df651e1b18ad9db5328cb3aa3aff31))
+
+
+### Fixed
+
+* **connectors:** populate registry in 'opshub connectors' + close Phase 14 MCP gap ([#437](https://github.com/ozzy-labs/opshub/issues/437)) ([bbd792a](https://github.com/ozzy-labs/opshub/commit/bbd792acb6d3e6a7b9ef469e3520590069a24dce))
+* **tests,docs:** close Phase 13/14 connector drift + stale docstring refs (PR [#437](https://github.com/ozzy-labs/opshub/issues/437) followup) ([#442](https://github.com/ozzy-labs/opshub/issues/442)) ([3d0c972](https://github.com/ozzy-labs/opshub/commit/3d0c97255edb1c75e269c408e4249065ceda1f5b))
+
+
+### Documentation
+
+* **adr:** add ADR-0034 Slack engagement axis (Phase 19-A) ([#444](https://github.com/ozzy-labs/opshub/issues/444)) ([19fb738](https://github.com/ozzy-labs/opshub/commit/19fb738aaf333ffc1e3521c2ba71be7c668a4fdc))
+
 ## [0.3.2](https://github.com/ozzy-labs/opshub/compare/v0.3.1...v0.3.2) (2026-06-03)
 
 
