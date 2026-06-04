@@ -5,6 +5,18 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1](https://github.com/ozzy-labs/opshub/compare/v0.4.0...v0.4.1) (2026-06-04)
+
+
+### Added
+
+* **slack:** add opshub slack sync date floor (sync_since + per-channel since) ([#461](https://github.com/ozzy-labs/opshub/issues/461)) ([81c904d](https://github.com/ozzy-labs/opshub/commit/81c904d97949966244fbc3a118c39e5cd5caa614))
+
+
+### Documentation
+
+* **slack:** cross-link ADR-0036 + document sync_since floor in slack sync help ([#464](https://github.com/ozzy-labs/opshub/issues/464)) ([b9bacb6](https://github.com/ozzy-labs/opshub/commit/b9bacb6c4e6a9d014a275675f32dfbe87562bffa))
+
 ## [0.4.0](https://github.com/ozzy-labs/opshub/compare/v0.3.3...v0.4.0) (2026-06-03)
 
 
