@@ -3,6 +3,7 @@
 - Status: Accepted (revised 2026-05-31 for Phase 14 Sub-issue G1)
 - Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外); 2026-05-31 (Phase 11 改訂: Teams 追加 + 本文抽出契約 + delta-link cursor + User Token principal); 2026-05-31 (Phase 13 改訂: Google Workspace 追加 + Drive `changes.list` cursor + TTL fallback + Workspace export 本文抽出契約 + Google Refresh Token principal = MS365 / Box pattern 明文化); 2026-05-31 (Phase 14 改訂: Gmail + Google Calendar 追加 + delta-cursor 型 connector 全般 への TTL fallback 一般化 + Outlook 流本文抽出契約を Gmail / Calendar に拡張)
 - Deciders: ozzy
+- Related: [ADR-0036](0036-slack-sync-date-floor.md) — Slack sync の date floor (`[connectors.slack] sync_since` / per-channel `since`) は本 contract の cursor checkpoint の上に `oldest = max(cursor, floor)` で乗る (cursor authoritative、既存 sync 済み channel に無影響)
 
 ## Context
 
