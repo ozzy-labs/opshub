@@ -226,6 +226,15 @@ opshub slack conversations --since 2026-05-01 --format=toml  # 絶対日付指�
 
 default `--format=toml` の出力を `~/.config/opshub/config.toml` の `[connectors.slack]` セクションに貼り、不要行を消すだけで sync 対象が確定する (ADR-0035 §(a))。`--since` 指定時 / `--sort=last_*` 指定時は TOML コメントにも `# <name> (public, last post 2026-05-30)` (engagement 軸) / `# <name> (public, last 2026-05-30)` (any 軸) 形式で activity 日付が付くので、レビュアが「最近動いている channel か」を一目で判断できる。
 
+**sync の取得範囲を絞る (Phase 20 / [ADR-0036](adr/0036-slack-sync-date-floor.md))**: ボリュームの大きい channel で初回 sync が重い場合、`[connectors.slack] sync_since` で日付 floor を設定すると、それより古いメッセージを `opshub slack sync` が取得しなくなる。相対 (`"90d"` / `"4w"`、sync 実行時点で評価) でも ISO 絶対日付 (`"2026-01-01"`) でも指定でき、未設定なら従来どおり全件バックフィルする。特定 channel だけ全件取りたい場合は table 形式で `[[connectors.slack.channels]] id=... / since="all"` と書く (貼り付けた `channels = ["C..."]` 文字列配列もそのまま有効)。
+
+floor 関連の挙動でよくある質問:
+
+- **floor を設定したのに既存の古いメッセージが消えない**: 正常。floor は「これ以降のみ取得する」下限であり、既に sync 済みのメッセージを削除しない。
+- **floor を有効にしたのに再取得が走らない / 既存 channel に効かない**: 正常。per-channel cursor が authoritative (`oldest = max(cursor, floor)`) なので、cursor が floor より新しい既存 channel では floor は inert になる。floor が効くのは初回 sync・新規追加 channel・cursor が floor より古い場合のみ。
+- **floor を下げた (例 `90d` → `365d`) のに古い履歴が戻ってこない**: 仕様。floor を下げても遡及 backfill はしない (cursor が authoritative)。古い履歴を取り直すには `opshub projections rebuild` で Slack cursor をリセットしてから sync する。
+- **相対指定 `"90d"` の起点がいつなのか分からない**: sync 実行時点基準で毎回再評価される。絶対的な下限が必要なら ISO 日付 (`"2026-01-01"`) を使う。
+
 **`--since` の値**:
 
 - 相対 (`<N>d` = N 日前、`<N>w` = N 週前): 例 `7d`、`2w`、`90d`

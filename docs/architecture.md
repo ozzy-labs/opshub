@@ -170,7 +170,7 @@ Phase 3 で確立した connector framework (ADR-0010 + ADR-0014 + ADR-0005) を
 
 | Connector | 取得対象 | source_type | OAuth flow | Extras |
 |---|---|---|---|---|
-| Slack | channel messages | `slack_message` | Bot token (`xoxb-`) | `[connectors-slack]` (slack-sdk) |
+| Slack | channel messages (Phase 20 [ADR-0036](adr/0036-slack-sync-date-floor.md): optional `[connectors.slack] sync_since` / per-channel `since` date floor bounds the `conversations.history` backfill) | `slack_message` | Bot token (`xoxb-`) | `[connectors-slack]` (slack-sdk) |
 | Microsoft 365 | Calendar / OneDrive / Outlook | `ms365_calendar` / `ms365_onedrive` / `ms365_outlook` | OAuth 2.0 paste-code (msal) | `[connectors-ms365]` (msal + httpx) |
 | Box | file/folder events | `box_event` | OAuth 2.0 paste-code (boxsdk) | `[connectors-box]` (boxsdk) |
 
