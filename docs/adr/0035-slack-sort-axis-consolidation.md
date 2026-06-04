@@ -4,6 +4,7 @@
 - Date: 2026-06-04
 - Deciders: opshub maintainers
 - Supersedes: [ADR-0034](0034-slack-engagement-axis.md) §(b) §(g) §(h) §(i) §不変条件 2 の **表現のみ** (CLI surface の rename)。§(d) Bot Token 不可 / §(e) silent fallback なし / §(g) field 二重化解消の motivation / §(i) indexing-lag notice / §不変条件 3, 5, 6, 7 は完全継承
+- Related: [ADR-0036](0036-slack-sync-date-floor.md) — 本 ADR の `--since` は discovery (`opshub slack conversations`) 専用。sync 側の取得下限は ADR-0036 の `[connectors.slack] sync_since` / per-channel `since` が担う (棲み分け)
 
 ## Context
 
