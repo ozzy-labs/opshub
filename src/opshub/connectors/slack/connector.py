@@ -130,9 +130,11 @@ from opshub.connectors.slack.auth import SlackAuth
 from opshub.connectors.slack.fetcher import SlackFetcher
 from opshub.connectors.slack.mapper import map_message
 from opshub.core.errors import ConfigError
+from opshub.core.time import parse_since, since_to_ts
 
 if TYPE_CHECKING:
     from opshub.connectors.context import ConnectorContext
+    from opshub.core.config import SlackChannelSpec, SlackConnectorSettings
 
 
 __all__ = ["SlackConnector"]
@@ -167,8 +169,9 @@ class SlackConnector:
         same at-most-once-or-no-loss posture pinned by the A2
         fetcher's module docstring).
         """
-        channels = self._resolve_channels()
-        if not channels:
+        slack_settings = self._resolve_slack_settings()
+        specs = list(slack_settings.channels)
+        if not specs:
             # Empty channel list is a degraded-but-not-failing state:
             # the connector is configured (token + extras present) but
             # the operator hasn't picked any channels yet. We log a
@@ -182,6 +185,12 @@ class SlackConnector:
                 "set OPSHUB_CONNECTORS__SLACK__CHANNELS to enable."
             )
             return SyncResult(observed_count=0, new_cursor=context.cursor_value)
+
+        channels = [spec.id for spec in specs]
+        # Phase 20 (ADR-0036): resolve the per-channel date floor (channel
+        # ``since`` → connector ``sync_since`` → no floor). Relative floors
+        # (``"90d"``) are evaluated *now* (sync time), not at config load.
+        floors = _resolve_floors(specs, slack_settings.sync_since)
 
         auth = SlackAuth()
         fetcher = SlackFetcher(auth, channels=channels)
@@ -210,11 +219,26 @@ class SlackConnector:
         # the fetcher's setup path — emitting a redundant
         # ``ConnectorSyncStarted`` event with a no-op cursor value.
         cursors_at_entry: dict[str, str | None] = dict(cursors)
+        # Phase 20 (ADR-0036 §(g)): the fetch resume bound is the *later*
+        # of the persisted cursor and the date floor, so a floor only ever
+        # advances ``oldest`` forward — it never rewinds past a cursor
+        # (cursor is authoritative; partial-sync resume stays safe). We
+        # build a separate ``resume`` map and leave ``cursors`` as the
+        # persistence accumulator: the floor bounds what we *fetch*, not
+        # the message ts we *persist*. Channels without a floor keep their
+        # raw cursor entry (including the first-sync "absent key" shape the
+        # connector-test contract pins), so a no-floor sync is byte-identical
+        # to the pre-Phase-20 behaviour.
+        resume: dict[str, str | None] = dict(cursors)
+        for channel_id in channels:
+            floor = floors.get(channel_id)
+            if floor is not None:
+                resume[channel_id] = _max_ts(cursors.get(channel_id), floor)
         observed_count = 0
         completed_normally = False
         try:
             for channel_id, raw_message, new_cursor in fetcher.fetch_messages(
-                cursor_per_channel=cursors,
+                cursor_per_channel=resume,
             ):
                 # Defense-in-depth: never let the persisted cursor regress.
                 # The fetcher (post-#339 fix) yields ts-ascending across
@@ -275,21 +299,19 @@ class SlackConnector:
         new_cursor_value = _dump_cursors(cursors) if cursors else context.cursor_value
         return SyncResult(observed_count=observed_count, new_cursor=new_cursor_value)
 
-    def _resolve_channels(self) -> list[str]:
-        """Return the configured Slack channel ids from settings.
+    def _resolve_slack_settings(self) -> SlackConnectorSettings:
+        """Return the resolved ``[connectors.slack]`` settings sub-model.
 
         Lazy-imports :mod:`opshub.core.config` so the connectors
         package import path stays free of pydantic-settings — cold
         start (ADR-0001) only pays for this when the operator
-        actually runs ``opshub slack sync``.
+        actually runs ``opshub slack sync``. The returned model carries
+        both ``channels`` (each a :class:`SlackChannelSpec`) and the
+        connector-wide ``sync_since`` floor (Phase 20, ADR-0036).
         """
         from opshub.core.config import OpsHubSettings
 
-        settings = OpsHubSettings()
-        # ``Field(default_factory=list)`` ensures the list is always
-        # present; the explicit copy keeps mutation off the live
-        # settings instance if a future refactor caches it.
-        return list(settings.connectors.slack.channels)
+        return OpsHubSettings().connectors.slack
 
 
 def _load_cursors(cursor_value: str | None) -> dict[str, str | None]:
@@ -339,6 +361,42 @@ def _load_cursors(cursor_value: str | None) -> dict[str, str | None]:
             )
         result[key] = value
     return result
+
+
+def _resolve_floors(specs: list[SlackChannelSpec], sync_since: str | None) -> dict[str, str | None]:
+    """Resolve each channel's effective date floor to a Slack ``ts`` string.
+
+    Precedence per ADR-0036 §(e): the channel's own ``since`` wins;
+    otherwise the connector-wide ``sync_since`` applies; otherwise there
+    is no floor (full history). The :data:`~opshub.core.config.SLACK_FULL_HISTORY_SENTINEL`
+    (``"all"``) and ``None`` both resolve to ``None`` (no floor). Relative
+    values (``"90d"``) are evaluated *now* via :func:`parse_since`, so the
+    floor advances with each sync run rather than freezing at config load.
+    """
+    floors: dict[str, str | None] = {}
+    for spec in specs:
+        raw = spec.since if spec.since is not None else sync_since
+        floors[spec.id] = _floor_to_ts(raw)
+    return floors
+
+
+def _floor_to_ts(raw: str | None) -> str | None:
+    """Convert a floor value (``None`` / ``"all"`` / date) to a ``ts`` or ``None``.
+
+    ``None`` (inherit / unset) and the full-history sentinel short-circuit
+    to ``None`` *before* :func:`parse_since` so ``"all"`` is never fed to
+    the date parser (which would reject it). Any other value is parsed and
+    rendered as a ``"seconds.microseconds"`` string for comparison against
+    the per-channel cursor via :func:`_max_ts`.
+    """
+    # Lazy import keeps the sentinel a single source of truth without
+    # pulling pydantic-settings onto the cold-start path (the config
+    # import is already paid for inside ``_resolve_slack_settings``).
+    from opshub.core.config import SLACK_FULL_HISTORY_SENTINEL
+
+    if raw is None or raw == SLACK_FULL_HISTORY_SENTINEL:
+        return None
+    return since_to_ts(parse_since(raw))
 
 
 def _max_ts(prior: str | None, candidate: str | None) -> str | None:

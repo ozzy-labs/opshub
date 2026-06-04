@@ -37,11 +37,15 @@ from opshub.connectors.context import ConnectorContext
 from opshub.connectors.slack.connector import (
     SlackConnector,
     _dump_cursors,  # pyright: ignore[reportPrivateUsage]
+    _floor_to_ts,  # pyright: ignore[reportPrivateUsage]
     _load_cursors,  # pyright: ignore[reportPrivateUsage]
     _max_ts,  # pyright: ignore[reportPrivateUsage]
+    _resolve_floors,  # pyright: ignore[reportPrivateUsage]
 )
 from opshub.connectors.slack.fetcher import RawSlackMessage
+from opshub.core.config import SlackChannelSpec
 from opshub.core.errors import ConfigError
+from opshub.core.time import parse_since, since_to_ts
 
 # ---------------------------------------------------------------------- helpers
 
@@ -147,19 +151,30 @@ def _context(
 def _patch_settings(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    channels: list[str],
+    channels: list[str | Any],
+    sync_since: str | None = None,
 ) -> None:
-    """Patch :class:`OpsHubSettings` so ``_resolve_channels`` returns ``channels``.
+    """Patch :class:`OpsHubSettings` so ``_resolve_slack_settings`` returns ``channels``.
 
     The connector lazy-imports ``OpsHubSettings`` from
-    ``opshub.core.config`` *inside* :meth:`_resolve_channels`; patching
-    a name on the connector module would silently fail (the import
-    binds the name fresh inside the method). Patching the class on
+    ``opshub.core.config`` *inside* :meth:`_resolve_slack_settings`;
+    patching a name on the connector module would silently fail (the
+    import binds the name fresh inside the method). Patching the class on
     its defining module catches the lazy import via the usual
     monkeypatch lookup.
+
+    Bare id strings in ``channels`` are coerced to
+    :class:`SlackChannelSpec` (mirroring the pydantic before-validator)
+    so call sites that only care about ids stay terse; pass a
+    :class:`SlackChannelSpec` directly to exercise per-channel ``since``
+    (Phase 20, ADR-0036). ``sync_since`` sets the connector-wide floor.
     """
+    from opshub.core.config import SlackChannelSpec
+
+    specs = [c if isinstance(c, SlackChannelSpec) else SlackChannelSpec(id=c) for c in channels]
     fake_settings = MagicMock()
-    fake_settings.connectors.slack.channels = channels
+    fake_settings.connectors.slack.channels = specs
+    fake_settings.connectors.slack.sync_since = sync_since
     monkeypatch.setattr(
         "opshub.core.config.OpsHubSettings",
         lambda: fake_settings,
@@ -384,6 +399,44 @@ def test_dump_cursors_is_deterministic() -> None:
     assert _dump_cursors(a) == _dump_cursors(b)
 
 
+# --------------------------------------------------- Phase 20: date floor resolution (ADR-0036)
+
+
+def test_floor_to_ts_none_is_no_floor() -> None:
+    """``since = None`` (inherit / unset) → no floor."""
+    assert _floor_to_ts(None) is None
+
+
+def test_floor_to_ts_all_sentinel_is_no_floor() -> None:
+    """``since = "all"`` → full backfill (no floor), never fed to the date parser."""
+    assert _floor_to_ts("all") is None
+
+
+def test_floor_to_ts_absolute_date_returns_ts() -> None:
+    """An ISO date floor renders to the same ``ts`` the cursor comparison uses."""
+    assert _floor_to_ts("2026-01-01") == since_to_ts(parse_since("2026-01-01"))
+
+
+def test_resolve_floors_precedence() -> None:
+    """Channel ``since`` overrides global ``sync_since``; absent inherits; ``all`` opts out."""
+    specs = [
+        SlackChannelSpec(id="C_INHERIT"),  # inherits global
+        SlackChannelSpec(id="C_OVERRIDE", since="2025-06-01"),  # own floor
+        SlackChannelSpec(id="C_ALL", since="all"),  # explicit full backfill
+    ]
+    floors = _resolve_floors(specs, sync_since="2020-01-01")
+
+    assert floors["C_INHERIT"] == since_to_ts(parse_since("2020-01-01"))
+    assert floors["C_OVERRIDE"] == since_to_ts(parse_since("2025-06-01"))
+    assert floors["C_ALL"] is None
+
+
+def test_resolve_floors_no_global_no_channel_is_no_floor() -> None:
+    """No ``sync_since`` and no per-channel ``since`` → no floor (legacy full backfill)."""
+    floors = _resolve_floors([SlackChannelSpec(id="C1")], sync_since=None)
+    assert floors == {"C1": None}
+
+
 # ---------------------------------------------------------------------- sync: happy path
 
 
@@ -524,6 +577,91 @@ def test_sync_advances_cursor_per_channel(monkeypatch: pytest.MonkeyPatch) -> No
         "C1": "ts-c1-new",
         "C2": "ts-c2-new",
     }
+
+
+# --------------------------------------------------- sync: date floor (Phase 20, ADR-0036)
+
+
+def test_sync_applies_global_floor_as_resume_bound_on_first_sync(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """First sync with ``sync_since`` set → fetcher resumes from the floor ts.
+
+    With no prior cursor the floor becomes the ``oldest`` bound passed to
+    ``conversations.history`` so the cold-start backfill is capped at the
+    floor instead of walking the whole channel history (ADR-0036 §(g)).
+    """
+    _patch_settings(monkeypatch, channels=["C1"], sync_since="2020-01-01")
+    _patch_auth(monkeypatch)
+    _, captured = _patch_fetcher(monkeypatch, yields=[])
+
+    SlackConnector().sync(_context(_RecordingSourceService(), cursor_value=None))
+
+    assert captured["cursor_per_channel"] == {"C1": since_to_ts(parse_since("2020-01-01"))}
+
+
+def test_sync_floor_is_inert_when_cursor_is_newer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An already-synced channel ignores a floor older than its cursor.
+
+    ``_max_ts(cursor, floor)`` keeps the (newer) cursor, so enabling
+    ``sync_since`` on an established install never rewinds the resume
+    bound and never re-fetches history (ADR-0036 §(g) "cursor is
+    authoritative").
+    """
+    _patch_settings(monkeypatch, channels=["C1"], sync_since="2000-01-01")
+    _patch_auth(monkeypatch)
+    _, captured = _patch_fetcher(monkeypatch, yields=[])
+
+    prior = _dump_cursors({"C1": "1700000000.000000"})  # year 2023 ≫ floor 2000
+    SlackConnector().sync(_context(_RecordingSourceService(), cursor_value=prior))
+
+    assert captured["cursor_per_channel"] == {"C1": "1700000000.000000"}
+
+
+def test_sync_per_channel_all_opts_out_of_global_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``since = "all"`` keeps a channel on full backfill despite a global floor.
+
+    The floor-bearing channel gets the floor ts; the ``"all"`` channel
+    keeps the first-sync "absent key" resume shape (no ``oldest`` bound).
+    """
+    _patch_settings(
+        monkeypatch,
+        channels=[SlackChannelSpec(id="C_FLOOR"), SlackChannelSpec(id="C_ALL", since="all")],
+        sync_since="2020-01-01",
+    )
+    _patch_auth(monkeypatch)
+    _, captured = _patch_fetcher(monkeypatch, yields=[])
+
+    SlackConnector().sync(_context(_RecordingSourceService(), cursor_value=None))
+
+    # C_ALL is omitted (no floor, first sync); C_FLOOR carries the floor ts.
+    assert captured["cursor_per_channel"] == {"C_FLOOR": since_to_ts(parse_since("2020-01-01"))}
+
+
+def test_sync_relative_floor_is_evaluated_at_sync_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A relative ``sync_since`` ("30d") is resolved against ``now_utc`` at sync time.
+
+    Pinning the ``now_utc`` monkeypatch proves the floor advances with
+    each run rather than freezing at config-load time (ADR-0036 §(f)).
+    """
+    from datetime import UTC, datetime, timedelta
+
+    fixed_now = datetime(2026, 6, 4, tzinfo=UTC)
+    monkeypatch.setattr("opshub.core.time.now_utc", lambda: fixed_now)
+    _patch_settings(monkeypatch, channels=["C1"], sync_since="30d")
+    _patch_auth(monkeypatch)
+    _, captured = _patch_fetcher(monkeypatch, yields=[])
+
+    SlackConnector().sync(_context(_RecordingSourceService(), cursor_value=None))
+
+    expected = since_to_ts(fixed_now - timedelta(days=30))
+    assert captured["cursor_per_channel"] == {"C1": expected}
 
 
 # ---------------------------------------------------------------------- sync: empty channels

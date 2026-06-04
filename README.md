@@ -197,7 +197,7 @@ opshub slack conversations --since 30d                        # name order + you
 opshub slack conversations --sort=last_self_post              # descending by your last post (implicit --since 90d cutoff + stderr notice; ADR-0035 §(e))
 opshub slack conversations --sort=last_activity --since 30d   # descending by any-author last activity within 30 days
 opshub slack conversations --format=table                     # pre-19-D default rendering (eyeball / script use; ADR-0035 §(a))
-opshub slack sync                           # incremental sync ([connectors.slack] channels)
+opshub slack sync                           # incremental sync ([connectors.slack] channels; sync_since date floor — ADR-0036)
 opshub ms365 auth set             # OAuth paste-code (Microsoft Graph Calendar / OneDrive / Outlook)
 opshub ms365 sync                           # incremental sync per endpoint
 opshub box auth set               # OAuth paste-code (Box Events API)
