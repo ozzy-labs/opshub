@@ -178,10 +178,10 @@ class SourceService:
         external_id: str,
         source_type: str,
         title: str,
+        body: str,
         url: str | None = None,
         summary: str | None = None,
         fingerprint: str | None = None,
-        body: str | None = None,
         provenance_origin: ProvenanceOrigin | None = None,
         provenance_trust: ProvenanceTrust | None = None,
     ) -> tuple[SourceObserved, ItemEnqueued]:
@@ -221,10 +221,21 @@ class SourceService:
         ("new optional fields may be added without bumping
         ``schema_version``").
 
-        ``body`` / ``provenance_origin`` / ``provenance_trust`` (Phase
-        10 step A2, ADR-0020 Full Local Content Retention) carry the
-        full retained content of the observed item and its provenance
-        tags. ``provenance_origin`` distinguishes ``"external"``
+        ``body`` (Phase 10 step A2, ADR-0020 Full Local Content
+        Retention; epic #470 / issue #481 follow-up) is the full
+        retained content of the observed item. It is **required and
+        non-empty** — every connector must supply a value; metadata-only
+        / stat-only paths (the ``box_drive`` FS scan with
+        ``content_extraction=False``, the Google Workspace
+        ``google_workspace_file`` catch-all, MS365 OneDrive metadata,
+        Box web-API events, the GitHub notification path, ...)
+        satisfy the contract by emitting ``body = summary`` (ADR-0010
+        §不変条件). A Pydantic ``ValidationError`` fires when the value
+        is missing or empty (``min_length=1`` on
+        :class:`SourceObserved.body`).
+
+        ``provenance_origin`` / ``provenance_trust`` tag where the body
+        came from. ``provenance_origin`` distinguishes ``"external"``
         (connector-fetched SaaS / FS content) from ``"internal"``
         (operator-authored / opshub-generated); ``provenance_trust``
         records whether the body may be trusted (``"trusted"``) or must
@@ -232,10 +243,8 @@ class SourceService:
         (``"untrusted"``). External connector bodies pass ``origin=
         "external"`` + ``trust="untrusted"`` so content poisoning /
         indirect prompt injection is mitigated downstream (ADR-0020 §(e)
-        + ADR-0015 §決定 (f)). All three default to ``None`` and
-        round-trip as ``NULL`` for connectors / items with no body
-        (the ``box_drive`` FS scan, historic Phase 3-9 events) —
-        backward-compat per ADR-0002 §4 / ADR-0020 §(d).
+        + ADR-0015 §決定 (f)). Both default to ``None`` and round-trip
+        as ``NULL`` for the operator-authored workspace ingest path.
 
         Returns the ``(source_event, inbox_event)`` tuple so callers
         can render both ULIDs without re-querying the store.

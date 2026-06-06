@@ -267,6 +267,8 @@ def _seed_source(engine: Engine, *, title: str, external_id: str) -> str:
                 summary="ignored summary",
                 observed_at=now,
                 updated_at=now,
+                # epic #470 / issue #481: ``sources.body`` is NOT NULL.
+                body="ignored body",
             )
         )
     return source_id

@@ -95,7 +95,7 @@ Phase 18 改訂: `[embedding]` セクションの TOML 読込経路は [ADR-0032
 - `tasks.title` (Phase 4 実装で `summary` ではなく `title` を使用、§Validation 参照)
 - `decisions.text`
 - `inbox_items.summary`
-- `sources.body` (本文が NULL の場合は `sources.summary` にフォールバック; Phase 3-9 の historical row および `box_drive` の FS-only row は body=NULL のため自然に summary が使われる)
+- `sources.body` (epic #470 / issue #481 以降は **直接参照**。Phase 10 当時の `COALESCE(body, summary)` fallback chain は撤去された。metadata-only / stat-only connector が mapper 層で `body = summary` を emit するため、embed 経路には常に非空 body が渡る。ADR-0020 §(d') 参照)
 - `briefings.content` (生成済 markdown briefing、Phase 5+ で event 駆動 auto-embed 対象)
 - `extracted_action_items.text`
 
@@ -106,7 +106,7 @@ Phase 18 改訂: `[embedding]` セクションの TOML 読込経路は [ADR-0032
 
 **運用ルール**:
 
-- Body 採用は **fallback chain** で実装する: `COALESCE(body, summary)`。新規 connector 取り込みは `body` 充填、historical row は `summary` のまま自然に動作 (ADR-0020 §(d) backward-compat)。
+- Body は `sources.body` を **直接参照** する (epic #470 / issue #481、ADR-0020 §(d'))。Phase 10 当時の `COALESCE(body, summary)` fallback chain は撤去された。metadata-only / stat-only connector の mapper が `body = summary` を emit して契約を満たすため、SQL 層に fallback を持つ必要がない。
 - Body→summary に切り替えた entity は `embeddings rebuild` で再計算が必要 (`model_id` / `model_version` 一致でも text 差分は projection に現れないため `--rebuild-body` 経路で強制 re-embed する; 詳細は Sub-issue B2)。
 - `provenance_trust = "untrusted"` の本文も embed 対象には含む (検索の recall 性能を優先)。LLM context に渡す段階で ADR-0015 §決定 (f) do-not-follow preamble + ADR-0020 §(e) provenance タグで poisoning 緩和する責務に分離。
 - Embed 対象の text は本文長 cap (= embedder の max token) を超過したら **head-truncation** する (Phase 10 step B2 の単純実装、chunk + max pool は §Open Q #2 で Phase 11+)。
@@ -159,7 +159,7 @@ projection と JOIN できる前提を活かし、**vector + SQL filter の hybr
 2. **配布が軽い状態を維持** — core dep が ML フリーなので、Homebrew / PyInstaller / Docker の道が閉じない
 3. **backend 乗り換えコストが小さい** — `Embedder` interface に閉じているので、`OpenAI → BGE-M3` 等の移行が config 変更 + rebuild で完結
 4. **モデル進化に追従可能** — `model_id` + `model_version` 列で増分 re-embed と新旧並列保持が可能
-5. **本文と embedding source の整合** — Phase 10 改訂後は ADR-0020 §決定 (a) の `sources.body` を embed 元として直接参照し、`COALESCE(body, summary)` の fallback で historical row が壊れない (Phase 1 当初版は ADR-0005 整合で summary のみだった、§4 改訂履歴参照)
+5. **本文と embedding source の整合** — Phase 10 改訂後は ADR-0020 §決定 (a) の `sources.body` を embed 元として直接参照する。epic #470 / issue #481 (ADR-0020 §(d')) で `body` が `NOT NULL` に格上げされ、metadata-only path も `body = summary` を emit するため、`COALESCE` fallback は不要になった (Phase 1 当初版は ADR-0005 整合で summary のみ、Phase 10 で `COALESCE(body, summary)`、epic #470 で `body` 直接参照、§4 改訂履歴参照)
 6. **Phase 4 着手前から `embeddings` テーブル骨格があるため、event 駆動 refresh の hook 配線を Phase 2-3 で先回り可能**
 
 ### Negative / Trade-offs
@@ -285,7 +285,7 @@ Phase 4 sub-issue A-D (PR #63-#74) で 3 backend (local sentence-transformers, O
 
 Event-driven 自動 embed (projector hook) / briefing 自動生成 (LLM 呼び出し) / `links` projection 本実装は Phase 5 以降の outlook (`docs/phase-4-plan.md` §6)。
 
-> 注: Phase 10 step B2 で source の embed 元は `COALESCE(body, summary)` に改訂された。§4 / Alternative #8 参照。
+> 注: Phase 10 step B2 で source の embed 元は `COALESCE(body, summary)` に改訂され、さらに epic #470 / issue #481 (ADR-0020 §(d')) で `body` 直接参照に簡素化された (metadata-only mapper が `body = summary` を emit するため SQL 層の fallback が不要)。§4 / Alternative #8 参照。
 
 ### Phase 4.x follow-up (PR #75) validation
 

@@ -7,10 +7,11 @@ The wrapper covers exactly the Phase 13 MVP needs:
   initialisation + TTL-expiry fallback per ADR-0010 §Phase 13 改訂 (g)).
 * ``changes.list`` — delta walk over file metadata; the connector
   consumes the iterator and persists cursors as items land.
-* ``files.export`` — *deferred to G4*; the Phase 13 G3 PR ships
-  metadata-only (``body=None`` on every mapped event). The export call
-  signature is documented here so G4 can extend without re-shaping the
-  module.
+* ``files.export`` — *added in G4*; the Phase 13 G3 PR shipped
+  metadata-only and the mapper substituted ``summary`` for ``body``
+  (epic #470 / issue #481 promoted ``SourceObserved.body`` to required
+  + non-empty). G4 wires ``files.export`` so Workspace native items
+  land with their extracted markdown body instead.
 
 SDK choice (OQ8 — decided at G3 start per plan §8)
 --------------------------------------------------

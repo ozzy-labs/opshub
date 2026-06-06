@@ -80,6 +80,8 @@ def _seed_source(
                 title=title,
                 url=url,
                 summary=summary,
+                # epic #470 / issue #481: ``sources.body`` is NOT NULL.
+                body=summary or title,
                 observed_at=_NOW,
                 updated_at=_NOW,
             )

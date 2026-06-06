@@ -208,12 +208,14 @@ def map_onedrive_item(raw: RawOneDriveItem, *, actor: str = DEFAULT_ACTOR) -> So
     * ``occurred_at`` ← parsed ``raw.last_modified_iso`` (tz-aware UTC).
     * Source type is pinned to :data:`ONEDRIVE_SOURCE_TYPE`.
 
-    Phase 10 (ADR-0020 §(d) exception): OneDrive items are *file
-    references*; the connector does not read the file body itself, so
-    ``body`` stays ``None`` — body retention via a file-extraction
-    connector lives in Phase 11+, mirroring the ``box_drive`` FS-scan
-    posture (ADR-0019 §不変条件 (b)). The provenance tags
-    (``external`` / ``untrusted``) are still stamped for cross-connector
+    OneDrive items are *file references*; this connector does not read
+    file bodies (Phase 11 ``onedrive_drive`` covers that path for
+    locally-synced files). epic #470 / issue #481 promoted
+    :class:`SourceObserved.body` to required + non-empty; the helper
+    :func:`_build_source_observed` substitutes the composed ``path``
+    summary for ``body`` here so the metadata-only path still emits a
+    valid event (ADR-0010 §不変条件 metadata-only rule). Provenance
+    tags (``external`` / ``untrusted``) are stamped for cross-connector
     consistency with the SaaS family.
     """
     return _build_source_observed(
@@ -314,9 +316,10 @@ _OUTLOOK_TRUNCATION_MARKER = "\n\n[outlook body truncated: {kept} / {original} c
 def _truncate_outlook_body(body: str | None, *, message_id: str) -> str | None:
     """Clip ``body`` to :data:`MAX_OUTLOOK_BODY_CHARS` with an audit suffix.
 
-    ``None`` passes through unchanged so the projection still stores
-    ``NULL`` for messages without a body. Bodies at or below the cap
-    are returned unchanged.
+    ``None`` passes through unchanged so the caller can decide on a
+    fallback (``map_outlook_message`` substitutes ``summary``; see
+    epic #470 / issue #481 + ADR-0010 §不変条件 metadata-only rule).
+    Bodies at or below the cap are returned unchanged.
 
     Over-cap bodies get clipped to ``MAX_OUTLOOK_BODY_CHARS`` and a
     deterministic suffix is appended:
@@ -383,6 +386,17 @@ def _build_source_observed(
     connector family (issue #343; PR #355 covered ``summary``, this
     extends the same SSOT helper to ``url``).
 
+    epic #470 / issue #481 promoted
+    :class:`SourceObserved.body` to ``str = Field(min_length=1)``.
+    When the caller passes ``body=None`` (the
+    :func:`map_onedrive_item` metadata-only path, the empty-body
+    branch of :func:`map_outlook_message`, the no-body Calendar
+    event), the helper falls back to ``summary`` so the invariant
+    holds (ADR-0010 §不変条件 metadata-only rule). ``summary`` is
+    always populated upstream (composed `"<start> - <end> (N
+    attendees)"` for Calendar, ``bodyPreview`` for Outlook, ``path``
+    for OneDrive) so a non-empty fallback is always available.
+
     Raises
     ------
     ConnectorFailedError
@@ -407,6 +421,14 @@ def _build_source_observed(
             f"MS365 mapper rejected an item with no title (source_type={source_type}, "
             f"external_id={external_id})"
         )
+    # epic #470 / issue #481: ``body`` is required + non-empty. The
+    # ``summary`` upstream is always composed to a non-empty string
+    # (the Calendar / Outlook / OneDrive mappers each pass a built
+    # summary, then ``_truncate`` ensures the string is non-empty
+    # before reaching here). When the caller's ``body`` is None /
+    # whitespace, fall back to ``summary`` so the invariant holds
+    # without violating ADR-0020 §(e) provenance semantics.
+    resolved_body: str = body if body and body.strip() else summary
     return SourceObserved(
         aggregate_id=new_ulid(),
         actor=actor,
@@ -434,8 +456,10 @@ def _build_source_observed(
         summary=normalise_optional_text(summary),
         # Phase 10 (ADR-0020): full body + provenance. External SaaS
         # content is tagged untrusted so downstream agent / LLM context
-        # treats it as reference material, never instructions.
-        body=body,
+        # treats it as reference material, never instructions. The
+        # resolved body (mapper-supplied content or ``summary``
+        # fallback) satisfies the epic #470 / #481 NOT NULL contract.
+        body=resolved_body,
         provenance_origin="external",
         provenance_trust="untrusted",
     )

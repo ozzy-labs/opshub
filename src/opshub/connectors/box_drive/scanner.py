@@ -537,7 +537,12 @@ class BoxDriveScanner:
         :func:`extract_document` which itself never raises — failures
         surface as ``body=None`` + a stable ``body_skip_reason`` tag,
         so a single broken document never stops the scan
-        (ADR-0025 §決定 (c) fail-safe contract).
+        (ADR-0025 §決定 (c) fail-safe contract). The downstream mapper
+        (:func:`opshub.connectors.box_drive.mapper.map_scanned_file`)
+        then substitutes ``body = summary`` so the
+        :class:`SourceObserved.body` ``min_length=1`` invariant
+        (ADR-0010 §不変条件, epic #470 / #481) holds even when the
+        scanner could not extract a body.
         """
         if not self._content_extraction:
             return (None, None, False, None)

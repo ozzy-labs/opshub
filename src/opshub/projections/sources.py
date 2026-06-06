@@ -91,12 +91,16 @@ sources_table: Table = Table(
     # ``0017_add_fingerprint_to_sources``.
     Column("fingerprint", String, nullable=True),
     # Phase 10 step A2 (ADR-0020 Full Local Content Retention): the
-    # full retained body plus provenance tags (origin / trust). All
-    # nullable so Phase 3-9 rows — and the ``box_drive`` connector,
-    # which never reads file bodies (ADR-0019 §不変条件 (b)) — keep
-    # landing with ``NULL``. Mirrors migration
-    # ``0018_add_body_provenance_to_sources``.
-    Column("body", Text(), nullable=True),
+    # full retained body plus provenance tags (origin / trust). epic
+    # #470 / issue #481 lifted ``body``'s ``NULL`` shim and pinned the
+    # ``NOT NULL`` invariant — every connector emits a non-empty body
+    # (stat-only / metadata-only paths satisfy the contract by setting
+    # ``body = summary``; ADR-0010 §不変条件). Mirrors migration
+    # ``0018_add_body_provenance_to_sources`` (body) +
+    # ``0030_enforce_sources_body_not_null`` (the NOT NULL rebuild,
+    # epic #470). ``provenance_*`` stay nullable because the
+    # operator-authored workspace ingest path leaves them unset.
+    Column("body", Text(), nullable=False),
     Column("provenance_origin", Text(), nullable=True),
     Column("provenance_trust", Text(), nullable=True),
     UniqueConstraint(
@@ -175,11 +179,13 @@ class SourcesProjection:
         Phase 10 step A2 (ADR-0020): ``body`` / ``provenance_origin`` /
         ``provenance_trust`` are likewise written through on both arms.
         Re-observation refreshes them so an edited upstream item
-        updates the retained body and its trust tag. Connectors / items
-        with no body (Phase 3-9 historic events, the ``box_drive``
-        FS scan) pass ``None`` and round-trip as ``NULL`` — the columns
-        are nullable in migration ``0018`` for the same backward-compat
-        reason (ADR-0020 §(d)).
+        updates the retained body and its trust tag. epic #470 / issue
+        #481 promoted ``body`` to ``NOT NULL`` (stat-only / metadata-only
+        connectors emit ``body = summary`` to satisfy the contract;
+        ADR-0010 §不変条件 + migration
+        ``0030_enforce_sources_body_not_null``). ``provenance_*`` stay
+        nullable because the operator-authored workspace ingest path
+        leaves them unset.
         """
         stmt = sqlite_insert(sources_table).values(
             id=event.aggregate_id,

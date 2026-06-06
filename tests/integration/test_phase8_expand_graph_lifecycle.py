@@ -230,6 +230,8 @@ def _seed_source_row(db_path: Path, source_id: str) -> None:
                     title="phase 8 expand-graph linked source",
                     url="https://example.invalid/phase8",
                     summary=_SOURCE_SUMMARY,
+                    # epic #470 / issue #481: ``sources.body`` is NOT NULL.
+                    body=_SOURCE_SUMMARY,
                     observed_at=datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC),
                     updated_at=datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC),
                 )

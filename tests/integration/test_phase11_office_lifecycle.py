@@ -191,7 +191,8 @@ class _Phase11Fixture:
     source_type: str
     external_id: str
     title: str
-    body: str | None
+    # epic #470 / issue #481: ``body`` is required + non-empty.
+    body: str
     provenance_origin: ProvenanceOrigin | None
 
 
@@ -277,11 +278,15 @@ _PHASE11_FIXTURES: tuple[_Phase11Fixture, ...] = (
         source_type="box_drive_file",
         external_id="Misc/readme.txt",
         title="readme.txt",
-        # body=None for the FS-scan default path (ADR-0019 §不変条件
-        # (b)). Pinned here so the round-trip exercises the NULL
-        # branch end-to-end alongside the opted-in Office bodies above.
-        body=None,
-        provenance_origin=None,
+        # epic #470 / issue #481 (ADR-0010 §不変条件 metadata-only
+        # rule) replaced the Phase 10 ``body=None`` shim with
+        # ``body = summary``: FS-scan connectors still do not
+        # ``open()`` files (ADR-0019 §不変条件 (b)), they just forward
+        # the composed path summary as the body. Pinned here so the
+        # round-trip exercises the substitution end-to-end alongside
+        # the opted-in Office bodies above.
+        body="path: Misc/readme.txt",
+        provenance_origin="external",
     ),
 )
 
@@ -490,17 +495,19 @@ def test_phase11_office_lifecycle(
 
         # ---- 5. metadata-only FS-scan default ------------------------
         # ADR-0019 §不変条件 (b): a FS-scan source without
-        # ``content_extraction`` keeps body=NULL. The same query path
-        # that returns extracted Office bodies above must round-trip
-        # NULL cleanly for the un-extracted FS row.
+        # ``content_extraction`` does not open the file. epic #470 /
+        # issue #481 (ADR-0010 §不変条件 metadata-only rule) replaced
+        # the Phase 10 ``body=NULL`` shim with ``body = summary`` for
+        # those rows so the projection satisfies the new NOT NULL
+        # invariant without violating the no-``open()`` contract.
         with engine.connect() as conn:
             row = conn.execute(
                 text("SELECT id, body, source_type FROM sources WHERE id = :id"),
                 {"id": metadata_only_id},
             ).first()
         assert row is not None
-        assert row.body is None, (
-            "ADR-0019 §不変条件 (b) — FS-scan rows without content_extraction must keep body=NULL"
+        assert row.body == "path: Misc/readme.txt", (
+            "epic #470 / #481: FS-scan rows without content_extraction emit body=summary"
         )
         assert row.source_type == "box_drive_file"
 

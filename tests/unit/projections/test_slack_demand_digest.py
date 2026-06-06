@@ -98,6 +98,11 @@ def _slack_observed(
         occurred_at = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
     if aggregate_id is None:
         aggregate_id = new_ulid()
+    # epic #470 / issue #481: ``body`` is required + non-empty. The
+    # Slack mapper falls back to the title when text is empty (see
+    # :func:`opshub.connectors.slack.mapper.map_message`); the test
+    # helper mirrors that so demand-digest fixtures stay valid.
+    resolved_body = body if body else title
     return SourceObserved(
         aggregate_id=aggregate_id,
         occurred_at=occurred_at,
@@ -109,7 +114,7 @@ def _slack_observed(
         title=title,
         url=permalink,
         summary=summary if summary is not None else body[:200] if body else None,
-        body=body or None,
+        body=resolved_body,
         provenance_origin="external",
         provenance_trust="untrusted",
     )

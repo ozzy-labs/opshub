@@ -184,31 +184,30 @@ def test_map_message_empty_permalink_passes_through() -> None:
     assert kwargs["url"] == ""
 
 
-def test_map_message_normalises_empty_text_to_none() -> None:
-    """Empty ``text`` → ``summary=None`` and ``body=None`` (issue #332).
+def test_map_message_normalises_empty_text_to_title_body() -> None:
+    """Empty ``text`` → ``summary=None`` and ``body=title`` (issue #332 + epic #470 / #481).
 
     Slackbot / ``channel_join`` / ``file_share`` events arrive with an
     empty ``text`` field. The mapper used to pass that empty string
     through as ``summary``, which downstream tripped
     :class:`ItemEnqueued`'s ``min_length=1`` and aborted the sync.
+    The #332 fix normalised empty ``text=""`` to ``summary=None`` so
+    :meth:`SourceService.observe` falls back to the synthetic title
+    for the inbox preview.
 
-    Post-fix the mapper normalises empty ``text`` to ``None`` for both
-    ``summary`` and ``body`` (mirroring the existing ``body`` rule), so
-    the projection stores NULL and :meth:`SourceService.observe` applies
-    its ``f"{source_type}: {title}"`` fallback for the inbox preview.
-    Title / external_id / url remain populated as usual since they
-    derive from the channel / user metadata, not the message text.
+    epic #470 / issue #481 then promoted
+    :class:`SourceObserved.body` to ``min_length=1``; the mapper now
+    falls back to the composed title (which always includes either a
+    body excerpt or an English placeholder such as ``"(no text)"`` or
+    ``"alice joined #general"``) so the projection still gets a
+    recognisable non-empty body for text-less events.
     """
     raw = _raw_message(text="")
     kwargs = map_message(raw)
 
     assert kwargs["summary"] is None
-    assert kwargs["body"] is None
-    # Other fields keep their normal shape — the empty-text case only
-    # affects ``summary`` / ``body``. The title's excerpt segment
-    # falls back to ``"(no text)"`` per issue #367 so search results
-    # for attachment-only / file_share messages still carry an
-    # identifiable label rather than ``"alice in #general: "``.
+    # epic #470 / issue #481: empty text falls back to the title.
+    assert kwargs["body"] == kwargs["title"]
     assert kwargs["title"] == "alice in #general: (no text)"
     assert kwargs["external_id"] == "C123:1700000000.000100"
 
@@ -649,7 +648,16 @@ def test_map_message_retains_body_and_tags_provenance() -> None:
     assert kwargs["summary"] == "please review the design doc when free"
 
 
-def test_map_message_empty_text_body_is_none() -> None:
-    """An empty message text normalises ``body`` to ``None`` (NULL in the projection)."""
+def test_map_message_empty_text_body_falls_back_to_title() -> None:
+    """An empty message text falls back to ``body = title`` (epic #470 / issue #481).
+
+    epic #470 / #481 promoted :class:`SourceObserved.body` to
+    ``min_length=1``. Slack's text-less events (Slackbot pings,
+    ``channel_join``, ``file_share``) used to land with
+    ``body=None``; the mapper now substitutes the composed title so
+    the projection still has a meaningful non-empty body without
+    fabricating fresh text content.
+    """
     kwargs = map_message(_raw_message(text=""))
-    assert kwargs["body"] is None
+    assert kwargs["body"] == kwargs["title"]
+    assert kwargs["body"] and kwargs["body"].strip()

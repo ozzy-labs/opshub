@@ -77,6 +77,7 @@ def test_source_observed_inserts_new_row(engine: Engine) -> None:
         title="Fix the thing",
         url="https://github.com/owner/repo/issues/42",
         summary="It is broken.",
+        body="It is broken — full issue body lives here.",
     )
 
     with engine.begin() as conn:
@@ -109,6 +110,11 @@ def test_source_observed_allows_null_url_and_summary(engine: Engine) -> None:
         external_id="owner/repo#1",
         source_type="issue",
         title="bare",
+        # epic #470 / issue #481: ``body`` is required + non-empty.
+        # Metadata-only paths emit ``body = summary`` (or here, a
+        # synthesised non-empty fallback because ``summary`` is also
+        # absent).
+        body="bare",
     )
 
     with engine.begin() as conn:
@@ -149,6 +155,7 @@ def test_source_observed_again_updates_in_place(engine: Engine) -> None:
         title="original title",
         url="https://example.com/v1",
         summary="v1",
+        body="original issue body",
     )
     second = SourceObserved(
         # Use a different aggregate_id to prove the projector keeps the
@@ -163,6 +170,7 @@ def test_source_observed_again_updates_in_place(engine: Engine) -> None:
         title="updated title",
         url="https://example.com/v2",
         summary="v2",
+        body="updated issue body",
     )
 
     with engine.begin() as conn:
@@ -199,6 +207,7 @@ def test_source_observed_different_natural_key_inserts_separate_row(
         external_id="owner/repo#42",
         source_type="issue",
         title="issue 42",
+        body="issue 42 body",
     )
     second_same_external_diff_connector = SourceObserved(
         aggregate_id=new_ulid(),
@@ -209,6 +218,7 @@ def test_source_observed_different_natural_key_inserts_separate_row(
         external_id="owner/repo#42",
         source_type="message",
         title="unrelated slack message",
+        body="unrelated slack body",
     )
     third_same_connector_diff_external = SourceObserved(
         aggregate_id=new_ulid(),
@@ -219,6 +229,7 @@ def test_source_observed_different_natural_key_inserts_separate_row(
         external_id="owner/repo#43",
         source_type="issue",
         title="issue 43",
+        body="issue 43 body",
     )
 
     with engine.begin() as conn:
@@ -259,6 +270,7 @@ def test_source_observed_without_fingerprint_writes_null(engine: Engine) -> None
         external_id="owner/repo#42",
         source_type="issue",
         title="legacy connector",
+        body="legacy body",
     )
     assert event.fingerprint is None, (
         "default fingerprint must remain None — backward-compat invariant"
@@ -295,6 +307,8 @@ def test_source_observed_with_fingerprint_writes_value(engine: Engine) -> None:
         url="file:///mnt/b/docs/spec.md",
         summary="path: docs/spec.md",
         fingerprint=fingerprint,
+        # epic #470 / issue #481: stat-only paths emit body=summary.
+        body="path: docs/spec.md",
     )
 
     with engine.begin() as conn:
@@ -327,6 +341,7 @@ def test_source_observed_refresh_updates_fingerprint(engine: Engine) -> None:
         source_type="box_drive_file",
         title="docs/spec.md",
         fingerprint="100:1000000000",
+        body="path: docs/spec.md",
     )
     second = SourceObserved(
         aggregate_id=new_ulid(),
@@ -338,6 +353,7 @@ def test_source_observed_refresh_updates_fingerprint(engine: Engine) -> None:
         source_type="box_drive_file",
         title="docs/spec.md",
         fingerprint="200:2000000000",
+        body="path: docs/spec.md",
     )
 
     with engine.begin() as conn:
@@ -414,6 +430,7 @@ def test_reset_clears_every_row(engine: Engine) -> None:
                 external_id=f"owner/repo#{i}",
                 source_type="issue",
                 title=f"row {i}",
+                body=f"row {i} body",
             )
             projection.apply(conn, event)
 
@@ -457,10 +474,72 @@ def test_source_observed_persists_body_and_provenance(engine: Engine) -> None:
     assert row["provenance_trust"] == "untrusted"
 
 
-def test_source_observed_body_defaults_to_null(engine: Engine) -> None:
-    """A connector that omits ``body`` lands ``NULL`` (backward-compat, ADR-0020 §(d))."""
+def test_source_observed_rejects_missing_body() -> None:
+    """epic #470 / issue #481: ``body`` is required + non-empty.
+
+    The Phase 10 ``body=None`` shim (ADR-0020 §(d) backward-compat) was
+    lifted by epic #470 — every connector now substitutes ``summary``
+    for ``body`` on metadata-only / stat-only paths (ADR-0010
+    §不変条件). The event schema enforces the contract at construction
+    time so a regression surfaces as a Pydantic ``ValidationError``
+    rather than a silent ``NULL`` write.
+    """
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    occurred = datetime(2026, 6, 7, 9, 0, 0, tzinfo=UTC)
+    # ``model_validate`` round-trips through Pydantic the same way
+    # the event store deserialises events — so we can omit ``body``
+    # via a dict payload to exercise the required-field validation
+    # without the static type checker flagging the missing kwarg.
+    payload: dict[str, object] = {
+        "aggregate_id": new_ulid(),
+        "occurred_at": occurred,
+        "recorded_at": occurred,
+        "actor": "test",
+        "connector_name": "box_drive",
+        "external_id": "projects/spec.md",
+        "source_type": "box_drive_file",
+        "title": "projects/spec.md",
+    }
+    with _pytest.raises(ValidationError):
+        SourceObserved.model_validate(payload)
+
+
+def test_source_observed_rejects_empty_body() -> None:
+    """Empty / whitespace-only ``body`` also fails (``min_length=1``)."""
+    import pytest as _pytest
+    from pydantic import ValidationError
+
+    occurred = datetime(2026, 6, 7, 9, 0, 0, tzinfo=UTC)
+    with _pytest.raises(ValidationError):
+        SourceObserved(
+            aggregate_id=new_ulid(),
+            occurred_at=occurred,
+            recorded_at=occurred,
+            actor="test",
+            connector_name="box_drive",
+            external_id="projects/spec.md",
+            source_type="box_drive_file",
+            title="projects/spec.md",
+            body="",
+        )
+
+
+def test_source_observed_metadata_only_body_equals_summary(engine: Engine) -> None:
+    """Stat-only / metadata-only connectors emit ``body = summary``.
+
+    ADR-0010 §不変条件 metadata-only rule: when a connector cannot
+    extract a richer body (box_drive stat-only, ms365 OneDrive
+    metadata, Box web-API events, Google Workspace catch-all), the
+    mapper reuses the composed ``summary`` as the body so the
+    :class:`SourceObserved.body` ``min_length=1`` invariant is
+    satisfied uniformly. This test pins the row shape that
+    metadata-only paths produce.
+    """
     projection = SourcesProjection()
-    occurred = datetime(2026, 5, 30, 9, 0, 0, tzinfo=UTC)
+    occurred = datetime(2026, 6, 7, 9, 0, 0, tzinfo=UTC)
+    summary = "path: projects/spec.md"
     event = SourceObserved(
         aggregate_id=new_ulid(),
         occurred_at=occurred,
@@ -470,6 +549,10 @@ def test_source_observed_body_defaults_to_null(engine: Engine) -> None:
         external_id="projects/spec.md",
         source_type="box_drive_file",
         title="projects/spec.md",
+        summary=summary,
+        body=summary,
+        provenance_origin="external",
+        provenance_trust="untrusted",
     )
 
     with engine.begin() as conn:
@@ -477,9 +560,10 @@ def test_source_observed_body_defaults_to_null(engine: Engine) -> None:
 
     with engine.connect() as conn:
         row = conn.execute(select(sources_table)).mappings().one()
-    assert row["body"] is None
-    assert row["provenance_origin"] is None
-    assert row["provenance_trust"] is None
+    assert row["body"] == summary
+    assert row["summary"] == summary
+    assert row["provenance_origin"] == "external"
+    assert row["provenance_trust"] == "untrusted"
 
 
 def test_reobservation_refreshes_body_and_provenance(engine: Engine) -> None:

@@ -1,16 +1,21 @@
 """Integration tests for the Phase 10 step A2 migration.
 
-Pin the physical shape of the ``sources`` body / provenance columns
-after migration ``0018_add_body_provenance_to_sources`` (ADR-0020 Full
-Local Content Retention / phase-10-plan §3 Sub-issue A / §4-A):
+Pin the physical shape of the ``sources`` body / provenance columns at
+the **post-0018, pre-0030** revision so the original Phase 10 contract
+stays test-pinned even after the epic #470 / issue #481 follow-up
+(migration ``0030_enforce_sources_body_not_null``) promoted ``body`` to
+``NOT NULL``:
 
 * ``body`` / ``provenance_origin`` / ``provenance_trust`` exist, are
-  ``TEXT`` and ``NULLABLE`` so Phase 3-9 rows (and the ``box_drive``
-  connector, which never reads file bodies) keep landing with ``NULL``.
+  ``TEXT`` and ``NULLABLE`` at the 0018 boundary so Phase 3-9 rows kept
+  landing with ``NULL`` until the body NOT NULL rebuild.
 * Existing pre-0018 rows survive the upgrade with the three columns
   ``NULL`` (no back-fill — backward-compat, ADR-0020 §(d)).
 * ``alembic downgrade`` cleanly drops the three columns without touching
   the rest of the ``sources`` shape.
+
+The post-0030 column shape (``body NOT NULL``) is pinned separately by
+``test_phase3_migrations.py::test_phase3_migrations_create_expected_columns``.
 
 Mirrors ``test_phase9_migrations.py`` so the assertions exercise the
 real migration env.py path (not ``metadata.create_all``).
@@ -38,6 +43,13 @@ _SCRIPT_LOCATION = _REPO_ROOT / "src" / "opshub" / "db" / "migrations"
 # assertion stays stable when later migrations append on top of 0018.
 _PRE_0018_REVISION = "0017_add_fingerprint_to_sources"
 
+# The revision the original Phase 10 contract pinned: post-0018 +
+# subsequent additive revisions but before the epic #470 / issue #481
+# ``body NOT NULL`` rebuild (migration ``0030``). Test fixtures upgrade
+# to this revision so the original Phase 10 nullability + existing-row
+# ``NULL`` body contracts stay observable.
+_POST_0018_PRE_0030_REVISION = "0029_create_slack_demand_digest"
+
 _NEW_COLUMNS = ("body", "provenance_origin", "provenance_trust")
 
 
@@ -50,10 +62,17 @@ def _make_alembic_config(db_path: Path) -> Config:
 
 @pytest.fixture
 def head_engine(tmp_path: Path) -> Iterator[Engine]:
-    """Provision a SQLite DB at ``alembic upgrade head`` (past 0018)."""
+    """Provision a SQLite DB at the post-0018, pre-0030 revision.
+
+    The original Phase 10 contract pinned ``body`` / ``provenance_*`` as
+    nullable. Epic #470 / issue #481 (migration 0030) later promoted
+    ``body`` to ``NOT NULL``; this test exercises the 0018-era contract
+    so it stays observable. The post-0030 column shape lives in
+    ``test_phase3_migrations.py``.
+    """
     db_path = tmp_path / "phase10.sqlite"
     cfg = _make_alembic_config(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, _POST_0018_PRE_0030_REVISION)
     engine = create_engine_for_sqlite(db_path)
     try:
         yield engine
@@ -137,7 +156,7 @@ def test_upgrade_existing_row_reads_null(tmp_path: Path) -> None:
     finally:
         engine.dispose()
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, _POST_0018_PRE_0030_REVISION)
 
     engine = create_engine_for_sqlite(db_path)
     try:
@@ -156,7 +175,7 @@ def test_downgrade_drops_body_provenance_columns(tmp_path: Path) -> None:
     """Downgrading past 0018 removes exactly the three new columns."""
     db_path = tmp_path / "phase10_downgrade.sqlite"
     cfg = _make_alembic_config(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, _POST_0018_PRE_0030_REVISION)
 
     engine = create_engine_for_sqlite(db_path)
     try:

@@ -83,9 +83,22 @@ def _seed_source(
     a unique ``external_id`` per call keeps the
     ``(connector_name, external_id)`` UNIQUE constraint happy when a
     test seeds multiple rows.
+
+    epic #470 / issue #481: ``sources.body`` is ``NOT NULL`` (migration
+    0030). When the test passes ``body=None``, the helper falls back to
+    ``summary`` (or a placeholder) so the insert satisfies the new
+    NOT NULL constraint while keeping legacy "metadata-only" call
+    sites valid (the substituted summary becomes the searchable body,
+    matching the metadata-only contract ADR-0010 §不変条件).
     """
     source_id = new_ulid()
     now = now_utc()
+    if body is not None:
+        resolved_body = body
+    elif summary is not None:
+        resolved_body = summary
+    else:
+        resolved_body = "placeholder body"
     with engine.begin() as conn:
         conn.execute(
             insert(sources_table).values(
@@ -98,7 +111,7 @@ def _seed_source(
                 summary=summary,
                 observed_at=now,
                 updated_at=now,
-                body=body,
+                body=resolved_body,
             )
         )
     return source_id
@@ -148,8 +161,17 @@ def test_matched_body_returns_hit_with_metadata(migrated_engine: Engine) -> None
     assert hit.score > 0
 
 
-def test_null_body_rows_are_never_returned(migrated_engine: Engine) -> None:
-    """Phase 3-9 / box_drive NULL-body rows must not pollute results."""
+def test_search_targets_body_directly(migrated_engine: Engine) -> None:
+    """The FTS5 path indexes ``body`` directly — no COALESCE fallback (epic #470 / #481).
+
+    The Phase 10 ``NULL``-body shim is gone. Metadata-only connectors
+    emit ``body = summary`` so the FTS index is dense, and
+    ``opshub search`` finds rows by the body column alone (ADR-0010
+    §不変条件). The test seeds one row whose body is the substituted
+    summary (legacy preview shape) and one row with a distinct body
+    token; the search term hits only the latter to pin that body —
+    not summary alone — drives the match.
+    """
     _seed_source(migrated_engine, body=None, summary="legacy preview")
     matched_id = _seed_source(migrated_engine, body="genuine signal token", summary="match")
     service = SearchService(engine=migrated_engine)
@@ -570,18 +592,16 @@ def test_like_fallback_respects_limit(migrated_engine: Engine) -> None:
     assert len(hits) == 2
 
 
-def test_like_fallback_skips_null_body_rows(migrated_engine: Engine) -> None:
-    """NULL-body rows (Phase 3-9 / box_drive historicals) do not surface.
+def test_like_fallback_targets_body_directly(migrated_engine: Engine) -> None:
+    """The LIKE fallback path matches the body column directly (epic #470 / #481).
 
-    The FTS5 path already filters them out via the empty-document
-    trigger contract; the LIKE path needs an explicit
-    ``body IS NOT NULL`` guard because it bypasses the FTS index. A
-    regression where that guard is missing would surface every
-    NULL-body row for any short query (LIKE would treat the column
-    as not matching but plenty of row predicates would still flake
-    on NULL semantics).
+    ``sources.body`` is ``NOT NULL`` (migration 0030); the previous
+    ``body IS NOT NULL`` guard in the LIKE path is gone (every row has
+    a non-empty body). The test seeds a non-matching row and a row
+    whose body carries the short-query token; only the latter
+    surfaces in the LIKE fallback.
     """
-    _seed_source(migrated_engine, body=None, summary="legacy preview")
+    _seed_source(migrated_engine, body="legacy notes overview", summary=None)
     matched_id = _seed_source(
         migrated_engine,
         body="genuine PR signal",

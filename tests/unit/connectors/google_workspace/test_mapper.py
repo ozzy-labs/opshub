@@ -139,7 +139,9 @@ def test_map_drive_item_builds_source_observed() -> None:
     assert event.title == "Hello"
     assert event.url == "https://drive.google.com/file/d/F1/view"
     assert event.summary is not None
-    assert event.body is None  # G3 ships metadata-only; G4 fills body
+    # epic #470 / issue #481: metadata-only path emits body=summary so
+    # the SourceObserved.body min_length=1 invariant holds.
+    assert event.body == event.summary
     assert event.provenance_origin == "external"
     assert event.provenance_trust == "untrusted"
     assert event.actor == DEFAULT_ACTOR
@@ -235,15 +237,18 @@ def test_map_drive_item_actor_override() -> None:
 # ----- G4 body + provenance + metadata -----------------------------------
 
 
-def test_map_drive_item_default_body_is_none() -> None:
-    """No ``body`` kwarg → ``body=None`` (G3 metadata-only invariant).
+def test_map_drive_item_default_body_falls_back_to_summary() -> None:
+    """No ``body`` kwarg → ``body = summary`` (epic #470 / issue #481).
 
     G4 makes ``body`` opt-in via the connector's ``content_extraction``
-    flag; callers that omit the kwarg preserve the G3 default-off
-    behaviour bit-for-bit so unrelated tests stay valid.
+    flag; callers that omit the kwarg land on the metadata-only path,
+    which substitutes ``summary`` for ``body`` so the
+    :class:`SourceObserved.body` ``min_length=1`` invariant
+    (ADR-0010 §不変条件 metadata-only rule) is satisfied.
     """
     event = map_drive_item(_raw())
-    assert event.body is None
+    assert event.body == event.summary
+    assert event.body and event.body.strip()
 
 
 def test_map_drive_item_body_threads_through() -> None:
@@ -262,18 +267,21 @@ def test_map_drive_item_body_threads_through() -> None:
     assert event.provenance_trust == "untrusted"
 
 
-def test_map_drive_item_empty_body_stays_empty_not_none() -> None:
-    """An empty body (legit empty Google Doc) stays as ``""``, not coerced to ``None``.
+def test_map_drive_item_empty_body_falls_back_to_summary() -> None:
+    """An empty body (legit empty Google Doc) substitutes ``summary`` (epic #470 / #481).
 
     :func:`opshub.core.document_extract.extract_workspace_export`
     short-circuits empty exports to ``body=""`` (the file was
-    successfully exported, it just had no content). Surfacing that
-    distinction matters because the downstream consumer can tell
-    "extraction succeeded with no content" from "extraction was
-    skipped or failed".
+    successfully exported, it just had no content). epic #470 / #481
+    promoted :class:`SourceObserved.body` to ``min_length=1``, so the
+    mapper now substitutes the composed ``summary`` (owner /
+    mimeType) for an empty body — the row still lands without
+    violating the NOT NULL contract, and downstream consumers see the
+    summary content rather than an empty document.
     """
     event = map_drive_item(_raw(), body="")
-    assert event.body == ""
+    assert event.body == event.summary
+    assert event.body and event.body.strip()
 
 
 def test_map_drive_item_marks_shared() -> None:
@@ -427,7 +435,9 @@ def test_mapped_shared_with_me_item_carries_marker() -> None:
     assert "[shared with me]" in event.summary
     # ADR-0020 retain-everything: shared items flow through the same
     # projection path as owned items — only the marker differs.
-    assert event.body is None  # G3 metadata-only invariant preserved
+    # epic #470 / issue #481: metadata-only path emits body = summary
+    # so the marker rides along on both the summary and the body.
+    assert event.body == event.summary
 
 
 # ----- Phase 13 audit Cluster C — C#23 defensive code pins ---------------

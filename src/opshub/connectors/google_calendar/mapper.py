@@ -300,10 +300,20 @@ def _build_source_observed(
     *and* whitespace-only inputs collapse to ``None`` (issue #343 —
     SSOT semantics across the connector family; PR #355 covered
     ``summary``, this extends the same SSOT helper to ``url``).
+
+    epic #470 / issue #481 promoted
+    :class:`SourceObserved.body` to required + non-empty. Calendar
+    events with no description / attendees / location / recurrence /
+    organizer (caller passes ``body=None``) fall back to ``summary``
+    so the invariant holds (ADR-0010 §不変条件 metadata-only rule);
+    ``summary`` is composed `"<start> - <end> (N attendees)"` upstream
+    and is always non-empty.
     """
     # Lazy import keeps the module-load cost off ``opshub.core.ids`` for
     # callers that only need the literals, mirroring the MS365 mapper.
     from opshub.core.ids import new_ulid
+
+    resolved_body: str = body if body and body.strip() else summary
 
     return SourceObserved(
         aggregate_id=new_ulid(),
@@ -326,7 +336,7 @@ def _build_source_observed(
         # whitespace-free in practice, but routing through the helper
         # keeps the wiring identical to its peer mappers.
         summary=normalise_optional_text(summary),
-        body=body,
+        body=resolved_body,
         # ADR-0020 §(e): SaaS-connector events are external + untrusted
         # so host LLM / skill side treats the body as reference
         # material under the do-not-follow preamble (ADR-0015 §決定

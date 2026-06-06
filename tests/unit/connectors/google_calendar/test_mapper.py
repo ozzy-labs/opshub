@@ -255,8 +255,16 @@ def test_body_includes_all_metadata_lines_in_order() -> None:
     assert "alice@example.com\nbob@example.com" in event.body
 
 
-def test_body_is_none_when_all_metadata_empty() -> None:
-    """A minimal event yields ``body=None`` so the projection stores ``NULL``."""
+def test_body_falls_back_to_summary_when_all_metadata_empty() -> None:
+    """A minimal event with no description / attendees / etc. falls back to ``summary``.
+
+    epic #470 / issue #481: the mapper previously returned ``body=None`` and the projection
+    stored ``NULL``. epic #470 / issue #481 promoted
+    :class:`SourceObserved.body` to ``min_length=1``; the mapper now
+    substitutes the composed ``"<start> - <end> (N attendees)"``
+    summary as the body so the metadata-only invariant
+    (ADR-0010 §不変条件) holds for sparse Calendar events too.
+    """
     event = map_calendar_event(
         _raw(
             organizer_email="",
@@ -267,7 +275,8 @@ def test_body_is_none_when_all_metadata_empty() -> None:
             recurring_event_id="",
         )
     )
-    assert event.body is None
+    assert event.body == event.summary
+    assert event.body and event.body.strip()
 
 
 def test_body_handles_attendee_emails_with_newlines_preserved() -> None:

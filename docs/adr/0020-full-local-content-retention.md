@@ -60,9 +60,18 @@ excludes は `channel` / `sender` / `repo` / `path` の 4 種の selector を持
 
 ### (d) 認証情報の本文からの分離 + backward-compat
 
-本文ストアにトークン / 認証情報が混入しないことを test で pin する (DoD)。credentials は引き続き keyring (ADR-0014) で別管理し、`body` フィールドには載せない。既存 source 行 (`body = NULL`) は挙動不変。
+本文ストアにトークン / 認証情報が混入しないことを test で pin する (DoD)。credentials は引き続き keyring (ADR-0014) で別管理し、`body` フィールドには載せない。
 
-**例外: ファイル参照 connector の `body` 不保持** — OneDrive item (MS365) と Box event / Box Drive scan のように「ファイル本体ではなくメタデータ (path / actor / event_type) のみを観測する」connector は、`body = NULL` を維持する。これらは ADR-0019 §不変条件 (b) (FS scan は本文を読まない) と同じ posture を SaaS API 側で踏襲しているため、本文抽出は将来の **file-extraction connector (Phase 11+)** へ分離する。本 ADR §(a) の retention 方針は「観測経路に本文があれば持つ」原則であり、参照しか持たない経路は対象外とする (provenance タグは引き続き `external` / `untrusted` で stamp する)。
+#### (d') `body NOT NULL` への昇格 (epic #470 / issue #481 follow-up, 2026-06-07)
+
+Phase 10 当時、後方互換のため `body` を Optional (`str | None = None`) として導入し、ファイル参照 connector (OneDrive item / Box event / Box Drive stat-only scan / Google Workspace `google_workspace_file` catch-all 等) も `body = NULL` を emit していた。pre-userbase 段階の epic #470 (compat shim cleanup) でこの shim を撤去し、以下を pin する:
+
+- `SourceObserved.body: str = Field(min_length=1)` — Pydantic schema レベルで required + 非空を強制。
+- `sources.body` を `NOT NULL` に格上げ (migration `0030_enforce_sources_body_not_null`)。
+- metadata-only / stat-only connector (box_drive `content_extraction=False`、Google Workspace catch-all、MS365 OneDrive metadata、Box web-API events、GitHub notifications 等) は **`body = summary` を emit** することで「source は必ず本文を持つ」契約を満たす (ADR-0010 §不変条件 metadata-only rule)。`summary` と `body` の semantic 区別 (前者は preview、後者は full text / search 対象) は維持される。stat-only path では両者が同値、Office 抽出 / Slack message / Outlook 等の本文抽出 path では別物。
+- 既存 NULL-body row は migration 0030 で破棄され、operator が全 connector の cursor reset + 再 sync で再構築する (`docs/upgrading.md` §"Pre-userbase compat shim cleanup")。append-only event log は維持される (古い `body=None` event も新 schema では deserialise 失敗するが、event log は projection rebuild の SSOT として残る)。
+
+この決定で「本文を持たない connector」例外はなくなる。FS-scan / metadata-only path は `path` derived summary を body にコピーし、検索 / 重複検出 / reply-draft の入力 surface が全 connector で uniform になる。
 
 ### (e) provenance タグ (poisoning 緩和の中核)
 

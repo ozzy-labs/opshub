@@ -103,8 +103,11 @@ class OneDriveDriveConnector:
                 url=event.url,
                 summary=event.summary,
                 fingerprint=event.fingerprint,
-                # Thread the body + provenance the mapper stamped
-                # (ADR-0019 §(b') opt-in; default-off → body=None).
+                # Thread the body + provenance the mapper stamped.
+                # ADR-0019 §(b') opt-in extracts Office bodies;
+                # stat-only paths set ``body = summary`` so the
+                # ``SourceObserved.body`` ``min_length=1`` invariant
+                # holds (epic #470 / #481).
                 body=event.body,
                 provenance_origin=event.provenance_origin,
                 provenance_trust=event.provenance_trust,

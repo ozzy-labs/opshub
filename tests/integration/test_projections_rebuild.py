@@ -434,6 +434,8 @@ def test_rebuild_all_replays_phase_3_source_and_connector_events(
         title="original title",
         url="https://example.com/v1",
         summary="v1",
+        # epic #470 / issue #481: ``body`` is required + non-empty.
+        body="v1 body",
     )
     obs2 = SourceObserved(
         aggregate_id="01HA0SRC0000000000000000BB",
@@ -446,6 +448,7 @@ def test_rebuild_all_replays_phase_3_source_and_connector_events(
         title="updated title",
         url="https://example.com/v2",
         summary="v2",
+        body="v2 body",
     )
 
     # A SourceReferenced event must be a no-op for SourcesProjection
@@ -579,6 +582,8 @@ def test_rebuild_all_phase_3_projections_are_idempotent(
             external_id="owner/repo#2",
             source_type="issue",
             title="idempotent",
+            # epic #470 / issue #481: ``body`` is required + non-empty.
+            body="idempotent body",
         )
     )
     store.append(

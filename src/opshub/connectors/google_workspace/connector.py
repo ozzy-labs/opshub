@@ -73,11 +73,14 @@ on the three Workspace native source_types (``google_doc`` /
 through :func:`opshub.core.document_extract.extract_workspace_export`.
 The resulting markdown becomes the
 :class:`~opshub.domain.events.source.SourceObserved` body. Non-native
-items (the ``google_workspace_file`` catch-all) keep ``body=None``
-regardless of the flag — ``files.export`` would return 403
-``fileNotExportable`` for them. Default ``False`` keeps the G3 metadata
--only behaviour bit-for-bit so upgrading is a no-op until the operator
-opts in.
+items (the ``google_workspace_file`` catch-all) and opt-out / fail-safe
+paths land with ``body=None`` here; the mapper
+(:func:`opshub.connectors.google_workspace.mapper._build_source_observed`)
+then substitutes ``summary`` for ``body`` so the
+:class:`SourceObserved.body` ``min_length=1`` invariant (epic #470 /
+#481, ADR-0010 §不変条件) holds for every event regardless of which
+path produced it. Default ``False`` keeps the connector cheap until
+the operator opts in.
 
 The :class:`OfficeSettings` overrides (``[office] max_file_size_mb`` /
 ``[office] max_chars`` / ``[office.excel] max_cells_*``) propagate
@@ -89,11 +92,12 @@ the same propagation; this connector follows that precedent so
 operators see one knob across all three Office paths.
 
 Failure mode: ``files.export`` rejections (file not exportable, quota,
-transient 5xx) collapse into ``body=None`` + a structlog warning so a
-single broken export never blocks the sync (ADR-0025 §決定 (c)
-fail-safe contract). The mapper still emits the
-:class:`SourceObserved` with the file's metadata so the projection
-retains the row (ADR-0020 retain-everything).
+transient 5xx) collapse into ``body=None`` here + a structlog warning
+so a single broken export never blocks the sync (ADR-0025 §決定 (c)
+fail-safe contract). The mapper then substitutes ``summary`` for
+``body`` (see above) so the projection retains the row with a
+non-empty body (ADR-0020 retain-everything + epic #470 / #481 ``body``
+``NOT NULL`` contract).
 
 ADR-0005 compliance
 -------------------
@@ -466,9 +470,11 @@ class GoogleWorkspaceConnector:
         * ``files.export`` or
           :func:`opshub.core.document_extract.extract_workspace_export`
           surfaces any failure — the ADR-0025 §決定 (c) fail-safe
-          contract collapses all of them into ``body=None`` plus a
-          structlog warning so a single broken Google Doc never
-          blocks the rest of the sync.
+          contract collapses all of them into ``body=None`` here plus
+          a structlog warning so a single broken Google Doc never
+          blocks the rest of the sync. The mapper then substitutes
+          ``summary`` for ``body`` to satisfy the epic #470 / #481
+          ``body NOT NULL`` invariant.
 
         The Office cap settings (``[office] max_file_size_mb`` /
         ``max_chars`` / ``[office.excel] max_cells_*``) propagate

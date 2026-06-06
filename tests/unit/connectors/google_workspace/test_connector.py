@@ -524,15 +524,16 @@ def test_sync_excluded_items_advance_cursor_but_are_not_observed(
 # ----- G4 content_extraction wiring (#278) -------------------------------
 
 
-def test_sync_content_extraction_off_keeps_body_none(
+def test_sync_content_extraction_off_falls_back_to_summary_body(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``content_extraction = false`` (default) → body stays ``None``.
+    """``content_extraction = false`` (default) → mapper emits ``body = summary``.
 
-    Phase 13 G3 metadata-only invariant preserved bit-for-bit when
-    the operator does not opt in. The connector MUST NOT call
-    ``files.export`` on the default-off path — that would be a
-    silent change in network surface for upgrading operators.
+    Phase 13 G3 metadata-only behaviour is preserved on the wire
+    (no ``files.export`` call) but epic #470 / issue #481 promoted
+    ``SourceObserved.body`` to ``min_length=1``; the mapper
+    substitutes the composed Drive summary so the projection still
+    receives a non-empty body (ADR-0010 §不変条件 metadata-only rule).
     """
     _patch_settings(monkeypatch, content_extraction=False)
     _patch_excludes(monkeypatch, tmp_path)
@@ -544,8 +545,11 @@ def test_sync_content_extraction_off_keeps_body_none(
 
     GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
 
-    assert [c["body"] for c in service.calls] == [None]
     fake_client.export_file.assert_not_called()
+    bodies = [c["body"] for c in service.calls]
+    summaries = [c["summary"] for c in service.calls]
+    assert bodies == summaries
+    assert all(b and b.strip() for b in bodies)
 
 
 def test_sync_content_extraction_on_calls_export_and_threads_body(
@@ -697,7 +701,12 @@ def test_sync_content_extraction_skips_non_workspace_mimetypes(
     GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
 
     fake_client.export_file.assert_not_called()
-    assert [c["body"] for c in service.calls] == [None]
+    # epic #470 / issue #481: catch-all (non-Workspace) items skip
+    # export and fall back to summary as body.
+    bodies = [c["body"] for c in service.calls]
+    summaries = [c["summary"] for c in service.calls]
+    assert bodies == summaries
+    assert all(b and b.strip() for b in bodies)
     # The source is still observed (ADR-0020 retain-everything).
     assert [c["external_id"] for c in service.calls] == ["PDF1"]
 
@@ -745,8 +754,14 @@ def test_sync_content_extraction_export_failure_falls_back_to_metadata_only(
 
     assert result.observed_count == 2
     assert [c["external_id"] for c in service.calls] == ["F1", "F2"]
-    # F1 fell back to ``body=None``; F2 carried the extracted body.
-    assert [c["body"] for c in service.calls] == [None, "# F2 body"]
+    # epic #470 / issue #481: F1's failed export falls back to
+    # body=summary; F2 still carries the extracted body.
+    f1_call, f2_call = service.calls
+    assert f1_call["body"] == f1_call["summary"], (
+        "fail-safe path must reuse summary as body (epic #470 / #481)"
+    )
+    assert f1_call["body"] and f1_call["body"].strip()
+    assert f2_call["body"] == "# F2 body"
 
 
 def test_sync_content_extraction_skips_removed_items(
@@ -786,18 +801,26 @@ def test_sync_content_extraction_skips_removed_items(
     GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
 
     fake_client.export_file.assert_not_called()
-    assert [c["body"] for c in service.calls] == [None]
+    # epic #470 / issue #481: removed items still fall back to
+    # summary (placeholder ``[removed: <fileId>]`` summary).
+    bodies = [c["body"] for c in service.calls]
+    summaries = [c["summary"] for c in service.calls]
+    assert bodies == summaries
+    assert all(b and b.strip() for b in bodies)
 
 
 def test_sync_content_extraction_skip_reason_does_not_block_event(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """When ``extract_workspace_export`` returns ``skip_reason`` (size cap, corrupt),
-    the connector keeps the event with ``body=None``.
+    the connector keeps the event and the mapper substitutes ``body = summary``.
 
     The mapper still emits :class:`SourceObserved` so the projection
     row + metadata are retained (ADR-0025 §決定 (c) fail-safe +
-    ADR-0020 retain-everything).
+    ADR-0020 retain-everything). epic #470 / issue #481 promoted
+    ``body`` to ``min_length=1``, so the mapper falls back to
+    ``summary`` on the extractor-skip path (ADR-0010 §不変条件
+    metadata-only rule).
     """
     _patch_settings(monkeypatch, content_extraction=True)
     _patch_excludes(monkeypatch, tmp_path)
@@ -825,7 +848,10 @@ def test_sync_content_extraction_skip_reason_does_not_block_event(
     result = GoogleWorkspaceConnector().sync(_context(service, cursor="stored-T"))
 
     assert result.observed_count == 1
-    assert [c["body"] for c in service.calls] == [None]
+    # epic #470 / issue #481: skip_reason → mapper falls back to summary.
+    call = service.calls[0]
+    assert call["body"] == call["summary"]
+    assert call["body"] and call["body"].strip()
 
 
 def test_sync_content_extraction_propagates_office_settings(
@@ -960,8 +986,8 @@ def test_sync_existing_metadata_unchanged_when_content_extraction_off(
     """Default-off path: every other observe-call kwarg matches the G3 shape.
 
     Regression guard for upgrading operators — flipping G4 on / off
-    must only toggle ``body`` (and not silently change url / summary
-    / provenance shape).
+    must only change the source of ``body`` (extracted vs. summary
+    fallback) and not silently shift url / summary / provenance.
     """
     _patch_settings(monkeypatch, content_extraction=False)
     _patch_excludes(monkeypatch, tmp_path)
@@ -981,4 +1007,7 @@ def test_sync_existing_metadata_unchanged_when_content_extraction_off(
     assert call["url"] == "https://drive.google.com/file/d/F1/view"
     assert call["provenance_origin"] == "external"
     assert call["provenance_trust"] == "untrusted"
-    assert call["body"] is None
+    # epic #470 / issue #481: default-off path emits body = summary so
+    # the metadata-only contract is satisfied.
+    assert call["body"] == call["summary"]
+    assert call["body"] and call["body"].strip()

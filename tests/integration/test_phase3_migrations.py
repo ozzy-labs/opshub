@@ -99,12 +99,13 @@ def test_phase3_migrations_create_expected_columns(head_engine: Engine) -> None:
         # break ``head`` even before a fresh migration test runs.
         "fingerprint": {"nullable": True},
         # Phase 10 step A1 (migration 0018, ADR-0020): full local body
-        # retention + provenance tagging. All three columns are
-        # nullable so historical Phase 3-9 rows continue to load
-        # without a backfill step; connectors populate them on the
-        # next sync. Pinning them here keeps the Phase 3 column-set
-        # test on the wider Phase 10 sources schema.
-        "body": {"nullable": True},
+        # retention + provenance tagging. epic #470 / issue #481
+        # (migration 0030) promoted ``body`` to ``NOT NULL`` — every
+        # connector substitutes ``summary`` on metadata-only paths so
+        # the row always carries a non-empty body. ``provenance_*``
+        # stay nullable because the operator-authored workspace ingest
+        # path leaves them unset.
+        "body": {"nullable": False},
         "provenance_origin": {"nullable": True},
         "provenance_trust": {"nullable": True},
     }
@@ -164,6 +165,7 @@ def test_sources_unique_constraint_on_connector_and_external_id(
     a duplicate row.
     """
     now = datetime(2026, 5, 17, 12, 0, 0, tzinfo=UTC)
+    # epic #470 / issue #481: ``sources.body`` is NOT NULL.
     row = {
         "connector_name": "github",
         "external_id": "owner/repo#42",
@@ -171,6 +173,7 @@ def test_sources_unique_constraint_on_connector_and_external_id(
         "title": "first observation",
         "url": "https://github.com/owner/repo/issues/42",
         "summary": None,
+        "body": "first observation body",
         "observed_at": now,
         "updated_at": now,
     }
@@ -193,6 +196,7 @@ def test_sources_unique_constraint_on_connector_and_external_id(
                     title="second observation",
                     url=None,
                     summary=None,
+                    body="second observation body",
                     observed_at=now,
                     updated_at=now,
                 )
@@ -211,6 +215,7 @@ def test_sources_unique_constraint_on_connector_and_external_id(
                 title="different item",
                 url=None,
                 summary=None,
+                body="different item body",
                 observed_at=now,
                 updated_at=now,
             )

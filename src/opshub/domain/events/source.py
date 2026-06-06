@@ -107,8 +107,9 @@ class SourceObserved(DomainEvent):
       and lives **outside** the three-element
       :data:`opshub.core.document_extract.GOOGLE_WORKSPACE_MIMETYPE_TO_SOURCE_TYPE`
       lookup table on purpose: the connector short-circuits these rows
-      to metadata-only (``body=None``) without spending an export
-      round-trip (`connector.py::_maybe_extract_body`).
+      to metadata-only (``body = summary``, the operator-facing path
+      label) without spending an export round-trip
+      (`connector.py::_maybe_extract_body`).
     * Phase 14 Google Calendar (G4 #296, ADR-0010 §Phase 14 改訂 (l)):
       ``"google_calendar"`` — stamped by the Calendar API v3 mapper on
       every event (master + override alike; instance expansion of
@@ -178,14 +179,25 @@ class SourceObserved(DomainEvent):
     ``projections rebuild`` reproduces the ``NULL`` write through the
     projector — no data migration is required.
 
-    ``body`` / ``provenance_origin`` / ``provenance_trust`` (Phase 10 step A2, ADR-0020)
-    ------------------------------------------------------------------------------------
+    ``body`` / ``provenance_origin`` / ``provenance_trust``
+    -------------------------------------------------------
+    (Phase 10 step A2, ADR-0020; epic #470 follow-up)
+
     ADR-0020 (Full Local Content Retention) supersedes ADR-0005
-    (External Content Minimization): connectors now retain the full
-    body of an observed item rather than only a ≤200-char summary.
-    ``body`` carries that full text (``None`` for connectors / items
-    with no body, e.g. the ``box_drive`` FS scan which is forbidden
-    from reading file contents — ADR-0019 §不変条件 (b)).
+    (External Content Minimization): connectors retain the full body of
+    an observed item rather than only a ≤200-char summary. ``body``
+    carries that full text and is **required** (``min_length=1``) for
+    every observation — epic #470 / issue #481 lifted the Phase 10 Optional
+    shim and pinned the "every source has a body" invariant on the event
+    schema.
+
+    metadata-only / stat-only connectors (the ``box_drive`` FS scan with
+    ``content_extraction=False``, the Google Workspace
+    ``google_workspace_file`` catch-all, the GitHub notification path,
+    Box-events, MS365 OneDrive metadata, ...) MUST satisfy the invariant
+    by emitting ``body = summary``. ADR-0010 §不変条件 records the rule;
+    ADR-0020 §(d) defers the historical ``body = NULL`` shim to the
+    pre-userbase cleanup that landed alongside this revision.
 
     ``provenance_origin`` (``"external"`` / ``"internal"``) and
     ``provenance_trust`` (``"trusted"`` / ``"untrusted"``) tag where the
@@ -196,11 +208,9 @@ class SourceObserved(DomainEvent):
     body must treat it as reference material, never instructions
     (combined with ADR-0015 §決定 (f) do-not-follow preamble).
 
-    All three are backward-compatible optional field additions
-    (ADR-0002 §4), so ``schema_version`` stays at ``1``. Historic
-    Phase 3-9 events deserialise with ``body = provenance_* = None``
-    and the projector writes them as ``NULL`` — existing source rows
-    behave exactly as before (ADR-0020 §(d) backward-compat).
+    ``provenance_*`` remain optional (``None`` permitted) because the
+    operator-authored workspace ingest path leaves both unset; the
+    SaaS connector family stamps ``external`` / ``untrusted`` uniformly.
     """
 
     event_type: Literal["source.observed"] = "source.observed"  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -212,7 +222,7 @@ class SourceObserved(DomainEvent):
     url: str | None = None
     summary: str | None = Field(default=None, max_length=200)
     fingerprint: str | None = None
-    body: str | None = None
+    body: str = Field(min_length=1)
     provenance_origin: ProvenanceOrigin | None = None
     provenance_trust: ProvenanceTrust | None = None
 

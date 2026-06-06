@@ -135,15 +135,19 @@ def test_map_scanned_file_forwards_fingerprint(tmp_path: Path) -> None:
     assert observed.fingerprint == "99:12345"
 
 
-def test_map_scanned_file_body_none_default_provenance_tagged(tmp_path: Path) -> None:
-    """Default-off path: ``body=None`` + external/untrusted provenance.
+def test_map_scanned_file_body_equals_summary_provenance_tagged(tmp_path: Path) -> None:
+    """epic #470 / issue #481: stat-only paths emit ``body = summary`` for OneDrive too.
 
     Mirrors box_drive — local-FS connectors do not read bodies by
-    default (ADR-0019 §不変条件 (b)), but the observation is still
-    external in origin so provenance tags are stamped (ADR-0020 §(e)).
+    default (ADR-0019 §不変条件 (b)). The metadata-only rule
+    (ADR-0010 §不変条件) substitutes the composed ``"path: <rel_path>"``
+    summary as the body so the :class:`SourceObserved.body`
+    ``min_length=1`` invariant holds without violating the
+    no-``open()`` contract.
     """
     event = map_scanned_file(_scanned(), root_path=tmp_path)
-    assert event.body is None
+    assert event.body == event.summary
+    assert event.body and event.body.strip()
     assert event.provenance_origin == "external"
     assert event.provenance_trust == "untrusted"
 
@@ -173,10 +177,10 @@ def test_map_scanned_file_with_office_source_type_overrides_default(
     assert event.provenance_trust == "untrusted"
 
 
-def test_map_scanned_file_office_extraction_failure_yields_body_none(
+def test_map_scanned_file_office_extraction_failure_falls_back_to_summary(
     tmp_path: Path,
 ) -> None:
-    """ADR-0025 §決定 (c) fail-safe carries over to OneDrive mapper."""
+    """ADR-0025 §決定 (c) fail-safe carries over; epic #470 / #481 falls back to summary."""
     scanned = ScannedFile(
         rel_path="docs/big.xlsx",
         size=999_999_999,
@@ -190,7 +194,8 @@ def test_map_scanned_file_office_extraction_failure_yields_body_none(
 
     event = map_scanned_file(scanned, root_path=tmp_path)
 
-    assert event.body is None
+    assert event.body == event.summary
+    assert event.body and event.body.strip()
     assert event.source_type == "excel_spreadsheet"
     assert event.provenance_origin == "external"
     assert event.provenance_trust == "untrusted"

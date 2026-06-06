@@ -139,12 +139,15 @@ def map_event(raw: RawBoxEvent, *, actor: str = "connector:box") -> SourceObserv
         url=raw.web_url,
         summary=summary,
         # Phase 10 (ADR-0020): Box *events* describe file activity, not
-        # file content — there is no body to retain (mirrors box_drive,
-        # which is forbidden from reading file bodies, ADR-0019). The
-        # event is still external in origin, so it carries the external
-        # + untrusted provenance tags for consistency with the other
-        # SaaS connectors.
-        body=None,
+        # file content — there is no body to fetch (mirrors box_drive,
+        # which is forbidden from reading file bodies, ADR-0019). epic
+        # #470 / issue #481 promoted ``SourceObserved.body`` to
+        # required + non-empty, so the metadata-only path reuses the
+        # ``"path: <item_path>"`` summary as the body (ADR-0010 §不変条件
+        # metadata-only rule). The event is still external in origin,
+        # so it carries the external + untrusted provenance tags for
+        # consistency with the other SaaS connectors.
+        body=summary,
         provenance_origin="external",
         provenance_trust="untrusted",
     )

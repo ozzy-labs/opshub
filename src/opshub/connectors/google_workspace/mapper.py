@@ -5,18 +5,22 @@ see; this module translates each into the canonical
 :class:`opshub.domain.events.source.SourceObserved` shape the event
 store / projections / recall pipeline consume.
 
-Phase 13 G3 scope (metadata only, ``body=None``) → G4 (body + provenance)
--------------------------------------------------------------------------
+Phase 13 G3 scope (metadata only) → G4 (body + provenance)
+----------------------------------------------------------
 
-* G3 (#277) shipped ``body=None`` on every event — the OAuth +
-  metadata + cursor surface only. G4 (#278) wires
+* G3 (#277) shipped the OAuth + metadata + cursor surface only;
+  metadata-only items therefore had no Workspace export body. G4
+  (#278) wires
   :func:`opshub.core.document_extract.extract_workspace_export`
   through the connector and threads the resulting body + truncation
-  flag into :func:`map_drive_item`. The mapper itself stays
-  source-of-truth-agnostic: callers pass the already-extracted body
-  (or ``None`` when ``content_extraction`` is off or the item is not
-  a Workspace native), and the mapper assembles the
-  :class:`SourceObserved` with the right provenance stamps.
+  flag into :func:`map_drive_item`.
+* epic #470 / issue #481 promoted ``SourceObserved.body`` to
+  ``str = Field(min_length=1)``: every observation must carry a
+  non-empty body. Workspace native items with a successful export use
+  the extracted markdown; metadata-only catch-all items
+  (``google_workspace_file``), opt-out paths, and ``files.export``
+  failures reuse the human-readable ``summary`` as the body so the
+  invariant always holds (ADR-0010 §不変条件 metadata-only rule).
 * Provenance tags stay ``provenance_origin="external"`` /
   ``provenance_trust="untrusted"`` — matches the rest of the SaaS
   connector family (MS365 / Box / Teams) and tells the assistant
@@ -221,15 +225,18 @@ def map_drive_item(
       can attribute the most recent change.
     * ``occurred_at`` ← parsed ``raw.modified_time_iso`` (tz-aware
       UTC).
-    * ``body`` ← ``body`` argument when supplied (G4 connector wiring
-      hands in the extracted markdown from
-      :func:`opshub.core.document_extract.extract_workspace_export`);
-      ``None`` otherwise (catch-all source types, items skipped by
-      size cap / fail-safe, or operator opt-out via
-      ``content_extraction = False``). Provenance is always
-      ``external`` / ``untrusted`` — matches ADR-0020 §(e) for SaaS
-      connectors so an agent / LLM treats the body as reference
-      material under the do-not-follow preamble (ADR-0015 §決定 (f)).
+    * ``body`` ← ``body`` argument when supplied + non-empty (G4
+      connector wiring hands in the extracted markdown from
+      :func:`opshub.core.document_extract.extract_workspace_export`).
+      Catch-all source types, items skipped by size cap / fail-safe,
+      and operator opt-out (``content_extraction = False``) reuse the
+      composed ``summary`` as the body so the
+      :class:`SourceObserved.body` ``min_length=1`` invariant
+      (epic #470 / #481, ADR-0010 §不変条件) is satisfied uniformly.
+      Provenance is always ``external`` / ``untrusted`` — matches
+      ADR-0020 §(e) for SaaS connectors so an agent / LLM treats the
+      body as reference material under the do-not-follow preamble
+      (ADR-0015 §決定 (f)).
 
     Parameters
     ----------
@@ -244,13 +251,15 @@ def map_drive_item(
         Extracted markdown body when content extraction succeeded
         for this item. ``None`` when extraction was off (operator
         opt-out, non-native mimeType, or fail-safe skip in
-        :func:`opshub.core.document_extract.extract_workspace_export`).
-        Truncation / skip metadata is intentionally **not** stored on
-        the event — the truncation notice is appended inline by the
-        extractor (``\\n\\n[truncated: original=<N> chars, limit=<M>]``)
-        so the field stays a single nullable string and the existing
-        Phase 11 Office event shape is preserved bit-for-bit
-        (ADR-0025 §決定 (b-2) shared truncation contract).
+        :func:`opshub.core.document_extract.extract_workspace_export`);
+        the mapper substitutes ``summary`` so the projection always
+        stores a non-empty body. Truncation / skip metadata is
+        intentionally **not** stored on the event — the truncation
+        notice is appended inline by the extractor
+        (``\\n\\n[truncated: original=<N> chars, limit=<M>]``) so the
+        field stays a single string and the existing Phase 11 Office
+        event shape is preserved bit-for-bit (ADR-0025 §決定 (b-2)
+        shared truncation contract).
 
     Raises
     ------
@@ -381,11 +390,29 @@ def _build_source_observed(
     SSOT semantics across the Slack / Teams / MS365 / Gmail /
     Calendar / GitHub-notification connectors; PR #355 covered
     ``summary``, this extends the same SSOT helper to ``url``).
+
+    epic #470 / issue #481 promoted
+    :class:`SourceObserved.body` to ``str = Field(min_length=1)``.
+    When the connector's Workspace export path returned ``None``
+    (catch-all source type, content_extraction opt-out, fail-safe
+    skip), the helper falls back to the composed ``summary`` so the
+    invariant holds (ADR-0010 §不変条件 metadata-only rule). The
+    summary itself is always populated by :func:`_build_summary`
+    (owner string / mimeType / status markers) so a non-empty
+    fallback is always available.
     """
     # Lazy import keeps the module-load cost off ``opshub.core.ids``
     # for callers that only need the literals (`source_type_for_mime_type`
     # / `GOOGLE_*_SOURCE_TYPE` constants), mirroring the MS365 mapper.
     from opshub.core.ids import new_ulid
+
+    # epic #470 / issue #481: ``body`` is required + non-empty. Fall
+    # back to ``summary`` for metadata-only / opt-out / fail-safe
+    # paths. ``summary`` is composed from owner + mimeType + status
+    # markers by :func:`_build_summary`, so it is always non-empty for
+    # a live Drive item; defensive whitespace check covers the rare
+    # placeholder rows.
+    resolved_body: str = body if body and body.strip() else summary
 
     return SourceObserved(
         aggregate_id=new_ulid(),
@@ -409,11 +436,12 @@ def _build_source_observed(
         # Phase 13 G4 (#278) hands the body in from
         # :func:`opshub.core.document_extract.extract_workspace_export`
         # via the connector when ``[connectors.google_workspace]
-        # content_extraction = true``. The default-off / catch-all /
-        # fail-safe paths keep ``body=None``; provenance stays the
-        # same (external / untrusted), matching ADR-0020 + the rest
-        # of the SaaS connector family.
-        body=body,
+        # content_extraction = true``. Default-off / catch-all /
+        # fail-safe paths land with ``body=None`` from the caller; the
+        # helper above substitutes ``summary`` so every event carries
+        # a non-empty body. Provenance stays external / untrusted
+        # regardless (ADR-0020 §(e) + ADR-0015 §決定 (f)).
+        body=resolved_body,
         provenance_origin="external",
         provenance_trust="untrusted",
     )

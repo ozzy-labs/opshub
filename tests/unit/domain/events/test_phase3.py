@@ -55,11 +55,14 @@ def test_source_observed_minimal_fields() -> None:
         external_id="owner/repo#42",
         source_type="issue",
         title="something is broken",
+        # epic #470 / issue #481: ``body`` is required + non-empty.
+        body="full issue body",
     )
     assert event.event_type == "source.observed"
     assert event.schema_version == 1
     assert event.url is None
     assert event.summary is None
+    assert event.body == "full issue body"
 
 
 def test_source_observed_full_fields() -> None:
@@ -72,9 +75,34 @@ def test_source_observed_full_fields() -> None:
         title="fix(foo): bar",
         url="https://github.com/owner/repo/pull/42",
         summary="rolls back the regression introduced in #41",
+        body="PR description body",
     )
     assert event.url == "https://github.com/owner/repo/pull/42"
     assert event.summary == "rolls back the regression introduced in #41"
+    assert event.body == "PR description body"
+
+
+def test_source_observed_requires_non_empty_body() -> None:
+    """epic #470 / issue #481 pins ``body`` to ``str = Field(min_length=1)``.
+
+    A missing ``body`` (the Phase 10 backward-compat shim) and an
+    empty / whitespace-only ``body`` both raise
+    :class:`PydanticValidationError` so connectors that forget to
+    substitute ``summary`` for ``body`` on metadata-only paths fail
+    fast at construction time.
+    """
+    base_payload: dict[str, Any] = {
+        "aggregate_id": _agg(),
+        "actor": "connector:github",
+        "connector_name": "github",
+        "external_id": "owner/repo#1",
+        "source_type": "issue",
+        "title": "ok",
+    }
+    with pytest.raises(PydanticValidationError):
+        SourceObserved(**base_payload)
+    with pytest.raises(PydanticValidationError):
+        SourceObserved(**base_payload, body="")
 
 
 @pytest.mark.parametrize(
@@ -105,6 +133,10 @@ def test_source_observed_rejects_out_of_range_strings(field: str, value: str) ->
         "external_id": "owner/repo#1",
         "source_type": "issue",
         "title": "ok",
+        # epic #470 / issue #481: ``body`` is required + non-empty;
+        # supply a placeholder so the test asserts the OTHER field's
+        # validation, not body's.
+        "body": "ok body",
     }
     payload[field] = value
     with pytest.raises(PydanticValidationError):
@@ -120,6 +152,7 @@ def test_source_observed_accepts_max_length_strings() -> None:
         source_type="x" * 50,
         title="x" * 500,
         summary="x" * 200,
+        body="x" * 500,
     )
     assert len(event.connector_name) == 50
     assert len(event.external_id) == 200
@@ -378,6 +411,7 @@ def test_phase3_event_is_frozen() -> None:
         external_id="owner/repo#1",
         source_type="issue",
         title="t",
+        body="body",
     )
     with pytest.raises(PydanticValidationError):
         event.title = "y"
@@ -393,6 +427,7 @@ def test_phase3_event_forbids_extra_fields() -> None:
                 "external_id": "owner/repo#1",
                 "source_type": "issue",
                 "title": "t",
+                "body": "body",
                 "unexpected": "boom",
             }
         )
@@ -410,6 +445,7 @@ def test_phase3_event_rejects_wrong_event_type_literal() -> None:
                 "external_id": "owner/repo#1",
                 "source_type": "issue",
                 "title": "t",
+                "body": "body",
             }
         )
 
@@ -427,6 +463,7 @@ _PHASE3_FACTORIES: list[tuple[str, Any]] = [
             external_id="owner/repo#1",
             source_type="issue",
             title="t",
+            body="b",
         ),
     ),
     (
@@ -527,6 +564,8 @@ def test_all_event_dispatches_to_phase3_event() -> None:
         "external_id": "owner/repo#1",
         "source_type": "issue",
         "title": "from all-event",
+        # epic #470 / issue #481: ``body`` is required + non-empty.
+        "body": "from all-event body",
     }
     event = _AllEventAdapter.validate_python(payload)
     assert isinstance(event, SourceObserved)

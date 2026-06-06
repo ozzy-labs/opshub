@@ -1307,3 +1307,94 @@ persistence layer (`SqlAlchemyEventStore._decode`) always reached for
 - **One ADR.** [ADR-0002 §Decision 5](adr/0002-event-sourced-architecture.md)
   records the `AllEvent`-only consolidation and the rationale for
   removing the per-phase aliases.
+## Pre-userbase compat shim cleanup: `sources.body NOT NULL` (sub-issue #481)
+
+[ADR-0020 §(d')](adr/0020-full-local-content-retention.md) promotes
+`SourceObserved.body` from `str | None = None` to `str =
+Field(min_length=1)` and `sources.body` from `nullable=True` to
+`nullable=False` (migration
+`0030_enforce_sources_body_not_null`). The previous `body=NULL` shim —
+used by stat-only / metadata-only connectors (`box_drive`
+`content_extraction=False`, Google Workspace `google_workspace_file`
+catch-all, MS365 OneDrive metadata, Box web-API events, GitHub
+notifications, ...) — is replaced by **`body = summary`** at the mapper
+layer ([ADR-0010 §不変条件 metadata-only rule](adr/0010-connector-contract.md)).
+The `body` ↔ `summary` semantic distinction (preview vs. full text /
+search target) is preserved: stat-only paths emit identical values for
+both, the body-extracting paths (Office documents, Slack messages,
+Outlook bodies, Calendar descriptions, Gmail bodies) keep them
+distinct.
+
+#### ⚠️ **Required operator action**
+
+Migration `0030` drops every existing `sources` row whose `body IS
+NULL` (or empty) as part of the rebuild. The pre-userbase posture
+tolerates the round-trip: the next connector sync regenerates those
+rows with the new `body = summary` contract. Operators **MUST**:
+
+1. **Drop the existing event store + projections** (`rm -f
+   ~/.opshub/opshub.sqlite*` or whatever path your `[storage] db_path`
+   resolves to). The migration itself only purges projection rows but
+   the cleanest reset is to start fresh — historic `body=None` events
+   would deserialise into `ValidationError` against the new schema
+   anyway.
+2. **Run `opshub init`** to re-mint the DB at head (which now includes
+   migration 0030 — the `sources` table comes up with `body NOT NULL`
+   from the start).
+3. **Reset every connector's cursor** so the next sync re-fetches
+   every source from scratch and the mapper substitution lands the
+   non-empty body. With the DB dropped, cursors are already reset; on
+   a partial cleanup, run:
+
+   ```bash
+   sqlite3 ~/.opshub/opshub.sqlite \
+     "DELETE FROM connector_cursors WHERE connector_name IN \
+        ('github','slack','box','box_drive','ms365','teams','onedrive_drive', \
+         'google_workspace','google_mail','google_calendar')"
+   ```
+
+4. **Re-sync each enabled connector** for full re-population:
+
+   ```bash
+   opshub github sync           # GitHub issues / PRs / notifications
+   opshub slack sync            # Slack messages
+   opshub box sync              # Box web-API events
+   opshub box-drive sync        # Box Drive FS scan (body = path summary)
+   opshub ms365 sync            # Outlook / OneDrive metadata / Calendar
+   opshub teams sync            # Teams chat messages
+   opshub onedrive-drive sync   # OneDrive FS scan (body = path summary)
+   opshub google-workspace sync # Drive (Docs / Slides / Sheets + catch-all)
+   opshub google-mail sync      # Gmail messages
+   opshub google-calendar sync  # Calendar events
+   ```
+
+   Only run the commands for connectors you have configured in
+   `opshub.toml`; the others are no-ops if disabled.
+
+5. **Rebuild embeddings + FTS** so the new body content is indexed:
+
+   ```bash
+   opshub embeddings rebuild --purge   # re-embed against the new body surface
+   opshub projections rebuild          # idempotent; the migration already
+                                       # rebuilt sources, but this also
+                                       # refreshes downstream projections
+   ```
+
+After these steps `SELECT COUNT(*) FROM sources WHERE body IS NULL OR
+length(body) = 0` returns 0 and the embed / search surface uniformly
+reads `sources.body` (no more `COALESCE(body, summary)` fallback).
+
+#### Why this is safe
+
+- **No installed user base.** Opshub is single-user, pre-1.0; there are
+  no third-party deployments to migrate gracefully
+  ([ADR-0011](adr/0011-ozzy-labs-ecosystem-adoption.md)).
+- **Append-only event log.** The legacy `body=None` events are gone
+  from the projection, but the event log is the SSOT — they are
+  preserved (and ignored on rebuild since `SourceObserved.body` now
+  rejects `None`). Operators who want to keep historic events for
+  audit can keep the old DB on disk; the new one is what serves
+  queries.
+- **Idempotent connectors.** Each `<connector> sync` upserts on the
+  natural key `(connector_name, external_id)`, so re-syncing
+  reproduces the same projection state with the new body contract.

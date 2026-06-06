@@ -197,19 +197,23 @@ def test_map_scanned_file_forwards_fingerprint(tmp_path: Path) -> None:
     assert observed.fingerprint == "99:12345"
 
 
-def test_map_scanned_file_body_none_provenance_tagged() -> None:
-    """ADR-0020: box_drive's default body is ``None``.
+def test_map_scanned_file_body_equals_summary_provenance_tagged() -> None:
+    """epic #470 / issue #481: stat-only paths emit ``body = summary``.
+
+    ADR-0020 box_drive's default-off path has no extracted body. The
+    metadata-only rule (ADR-0010 §不変条件) tells the mapper to reuse
+    the composed ``"path: <rel_path>"`` summary as the body so the
+    :class:`SourceObserved.body` ``min_length=1`` invariant holds.
 
     The observation is still external in origin, so the provenance tags
     are stamped (external / untrusted) for downstream consistency with
     the SaaS connectors.
-
-    Phase 11 F4 (ADR-0019 §(b')) keeps this contract for the default-off
-    path: a :class:`ScannedFile` without ``body`` /
-    ``office_source_type`` still maps to ``body=None``.
     """
     event = map_scanned_file(_scanned(), root_path=Path("/mnt/b"))
-    assert event.body is None
+    assert event.body == event.summary, (
+        "stat-only path must reuse summary as body (epic #470 / #481)"
+    )
+    assert event.body and event.body.strip()
     assert event.provenance_origin == "external"
     assert event.provenance_trust == "untrusted"
 
@@ -258,16 +262,18 @@ def test_map_scanned_file_with_office_source_type_overrides_default(
     assert event.provenance_trust == "untrusted"
 
 
-def test_map_scanned_file_office_extraction_failure_yields_body_none(
+def test_map_scanned_file_office_extraction_failure_falls_back_to_summary(
     tmp_path: Path,
 ) -> None:
-    """An Office file whose extraction failed surfaces with ``body=None``.
+    """An Office file whose extraction failed falls back to ``body = summary``.
 
     ADR-0025 §決定 (c) fail-safe: the scanner still yields the file
     with the Office discriminator (extension matched), but ``body``
-    is ``None`` because the extractor failed / skipped. The mapper
-    must thread the ``None`` through verbatim — never substitute the
-    rel_path or any other fallback that would leak as ``body`` text.
+    is ``None`` from the scanner because the extractor failed /
+    skipped. epic #470 / issue #481 (ADR-0010 §不変条件): the mapper
+    substitutes the composed ``"path: <rel_path>"`` summary so the
+    :class:`SourceObserved.body` ``min_length=1`` invariant holds even
+    on the fail-safe path.
     """
     from opshub.connectors.box_drive import ScannedFile
 
@@ -284,7 +290,10 @@ def test_map_scanned_file_office_extraction_failure_yields_body_none(
 
     event = map_scanned_file(scanned, root_path=tmp_path)
 
-    assert event.body is None
+    assert event.body == event.summary, (
+        "fail-safe path must reuse summary as body (epic #470 / #481)"
+    )
+    assert event.body and event.body.strip()
     assert event.source_type == "excel_spreadsheet"
     assert event.provenance_origin == "external"
     assert event.provenance_trust == "untrusted"
@@ -299,7 +308,8 @@ def test_map_scanned_file_office_source_type_none_falls_back_to_default(
     :class:`ScannedFile` records whose ``office_source_type`` is
     ``None``. The mapper must fall back to :data:`SOURCE_TYPE` =
     ``"box_drive_file"`` so the projection key shape stays compatible
-    with Phase 9.
+    with Phase 9. epic #470 / issue #481: the mapper also substitutes
+    ``summary`` for the stat-only body.
     """
     from opshub.connectors.box_drive import ScannedFile
 
@@ -315,4 +325,6 @@ def test_map_scanned_file_office_source_type_none_falls_back_to_default(
     event = map_scanned_file(scanned, root_path=tmp_path)
 
     assert event.source_type == SOURCE_TYPE == "box_drive_file"
-    assert event.body is None
+    assert event.body == event.summary, (
+        "non-Office stat-only path must reuse summary as body (epic #470 / #481)"
+    )

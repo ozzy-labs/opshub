@@ -291,6 +291,8 @@ def test_sync_threads_prior_fingerprints_filtered_by_connector_name(
                     observed_at=now,
                     updated_at=now,
                     fingerprint="42:99",
+                    # epic #470 / issue #481: body NOT NULL.
+                    body="path: existing.txt",
                 )
             )
             # box_drive row with the same external_id must NOT leak.
@@ -306,6 +308,7 @@ def test_sync_threads_prior_fingerprints_filtered_by_connector_name(
                     observed_at=now,
                     updated_at=now,
                     fingerprint="should-not-leak",
+                    body="path: existing.txt",
                 )
             )
             # onedrive_drive row with NULL fingerprint must be skipped.
@@ -321,6 +324,7 @@ def test_sync_threads_prior_fingerprints_filtered_by_connector_name(
                     observed_at=now,
                     updated_at=now,
                     fingerprint=None,
+                    body="path: legacy.txt",
                 )
             )
 
@@ -468,7 +472,9 @@ def test_sync_office_observe_call_carries_body_and_source_type(
     assert office_call["provenance_trust"] == "untrusted"
 
     assert plain_call["source_type"] == "onedrive_drive_file"
-    assert plain_call["body"] is None
+    # epic #470 / issue #481: stat-only plain file emits body = summary.
+    assert plain_call["body"] == plain_call["summary"]
+    assert plain_call["body"] and plain_call["body"].strip()
     assert plain_call["connector_name"] == "onedrive_drive"
     assert plain_call["provenance_origin"] == "external"
     assert plain_call["provenance_trust"] == "untrusted"

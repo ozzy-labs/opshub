@@ -362,12 +362,21 @@ def _build_source_observed(
     ``summary``, this extends the same SSOT helper to ``url``).
     Mirrors the helper shape in the Outlook + Google Workspace
     mappers so future audit passes can diff the three side by side.
+
+    epic #470 / issue #481 promoted
+    :class:`SourceObserved.body` to required + non-empty. Gmail
+    messages with no text/plain + text/html body and no labels
+    (``map_gmail_message`` passes ``body=None``) fall back to the
+    composed ``"from: ..., subject: ..."`` summary so the invariant
+    holds (ADR-0010 §不変条件 metadata-only rule).
     """
     # Lazy import keeps the module-load cost off ``opshub.core.ids``
     # for callers that only need the literals (`map_gmail_message` /
     # `GMAIL_SOURCE_TYPE`), mirroring the MS365 + Google Workspace
     # mappers.
     from opshub.core.ids import new_ulid
+
+    resolved_body: str = body if body and body.strip() else summary
 
     return SourceObserved(
         aggregate_id=new_ulid(),
@@ -389,7 +398,7 @@ def _build_source_observed(
         # preview (matches the Slack / Teams / MS365 / Calendar /
         # Workspace / GitHub-notification mappers).
         summary=normalise_optional_text(summary),
-        body=body,
+        body=resolved_body,
         # External SaaS body — same provenance shape as the Outlook /
         # Google Workspace / Teams / Box mappers. Treated as untrusted
         # reference material by the assistant skills' do-not-follow

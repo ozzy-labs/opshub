@@ -1183,6 +1183,8 @@ def test_all_event_still_dispatches_to_phase3_event() -> None:
         "external_id": "owner/repo#1",
         "source_type": "issue",
         "title": "from all-event",
+        # epic #470 / issue #481: ``body`` is required + non-empty.
+        "body": "from all-event body",
     }
     event = _AllEventAdapter.validate_python(payload)
     assert isinstance(event, SourceObserved)
