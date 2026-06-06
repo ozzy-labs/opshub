@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-06-02
 - Deciders: opshub maintainers
+- Related: [ADR-0036](0036-slack-sync-date-floor.md) — sync の date floor で親メッセージが `oldest` 以前に落ちると、その thread reply (`conversations.replies`) も取得対象外になる (floor と整合)
 
 ## Context
 

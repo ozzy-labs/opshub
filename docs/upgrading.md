@@ -892,3 +892,67 @@ Rejection message: `Error: --all is incompatible with engagement-axis sort (--so
 - **BREAKING CHANGE in Conventional Commits.** The implementation PR uses the `feat(slack)!:` prefix so `release-please` cuts a CHANGELOG `BREAKING CHANGE:` entry. Pre-1.0 SemVer keeps the version bump in the minor lane (`0.3.x → 0.4.0`).
 - **One new ADR (ADR-0035) + one partial supersede (ADR-0034 §(b) §(g) §(h) §(i) §不変条件 2 — CLI surface only).** The decision body of ADR-0034 (engagement axis source, Bot Token rejection, no silent fallback, field disjointness, `--all` × engagement-axis non-coexistence, indexing-lag notice) carries forward unchanged; only the CLI flag spelling is rewritten.
 - Full rationale and rejected alternatives: [ADR-0035](adr/0035-slack-sort-axis-consolidation.md). Phase 19-D-1 delivered the ADR + supersede notice ([#451](https://github.com/ozzy-labs/opshub/pull/451)); Phase 19-D-2 delivers the implementation + tests + this docs section ([#450](https://github.com/ozzy-labs/opshub/issues/450)).
+
+## Phase 20: `opshub slack sync` date floor (`sync_since` + per-channel `since`)
+
+Phase 20 ([ADR-0036](adr/0036-slack-sync-date-floor.md)) adds an opt-in **date
+floor** to `opshub slack sync` so the cold-start / newly-added-channel backfill
+can be capped instead of walking the whole channel history. This is an
+**additive, non-breaking** change — existing configs keep working untouched.
+
+### Opt-in: cap the backfill
+
+In `~/.config/opshub/config.toml`:
+
+```toml
+[connectors.slack]
+enabled = true
+sync_since = "90d"          # global floor: don't fetch messages older than 90 days
+                            # (relative "90d"/"4w" evaluated at sync time, or ISO "2026-01-01")
+
+# Bare-string channel ids still work (unchanged):
+# channels = ["C_GENERAL", "C_RANDOM"]
+
+# ...or use the table form for per-channel overrides:
+[[connectors.slack.channels]]
+id = "C_GENERAL"            # inherits the global sync_since (90d)
+
+[[connectors.slack.channels]]
+id = "C_INCIDENTS"
+since = "all"               # opt this channel back into full-history backfill
+
+[[connectors.slack.channels]]
+id = "C_ARCHIVE"
+since = "2026-01-01"        # channel-specific floor (overrides the global default)
+```
+
+The env override accepts either shape: `OPSHUB_CONNECTORS__SLACK__CHANNELS='["C1"]'`
+(legacy string array) or `'[{"id":"C1","since":"30d"}]'` (table form as JSON).
+
+### Behavioural notes
+
+- **Default is unchanged.** With no `sync_since` and no per-channel `since`, the
+  connector backfills the full channel history exactly as before.
+- **The floor only moves the resume bound forward.** The per-channel cursor is
+  authoritative (`oldest = max(cursor, floor)`), so enabling `sync_since` on an
+  already-synced workspace **never re-fetches or deletes** history.
+- **Lowering the floor does not retroactively backfill.** Because the cursor
+  wins, dropping `sync_since` from `90d` to `365d` (or to an earlier ISO date)
+  will *not* pull the older history back in. To re-fetch older messages, reset
+  the Slack cursor (`opshub projections rebuild`) so the next sync starts from
+  the new floor.
+- **Relative floors advance over time.** `"90d"` is evaluated at each sync run;
+  use an ISO date (`"2026-01-01"`) if you need an absolute lower bound.
+- **`opshub slack conversations --format=toml`** still emits the
+  `channels = ["C..."]` snippet, which remains valid to paste under
+  `[connectors.slack]`.
+
+### Phase 20 specifics
+
+- **No DB migration.** Phase 20 is config / connector / docs surface only.
+- **No new extras.** The change reuses `[connectors-slack]` (slack-sdk).
+- **No breaking change.** `channels` accepts both the historical string array and
+  the new table form, so the Conventional Commit lands as `feat(slack):` (no `!`)
+  and `release-please` bumps the minor lane.
+- **One new ADR ([ADR-0036](adr/0036-slack-sync-date-floor.md)).** Full rationale,
+  cursor-authoritative semantics, and rejected alternatives live there.

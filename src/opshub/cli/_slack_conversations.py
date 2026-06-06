@@ -56,9 +56,8 @@ sanitised by the upstream iterator + auth resolver.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
 import typer
@@ -69,7 +68,8 @@ from opshub.connectors.slack.conversations import (
     ConversationType,
     SortKey,
 )
-from opshub.core.time import now_utc
+from opshub.core.errors import ValidationError
+from opshub.core.time import parse_since as _parse_since_core
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -154,74 +154,25 @@ _TYPE_BUCKET_ORDER: tuple[ConversationType, ...] = ("public", "private", "mpim",
 #: 10 chars; we pad to 13 so the column header and values align).
 _LAST_ACTIVITY_WIDTH = 13
 
-#: ``--since`` relative-form pattern. Accepts ``<N>d`` (days) and
-#: ``<N>w`` (weeks). Months / years are intentionally unsupported —
-#: their calendar semantics are ambiguous for an "is this channel
-#: still active" filter and ``90d`` / ``365d`` cover the practical
-#: range without extra surface to test.
-_SINCE_RELATIVE_RE = re.compile(r"^\s*(\d+)\s*([dw])\s*$")
-
 
 def parse_since(raw: str) -> datetime:
-    """Parse a ``--since`` value into a tz-aware UTC :class:`datetime.datetime`.
+    """Typer-facing wrapper over :func:`opshub.core.time.parse_since`.
 
-    Accepts two forms (see :data:`_SINCE_RELATIVE_RE` for the relative
-    grammar):
-
-    * Relative: ``"7d"`` / ``"2w"`` → ``now_utc() - timedelta(...)``.
-      ``"0d"`` is permitted and resolves to "now" (a degenerate but
-      harmless filter the operator can construct via ``--since 0d``
-      for a sanity check).
-    * Absolute: any ISO 8601 string :func:`datetime.fromisoformat`
-      accepts, plus the convenience that a trailing ``Z`` (UTC zulu)
-      is rewritten to ``+00:00`` so ``"2026-05-01T00:00:00Z"`` parses
-      cleanly. tz-naive inputs are interpreted as UTC.
-
-    Raises :class:`typer.BadParameter` for empty input, unknown forms,
-    and malformed numerics — Typer surfaces the message verbatim with
-    exit code 2 so operators can self-correct without re-reading
-    ``--help``.
+    The grammar (relative ``7d`` / ``2w`` + ISO absolute, trailing ``Z``
+    accepted, tz-naive defaulted to UTC) and message text live in
+    :func:`opshub.core.time.parse_since` so the connector config floor
+    (``[connectors.slack] sync_since`` / per-channel ``since``) can reuse
+    the identical parser without importing the CLI layer (Phase 20,
+    #459 / ADR-0036). This wrapper only translates the core
+    :class:`~opshub.core.errors.ValidationError` into a
+    :class:`typer.BadParameter` so Typer surfaces the message verbatim
+    with exit code 2 — preserving the pre-Phase-20 ``--since`` callback
+    contract byte-for-byte (``field`` defaults to ``"--since"``).
     """
-    if not raw or not raw.strip():
-        raise typer.BadParameter("--since must not be empty")
-
-    text = raw.strip()
-    relative = _SINCE_RELATIVE_RE.match(text)
-    if relative is not None:
-        amount = int(relative.group(1))
-        unit = relative.group(2)
-        # ``\d+`` is unbounded, so a typo like ``--since 99999999999d``
-        # would propagate to :class:`timedelta` and raise
-        # :class:`OverflowError` (escaping the documented
-        # :class:`typer.BadParameter` contract that surfaces with
-        # exit code 2). Translate the overflow into the documented
-        # usage-error vocabulary so the operator sees one consistent
-        # ``--help``-able message.
-        try:
-            delta = timedelta(days=amount) if unit == "d" else timedelta(weeks=amount)
-        except OverflowError as exc:
-            raise typer.BadParameter(
-                f"--since {raw!r} is too far in the past; use an ISO date "
-                "(e.g. '2026-05-01') for cutoffs beyond a few centuries."
-            ) from exc
-        return now_utc() - delta
-
-    iso_text = text.replace("Z", "+00:00") if text.endswith("Z") else text
     try:
-        parsed = datetime.fromisoformat(iso_text)
-    except ValueError as exc:
-        raise typer.BadParameter(
-            f"--since {raw!r} is not a recognised value: expected a relative "
-            "duration like '7d' / '2w' or an ISO date like '2026-05-01'."
-        ) from exc
-
-    if parsed.tzinfo is None:
-        # Naive inputs default to UTC so the operator can write
-        # ``--since 2026-05-01`` without manually annotating timezone.
-        # ADR-0027 keeps internal tz handling on UTC; matching that
-        # default here means cross-tz operators see no surprise drift.
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+        return _parse_since_core(raw)
+    except ValidationError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 def parse_types(raw: str) -> tuple[ConversationType, ...]:
