@@ -721,3 +721,155 @@ def test_polling_phase_treats_null_last_reply_as_in_window(
             "oldest_reply_ts": None,
         }
     ]
+
+
+# -------------------------------------------------- "all" sentinel (Phase 20-E)
+#
+# Phase 20-E ([#478](https://github.com/ozzy-labs/opshub/issues/478)) added
+# the ``thread_activity_window = "all"`` sentinel (case-insensitive) that
+# coerces to ``None`` so the late-reply polling prune is disabled wholesale.
+# ``docs/troubleshooting.md`` §3.12 and ``docs/upgrading.md`` §Phase 20 both
+# promised this spelling ahead of the validator catching up; pre-Phase-20-E
+# operators who set ``thread_activity_window = "all"`` per the doc were met
+# with a startup-time ``ConfigError`` from the regex-based validator. These
+# tests pin the recovery: the sentinel is accepted at every layer (config /
+# CLI / connector pruning helper), prune is fully disabled, and every cold
+# thread cursor is preserved across syncs.
+
+
+@pytest.mark.parametrize("spelling", ["all", "All", "ALL", " all ", "aLl"])
+def test_thread_activity_window_all_sentinel_coerces_to_none(
+    spelling: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``thread_activity_window = "all"`` (any case-variant) coerces to ``None``.
+
+    Pin the env-var path (the documented operator surface) end-to-end:
+    pydantic settings → validator → resolved
+    :class:`SlackConnectorSettings.thread_activity_window`. ``None`` is
+    the connector-side sentinel for "disable prune"; the
+    :func:`_prune_inactive_threads` / :func:`_window_cutoff_ts` helpers
+    short-circuit on it.
+    """
+    monkeypatch.setenv(
+        "OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW",
+        spelling,
+    )
+    settings = OpsHubSettings()
+    assert settings.connectors.slack.thread_activity_window is None
+
+
+def test_prune_inactive_threads_skips_everything_when_window_disabled() -> None:
+    """``_prune_inactive_threads`` with ``cutoff_ts=None`` keeps every entry.
+
+    The ``thread_activity_window = "all"`` path coerces the cutoff to
+    ``None`` (via :func:`_window_cutoff_ts`); the prune helper must
+    treat that as a no-op so even cold threads (last reply > 1 year ago
+    relative to the default 30d window) stay in the cursor.
+    """
+    from opshub.connectors.slack.connector import (
+        _prune_inactive_threads,  # pyright: ignore[reportPrivateUsage]
+        _window_cutoff_ts,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    ancient_ts = since_to_ts(now_utc() - timedelta(days=365))
+    recent_ts = since_to_ts(now_utc() - timedelta(days=1))
+    cursors: dict[str, str | None] = {
+        "C1:thread-ancient": ancient_ts,
+        "C1:thread-recent": recent_ts,
+        "C1:thread-null": None,
+    }
+    expected = dict(cursors)
+
+    _prune_inactive_threads(cursors, _window_cutoff_ts(None))
+
+    # Every entry — even the 1-year-old cold thread — is preserved.
+    assert cursors == expected
+
+
+def test_polling_phase_preserves_all_threads_when_window_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With ``thread_activity_window = None`` (the ``"all"`` sentinel), prune is skipped.
+
+    A cold thread (last reply 60 days ago, well outside the default
+    30d window) would normally be skipped on the polling phase and
+    pruned from the cursor. The ``None`` window (``"all"`` sentinel)
+    flips that: the polling phase still fires for every thread, and
+    no entry is dropped from the cursor.
+    """
+    # ``_patch_settings`` conflates ``thread_activity_window=None`` with
+    # "use the default" via its ternary; we want the literal ``None``
+    # (the connector-side spelling of the ``"all"`` sentinel), so we
+    # call the helper first then override the attribute directly.
+    _patch_settings(monkeypatch, channels=["C1"])
+    from opshub.core.config import OpsHubSettings
+
+    OpsHubSettings().connectors.slack.thread_activity_window = None
+    _patch_auth(monkeypatch)
+
+    cold_ts = since_to_ts(now_utc() - timedelta(days=60))
+    cold_key = "C1:1700000010.000100"
+    prior_cursor = _dump_cursors(
+        {
+            "channels": {"C1": "1700000010.000100"},
+            "threads": {cold_key: cold_ts},
+        }
+    )
+
+    _, polling_calls = _patch_fetcher_with_thread_replies(
+        monkeypatch,
+        history_yields=[],
+        thread_replies={},
+    )
+
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=prior_cursor))
+
+    # Polling fires for the cold thread (window disabled).
+    assert polling_calls == [
+        {
+            "channel_id": "C1",
+            "thread_ts": "1700000010.000100",
+            "oldest_reply_ts": cold_ts,
+        }
+    ]
+    # Cursor entry is preserved (no prune).
+    parsed = _load_cursors(result.new_cursor)
+    assert parsed["threads"] == {cold_key: cold_ts}
+
+
+def test_cli_flag_accepts_all_sentinel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``opshub slack sync --thread-activity-window all`` propagates verbatim.
+
+    The CLI forwards the raw string to
+    ``OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW``; the validator
+    then coerces ``"all"`` to ``None``. The flag itself only owns the
+    typer surface — pin that the documented spelling reaches the env
+    var unchanged (operator typo / case-folding only matters once
+    pydantic picks it up).
+    """
+    import os
+
+    from typer.testing import CliRunner
+
+    from opshub.cli.app import app
+
+    captured: dict[str, str | None] = {}
+
+    def _fake_run(name: str) -> None:
+        del name
+        captured["env_value"] = os.environ.get("OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW")
+
+    monkeypatch.setattr("opshub.cli.slack.run_connector_sync", _fake_run, raising=False)
+    monkeypatch.setattr("opshub.cli._connector_common.run_connector_sync", _fake_run)
+
+    runner = CliRunner()
+    try:
+        result = runner.invoke(app, ["slack", "sync", "--thread-activity-window=all"])
+        assert result.exit_code == 0, result.stdout
+        assert captured["env_value"] == "all"
+    finally:
+        os.environ.pop("OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW", None)

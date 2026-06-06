@@ -389,6 +389,32 @@ def test_load_cursors_rejects_legacy_message_mentions_pre_phase_20b() -> None:
         _load_cursors(legacy)
 
 
+def test_load_cursors_legacy_message_matches_canonical_doc_text() -> None:
+    """Reject text matches the canonical doc string (Phase 20-E audit).
+
+    ``docs/troubleshooting.md`` §3.12 and ``docs/upgrading.md`` §Phase 20
+    each render the error string verbatim as the "typical error" the
+    operator will grep against. Phase 20-E
+    ([#478](https://github.com/ozzy-labs/opshub/issues/478)) aligned the
+    implementation to the documented spelling — both files are the SSOT
+    for the message ("doc is canonical"); this test pins both the
+    individual fragments and the underlying operator surface
+    (``opshub projections rebuild``) so a future paraphrase has to
+    update the docs first.
+    """
+    legacy = '{"C1":"ts-1"}'
+    with pytest.raises(ConfigError) as excinfo:
+        _load_cursors(legacy)
+    message = str(excinfo.value)
+    # Fragments lifted directly from the doc surface.
+    assert "Slack cursor envelope is pre-Phase-20-B (flat dict)." in message
+    assert "`opshub projections rebuild`" in message
+    assert '{"channels": ..., "threads": ...} compound schema' in message
+    assert "opshub is pre-userbase and ships no silent migration" in message
+    # ADR cross-reference so operators can grep ADR-0030 from the error.
+    assert "ADR-0030" in message
+
+
 def test_load_cursors_rejects_missing_channels_axis() -> None:
     """Compound schema requires the ``channels`` axis — drop → ConfigError."""
     with pytest.raises(ConfigError, match="opshub projections rebuild"):

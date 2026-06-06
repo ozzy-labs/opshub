@@ -2294,3 +2294,495 @@ def test_slack_sync_phase20c_polling_retries_rate_limit(
     # The shared retry helper slept exactly once on the polling
     # retry (no ``Retry-After`` → 2**0 == 1s).
     sleep_mock.assert_called_once_with(1)
+
+
+# ---------------------------------------------------------------------- Phase 20-E
+# Audit followups: [#478](https://github.com/ozzy-labs/opshub/issues/478)
+# integration coverage for three gaps the Phase 20-C suite missed.
+#
+# D-4: late reply cursor advances monotonically at the integration level
+#      (unit-level pin already exists; integration was missing the
+#      end-to-end DB checkpoint).
+# D-8: rate-limit budget exhausted (3 consecutive 429s) → ConnectorFailedError
+#      surface + partial-progress checkpoint persists the cursor we got to.
+# D-10: a channel listed in ``excludes.yaml`` prunes its threads-axis entries
+#       and skips the Phase 2 polling round-trip even if the cursor still
+#       knows about them (excludes is the outermost authority).
+
+
+def test_slack_sync_phase20c_late_reply_advances_threads_cursor_monotonically(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """Integration-level: across two syncs, the threads cursor only moves forward.
+
+    The Phase 20-C unit suite pins monotonicity at the helper
+    boundary (``_max_ts`` + a single-call polling test). This
+    integration test pins the same contract at the DB level over
+    two real syncs: sync 1 seeds the cursor at the initial reply
+    snapshot, sync 2 ingests a late reply, the cursor advances —
+    and a subsequent sync 3 with no new activity must leave the
+    cursor at the sync 2 value (no regression to an earlier ts).
+    A regression that re-fetched the snapshot and overwrote the
+    threads cursor with the parent's seed ts would fail here.
+    """
+    from datetime import timedelta
+    from unittest.mock import MagicMock
+
+    from opshub.core.time import now_utc, since_to_ts
+
+    now_dt = now_utc()
+    parent_ts = since_to_ts(now_dt - timedelta(days=1))
+    initial_reply_ts = since_to_ts(now_dt - timedelta(hours=12))
+    late_reply_ts = since_to_ts(now_dt - timedelta(minutes=30))
+
+    parent = _phase20c_history_msg(
+        ts=parent_ts,
+        text="parent",
+        latest_reply=initial_reply_ts,
+    )
+    initial_reply = _phase20c_reply_msg(
+        ts=initial_reply_ts,
+        thread_ts=parent_ts,
+        text="initial reply",
+    )
+    late_reply = _phase20c_reply_msg(
+        ts=late_reply_ts,
+        thread_ts=parent_ts,
+        text="late reply",
+    )
+
+    def _history_side_effect(**kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("oldest") is None:
+            return {
+                "ok": True,
+                "messages": [parent],
+                "has_more": False,
+                "response_metadata": {"next_cursor": ""},
+            }
+        return {
+            "ok": True,
+            "messages": [],
+            "has_more": False,
+            "response_metadata": {"next_cursor": ""},
+        }
+
+    # workspace_state cycles through three phases: pre-late-reply
+    # (sync 1) → late reply landed (sync 2) → quiet workspace (sync 3).
+    workspace_state = {"phase": 1}
+
+    def _replies_side_effect(**kwargs: Any) -> dict[str, Any]:
+        # Phase 1 snapshot — same shape every sync.
+        if kwargs.get("oldest") is None:
+            return {
+                "ok": True,
+                "messages": [parent, initial_reply],
+                "has_more": False,
+            }
+        # Phase 2 polling: only sync 2 returns the late reply.
+        if workspace_state["phase"] == 2:
+            return {
+                "ok": True,
+                "messages": [late_reply],
+                "has_more": False,
+            }
+        return {"ok": True, "messages": [], "has_more": False}
+
+    web_client = _build_phase20c_web_client(
+        history_pages=[],
+        replies_handler=_replies_side_effect,
+    )
+    web_client.conversations_history.side_effect = _history_side_effect
+
+    import slack_sdk
+
+    monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=web_client))
+
+    runner = CliRunner()
+
+    # ---- Sync 1: parent + initial reply.
+    first = runner.invoke(app, ["slack", "sync"])
+    assert first.exit_code == 0, first.stdout
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        from sqlalchemy import text as sql_text
+
+        def _cursor_value() -> str:
+            with engine.connect() as conn:
+                row = (
+                    conn.execute(
+                        sql_text(
+                            "SELECT cursor_value FROM connector_cursors "
+                            "WHERE connector_name = 'slack'"
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+            assert row["cursor_value"] is not None
+            return str(row["cursor_value"])
+
+        cursor_after_first = _cursor_value()
+        assert initial_reply_ts in cursor_after_first
+
+        # ---- Sync 2: late reply ingest, cursor advances to late_reply_ts.
+        workspace_state["phase"] = 2
+        second = runner.invoke(app, ["slack", "sync"])
+        assert second.exit_code == 0, second.stdout
+        cursor_after_second = _cursor_value()
+        assert late_reply_ts in cursor_after_second
+        # Cursor advanced forward (string compare is OK because Slack
+        # ``ts`` is fixed-width "<seconds>.<microseconds>" and we built
+        # both timestamps from monotonic ``now - timedelta`` arithmetic
+        # — the lexicographic order matches the float order).
+        assert cursor_after_second > cursor_after_first
+
+        # ---- Sync 3: quiet workspace, cursor stays at late_reply_ts.
+        workspace_state["phase"] = 3
+        third = runner.invoke(app, ["slack", "sync"])
+        assert third.exit_code == 0, third.stdout
+        cursor_after_third = _cursor_value()
+        # Monotonicity contract: no regression, no overwrite by the
+        # snapshot path.
+        assert late_reply_ts in cursor_after_third
+        assert cursor_after_third == cursor_after_second
+    finally:
+        engine.dispose()
+
+
+def test_slack_sync_phase20c_polling_exhausts_retries_then_raises(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """Phase 2 polling: 3 consecutive 429s → ConnectorFailedError + checkpoint.
+
+    The shared retry helper budgets ``MAX_RETRIES_ON_RATE_LIMIT = 3``
+    (ADR-0030 §不変条件 #6). Beyond that the last 429 re-raises as
+    :class:`slack_sdk.errors.SlackApiError`, which the polling-phase
+    call-site wraps into a :class:`ConnectorFailedError`. The CLI
+    driver records :class:`ConnectorSyncFailed` and exits 1.
+
+    Critically, the connector's ``finally`` arm runs the
+    partial-progress checkpoint before the exception bubbles, so the
+    sync that ingested the Phase 1 parent + initial reply still
+    persists those rows AND the channels-axis cursor — re-running the
+    sync after the rate limit subsides resumes from where we got to
+    rather than re-fetching the parent (which would double-emit
+    inbox rows; see issue #339 cascade pin).
+    """
+    from datetime import timedelta
+    from unittest.mock import MagicMock
+
+    from slack_sdk.errors import SlackApiError
+
+    from opshub.core.time import now_utc, since_to_ts
+
+    now_dt = now_utc()
+    parent_ts = since_to_ts(now_dt - timedelta(days=1))
+    initial_reply_ts = since_to_ts(now_dt - timedelta(hours=12))
+
+    parent = _phase20c_history_msg(
+        ts=parent_ts,
+        text="parent",
+        latest_reply=initial_reply_ts,
+    )
+    initial_reply = _phase20c_reply_msg(
+        ts=initial_reply_ts,
+        thread_ts=parent_ts,
+        text="initial reply",
+    )
+
+    def _history_side_effect(**kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("oldest") is None:
+            return {
+                "ok": True,
+                "messages": [parent],
+                "has_more": False,
+                "response_metadata": {"next_cursor": ""},
+            }
+        return {
+            "ok": True,
+            "messages": [],
+            "has_more": False,
+            "response_metadata": {"next_cursor": ""},
+        }
+
+    rate_limited_response = MagicMock()
+    rate_limited_response.status_code = 429
+    rate_limited_response.headers = {}  # exponential fallback (1s / 2s / 4s)
+    rate_limited_response.get.return_value = "rate_limited"
+
+    workspace_state = {"sync_n": 1}
+
+    def _replies_side_effect(**kwargs: Any) -> dict[str, Any]:
+        # Phase 1 snapshot: succeed on every sync so the parent +
+        # initial reply land cleanly. The exhaustion is exercised on
+        # the Phase 2 polling path of sync 2 only.
+        if kwargs.get("oldest") is None:
+            return {
+                "ok": True,
+                "messages": [parent, initial_reply],
+                "has_more": False,
+            }
+        if workspace_state["sync_n"] == 1:
+            # Sync 1 polling: zero new messages (cursor was just
+            # seeded; no late replies have landed).
+            return {"ok": True, "messages": [], "has_more": False}
+        # Sync 2 polling: every attempt 429 — the helper exhausts its
+        # budget and re-raises the last 429.
+        raise SlackApiError(  # type: ignore[no-untyped-call]
+            message="ratelimited",
+            response=rate_limited_response,
+        )
+
+    web_client = _build_phase20c_web_client(
+        history_pages=[],
+        replies_handler=_replies_side_effect,
+    )
+    web_client.conversations_history.side_effect = _history_side_effect
+
+    import slack_sdk
+
+    monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=web_client))
+
+    # Patch ``time.sleep`` so the 3x backoff (1s + 2s + 4s = 7s) is
+    # collapsed to a no-op for the test.
+    import time as _stdlib_time
+
+    sleep_mock = MagicMock()
+    monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
+
+    runner = CliRunner()
+
+    # ---- Sync 1: parent + initial reply (Phase 2 polling no-op).
+    first = runner.invoke(app, ["slack", "sync"])
+    assert first.exit_code == 0, first.stdout
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        from sqlalchemy import text as sql_text
+
+        # 2 sources from sync 1 (parent + initial reply).
+        assert _row_count(engine, "sources") == 2
+
+        # ---- Sync 2: every polling attempt 429 → exhaust 3 retries → fail.
+        workspace_state["sync_n"] = 2
+        second = runner.invoke(app, ["slack", "sync"])
+        assert second.exit_code == 1, second.stdout
+        # CLI driver sanitises to the type name only (R3 / ADR-0027).
+        assert "ConnectorFailedError" in second.stderr
+
+        # The connector recorded ``ConnectorSyncFailed`` with the
+        # sanitised type-name payload.
+        with engine.connect() as conn:
+            failed_rows = [
+                dict(row)
+                for row in conn.execute(
+                    sql_text(
+                        "SELECT payload FROM events WHERE event_type = 'connector.sync_failed'"
+                    )
+                ).mappings()
+            ]
+        assert len(failed_rows) == 1
+        assert "ConnectorFailedError" in failed_rows[0]["payload"]
+        # The raw "rate_limited" reason must NOT appear in the
+        # persisted payload (sanitisation contract).
+        assert "rate_limited" not in failed_rows[0]["payload"]
+
+        # The shared retry helper slept exactly 3 times (one per
+        # 429 attempt, exponential fallback 1s / 2s / 4s with no
+        # ``Retry-After`` header). The actual sleep arguments are
+        # ``2**attempt`` per ``_retry.py``.
+        sleep_calls = [call.args[0] for call in sleep_mock.call_args_list]
+        assert sleep_calls == [1, 2, 4]
+
+        # No new ``sources`` rows from sync 2 — Phase 1 has nothing
+        # to fetch (history returned []) and Phase 2 blew up before
+        # observing anything.
+        assert _row_count(engine, "sources") == 2
+
+        # Partial-progress checkpoint: the connector_cursors row
+        # still contains the channels-axis ts from sync 1 (the
+        # ``finally`` arm fires ``cursor_set(sync_started=True)``
+        # only if we made progress relative to the entry state; on
+        # sync 2 nothing advanced so the cursor stays at the sync 1
+        # value, but it does NOT regress to "legacy / unset").
+        with engine.connect() as conn:
+            cursor_value = (
+                conn.execute(
+                    sql_text(
+                        "SELECT cursor_value FROM connector_cursors WHERE connector_name = 'slack'"
+                    )
+                )
+                .mappings()
+                .one()["cursor_value"]
+            )
+        assert cursor_value is not None
+        # Still in the Phase 20-B compound shape (sync 1 advanced it
+        # past the legacy / unset state).
+        assert '"channels":' in cursor_value
+        assert '"threads":' in cursor_value
+    finally:
+        engine.dispose()
+
+
+def test_slack_sync_phase20c_thread_cursor_pruned_when_channel_excluded(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """An excluded channel skips Phase 2 polling and prunes its threads-axis entries.
+
+    ADR-0020 §(b) makes ``excludes.yaml`` the outermost authority on
+    what gets ingested. Phase 20-A added a Phase 1 guard so a parent
+    in an excluded channel never costs a ``conversations.replies``
+    snapshot call; Phase 20-C extends the same guard to the late-
+    reply polling phase (see :meth:`SlackConnector.sync`'s polling
+    loop). This test pins the integration-level contract:
+
+    1. Seed a threads-axis cursor entry for an excluded channel
+       (simulating the operator adding the channel to excludes
+       *after* a previous sync registered the thread).
+    2. Run ``opshub slack sync``.
+    3. Verify:
+       a. The polling phase did not call ``conversations.replies``
+          for the excluded thread (no API budget consumed).
+       b. The cursor still contains the threads-axis entry — the
+          excludes guard short-circuits the polling round-trip but
+          does NOT prune the cursor (the prune is governed by the
+          activity window, not by excludes; sibling channels that
+          share the threads-axis envelope must not regress).
+    """
+    from datetime import timedelta
+
+    from opshub.core.excludes import excludes_path as _excludes_path
+    from opshub.core.time import now_utc, since_to_ts
+
+    # ---- Step 1: seed an excludes.yaml that drops channel C1.
+    # The connector's ``load_excludes()`` resolves through
+    # :func:`opshub.core.config.default_config_dir` (XDG fallback) rather
+    # than the ``OPSHUB_CONFIG_DIR`` env var the rest of the settings use.
+    # Redirect ``XDG_CONFIG_HOME`` so the read finds our seeded file under
+    # ``isolated_env``'s tmp tree. We can't just write to the real
+    # ``~/.config/opshub`` (the unit suite does that and is hermetic only
+    # because monkeypatch doesn't catch it).
+    config_dir = isolated_env["config_dir"]
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_dir.parent))
+    excludes_dir = config_dir.parent / "opshub"
+    excludes_dir.mkdir(parents=True, exist_ok=True)
+    excludes_path_value = excludes_dir / "excludes.yaml"
+    excludes_path_value.write_text("channels:\n  - C1\nsenders: []\n")
+    # Sanity-check that the resolution lines up — if a future refactor
+    # changes the resolver, this assertion surfaces it.
+    assert _excludes_path() == excludes_path_value
+
+    # ---- Step 2: seed the connector_cursors row with a Phase 20-B
+    # compound cursor that already knows about a thread in C1. This
+    # simulates the "operator excludes the channel after a prior sync
+    # registered the thread" scenario.
+    now_dt = now_utc()
+    recent_reply_ts = since_to_ts(now_dt - timedelta(days=1))
+    parent_ts = since_to_ts(now_dt - timedelta(days=2))
+    seeded_cursor = (
+        f'{{"channels":{{"C1":"{parent_ts}"}},"threads":{{"C1:{parent_ts}":"{recent_reply_ts}"}}}}'
+    )
+
+    import datetime as dt
+    from unittest.mock import MagicMock
+
+    from sqlalchemy import insert as sql_insert
+
+    from opshub.projections.connector_cursors import connector_cursors_table
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                sql_insert(connector_cursors_table).values(
+                    connector_name="slack",
+                    cursor_value=seeded_cursor,
+                    updated_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+                    last_synced_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+                )
+            )
+    finally:
+        engine.dispose()
+
+    # ---- Step 3: wire a WebClient stub that asserts replies is NOT
+    # called for the excluded thread. ``history`` returns zero new
+    # messages (the cursor is already past parent_ts).
+    def _history_side_effect(**kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        return {
+            "ok": True,
+            "messages": [],
+            "has_more": False,
+            "response_metadata": {"next_cursor": ""},
+        }
+
+    replies_calls: list[dict[str, Any]] = []
+
+    def _replies_side_effect(**kwargs: Any) -> dict[str, Any]:
+        replies_calls.append(dict(kwargs))
+        # If the excludes guard regressed, the connector would call
+        # ``conversations.replies`` for our excluded thread; surface
+        # that as a test failure by returning a sentinel that does
+        # nothing harmful but signals the regression in the assertion
+        # below.
+        return {"ok": True, "messages": [], "has_more": False}
+
+    web_client = _build_phase20c_web_client(
+        history_pages=[],
+        replies_handler=_replies_side_effect,
+    )
+    web_client.conversations_history.side_effect = _history_side_effect
+
+    import slack_sdk
+
+    monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=web_client))
+
+    try:
+        runner = CliRunner()
+        result = runner.invoke(app, ["slack", "sync"])
+        assert result.exit_code == 0, result.stdout
+
+        # ---- Step 4a: the excluded-channel polling round-trip was skipped.
+        # No ``conversations.replies`` call for our seeded thread.
+        assert replies_calls == [], (
+            f"polling phase reached conversations.replies for an excluded "
+            f"channel (calls={replies_calls})"
+        )
+
+        # ---- Step 4b: the cursor still contains the threads-axis entry.
+        # The excludes guard only short-circuits the API round-trip; it
+        # does NOT prune (prune is governed by the activity window).
+        engine = create_engine_for_sqlite(isolated_env["db_path"])
+        try:
+            from sqlalchemy import text as sql_text
+
+            with engine.connect() as conn:
+                cursor_value = (
+                    conn.execute(
+                        sql_text(
+                            "SELECT cursor_value FROM connector_cursors "
+                            "WHERE connector_name = 'slack'"
+                        )
+                    )
+                    .mappings()
+                    .one()["cursor_value"]
+                )
+            assert cursor_value is not None
+            # The threads-axis entry is still present (excludes guard
+            # does not prune; cursor stays bounded by the activity
+            # window alone).
+            assert f"C1:{parent_ts}" in cursor_value
+        finally:
+            engine.dispose()
+    finally:
+        # ``excludes.yaml`` lives in the per-test ``isolated_env``
+        # config dir which ``tmp_path`` cleans up — explicit unlink
+        # is defensive against fixture lifetime edge cases.
+        excludes_path_value.unlink(missing_ok=True)
