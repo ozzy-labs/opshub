@@ -692,12 +692,149 @@ class SlackFetcher:
 
         return _as_response_dict(retry_on_rate_limit(_call))
 
+    def fetch_thread_replies(
+        self,
+        *,
+        channel_id: str,
+        thread_ts: str,
+        oldest_reply_ts: str | None,
+        channel_name: str | None = None,
+    ) -> Iterator[RawSlackMessage]:
+        """Yield thread replies newer than ``oldest_reply_ts`` (Phase 20-C).
+
+        Phase 20-C ([epic #465](https://github.com/ozzy-labs/opshub/issues/465),
+        ADR-0030 §(d) revised) introduces a 2-phase sync:
+
+        1. Phase 1 (``conversations.history``) — covered by
+           :meth:`fetch_messages`; new parents + their initial replies
+           snapshot.
+        2. Phase 2 (``conversations.replies(oldest=last_reply_ts)``) —
+           this method; per-thread incremental fetch driven by the
+           ``threads`` axis of the compound cursor.
+
+        Parameters
+        ----------
+        channel_id:
+            The Slack channel id the thread lives in.
+        thread_ts:
+            The parent message's ``ts`` (the Slack thread id).
+        oldest_reply_ts:
+            The last-observed reply ``ts`` for this thread (the
+            ``threads`` cursor value). ``None`` means "no reply
+            observed yet" — Slack receives no ``oldest`` parameter and
+            returns the full thread (used for cold-start of a thread
+            cursor that was just initialised from ``latest_reply_ts``,
+            though in practice the connector initialises the cursor to
+            the parent's ``latest_reply_ts`` so this branch is rare).
+        channel_name:
+            Optional human-readable channel name for the yielded
+            :class:`RawSlackMessage` rows. Resolved lazily when
+            omitted (cached per fetcher lifetime).
+
+        Yields
+        ------
+        RawSlackMessage
+            One row per reply strictly newer than ``oldest_reply_ts``
+            (or every reply but the parent when ``oldest_reply_ts`` is
+            ``None``). The yield type is just :class:`RawSlackMessage`
+            (not the ``(channel_id, message, new_cursor)`` triple
+            :meth:`fetch_messages` yields) because the late-reply
+            polling phase advances the **threads** axis of the
+            compound cursor, not the per-channel ``channels`` axis;
+            the caller computes the new threads cursor as
+            ``max(prior, reply.ts)`` directly. Replies arrive in
+            ts-ascending order (defensive sort applied even though
+            Slack documents that order).
+
+        Raises
+        ------
+        ConnectorFailedError
+            Same surface as :meth:`fetch_messages` for the reply path —
+            non-429 :class:`SlackApiError`, exhausted retry budget,
+            ``missing_scope``. The error message names the offending
+            ``channel_id`` + ``thread_ts`` so an operator can map back
+            to the specific thread. The bot / user token never appears
+            in the surfaced message.
+        """
+        from slack_sdk import WebClient
+
+        client = WebClient(token=self._auth.token)
+
+        # Lazy channel-name resolution mirrors the per-message path so
+        # an operator who configured many threads but few channels
+        # doesn't pay N ``conversations.info`` round-trips when the
+        # polling phase runs.
+        resolved_channel_name = (
+            channel_name
+            if channel_name is not None
+            else self._resolve_channel_name(client, channel_id)
+        )
+
+        response = self._call_replies(
+            client=client,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            oldest=oldest_reply_ts,
+        )
+        messages_obj = response.get("messages")
+        messages: list[dict[str, Any]] = (
+            cast(list[dict[str, Any]], messages_obj) if isinstance(messages_obj, list) else []
+        )
+
+        for reply_raw in sorted(messages, key=lambda raw: self._reply_ts_key(raw)):
+            reply_ts = str(reply_raw.get("ts", ""))
+            if not reply_ts:
+                # Malformed payload; same defensive skip as the parent
+                # path.
+                continue
+            if reply_ts == thread_ts:
+                # ``messages[0]`` is the parent itself — skip to keep
+                # the event log clean. Even on the polling phase Slack
+                # always returns the parent as the envelope head, and
+                # the parent was already observed in Phase 1.
+                continue
+            if oldest_reply_ts is not None:
+                # Defense in depth: Slack's ``oldest`` filter is
+                # server-side, but a malformed server response or a
+                # future API drift could let a stale reply through.
+                # Re-filter client-side so the threads cursor advances
+                # monotonically.
+                try:
+                    if float(reply_ts) <= float(oldest_reply_ts):
+                        continue
+                except (TypeError, ValueError):
+                    # Malformed ts — let it through; ``_max_ts`` on the
+                    # caller side will treat it as the new cursor.
+                    pass
+            reply_user_id = str(reply_raw.get("user", ""))
+            reply_subtype_raw = reply_raw.get("subtype")
+            reply_subtype = str(reply_subtype_raw) if reply_subtype_raw else None
+            reply_display = self._resolve_author_display(
+                client=client, raw=reply_raw, user_id=reply_user_id
+            )
+            reply_permalink = self._resolve_permalink(
+                client=client, channel_id=channel_id, ts=reply_ts
+            )
+            yield RawSlackMessage(
+                channel_id=channel_id,
+                channel_name=resolved_channel_name,
+                ts=reply_ts,
+                text=str(reply_raw.get("text", "")),
+                user_id=reply_user_id,
+                user_display_name=reply_display,
+                permalink=reply_permalink,
+                raw=reply_raw,
+                subtype=reply_subtype,
+                thread_ts=thread_ts,
+            )
+
     def _call_replies(
         self,
         *,
         client: Any,
         channel_id: str,
         thread_ts: str,
+        oldest: str | None = None,
     ) -> dict[str, Any]:
         """Call ``conversations.replies`` with 429 backoff (ADR-0030 §(e)).
 
@@ -734,6 +871,16 @@ class SlackFetcher:
             "channel": channel_id,
             "ts": thread_ts,
         }
+        if oldest is not None:
+            # Phase 20-C: incremental thread polling. Slack's ``oldest``
+            # parameter on ``conversations.replies`` filters out replies
+            # whose ``ts <= oldest`` server-side; ``inclusive=False``
+            # prevents Slack from re-yielding the boundary reply (the
+            # last reply we already observed). Without ``inclusive=False``
+            # the polling phase would re-emit the same reply on every
+            # sync and ``ItemEnqueued`` would inflate per-run.
+            kwargs["oldest"] = oldest
+            kwargs["inclusive"] = False
 
         def _call() -> Any:
             return client.conversations_replies(**kwargs)

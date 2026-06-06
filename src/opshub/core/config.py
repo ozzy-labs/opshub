@@ -25,7 +25,9 @@ lowest: ``init args`` > env > dotenv > **toml** > file_secret > defaults.
 from __future__ import annotations
 
 import os
+import re
 import tomllib
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -223,6 +225,50 @@ class OllamaLLMSettings(BaseModel):
 SLACK_FULL_HISTORY_SENTINEL = "all"
 
 
+#: Phase 20-C late-reply polling activity window (default 30 days). Threads
+#: whose ``last_reply_ts`` is older than this window are pruned from the
+#: ``threads`` axis at the end of each sync (ADR-0030 §(d) revised). Keeping
+#: the constant module-local so the connector's pruning helper and the
+#: settings default agree on the value.
+SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW = timedelta(days=30)
+
+
+#: Phase 20-C duration grammar for ``[connectors.slack] thread_activity_window``.
+#: Accepts ``<N>d`` / ``<N>w`` (lifted from :data:`opshub.core.time._SINCE_RELATIVE_RE`)
+#: so the operator surface is identical to ``sync_since``. Months / years are
+#: intentionally unsupported — ``90d`` covers any practical window.
+_THREAD_ACTIVITY_WINDOW_RE = re.compile(r"^\s*(\d+)\s*([dw])\s*$")
+
+
+def _coerce_thread_activity_window(value: Any) -> Any:
+    """Accept ``"30d"`` / ``"4w"`` strings alongside :class:`timedelta` / ``int``.
+
+    Pydantic's native ``timedelta`` parsing handles ISO 8601 durations
+    (``"P30D"``) and integer seconds, but the operator-facing surface
+    for ``[connectors.slack]`` already uses the ``"7d"`` / ``"2w"``
+    grammar (``sync_since`` / per-channel ``since``). Mirroring that
+    here keeps every Slack-side duration knob spelled the same way.
+    A :class:`timedelta` / int / ``None`` passes through unchanged so
+    pydantic's existing coercion paths still apply.
+    """
+    if isinstance(value, str):
+        match = _THREAD_ACTIVITY_WINDOW_RE.match(value)
+        if match is None:
+            # Let pydantic raise its native error (e.g. ISO 8601 attempt)
+            # so the operator sees one validation message rather than two.
+            return value
+        amount = int(match.group(1))
+        unit = match.group(2)
+        try:
+            return timedelta(days=amount) if unit == "d" else timedelta(weeks=amount)
+        except OverflowError as exc:
+            raise ConfigError(
+                f"[connectors.slack] thread_activity_window {value!r} is too "
+                "long; pick a smaller window (e.g. '90d')."
+            ) from exc
+    return value
+
+
 def _validate_slack_floor(value: str | None, *, field: str) -> str | None:
     """Validate a Slack date-floor value (``sync_since`` / per-channel ``since``).
 
@@ -324,6 +370,20 @@ class SlackConnectorSettings(BaseModel):
     enabled: bool = False
     channels: list[SlackChannelSpec] = Field(default_factory=_empty_channel_list)
     sync_since: str | None = None
+    #: Phase 20-C (ADR-0030 §(d) revised): activity window for the late-reply
+    #: polling phase. Threads whose ``last_reply_ts`` falls outside this
+    #: window are skipped on the polling phase and pruned from the
+    #: ``threads`` axis of the compound cursor at the end of each sync.
+    #: Default 30d — long enough that "late but recent" replies (the
+    #: workspace-norm case of a reply a few weeks after the parent post)
+    #: are still picked up, short enough that the per-sync
+    #: ``conversations.replies`` budget stays bounded. Operators can
+    #: override via this setting or the ``--thread-activity-window`` CLI
+    #: flag / ``OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW`` env
+    #: var. Accepts ``"7d"`` / ``"4w"`` strings (uniform with
+    #: ``sync_since``) plus pydantic's native :class:`timedelta`
+    #: coercion (ISO 8601 ``"P7D"`` / integer seconds).
+    thread_activity_window: timedelta = SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW
 
     @field_validator("channels", mode="before")
     @classmethod
@@ -352,6 +412,11 @@ class SlackConnectorSettings(BaseModel):
     @classmethod
     def _check_sync_since(cls, value: str | None) -> str | None:
         return _validate_slack_floor(value, field="[connectors.slack] sync_since")
+
+    @field_validator("thread_activity_window", mode="before")
+    @classmethod
+    def _coerce_thread_activity_window(cls, value: Any) -> Any:
+        return _coerce_thread_activity_window(value)
 
     @model_validator(mode="after")
     def _check_unique_channel_ids(self) -> SlackConnectorSettings:
