@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -166,8 +166,13 @@ def _install_slack_fetcher(
         *,
         cursor_per_channel: dict[str, str | None],
         max_per_channel: int = 100,
+        excludes: Any = None,
     ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
-        del cursor_per_channel, max_per_channel
+        # ADR-0030 (#466): the connector forwards the resolved
+        # ``ExcludeRules`` filter so the real fetcher can short-circuit
+        # ``conversations.replies`` calls for excluded parents. This
+        # atomicity mock accepts and ignores it.
+        del cursor_per_channel, max_per_channel, excludes
         if yields_then_error is not None:
             prefix, raised = yields_then_error
             yield from prefix

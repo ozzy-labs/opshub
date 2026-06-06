@@ -205,8 +205,16 @@ def _patch_fetcher(
         *,
         cursor_per_channel: dict[str, str | None],
         max_per_channel: int = 100,
+        excludes: Any = None,
     ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
-        del max_per_channel
+        # ADR-0030 (#466): the connector forwards the resolved
+        # ``ExcludeRules`` filter so the real fetcher can short-circuit
+        # ``conversations.replies`` calls for excluded parents. The
+        # unit-test mock accepts and ignores it — the connector's
+        # per-yield ``excludes`` arm still runs on the yielded
+        # ``RawSlackMessage`` rows, so the contract observed by these
+        # tests is unchanged.
+        del max_per_channel, excludes
         captured["cursor_per_channel"] = dict(cursor_per_channel)
         return iter(yields)
 
@@ -691,8 +699,11 @@ def _patch_fetcher_with_mid_iteration_error(
         *,
         cursor_per_channel: dict[str, str | None],
         max_per_channel: int = 100,
+        excludes: Any = None,
     ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
-        del max_per_channel
+        # See the sibling ``_patch_fetcher`` mock for the ``excludes``
+        # kwarg rationale (ADR-0030 / #466).
+        del max_per_channel, excludes
         captured["cursor_per_channel"] = dict(cursor_per_channel)
         yield from yields_before_error
         raise error

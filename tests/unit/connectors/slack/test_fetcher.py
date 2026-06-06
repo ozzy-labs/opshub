@@ -1155,6 +1155,544 @@ def test_subtype_is_carried_as_first_class_field(monkeypatch: pytest.MonkeyPatch
     assert subtypes == [None, "bot_message", "channel_join", "me_message"]
 
 
+# ----- thread reply ingestion (ADR-0030 / issue #466) ------------------------
+
+
+def _replies_response(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a :func:`conversations.replies`-shaped response dict.
+
+    ``conversations.replies`` returns the parent as ``messages[0]``
+    followed by every child reply in ts-ascending order. The fetcher
+    skips ``messages[0]`` on yield (ADR-0030 §(b)) so the dedup
+    invariant on ``external_id`` is preserved.
+    """
+    return {"ok": True, "messages": messages, "has_more": False}
+
+
+def _parent_with_latest_reply(
+    *,
+    ts: str = "1700000010.000100",
+    text: str = "parent",
+    latest_reply: str = "1700000020.000200",
+) -> dict[str, Any]:
+    """Build a parent message dict with the ``latest_reply`` signal set.
+
+    Slack populates ``latest_reply`` on every parent that has at least
+    one child reply (``reply_count > 0`` is the documented co-signal).
+    The fetcher gates the follow-up ``conversations.replies`` call on
+    ``latest_reply`` presence — see :func:`test_replies_not_called_when_latest_reply_absent`
+    for the contrapositive.
+
+    Slack also sets ``thread_ts`` equal to the parent's own ``ts`` on a
+    parent with replies; we populate that field too so the
+    parent-side ``thread_ts`` invariant
+    (:func:`test_thread_ts_field_set_for_parent_and_reply`) is
+    exercised end-to-end.
+    """
+    return {
+        "ts": ts,
+        "text": text,
+        "user": "U1",
+        "thread_ts": ts,
+        "latest_reply": latest_reply,
+        "reply_count": 1,
+    }
+
+
+def _reply_message(
+    *,
+    ts: str,
+    thread_ts: str,
+    text: str = "reply",
+    user: str = "U2",
+) -> dict[str, Any]:
+    """Build a child reply message dict (parent ``thread_ts`` injected).
+
+    Slack always populates ``thread_ts`` on reply payloads with the
+    parent's ``ts``. The fetcher forwards this verbatim onto
+    :attr:`RawSlackMessage.thread_ts` per ADR-0030 §(c).
+    """
+    return {"ts": ts, "text": text, "user": user, "thread_ts": thread_ts}
+
+
+def test_replies_not_called_when_latest_reply_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parent without ``latest_reply`` → ``conversations.replies`` is not called.
+
+    Pins the API-budget guard from ADR-0030 §(b): standalone messages
+    (the vast majority on most workspaces) must not pay the Tier-3
+    ``conversations.replies`` round-trip. The fetcher gates on the
+    presence of the documented ``latest_reply`` field — Slack only
+    populates it when ``reply_count > 0`` — so a regression that
+    forgets the gate would silently drain the rate-limit budget on
+    every sync.
+    """
+    msgs = [
+        _slack_message(ts="1700000001.000100", text="standalone-1"),
+        _slack_message(ts="1700000002.000200", text="standalone-2"),
+    ]
+    client = _build_client(history=[_history_response(msgs)])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    # Two parents, zero replies → two yields and no
+    # ``conversations.replies`` call. The yielded ``thread_ts`` is
+    # ``None`` for both (ADR-0030 §(c) parent semantics).
+    assert [r[1].text for r in results] == ["standalone-1", "standalone-2"]
+    assert all(r[1].thread_ts is None for r in results)
+    assert client.conversations_replies.call_count == 0
+
+
+def test_replies_fetched_when_latest_reply_present_and_messages_zero_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``latest_reply`` → ``conversations.replies`` called; ``messages[0]`` skipped.
+
+    ADR-0030 §(b) thread reply happy path. The parent is yielded
+    once from ``conversations.history``; ``conversations.replies``
+    is then called with ``channel=C1, ts=<parent_ts>`` and returns
+    the parent + children. The fetcher must:
+
+    * Yield the parent exactly once (via the history path) — the
+      replies-response ``messages[0]`` (parent) is skipped to honour
+      the natural-key invariant from ADR-0030 §不変条件 3 (the
+      ``UNIQUE`` constraint on ``external_id = f"{channel_id}:{ts}"``
+      catches a regression but skipping at source keeps the event
+      log clean and saves one ``users.info`` / ``chat.getPermalink``
+      budget per parent).
+    * Yield every child reply (``messages[1:]``) in ts-ascending
+      order with ``thread_ts`` set to the parent's ``ts``.
+    """
+    parent = _parent_with_latest_reply(
+        ts="1700000010.000100",
+        text="parent",
+        latest_reply="1700000020.000200",
+    )
+    reply_1 = _reply_message(
+        ts="1700000015.000150",
+        thread_ts="1700000010.000100",
+        text="reply-1",
+    )
+    reply_2 = _reply_message(
+        ts="1700000020.000200",
+        thread_ts="1700000010.000100",
+        text="reply-2",
+    )
+    client = _build_client(history=[_history_response([parent])])
+    # Replies endpoint returns parent + 2 replies (Slack contract).
+    client.conversations_replies.return_value = _replies_response([parent, reply_1, reply_2])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    # Three yields: parent + 2 replies. Parent itself appears only
+    # once (the replies-response head is skipped).
+    assert [r[1].text for r in results] == ["parent", "reply-1", "reply-2"]
+    assert [r[1].ts for r in results] == [
+        "1700000010.000100",
+        "1700000015.000150",
+        "1700000020.000200",
+    ]
+    # ``conversations.replies`` called exactly once with the parent
+    # ts. Pin the kwargs shape so a regression that changes the
+    # arg name (Slack SDK occasionally renames) trips here.
+    assert client.conversations_replies.call_count == 1
+    replies_call = client.conversations_replies.call_args
+    assert replies_call.kwargs == {"channel": "C1", "ts": "1700000010.000100"}
+
+
+def test_thread_ts_field_set_for_parent_and_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``RawSlackMessage.thread_ts`` round-trips parent + reply semantics.
+
+    ADR-0030 §(c):
+
+    * Parent message that already has replies → Slack sets
+      ``thread_ts == ts`` on the parent's payload; the fetcher
+      forwards that verbatim so downstream consumers (``reply-draft``)
+      can identify a thread root without joining back to the channel
+      history.
+    * Standalone top-level message (no replies) → ``thread_ts`` is
+      absent from the Slack payload; the fetcher normalises to
+      ``None``.
+    * Child reply → ``thread_ts`` points at the parent's ``ts``; the
+      fetcher forwards that verbatim.
+    """
+    parent_with_replies = _parent_with_latest_reply(
+        ts="1700000010.000100",
+        text="parent-with-replies",
+        latest_reply="1700000020.000200",
+    )
+    standalone = _slack_message(ts="1700000005.000050", text="standalone")
+    reply = _reply_message(
+        ts="1700000020.000200",
+        thread_ts="1700000010.000100",
+        text="child",
+    )
+
+    client = _build_client(history=[_history_response([parent_with_replies, standalone])])
+    client.conversations_replies.return_value = _replies_response([parent_with_replies, reply])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    by_text = {r[1].text: r[1] for r in results}
+    # Parent with replies: thread_ts == ts (Slack convention).
+    assert by_text["parent-with-replies"].thread_ts == "1700000010.000100"
+    # Standalone top-level message: no thread_ts in payload → None.
+    assert by_text["standalone"].thread_ts is None
+    # Child reply: thread_ts == parent's ts.
+    assert by_text["child"].thread_ts == "1700000010.000100"
+    # Reply ts is the reply's own; only the cursor element is
+    # parent-anchored (asserted separately below).
+    assert by_text["child"].ts == "1700000020.000200"
+
+
+def test_thread_reply_cursor_anchored_to_parent_ts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Yielded ``new_cursor`` for a reply == parent's ``ts`` (ADR-0030 §(d)).
+
+    The per-channel resume cursor stays anchored to the channel's
+    parent timeline so a partial-progress sync that committed N
+    replies but not the next parent re-resumes from the last parent's
+    ts (not from a reply ts that may be greater than the next
+    parent's ts). Without this anchor a later sync would skip a
+    parent whose ts lies between two reply timestamps.
+    """
+    parent = _parent_with_latest_reply(
+        ts="1700000010.000100",
+        text="parent",
+        latest_reply="1700000020.000200",
+    )
+    reply = _reply_message(
+        ts="1700000020.000200",
+        thread_ts="1700000010.000100",
+        text="reply",
+    )
+    client = _build_client(history=[_history_response([parent])])
+    client.conversations_replies.return_value = _replies_response([parent, reply])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    # Parent's cursor element is its own ts; reply's cursor element
+    # is the parent's ts (NOT the reply's own ts).
+    assert [(r[1].text, r[2]) for r in results] == [
+        ("parent", "1700000010.000100"),
+        ("reply", "1700000010.000100"),
+    ]
+
+
+def test_thread_replies_retry_429_via_shared_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``conversations.replies`` 429 → exponential backoff via the shared helper.
+
+    ADR-0030 §(e) pins ``_call_replies`` as the 4th call site of
+    :func:`opshub.connectors.slack._retry.retry_on_rate_limit`
+    (alongside ``_call_history`` + the discovery probe + the listing
+    path). The shared helper applies the 1s / 2s / 4s exponential
+    fallback when ``Retry-After`` is missing, so a single 429 must
+    sleep exactly once for 1s and then succeed.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    parent = _parent_with_latest_reply(
+        ts="1700000010.000100",
+        text="parent",
+        latest_reply="1700000020.000200",
+    )
+    reply = _reply_message(
+        ts="1700000020.000200",
+        thread_ts="1700000010.000100",
+        text="reply",
+    )
+
+    rate_limited_response = MagicMock()
+    rate_limited_response.status_code = 429
+    # No ``Retry-After`` → exponential fallback (2**0 = 1s).
+    rate_limited_response.headers = {}
+    rate_limited_response.get.return_value = "rate_limited"
+
+    client = _build_client(history=[_history_response([parent])])
+    client.conversations_replies.side_effect = [
+        # See test_fetch_messages_respects_retry_after_on_429 for the
+        # ``no-untyped-call`` suppression rationale.
+        SlackApiError(message="ratelimited", response=rate_limited_response),  # type: ignore[no-untyped-call]
+        _replies_response([parent, reply]),
+    ]
+    _patch_webclient(monkeypatch, client)
+
+    import time as _stdlib_time
+
+    sleep_mock = MagicMock()
+    monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    # Parent + reply both yielded after the retry succeeded.
+    assert [r[1].text for r in results] == ["parent", "reply"]
+    # The shared retry helper slept exactly once for the exponential
+    # fallback (no ``Retry-After`` header → ``2**0 == 1``).
+    sleep_mock.assert_called_once_with(1)
+
+
+def test_thread_replies_non_429_error_surfaces_connector_failed_with_thread_ts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``thread_not_found`` → ``ConnectorFailedError`` with channel + thread_ts.
+
+    The dedicated reply-path error message names the offending
+    ``thread_ts`` so an operator can map the failure back to a
+    specific thread (vs. the parent-path message which carries only
+    the channel id). The bot token must never appear regardless of
+    error code.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    parent = _parent_with_latest_reply(
+        ts="1700000010.000100",
+        text="parent",
+        latest_reply="1700000020.000200",
+    )
+
+    bad_response = MagicMock()
+    bad_response.status_code = 200  # Slack quirk: ``ok: false`` on 200
+    bad_response.headers = {}
+    bad_response.get.return_value = "thread_not_found"
+
+    client = _build_client(history=[_history_response([parent])])
+    client.conversations_replies.side_effect = [
+        # See test_fetch_messages_respects_retry_after_on_429 for the
+        # ``no-untyped-call`` suppression rationale.
+        SlackApiError(message="not_found", response=bad_response)  # type: ignore[no-untyped-call]
+    ]
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    message = str(excinfo.value)
+    # Channel id + thread_ts + error code: the reply-path message
+    # must name both so an operator can trace to a specific thread.
+    assert "C1" in message
+    assert "1700000010.000100" in message
+    assert "thread_not_found" in message
+    # Token-leak invariant: same as the parent-path tests.
+    assert "xoxb-test" not in message
+
+
+def test_thread_replies_missing_scope_surfaces_scope_hint_with_thread_ts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``conversations.replies`` ``missing_scope`` → ADR-0018 hint with ``needed`` + ``thread_ts``.
+
+    Shares the same hint pattern as the parent-side ``missing_scope``
+    branch (link to ADR-0018, Slack scope catalogue, echo of the
+    ``needed`` field). The reply-path message additionally names the
+    offending thread_ts.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    parent = _parent_with_latest_reply(
+        ts="1700000010.000100",
+        text="parent",
+        latest_reply="1700000020.000200",
+    )
+
+    bad_response = MagicMock()
+    bad_response.status_code = 200
+    bad_response.headers = {}
+
+    def _response_get(key: str, default: object = None) -> object:
+        return {"error": "missing_scope", "needed": "channels:history"}.get(key, default)
+
+    bad_response.get.side_effect = _response_get
+
+    client = _build_client(history=[_history_response([parent])])
+    client.conversations_replies.side_effect = [
+        SlackApiError(  # type: ignore[no-untyped-call]
+            message="missing_scope",
+            response=bad_response,
+        )
+    ]
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    message = str(excinfo.value)
+    assert "C1" in message
+    assert "1700000010.000100" in message
+    assert "missing_scope" in message
+    assert "channels:history" in message
+    # Same scope-catalogue hint shape as the parent-path missing_scope test.
+    assert "ADR-0018" in message
+    assert "https://api.slack.com/scopes" in message
+    assert "xoxb-test" not in message
+
+
+def test_thread_replies_skipped_when_parent_channel_excluded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parent in ``excludes.channels`` → no ``conversations.replies`` call.
+
+    The connector applies ``excludes.channels`` per-yield (every
+    yielded ``RawSlackMessage`` for an excluded channel is dropped
+    before reaching ``SourceService.observe``). When the fetcher
+    knows the parent will be dropped, the follow-up
+    ``conversations.replies`` call is wasted budget — every reply
+    would be dropped on the same per-yield filter. ADR-0030 §(b)
+    gates the call site on the optional ``excludes`` kwarg so the
+    fetcher can short-circuit the request entirely.
+
+    Counterpart for sender-based excludes is pinned by
+    :func:`test_thread_replies_skipped_when_parent_sender_excluded`.
+    The unconditional case (no ``excludes`` passed) is pinned by
+    :func:`test_replies_fetched_when_latest_reply_present_and_messages_zero_skipped`.
+    """
+    from opshub.core.excludes import ExcludeRules
+
+    parent = _parent_with_latest_reply(
+        ts="1700000010.000100",
+        text="excluded-parent",
+        latest_reply="1700000020.000200",
+    )
+    client = _build_client(history=[_history_response([parent])])
+    # If the fetcher mistakenly calls ``conversations.replies`` the
+    # mock has no configured return value; ``MagicMock`` would still
+    # respond but the assertion below pins ``call_count == 0`` so a
+    # regression trips immediately.
+    _patch_webclient(monkeypatch, client)
+
+    excludes = ExcludeRules(channels=frozenset({"C1"}))
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    # Parent still yielded — the connector applies excludes filter
+    # on the yielded row; the fetcher's excludes short-circuit only
+    # affects the follow-up ``conversations.replies`` call.
+    results = list(fetcher.fetch_messages(cursor_per_channel={}, excludes=excludes))
+
+    assert [r[1].text for r in results] == ["excluded-parent"]
+    assert client.conversations_replies.call_count == 0
+
+
+def test_thread_replies_skipped_when_parent_sender_excluded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parent author in ``excludes.senders`` → no ``conversations.replies`` call.
+
+    Mirror of the channel-excluded test for the sender axis. ADR-0020
+    §(b) excludes filter exposes both ``channels`` and ``senders`` as
+    independent dimensions; either one triggering on the parent
+    suffices to short-circuit the reply fetch (because both filters
+    are applied per-yield by the connector, so every reply would be
+    dropped regardless).
+
+    Note that the per-message sender check uses the parent's
+    ``user_id`` field; replies authored by *other* users in the same
+    thread are still skipped, mirroring how the connector handles
+    each row independently.
+    """
+    from opshub.core.excludes import ExcludeRules
+
+    parent = _parent_with_latest_reply(
+        ts="1700000010.000100",
+        text="parent-from-excluded-sender",
+        latest_reply="1700000020.000200",
+    )
+    client = _build_client(history=[_history_response([parent])])
+    _patch_webclient(monkeypatch, client)
+
+    # ``_parent_with_latest_reply`` defaults ``user`` to ``"U1"``.
+    excludes = ExcludeRules(senders=frozenset({"U1"}))
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}, excludes=excludes))
+
+    assert [r[1].text for r in results] == ["parent-from-excluded-sender"]
+    assert client.conversations_replies.call_count == 0
+
+
+def test_thread_replies_fetched_for_mixed_threads_only_when_latest_reply_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mixed history (A: 2 replies, B: 0 replies, C: 1 reply) → 2 replies calls.
+
+    Integration-coverage hint at the unit level: the fetcher must
+    gate per-parent, not per-channel. The expected call count is the
+    number of parents with ``latest_reply`` set — a regression that
+    eagerly fetches replies for every parent would burn the rate-limit
+    budget on workspaces where most messages are standalone.
+    """
+    parent_a = _parent_with_latest_reply(
+        ts="1700000010.000100",
+        text="parent-A",
+        latest_reply="1700000020.000200",
+    )
+    parent_b = _slack_message(ts="1700000011.000110", text="parent-B-standalone")
+    parent_c = _parent_with_latest_reply(
+        ts="1700000012.000120",
+        text="parent-C",
+        latest_reply="1700000030.000300",
+    )
+
+    reply_a1 = _reply_message(
+        ts="1700000015.000150",
+        thread_ts="1700000010.000100",
+        text="A-reply-1",
+    )
+    reply_a2 = _reply_message(
+        ts="1700000020.000200",
+        thread_ts="1700000010.000100",
+        text="A-reply-2",
+    )
+    reply_c1 = _reply_message(
+        ts="1700000030.000300",
+        thread_ts="1700000012.000120",
+        text="C-reply-1",
+    )
+
+    client = _build_client(history=[_history_response([parent_a, parent_b, parent_c])])
+
+    def _replies_side_effect(*, channel: str, ts: str) -> dict[str, Any]:
+        del channel
+        if ts == "1700000010.000100":
+            return _replies_response([parent_a, reply_a1, reply_a2])
+        if ts == "1700000012.000120":
+            return _replies_response([parent_c, reply_c1])
+        raise AssertionError(f"unexpected replies call for thread_ts={ts!r}")
+
+    client.conversations_replies.side_effect = _replies_side_effect
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(fetcher.fetch_messages(cursor_per_channel={}))
+
+    # 3 parents + 3 replies = 6 yields total; parent-B contributes
+    # zero replies and zero ``conversations.replies`` calls.
+    assert [r[1].text for r in results] == [
+        "parent-A",
+        "A-reply-1",
+        "A-reply-2",
+        "parent-B-standalone",
+        "parent-C",
+        "C-reply-1",
+    ]
+    # Two ``conversations.replies`` calls — one per parent with
+    # ``latest_reply``. Parent B (standalone) does not trigger a call.
+    assert client.conversations_replies.call_count == 2
+
+
 # ----- cold-start guard --------------------------------------------------
 
 

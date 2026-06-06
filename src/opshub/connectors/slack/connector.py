@@ -215,6 +215,7 @@ class SlackConnector:
         try:
             for channel_id, raw_message, new_cursor in fetcher.fetch_messages(
                 cursor_per_channel=cursors,
+                excludes=excludes,
             ):
                 # Defense-in-depth: never let the persisted cursor regress.
                 # The fetcher (post-#339 fix) yields ts-ascending across
