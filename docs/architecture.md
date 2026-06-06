@@ -203,7 +203,7 @@ ADR-0017 で `links` projection を導入し、Phase 1-7 で蓄積された enti
 
 **Graph traversal** (`LinkService`): `related` (1-hop bidirectional)、`trace` (incoming-direction provenance、default depth 3 / max 10)、`expand` (bidirectional N-hop、default 2 / max 5)。Cycle detection + visited tracking 必須。
 
-**`--expand-graph` flag** (ADR-0017 §決定 (f) default off): `opshub brief --expand-graph` / `opshub propose generate --expand-graph` で RecallService の hit を 1-hop graph 拡張し LLM prompt に追加 source block を注入。Phase 5 D1 follow-up と同じ delimiter wrap + html.escape contract が graph-expanded sources にも適用される — security 不変。
+**Graph 1-hop 拡張** (ADR-0017 §決定 (f)、epic #470 で `--expand-graph` opt-in を撤廃して常時実行に統一): `opshub brief` / `opshub propose generate` / `opshub propose generate --reply-to` は RecallService の hit (reply-draft mode では返信元 source) を 1-hop graph 拡張し LLM prompt に追加 source block を注入。Phase 5 D1 follow-up と同じ delimiter wrap + html.escape contract が graph-expanded sources にも適用される — security 不変。
 
 CLI: `opshub link {add,remove,list}` + `opshub graph {related,trace,expand}` + `--format md|json|dot` (DOT は Graphviz 出力)。
 

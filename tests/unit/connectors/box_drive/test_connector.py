@@ -456,19 +456,20 @@ def test_sync_uses_private_engine_attribute_as_fallback(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------- registry
 
 
-def test_sync_merges_shared_excludes_paths_into_scanner(
+def test_sync_threads_shared_excludes_into_scanner(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """ADR-0020 §(b): shared ``excludes.yaml`` ``paths`` reach the scanner.
+    """ADR-0020 §(b): shared ``excludes.yaml`` reaches the scanner as ``ExcludeRules``.
 
-    The connector merges its inline ``[connectors.box_drive] exclude_globs``
-    with the shared ``paths`` selector from ``excludes.yaml`` and hands
-    the combined list to :class:`BoxDriveScanner`. A file matching the
-    shared rule must be skipped before any ``observe`` call lands.
+    Post-#470 the connector loads :class:`ExcludeRules` from
+    ``~/.config/opshub/excludes.yaml`` and hands the value object to
+    :class:`BoxDriveScanner` (no more inline ``exclude_globs`` merge).
+    A file matching the shared ``paths:`` rule must be skipped before
+    any ``observe`` call lands.
 
-    Pins the ``merged_with_paths``-equivalent in-connector merger so a
-    regression that silently drops the shared list does not get past
-    review (Phase 10 audit Cluster 3 §A).
+    Pins the load-once → forward-as-value-object pattern so a
+    regression that silently drops the shared rule set does not get
+    past review.
     """
     # Set up a tiny box-drive root with one "secret" file and one safe file.
     secrets_dir = tmp_path / "drive" / "secrets"
@@ -485,7 +486,7 @@ def test_sync_merges_shared_excludes_paths_into_scanner(
         "paths:\n  - '**/secrets/**'\n",
         encoding="utf-8",
     )
-    # The connector now calls ``load_excludes()`` with no arguments
+    # The connector calls ``load_excludes()`` with no arguments
     # (Round 2 Cluster B M1 — matches github / slack / msgraph / box),
     # so patching ``default_config_dir`` on the loader is enough; no
     # ``OPSHUB_CONFIG_DIR`` env shim is needed.

@@ -1,16 +1,20 @@
 """Tests for the Phase 5 briefing domain events.
 
-Covers all 3 new event classes plus the :data:`Phase5Event` and the
-extended :data:`AllEvent` discriminated unions. The shape mirrors
-``test_phase4.py`` so the conventions stay obvious to future readers:
+Covers all 3 new event classes plus their dispatch through the unified
+:data:`AllEvent` discriminated union. The shape mirrors ``test_phase4.py``
+so the conventions stay obvious to future readers:
 
 - happy-path construction
 - field validation (length bounds, non-negative token counts)
 - ``frozen=True`` and ``extra="forbid"`` invariants
 - ``source_refs`` round-trips as a list of ``(str, str)`` tuples
 - ``occurred_at`` / ``recorded_at`` honour ``AfterValidator(to_utc)``
-- round-trip through each union's ``TypeAdapter``
-- the extended ``AllEvent`` still dispatches to Phase 1 / 2 / 3 / 4 events
+- round-trip through ``AllEvent``'s ``TypeAdapter``
+- ``AllEvent`` still dispatches to Phase 1 / 2 / 3 / 4 events
+
+Phase-scoped grouping aliases (``Phase2Event`` ... ``Phase8Event``) were
+dropped in epic #470 — :data:`AllEvent` is the single discriminated
+union over every event family OpsHub knows how to decode.
 """
 
 from __future__ import annotations
@@ -31,14 +35,12 @@ from opshub.domain.events import (
     BriefingRequested,
     EmbeddingFailed,
     ItemEnqueued,
-    Phase5Event,
     SourceObserved,
     TaskCreated,
     TextEmbedded,
 )
 
-# Module-level singletons so each test pays the schema-build cost once.
-_Phase5Adapter: TypeAdapter[Phase5Event] = TypeAdapter(Phase5Event)  # pyright: ignore[reportCallIssue]
+# Module-level singleton so each test pays the schema-build cost once.
 _AllEventAdapter: TypeAdapter[AllEvent] = TypeAdapter(AllEvent)  # pyright: ignore[reportCallIssue]
 
 
@@ -438,7 +440,7 @@ def test_briefing_event_normalises_non_utc_tz() -> None:
     assert event.occurred_at.utcoffset() == timedelta(0)
 
 
-# ---- Phase5Event discriminated union --------------------------------------
+# ---- AllEvent dispatch for Phase 5 event types ----------------------------
 
 
 def _factory_briefing_requested() -> BriefingRequested:
@@ -498,7 +500,7 @@ _PHASE5_FACTORIES: list[tuple[str, Any]] = [
 def test_phase5_event_roundtrip_via_model_dump(event_type: str, factory: Any) -> None:
     event = factory()
     assert event.event_type == event_type
-    restored = _Phase5Adapter.validate_python(event.model_dump(mode="json"))
+    restored = _AllEventAdapter.validate_python(event.model_dump(mode="json"))
     assert restored == event
     assert type(restored) is type(event)
 
@@ -510,36 +512,7 @@ def test_phase5_event_rejects_unknown_event_type() -> None:
         "actor": "service:briefing",
     }
     with pytest.raises(PydanticValidationError):
-        _Phase5Adapter.validate_python(payload)
-
-
-def test_phase5_event_rejects_task_event_payload() -> None:
-    """A ``task.created`` payload must NOT be accepted by Phase5Event."""
-    payload = {
-        "event_type": "task.created",
-        "aggregate_id": _agg(),
-        "actor": "cli:create",
-        "title": "t",
-    }
-    with pytest.raises(PydanticValidationError):
-        _Phase5Adapter.validate_python(payload)
-
-
-def test_phase5_event_rejects_phase4_payload() -> None:
-    """Phase 4 ``embedding.text_embedded`` must NOT be accepted by Phase5Event."""
-    entity_id = _agg()
-    payload = {
-        "event_type": "embedding.text_embedded",
-        "aggregate_id": entity_id,
-        "actor": "service:embedding",
-        "entity_type": "task",
-        "entity_id": entity_id,
-        "model_id": "BAAI/bge-m3",
-        "model_version": "1.0.0",
-        "dim": 1024,
-    }
-    with pytest.raises(PydanticValidationError):
-        _Phase5Adapter.validate_python(payload)
+        _AllEventAdapter.validate_python(payload)
 
 
 # ---- AllEvent extension ---------------------------------------------------

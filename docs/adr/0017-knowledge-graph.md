@@ -131,18 +131,18 @@ operator が `opshub link add` / `opshub link remove` で link を CRUD する�
 
 depth の default 値 (related 1 / trace 3 / expand 2) は Phase 8 B1-D2 の test fixture と operator 期待値 (cost / 出力サイズ) に基づく初期値で、Phase 8.x 以降に operator feedback を見て調整する余地を残す (本 ADR §Open Questions §1 参照)。
 
-### (f) `--expand-graph` flag は default off
+### (f) Graph 拡張は無条件 (epic #470 で `--expand-graph` opt-in 廃止)
 
-`opshub brief "<topic>" --expand-graph` / `opshub propose generate "<topic>" --expand-graph` は **opt-in flag** とし、未指定時 (default) は Phase 5/6 の既存挙動 (RecallService hit を直接 LLM prompt に渡す) を 1 byte たりとも変えない。
+`opshub brief "<topic>"` / `opshub propose generate "<topic>"` は graph 1-hop 拡張を **常時実行** する。Phase 8 D2 で導入された `--expand-graph` opt-in flag (CLI + MCP arg + Service `expand_graph: bool = False` param) は epic #470 (pre-userbase compat shim cleanup) で **完全削除** された。挙動は旧 `--expand-graph` 指定時 (RecallService の hit 各々について `LinkService.related(entity, link_types=["referenced_in_briefing", "references", "applied_to"], limit=3)` を呼び、link 先 entity を追加 source として LLM prompt に含める。dedupe は `(entity_type, entity_id)` で実施、original recall hits が priority) と等価。
 
-- `--expand-graph` 指定時 (Phase 8 D2 で実装): RecallService の hit 各々について `LinkService.related(entity, link_types=["referenced_in_briefing", "references", "applied_to"], limit=3)` を呼び、link 先 entity を追加 source として LLM prompt に含める。dedupe は `(entity_type, entity_id)` で実施、original recall hits が priority
-- `--expand-graph` 未指定時: 既存経路そのまま
+採用理由 (epic #470):
 
-採用理由:
+- **アシスタント 14 Skill は全 graph 連携 skill で `expand_graph: true` を明示渡ししていた** — `reply-draft` / `inbox-triage` / `meeting-followup` / `source-extract` / `research` / `external-brief` の 6 SSOT がいずれも true 固定だったため、opt-out 経路は実質的に使われていなかった
+- **wiring (`cli/_wiring.py`) は常時 `LinkService` を渡していた** — `link_service=None` ケースは production 経路に存在せず、`expand_graph=True + link_service=None` の dead-branch `ConfigError` を抱えていた
+- **pre-userbase posture**: ADR-0011 §設計判断のスタンス により、improvement 量より「あるべき設計」を優先する。「Phase 5/6 既存 snapshot 保護のための backward-compat default」は pre-userbase で意味がない
+- **cost control は `max_tokens` (ADR-0015 §決定 (h)) で十分**: graph 拡張で追加された source も同じ token budget 制約下で truncate される。operator が明示 opt-out したい場合の代替経路 (`--no-expand-graph`) は提供しない (param 削除と矛盾しないため)
 
-- **Phase 5/6 backward compatibility**: 既存の `tests/integration/test_phase5_lifecycle.py` / `test_phase6_lifecycle.py` 等の固定 test snapshot を破壊しない。`BriefingService.generate(..., expand_graph: bool = False)` / `ProposalService.generate(..., expand_graph: bool = False)` という default False の signature 拡張で対応
-- **cost control**: graph 拡張は prompt token 数を増やすため LLM cost が上がる。operator が明示 opt-in しない限り cost profile を変えない
-- **品質 validation の段階性**: graph 拡張が briefing / propose の品質を実測で改善するかは Phase 8.x の運用で評価する。default off で「使った人だけ trial cost を負担する」状態にしておき、validation が取れたら Phase 8.x 以降に default on の議論をする (本 ADR §Open Questions §2)
+旧文 (Phase 8 D2 時点) は「Phase 5/6 backward compat / cost monitoring / 品質 validation の段階性」を opt-in default off の根拠としていたが、いずれも pre-userbase posture (ADR-0011) で機能していなかったため epic #470 で撤回した。Phase 8 plan §2.4 D2 の `--expand-graph` flag spec は本決定で履歴情報として残置 (operator-facing spec は本 ADR §決定 (f) が SSOT)。
 
 ### (g) Connector-side automatic `SourceReferenced` 発行は Phase 8.x 持ち越し
 

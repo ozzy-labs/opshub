@@ -242,9 +242,8 @@ class SourceReferenced(DomainEvent):
     (``opshub.projections.links``) consumes :class:`SourceReferenced`
     via the ``LinksExtractor`` derived-state path (ADR-0017 §決定 (c))
     to materialise ``source → entity`` rows with
-    ``link_type="references"``. The event therefore stays in the
-    ``Phase3Event`` discriminated union (it is semantically a Phase 3
-    source-family fact); only its consumer side is new.
+    ``link_type="references"``. The event itself is semantically a
+    Phase 3 source-family fact; only its consumer side is new.
 
     Connector-side automatic emission — where a connector parses the
     body of an observed item (e.g. ``#task-id`` references in a GitHub

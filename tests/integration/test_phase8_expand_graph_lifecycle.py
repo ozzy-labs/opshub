@@ -1,23 +1,22 @@
-"""Phase 8 ``--expand-graph`` end-to-end lifecycle (E1 closeout, ADR-0017).
+"""Phase 8 graph-expansion end-to-end lifecycle (ADR-0017, epic #470).
 
-Drives the ``opshub brief "<topic>" --expand-graph`` and ``opshub
-propose generate "<topic>" --expand-graph`` flags through the shipped
-CLI with mocked LLM + Embedder. Asserts the Phase 8 D2 contract:
+Drives ``opshub brief "<topic>"`` and ``opshub propose generate
+"<topic>"`` through the shipped CLI with mocked LLM + Embedder.
+Asserts the unconditional graph-expansion contract (epic #470 dropped
+the Phase 5/6 backward-compat ``--expand-graph`` opt-in flag —
+expansion is now the documented Phase 8+ baseline):
 
-- Without ``--expand-graph`` (baseline), the LLM prompt contains the
-  recall hit only (the original task ``T``). This is the Phase 5
-  backward-compat baseline (ADR-0017 §決定 (f)).
-- With ``--expand-graph``, the LLM prompt contains BOTH ``T`` and the
+- The LLM prompt always contains BOTH the recall hit ``T`` and the
   graph-adjacent source ``S`` — the latter pulled in via the manual
   ``references`` link seeded in step 1.
-- Dedupe contract: if ``S`` is itself an extra recall hit (seeded
-  identically to ``T``), ``--expand-graph`` still emits it once.
-- Symmetric for ``opshub propose generate --expand-graph``.
+- Dedupe contract: ``S`` appears exactly once in the prompt even when
+  the same neighbour is reachable from multiple recall hits.
+- Symmetric for ``opshub propose generate``.
 
 What this pins
 --------------
 
-ADR-0017 §決定 (f) ``--expand-graph`` default off + Phase 5 D1 prompt
+ADR-0017 §決定 (e)+(f) graph-expansion path + Phase 5 D1 prompt
 contract: every graph-expanded source flows through the same
 ``<source id="..." type="...">...</source>`` delimiter wrap that the
 recall-side sources do. The assertion captures the LLM message body
@@ -261,25 +260,26 @@ def _structured_user_body(
     return "\n".join(m.content for m in messages if m.role == "user")
 
 
-def test_brief_with_expand_graph_includes_linked_source(
+def test_brief_includes_graph_expanded_linked_source(
     isolated_env: _PathsDict,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``brief --expand-graph`` adds the manual link's neighbour to the LLM prompt.
+    """Graph expansion is the default behavior: linked neighbour reaches the LLM prompt.
 
     Sequence:
 
     1. Seed task ``T`` via ``opshub task create`` so the recall hit
        list reaches it.
-    2. Seed source ``S`` directly into the ``sources`` projection so
-       the graph-expand neighbour lookup finds a real body to load.
-    3. ``opshub link add task:T source:S --type references`` mints
+    2. ``opshub embeddings rebuild`` so ``T`` becomes a recall hit.
+    3. Seed source ``S`` directly into the ``sources`` projection so
+       the graph-expand neighbour lookup finds a real body to load
+       (after the embeddings rebuild, so only the task is embedded —
+       ``S`` can only reach the prompt via the graph-expansion path).
+    4. ``opshub link add task:T source:S --type references`` mints
        the manual link.
-    4. ``opshub embeddings rebuild`` so ``T`` becomes a recall hit.
-    5. ``opshub brief "..."`` (no ``--expand-graph``) → LLM prompt
-       contains the task body but NOT ``S``'s marker token.
-    6. ``opshub brief "..." --expand-graph`` → LLM prompt contains
-       both the task body AND ``S``'s marker token.
+    5. ``opshub brief "..."`` → LLM prompt contains BOTH the task
+       body AND ``S``'s marker token; dedupe contract keeps the
+       marker exactly once.
     """
     monkeypatch.setenv("OPSHUB_EMBEDDING__BACKEND", "local")
     monkeypatch.setenv("OPSHUB_LLM__BACKEND", "anthropic")
@@ -308,10 +308,10 @@ def test_brief_with_expand_graph_includes_linked_source(
     #
     # ``embeddings rebuild`` walks every embeddable projection table —
     # if we seeded the source row first it would also be embedded and
-    # could surface in recall on its own (bypassing the
-    # ``--expand-graph`` gate). By rebuilding now we ensure only the
-    # task gets a vector, so the source can only reach the LLM prompt
-    # via the graph-expansion path under test.
+    # could surface in recall on its own (bypassing the graph-
+    # expansion path). By rebuilding now we ensure only the task gets
+    # a vector, so the source can only reach the LLM prompt via the
+    # graph walk under test.
     code, rebuild_out, _ = _invoke(["embeddings", "rebuild"])
     assert code == 0, rebuild_out
 
@@ -332,46 +332,33 @@ def test_brief_with_expand_graph_includes_linked_source(
     )
     assert code == 0, link_out + (err or "")
 
-    # ---- 5. baseline: brief WITHOUT --expand-graph -----------------------
+    # ---- 5. brief: graph expansion runs unconditionally -------------------
     code, brief_out, err = _invoke(["brief", "expand graph topic"])
     assert code == 0, brief_out + (err or "")
     assert len(stub_llm.complete_calls) == 1
-    baseline_user = _user_message_body(stub_llm.complete_calls[0])
-    # The task title made it in (recall hit -> source block):
-    assert seed_title in baseline_user, baseline_user
-    # The source marker did NOT (no graph expansion):
-    assert _SOURCE_SUMMARY_TOKEN not in baseline_user, (
-        "without --expand-graph, the graph-linked source must NOT appear in the LLM prompt"
-    )
-
-    # ---- 6. with --expand-graph ------------------------------------------
-    stub_llm.complete_calls.clear()
-    code, brief_out2, err = _invoke(["brief", "expand graph topic", "--expand-graph"])
-    assert code == 0, brief_out2 + (err or "")
-    assert len(stub_llm.complete_calls) == 1
     expanded_user = _user_message_body(stub_llm.complete_calls[0])
-    # Both task and linked source must now appear in the prompt:
+    # Both task and linked source must appear in the prompt:
     assert seed_title in expanded_user, expanded_user
     assert _SOURCE_SUMMARY_TOKEN in expanded_user, (
-        "with --expand-graph, the graph-linked source must be appended"
-        " to the LLM prompt; got: " + expanded_user
+        "graph expansion is the default behavior; the linked source must"
+        " appear in the LLM prompt. got: " + expanded_user
     )
     # Dedupe: the source marker appears EXACTLY once even though
-    # it's a graph-expanded source (and not a duplicate recall hit
-    # in this seed).
+    # it's reachable as a graph-expanded source (and not a duplicate
+    # recall hit in this seed).
     assert expanded_user.count(_SOURCE_SUMMARY_TOKEN) == 1
 
 
-def test_propose_generate_with_expand_graph_includes_linked_source(
+def test_propose_generate_includes_graph_expanded_linked_source(
     isolated_env: _PathsDict,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``propose generate --expand-graph`` mirrors the briefing-side behaviour.
+    """``propose generate`` mirrors the briefing-side graph-expansion behaviour.
 
     Same seed sequence as the brief test; asserts the captured
-    :meth:`LLMClient.complete_structured` prompt contains the linked
-    source's body when ``--expand-graph`` is passed and does NOT
-    contain it otherwise.
+    :meth:`LLMClient.complete_structured` prompt always contains the
+    linked source's body (graph expansion is unconditional from epic
+    #470).
     """
     monkeypatch.setenv("OPSHUB_EMBEDDING__BACKEND", "local")
     monkeypatch.setenv("OPSHUB_LLM__BACKEND", "anthropic")
@@ -414,24 +401,12 @@ def test_propose_generate_with_expand_graph_includes_linked_source(
     )
     assert code == 0, link_out + (err or "")
 
-    # ---- baseline: propose generate WITHOUT --expand-graph ---------------
+    # ---- propose generate: graph expansion runs unconditionally ----------
     code, out, err = _invoke(["propose", "generate", "propose-expand topic"])
-    assert code == 0, out + (err or "")
-    assert len(stub_llm.structured_calls) == 1
-    baseline_user = _structured_user_body(stub_llm.structured_calls[0])
-    assert seed_title in baseline_user
-    assert _SOURCE_SUMMARY_TOKEN not in baseline_user, (
-        "without --expand-graph, propose generate must not include the linked"
-        " source in the LLM prompt"
-    )
-
-    # ---- with --expand-graph ---------------------------------------------
-    stub_llm.structured_calls.clear()
-    code, out, err = _invoke(["propose", "generate", "propose-expand topic", "--expand-graph"])
     assert code == 0, out + (err or "")
     assert len(stub_llm.structured_calls) == 1
     expanded_user = _structured_user_body(stub_llm.structured_calls[0])
     assert seed_title in expanded_user
     assert _SOURCE_SUMMARY_TOKEN in expanded_user, expanded_user
-    # Dedupe pin (Phase 8 D2 §dedupe contract).
+    # Dedupe pin (ADR-0017 §dedupe contract).
     assert expanded_user.count(_SOURCE_SUMMARY_TOKEN) == 1

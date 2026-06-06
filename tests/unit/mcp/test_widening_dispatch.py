@@ -93,14 +93,12 @@ class _StubBriefingService:
         *,
         max_sources: int = 20,
         max_tokens: int = 1500,
-        expand_graph: bool = False,
     ) -> _StubBriefing:
         self.calls.append(
             {
                 "topic": topic,
                 "max_sources": max_sources,
                 "max_tokens": max_tokens,
-                "expand_graph": expand_graph,
             }
         )
         return _StubBriefing(source_refs=[("task", "01HTASK")])
@@ -134,7 +132,6 @@ async def test_brief_handler_json_envelope(monkeypatch: pytest.MonkeyPatch) -> N
             {
                 "topic": "weekly",
                 "format": "json",
-                "expand_graph": True,
                 "max_sources": 5,
                 "max_tokens": 200,
             }
@@ -148,7 +145,6 @@ async def test_brief_handler_json_envelope(monkeypatch: pytest.MonkeyPatch) -> N
     assert refs == [{"entity_type": "task", "entity_id": "01HTASK"}]
     # Service got the flags through.
     call = service.calls[0]
-    assert call["expand_graph"] is True
     assert call["max_sources"] == 5
     assert call["max_tokens"] == 200
 
@@ -207,7 +203,6 @@ class _StubProposalService:
         from_briefing_id: str | None = None,
         max_candidates: int = 5,
         max_tokens: int = 2000,
-        expand_graph: bool = False,
     ) -> _StubProposal:
         self.generate_calls.append(
             {
@@ -216,7 +211,6 @@ class _StubProposalService:
                 "from_briefing_id": from_briefing_id,
                 "max_candidates": max_candidates,
                 "max_tokens": max_tokens,
-                "expand_graph": expand_graph,
             }
         )
         return _make_stub_proposal(topic=topic, scope=scope, briefing_id=from_briefing_id)
@@ -227,14 +221,12 @@ class _StubProposalService:
         *,
         max_candidates: int = 3,
         max_tokens: int = 2000,
-        expand_graph: bool = False,
     ) -> _StubProposal:
         self.reply_calls.append(
             {
                 "reply_to_source_id": reply_to_source_id,
                 "max_candidates": max_candidates,
                 "max_tokens": max_tokens,
-                "expand_graph": expand_graph,
             }
         )
         return _make_stub_proposal(

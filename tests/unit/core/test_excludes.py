@@ -70,15 +70,6 @@ def test_none_inputs_never_match() -> None:
     assert not rules.excludes_path(None)
 
 
-def test_merged_with_paths_appends_globs() -> None:
-    base = ExcludeRules(paths=("**/secrets/**",))
-    merged = base.merged_with_paths(["**/.git/**"])
-    assert merged.excludes_path("a/secrets/x")
-    assert merged.excludes_path("a/.git/config")
-    # Original is untouched (frozen dataclass).
-    assert not base.excludes_path("a/.git/config")
-
-
 def test_malformed_top_level_raises(tmp_path: Path) -> None:
     (tmp_path / "excludes.yaml").write_text("- just\n- a\n- list\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="mapping at the top level"):

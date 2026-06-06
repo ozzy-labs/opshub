@@ -177,9 +177,10 @@ class BoxDriveConnector:
         Production path: load :class:`OpsHubSettings`, resolve
         ``root_path`` (falling back to the platform default), and
         construct a fresh scanner with the operator's caps
-        (``max_depth`` / ``max_files`` / ``exclude_globs`` /
-        ``follow_symlinks``). Test path: the constructor-provided
-        factory short-circuits all of that.
+        (``max_depth`` / ``max_files`` / ``follow_symlinks``) plus the
+        shared ``ExcludeRules`` resolved from
+        ``~/.config/opshub/excludes.yaml`` (ADR-0020 §(b)). Test path:
+        the constructor-provided factory short-circuits all of that.
 
         Raises :class:`ConfigError` when:
 
@@ -201,17 +202,18 @@ class BoxDriveConnector:
 
         settings = OpsHubSettings()
         cfg = settings.connectors.box_drive
-        # Phase 10 (ADR-0020 §(b)): the shared ``excludes.yaml`` ``paths``
-        # selector augments the connector's inline ``exclude_globs`` so an
-        # operator can migrate inline globs to the shared file at their
-        # own pace. Both lists feed the scanner's path matcher. Call
-        # ``load_excludes()`` with no arguments so the helper resolves
-        # ``default_config_dir()`` itself — matches the other four
-        # connectors (github / slack / msgraph / box) and avoids the
-        # ``OpsHubSettings`` mock pitfall where a ``MagicMock`` for
-        # ``settings.config_dir`` would propagate into the loader.
-        shared_paths = list(load_excludes().paths)
-        exclude_globs = list(cfg.exclude_globs) + shared_paths
+        # ADR-0020 §(b): path-based exclusion lives only in the shared
+        # ``~/.config/opshub/excludes.yaml`` ``paths`` selector. The
+        # Phase 9 inline ``[connectors.box_drive] exclude_globs`` was
+        # removed in epic #470; ``BoxDriveConnectorSettings`` carries
+        # ``extra="forbid"`` so a stale TOML carrying the inline key
+        # surfaces as a fail-fast ``ValidationError`` before we get
+        # here. Call ``load_excludes()`` with no arguments so the
+        # helper resolves ``default_config_dir()`` itself (matches the
+        # other four connectors and avoids the ``OpsHubSettings`` mock
+        # pitfall where a ``MagicMock`` for ``settings.config_dir``
+        # would propagate into the loader).
+        excludes = load_excludes()
         root_path: Path | None = cfg.root_path
         if root_path is None:
             root_path = box_drive_default_root_path()
@@ -233,7 +235,7 @@ class BoxDriveConnector:
         # mentions ``docs/box-drive-setup.md``.
         return BoxDriveScanner(
             root_path=root_path,
-            exclude_globs=exclude_globs,
+            excludes=excludes,
             max_depth=cfg.max_depth,
             follow_symlinks=cfg.follow_symlinks,
             max_files=cfg.max_files,

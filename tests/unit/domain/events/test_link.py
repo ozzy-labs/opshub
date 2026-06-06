@@ -1,20 +1,22 @@
 """Tests for the Phase 8 link domain events (Knowledge graph, ADR-0017).
 
-Covers the 2 manual link CRUD event classes plus the
-:data:`Phase8Event` union and the extended :data:`AllEvent`. The
-shape mirrors ``test_proposal.py`` so the conventions stay obvious
-to future readers:
+Covers the 2 manual link CRUD event classes plus their dispatch through
+the unified :data:`AllEvent` discriminated union. The shape mirrors
+``test_proposal.py`` so the conventions stay obvious to future readers:
 
 - happy-path construction for each event
 - field validation (length bounds on the 5-tuple natural-key
   components, optional ``source_event_id`` / ``metadata`` / ``reason``)
 - ``frozen=True`` and ``extra="forbid"`` invariants
 - ``occurred_at`` / ``recorded_at`` honour ``AfterValidator(to_utc)``
-- ``Phase8Event`` discriminator dispatch via ``TypeAdapter``
-- the extended ``AllEvent`` still dispatches to Phase 1 / 2 / 3 / 4 /
-  5 / 6 events
+- ``AllEvent`` discriminator dispatch via ``TypeAdapter``
+- ``AllEvent`` still dispatches to Phase 1 / 2 / 3 / 4 / 5 / 6 events
 - ``LinkDeleted.reason`` does NOT auto-sanitise (Phase 5 B1 contract
   / ADR-0017 §決定 (d) — sanitisation is the caller's responsibility)
+
+Phase-scoped grouping aliases (``Phase2Event`` ... ``Phase8Event``) were
+dropped in epic #470 — :data:`AllEvent` is the single discriminated
+union over every event family OpsHub knows how to decode.
 """
 
 from __future__ import annotations
@@ -34,7 +36,6 @@ from opshub.domain.events import (
     ItemEnqueued,
     LinkCreated,
     LinkDeleted,
-    Phase8Event,
     ProposalRequested,
     SourceObserved,
     SourceReferenced,
@@ -42,8 +43,7 @@ from opshub.domain.events import (
     TextEmbedded,
 )
 
-# Module-level singletons so each test pays the schema-build cost once.
-_Phase8Adapter: TypeAdapter[Phase8Event] = TypeAdapter(Phase8Event)  # pyright: ignore[reportCallIssue]
+# Module-level singleton so each test pays the schema-build cost once.
 _AllEventAdapter: TypeAdapter[AllEvent] = TypeAdapter(AllEvent)  # pyright: ignore[reportCallIssue]
 
 
@@ -386,7 +386,7 @@ def test_link_event_normalises_non_utc_tz() -> None:
     assert event.occurred_at.utcoffset() == timedelta(0)
 
 
-# ---- Phase8Event discriminated union --------------------------------------
+# ---- AllEvent dispatch for Phase 8 event types ----------------------------
 
 
 def _factory_link_created() -> LinkCreated:
@@ -427,7 +427,7 @@ _PHASE8_FACTORIES: list[tuple[str, Any]] = [
 def test_phase8_event_roundtrip_via_model_dump(event_type: str, factory: Any) -> None:
     event = factory()
     assert event.event_type == event_type
-    restored = _Phase8Adapter.validate_python(event.model_dump(mode="json"))
+    restored = _AllEventAdapter.validate_python(event.model_dump(mode="json"))
     assert restored == event
     assert type(restored) is type(event)
 
@@ -439,33 +439,7 @@ def test_phase8_event_rejects_unknown_event_type() -> None:
         "actor": "cli:link",
     }
     with pytest.raises(PydanticValidationError):
-        _Phase8Adapter.validate_python(payload)
-
-
-def test_phase8_event_rejects_task_event_payload() -> None:
-    """A ``task.created`` payload must NOT be accepted by Phase8Event."""
-    payload = {
-        "event_type": "task.created",
-        "aggregate_id": _agg(),
-        "actor": "cli:create",
-        "title": "t",
-    }
-    with pytest.raises(PydanticValidationError):
-        _Phase8Adapter.validate_python(payload)
-
-
-def test_phase8_event_rejects_proposal_payload() -> None:
-    """A ``proposal.requested`` payload must NOT be accepted by Phase8Event."""
-    payload = {
-        "event_type": "proposal.requested",
-        "aggregate_id": _agg(),
-        "actor": "cli:propose",
-        "topic": "t",
-        "scope": "all",
-        "requested_by": "cli:propose",
-    }
-    with pytest.raises(PydanticValidationError):
-        _Phase8Adapter.validate_python(payload)
+        _AllEventAdapter.validate_python(payload)
 
 
 # ---- AllEvent extension ---------------------------------------------------
@@ -542,13 +516,13 @@ def test_all_event_still_dispatches_to_phase3_source_observed() -> None:
 
 
 def test_all_event_still_dispatches_to_phase3_source_referenced() -> None:
-    """ADR-0017 §決定 (c): ``SourceReferenced`` stays in ``Phase3Event``.
+    """ADR-0017 §決定 (c): ``SourceReferenced`` is a Phase 3 source-family fact.
 
     Phase 8 only adds the projector side (``LinksProjector`` consumes
     it to materialise a ``source → entity`` link with
     ``link_type="references"``). The event itself is still a Phase 3
-    source-family fact, so ``AllEvent`` must continue to dispatch it
-    via the Phase 3 discriminator branch.
+    source-family fact, so :data:`AllEvent` must continue to dispatch
+    it to :class:`SourceReferenced`.
     """
     payload = {
         "event_type": "source.referenced",

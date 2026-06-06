@@ -62,7 +62,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, Field, TypeAdapter
 from sqlalchemy import Table, select, text
 
-from opshub.core.errors import ConfigError, OpsHubError
+from opshub.core.errors import OpsHubError
 from opshub.core.ids import new_ulid
 from opshub.core.sanitise import sanitise_error_message
 from opshub.core.time import now_utc
@@ -128,17 +128,18 @@ _STATE_APPLIED = "applied"
 _STATE_REJECTED = "rejected"
 
 
-# Link types consulted by :meth:`ProposalService.generate` when
-# ``expand_graph=True`` (Phase 8 D2). Symmetric with
+# Link types consulted by :meth:`ProposalService.generate` for the
+# unconditional 1-hop graph expansion (ADR-0017 §決定 (e)+(f), Phase 8
+# D2 → epic #470 で param 削除、常時実行に統一). Symmetric with
 # :data:`opshub.services.briefings.service._GRAPH_EXPAND_LINK_TYPES`;
-# kept as a separate constant so the two services can diverge in
-# Phase 8.x if proposal-side expansion ends up wanting different
-# link types (e.g. ``generated_from_briefing`` for proposal context).
+# kept as a separate constant so the two services can diverge in the
+# future if proposal-side expansion ends up wanting different link
+# types (e.g. ``generated_from_briefing`` for proposal context).
 _GRAPH_EXPAND_LINK_TYPES = ["referenced_in_briefing", "references", "applied_to"]
 
 # Per-recall-hit limit when expanding via :meth:`LinkService.related`.
 # Matches the BriefingService cap so prompt sizes scale identically
-# under ``--expand-graph`` across both verbs.
+# across both verbs.
 _GRAPH_EXPAND_PER_HIT_LIMIT = 3
 
 
@@ -317,14 +318,14 @@ class ProposalService:
         external connection and a network round-trip must never hold
         an SQLite write lock).
     link_service:
-        Optional :class:`~opshub.services.links.LinkService` reference
-        — required when callers pass ``expand_graph=True`` to
-        :meth:`generate` (Phase 8 step D2). The service walks the
-        knowledge graph 1-hop from every recall hit to materialise
-        additional ``<source>`` blocks for the LLM prompt. The
-        ``None`` default keeps the Phase 6 wiring contract intact;
-        an ``expand_graph=True`` call without the dependency raises
-        :class:`ConfigError` (mirrors the BriefingService contract).
+        Required :class:`~opshub.services.links.LinkService` reference.
+        Both :meth:`generate` and :meth:`generate_reply_draft` walk the
+        knowledge graph 1-hop from every recall hit / reply target to
+        materialise additional ``<source>`` blocks for the LLM prompt
+        (ADR-0017 §決定 (e)+(f)). The Phase 5/6 backward-compat
+        ``None`` default and the ``expand_graph`` opt-in flag were
+        dropped in epic #470 — graph expansion is the unconditional
+        Phase 8+ contract and is symmetric with BriefingService.
     """
 
     def __init__(
@@ -337,9 +338,9 @@ class ProposalService:
         decision_service: DecisionService,
         engine: Engine,
         *,
+        link_service: LinkService,
         actor: str = _DEFAULT_ACTOR,
         uow_factory: Callable[[], AbstractContextManager[Connection]] | None = None,
-        link_service: LinkService | None = None,
     ) -> None:
         self._recall_service = recall_service
         self._llm_client = llm_client
@@ -362,7 +363,6 @@ class ProposalService:
         from_briefing_id: str | None = None,
         max_candidates: int = 5,
         max_tokens: int = 2000,
-        expand_graph: bool = False,
     ) -> Proposal:
         """Generate a proposal for ``topic``.
 
@@ -413,19 +413,10 @@ class ProposalService:
         max_tokens:
             Per ADR-0015 §決定 (h), the caller is responsible for
             cost control. Surfaced to
-            :meth:`LLMClient.complete_structured` verbatim.
-        expand_graph:
-            Phase 8 step D2 (ADR-0017 §決定 (e)+(f)). Symmetric with
-            :meth:`BriefingService.generate`: when ``True``, the
-            service walks 1-hop from each recall hit via
-            :meth:`LinkService.related` (link types
-            :data:`_GRAPH_EXPAND_LINK_TYPES`, per-hit cap
-            :data:`_GRAPH_EXPAND_PER_HIT_LIMIT`) and appends the
-            neighbouring entities as additional ``<source>`` blocks.
-            Dedupe by ``(entity_type, entity_id)`` keeps the prompt
-            free of duplicates; original recall hits take precedence.
-            Defaults to ``False`` so the Phase 6 contract stays the
-            documented baseline.
+            :meth:`LLMClient.complete_structured` verbatim. Graph-
+            expanded sources share the same token budget — when the
+            prompt exceeds ``max_tokens`` the LLM-side truncation
+            kicks in identically to the non-graph path.
 
         Returns
         -------
@@ -435,11 +426,6 @@ class ProposalService:
 
         Raises
         ------
-        ConfigError
-            When ``expand_graph=True`` was requested but the service
-            was constructed without a :class:`LinkService` reference
-            (wiring mistake — fails loud rather than silently
-            degrading).
         Exception
             Whatever :meth:`LLMClient.complete_structured` raised
             (:class:`~opshub.core.errors.ConfigError` for the
@@ -447,15 +433,6 @@ class ProposalService:
             :class:`ProposalFailed` is always appended before the
             re-raise so the audit trail records the attempt.
         """
-        if expand_graph and self._link_service is None:
-            # Fail loud (no ProposalRequested appended yet — there is
-            # no attempt to audit when the wiring is broken before
-            # any work starts). Mirrors BriefingService contract.
-            raise ConfigError(
-                "expand_graph=True requires LinkService; check"
-                " opshub.cli._wiring.build_proposal_service composition"
-            )
-
         proposal_id = new_ulid()
         self._record_requested(
             proposal_id=proposal_id,
@@ -476,14 +453,13 @@ class ProposalService:
         # context beyond the candidate count cap.
         hits = self._collect_sources(topic=topic, max_sources=max_candidates * 3)
         source_payload = self._load_source_texts(hits)
-        if expand_graph:
-            # ``_load_source_texts`` already filtered orphans / empty
-            # bodies, so the dedupe-set is keyed against the prompt's
-            # actual contents. The expansion appends in place and
-            # inherits the Phase 5 D1 prompt-injection-mitigation
-            # contract (delimiter wrap + html.escape) via
-            # :func:`render_user_prompt`.
-            self._extend_with_graph_neighbours(source_payload, hits)
+        # Unconditional 1-hop graph expansion (ADR-0017 §決定 (e)+(f),
+        # epic #470). ``_load_source_texts`` already filtered orphans
+        # / empty bodies, so the dedupe-set is keyed against the
+        # prompt's actual contents. The expansion appends in place and
+        # inherits the Phase 5 D1 prompt-injection-mitigation contract
+        # (delimiter wrap + html.escape) via :func:`render_user_prompt`.
+        self._extend_with_graph_neighbours(source_payload, hits)
 
         user_prompt = render_user_prompt(
             topic=topic,
@@ -563,7 +539,6 @@ class ProposalService:
         max_candidates: int = 3,
         max_tokens: int = 2000,
         max_style_examples: int = 3,
-        expand_graph: bool = False,
     ) -> Proposal:
         """Generate reply-draft candidates for an observed source.
 
@@ -606,36 +581,23 @@ class ProposalService:
             have not yet ingested any internal-origin sources see an
             empty style block and the model falls back to the
             system-prompt-level role description.
-        expand_graph:
-            When ``True``, the service walks the knowledge graph
-            1-hop from ``reply_to_source_id`` via
-            :meth:`LinkService.related` and injects the neighbours as
-            ``<context_source>`` blocks (ADR-0017 §決定 (f)). The
-            ``referenced_in_reply_draft`` links are auto-extracted by
-            :class:`~opshub.projections.links.LinksProjector` from
-            the resulting ``ProposalGenerated.context_source_refs``.
-
         Returns
         -------
         Proposal
             The generated proposal record (reply_draft candidates +
-            cost trace).
+            cost trace). Always includes 1-hop graph neighbours of
+            ``reply_to_source_id`` as ``<context_source>`` blocks
+            (ADR-0017 §決定 (f), epic #470). The
+            ``referenced_in_reply_draft`` links are auto-extracted by
+            :class:`~opshub.projections.links.LinksProjector` from
+            the resulting ``ProposalGenerated.context_source_refs``.
 
         Raises
         ------
         OpsHubError
             When the source row is missing (``reply_to_source_id``
             does not exist in the ``sources`` projection).
-        ConfigError
-            When ``expand_graph=True`` but no LinkService was wired
-            (mirrors :meth:`generate`).
         """
-        if expand_graph and self._link_service is None:
-            raise ConfigError(
-                "expand_graph=True requires LinkService; check"
-                " opshub.cli._wiring.build_proposal_service composition"
-            )
-
         reply_to_row = self._load_reply_to_source(reply_to_source_id)
         if reply_to_row is None:
             raise OpsHubError(f"source {reply_to_source_id} not found; cannot draft a reply")
@@ -661,13 +623,11 @@ class ProposalService:
             max_examples=max_style_examples,
         )
 
-        context_source_refs: list[tuple[str, str]] = []
-        context_sources: list[tuple[str, str, str]] = []
-        if expand_graph:
-            assert self._link_service is not None  # narrowed above
-            context_source_refs, context_sources = self._collect_reply_draft_context(
-                reply_to_source_id=reply_to_source_id,
-            )
+        # Unconditional 1-hop graph expansion for reply-draft context
+        # (ADR-0017 §決定 (f), epic #470).
+        context_source_refs, context_sources = self._collect_reply_draft_context(
+            reply_to_source_id=reply_to_source_id,
+        )
 
         user_prompt = render_reply_draft_user_prompt(
             reply_to=ReplyToSource(
@@ -945,7 +905,6 @@ class ProposalService:
         Mutates ``source_payload`` in place — the caller does not
         need a separate accumulator for graph-expanded sources.
         """
-        assert self._link_service is not None
         seen: set[tuple[str, str]] = {
             (entity_type, entity_id) for entity_type, entity_id, _ in source_payload
         }
@@ -1127,7 +1086,6 @@ class ProposalService:
 
         Empty lists when the source has no graph neighbours.
         """
-        assert self._link_service is not None
         neighbours = self._link_service.related(
             "source",
             reply_to_source_id,

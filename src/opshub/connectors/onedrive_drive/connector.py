@@ -127,8 +127,8 @@ class OneDriveDriveConnector:
         Test seam: when ``scanner_factory`` was provided to the
         constructor it short-circuits the full settings resolution.
         Production path mirrors :class:`BoxDriveConnector._resolve_scanner`
-        (same shared-excludes merger, same fail-fast ConfigError on
-        Linux-native hosts).
+        (shared ``ExcludeRules`` resolved from ``excludes.yaml``, same
+        fail-fast ConfigError on Linux-native hosts).
 
         Raises :class:`ConfigError` when the platform has no
         OneDrive default and the operator did not override.
@@ -143,13 +143,16 @@ class OneDriveDriveConnector:
 
         settings = OpsHubSettings()
         cfg = settings.connectors.onedrive_drive
-        # ADR-0020 §(b): shared ``excludes.yaml`` ``paths`` selector
-        # augments the connector's inline ``exclude_globs``. Matches
-        # the box_drive merger pattern verbatim — call
-        # ``load_excludes()`` with no arguments so the loader resolves
-        # ``default_config_dir()`` itself (Round 2 Cluster B M1).
-        shared_paths = list(load_excludes().paths)
-        exclude_globs = list(cfg.exclude_globs) + shared_paths
+        # ADR-0020 §(b): path-based exclusion lives only in the shared
+        # ``~/.config/opshub/excludes.yaml`` ``paths`` selector. The
+        # Phase 11 F4-b inline ``[connectors.onedrive_drive]
+        # exclude_globs`` was removed in epic #470; the settings model
+        # carries ``extra="forbid"`` so a stale TOML key surfaces as a
+        # fail-fast ``ValidationError`` before we reach this code path.
+        # ``load_excludes()`` is called with no arguments so the helper
+        # resolves ``default_config_dir()`` itself (matches the
+        # box_drive precedent and the Round 2 Cluster B M1 fix).
+        excludes = load_excludes()
         root_path: Path | None = cfg.root_path
         if root_path is None:
             root_path = onedrive_drive_default_root_path()
@@ -163,7 +166,7 @@ class OneDriveDriveConnector:
             )
         return OneDriveDriveScanner(
             root_path=root_path,
-            exclude_globs=exclude_globs,
+            excludes=excludes,
             max_depth=cfg.max_depth,
             follow_symlinks=cfg.follow_symlinks,
             max_files=cfg.max_files,

@@ -63,7 +63,7 @@ def test_render_user_prompt_wraps_style_examples() -> None:
 
 
 def test_render_user_prompt_wraps_context_sources() -> None:
-    """``--expand-graph`` neighbours land in ``<context_source>`` blocks."""
+    """Graph 1-hop neighbours land in ``<context_source>`` blocks."""
     output = render_reply_draft_user_prompt(
         reply_to=_REPLY_TO,
         style_examples=[],

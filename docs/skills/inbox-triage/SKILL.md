@@ -56,9 +56,10 @@ tool: propose.generate
 input:
   topic: "<inbox 全体の要約 or 主トピック>"
   mode: "inbox_triage"
-  expand_graph: true       # 1-hop graph 拡張で context 補強 (ADR-0017 §(e)+(f))
   max_candidates: 10       # 1〜20。inbox は item 数だけ候補を出したいので多め
 ```
+
+1-hop graph 拡張による context 補強は default で常時走る (ADR-0017 §(e)+(f)、epic #470 で `expand_graph` param 削除)。
 
 `mode=inbox_triage` は Phase 12 H4 で追加された dispatch key（ADR-0016 改訂 §決定 (l)(b)）。`proposals.scope` に `inbox_triage` が stamp されるため、後から「どの skill が起こした proposal か」を audit log で join できる。`reply_to_source_id` とは排他（reply-draft mode は別経路）。
 

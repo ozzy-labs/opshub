@@ -798,7 +798,7 @@ opshub slack conversations --since 30d --activity=any   # legacy #374 path (any-
 
 This is the documented escape hatch for operators who cannot grant `search:read` (workspace policy, audit committee delay), need broadcast / announcement-only channels in the output, or want live activity without the `search.messages` indexing lag.
 
-### JSON consumer impact
+### JSON consumer impact (Phase 19)
 
 If a downstream script reads `last_activity_ts` from `opshub slack conversations --format=json --since <when>`, it now has to handle the field switching depending on `--activity`:
 
@@ -859,7 +859,7 @@ notice: search.messages may lag by minutes; use --sort=last_activity for live ac
 
 The behaviour is unchanged — the notice still surfaces once per call on the engagement-axis path, still ignores `-q` / `OPSHUB_LOG_LEVEL`, and is still suppressed by switching to `--sort=last_activity` ([ADR-0034](adr/0034-slack-engagement-axis.md) §(i) inherited by [ADR-0035](adr/0035-slack-sort-axis-consolidation.md) §(f)).
 
-### JSON consumer impact
+### JSON consumer impact (Phase 19-D)
 
 The field-switching rule from Phase 19-B is inherited verbatim — only the flag name changes:
 
@@ -1123,16 +1123,191 @@ cursor with `opshub projections rebuild`.
   `conversations.replies` rate-limit handling, and recovery from the legacy
   cursor shape.
 
-## Pre-userbase compat shim cleanup (epic [#470](https://github.com/ozzy-labs/opshub/issues/470))
+## Pre-userbase compat shim cleanup: drop inline `exclude_globs`
 
-Epic [#470](https://github.com/ozzy-labs/opshub/issues/470) lifts the
-Phase 10-era compat shims that were introduced as "Optional for backward
-compatibility" while opshub was still establishing its data model. Since
-opshub remains pre-userbase ([ADR-0011 §設計判断のスタンス](adr/0011-ozzy-labs-ecosystem-adoption.md)),
-the cleanup pins the **ideal end-state directly** rather than carrying
-optional shims forward indefinitely.
+Epic [#470](https://github.com/ozzy-labs/opshub/issues/470) (ADR-0020 §(b)
+closeout) removes the Phase 9 / Phase 11 F4-b inline `exclude_globs` field
+from `BoxDriveConnectorSettings` and `OneDriveDriveConnectorSettings`. Path-based
+exclusion now has a single SSOT: the `paths:` selector inside
+`~/.config/opshub/excludes.yaml`
+([ADR-0020 §(b)](adr/0020-full-local-content-retention.md)). The dual-read
+shim that used to merge both lists at sync time is gone, and the two settings
+models declare `model_config = ConfigDict(extra="forbid")` so a stale TOML
+key surfaces as a fail-fast `ValidationError` instead of the silent "no path
+filter applied" degradation the old merger could mask.
 
-### `sources.body NOT NULL` ([#481](https://github.com/ozzy-labs/opshub/issues/481))
+> **Required operator action (perform before the next sync).** If your
+> `opshub.toml` still carries `[connectors.box_drive] exclude_globs = [...]`
+> or `[connectors.onedrive_drive] exclude_globs = [...]`, **move the
+> patterns into `~/.config/opshub/excludes.yaml` `paths:`** and delete the
+> TOML key. Leaving the inline key in place means the next
+> `opshub box_drive sync` / `opshub onedrive_drive sync` (or any CLI that
+> instantiates `OpsHubSettings`) raises `ValidationError`: `extra fields
+> not permitted` and exits non-zero.
+
+Before (Phase 9 / Phase 11 F4-b shape):
+
+```toml
+# ~/.config/opshub/opshub.toml
+[connectors.box_drive]
+enabled = true
+exclude_globs = ["**/.DS_Store", "**/~$*", "**/secrets/**"]
+
+[connectors.onedrive_drive]
+enabled = true
+exclude_globs = ["**/.DS_Store", "**/~$*"]
+```
+
+After (post-#470 shape — inline key removed, patterns moved to the shared
+`excludes.yaml`):
+
+```toml
+# ~/.config/opshub/opshub.toml
+[connectors.box_drive]
+enabled = true
+
+[connectors.onedrive_drive]
+enabled = true
+```
+
+```yaml
+# ~/.config/opshub/excludes.yaml
+paths:
+  - "**/.DS_Store"
+  - "**/~$*"
+  - "**/secrets/**"
+```
+
+The shared `paths:` selector was already honoured by both connectors
+pre-#470 (ADR-0020 §(b) introduced it in Phase 10), so the migration is a
+pure copy — no semantic change beyond losing the silently-ignored inline
+path. Patterns continue to use fnmatch / gitignore-style syntax matched
+against the POSIX-form `rel_path`; `**/` is treated as optional so a single
+pattern catches both nested and top-level files.
+
+### Why this shape
+
+- `excludes.yaml` is the cross-connector SSOT for ingest exclusion
+  (`channels` / `senders` / `repos` / `paths`); keeping path filtering inline
+  in two connectors left operators with two places to audit and a dual-read
+  merge that could not be expressed in one settings query.
+- The Phase 11 audit Cluster B `_is_excluded` duplicate match logic on
+  `BoxDriveScanner` was wholly redundant with `ExcludeRules.excludes_path`.
+  Both scanners now delegate to the value object, so the four-selector
+  exclusion logic lives in exactly one module
+  (`src/opshub/core/excludes.py`).
+- `extra="forbid"` on the two settings models is scoped to the touched
+  connectors. A repo-wide `extra="forbid"` rollout for every `OpsHubSettings`
+  child is intentionally deferred to a follow-up issue; this epic only
+  removes the two shims it had to remove.
+
+### Specifics
+
+- **No DB migration.** Cleanup is config / schema / docs surface only.
+- **No new extras.** Existing `[connectors-box-drive]` / `[connectors-onedrive-drive]`
+  dependency closures are unchanged.
+- **Breaking config change.** The Conventional Commit lands as `refactor!:`
+  and `release-please` bumps the minor lane (`0.x` line — see top of this
+  document for the SemVer posture). Operators who never used the inline
+  `exclude_globs` key see no behavioural difference.
+- **One ADR.** [ADR-0020 §(b)](adr/0020-full-local-content-retention.md)
+  was re-published with the "future cleanup" comment removed and the
+  Implementation status flipped to `landed`.
+
+## Pre-userbase compat shim cleanup: drop `expand_graph` param + make LinkService required (sub-issue #472)
+
+Epic [#470](https://github.com/ozzy-labs/opshub/issues/470)
+(ADR-0017 §決定 (f) closeout) drops the
+`expand_graph: bool = False` keyword from
+`BriefingService.generate` / `ProposalService.generate` /
+`ProposalService.generate_reply_draft` and promotes
+`link_service: LinkService` to a required keyword on both service
+constructors. Graph 1-hop expansion is now the unconditional Phase
+8+ behaviour (ADR-0017 §決定 (e)+(f)).
+
+ADR-0017 §決定 (f) was originally landed (Phase 8 D2) with the
+`expand_graph: bool = False` default as a backward-compat shim so
+the Phase 5/6 prompt-snapshot tests would keep passing. In
+practice, all 6 graph-aware assistant skill SSOTs
+(`docs/skills/{reply-draft,inbox-triage,meeting-followup,
+source-extract,research,external-brief}/SKILL.md`) explicitly
+passed `expand_graph: true`, and `cli/_wiring.py` always supplied
+a `LinkService` — the `expand_graph=True + link_service=None`
+`ConfigError` dead-branch never fired in production. Sub-issue
+#472 drops the entire opt-in surface:
+
+- **Service `generate` / `generate_reply_draft`** no longer accept
+  an `expand_graph: bool` keyword; graph 1-hop expansion runs
+  unconditionally.
+- **`ProposalService` / `BriefingService` constructors** require a
+  `link_service: LinkService` keyword (no `None` default). Passing
+  `link_service=None` raises `TypeError` at construction time.
+- **`ConfigError("expand_graph=True requires LinkService ...")`**
+  is removed; the dead-branch no longer exists.
+- **MCP `briefing.generate` / `proposal.generate` tool schemas**
+  drop the `expand_graph` property. With `additionalProperties:
+  false` already pinned, an agent host calling `{"expand_graph":
+  ...}` now fails schema validation (caught by
+  `tests/unit/mcp/test_registry_policy.py::test_brief_and_propose_generate_drop_expand_graph_property`).
+- **CLI `opshub brief --expand-graph` / `opshub propose generate
+  --expand-graph` flags** are removed. Typer reports unknown
+  option and exits 2 (pinned in
+  `test_brief_rejects_legacy_expand_graph_flag` /
+  `test_generate_rejects_legacy_expand_graph_flag`).
+- **6 SKILL.md SSOTs** drop the `expand_graph: true` argument line
+  and replace it with a short note that graph expansion is the
+  default. `uv run opshub skills install --scope project`
+  regenerates `.claude/skills/` + `.agents/skills/` mirrors;
+  the `skills-sync-check` lefthook hook pins drift.
+
+Operator impact:
+
+1. Any caller passing `expand_graph=...` / `--expand-graph` /
+   `{"expand_graph": ...}` will **fail fast** at the boundary
+   (unknown option / additional property not allowed / `TypeError`).
+   Pre-userbase posture → no compat shim, no deprecation period.
+2. Graph expansion now runs on every `brief` / `propose generate` /
+   `propose generate --reply-to` invocation. LLM prompt size + cost
+   increase up to ~20-30% versus the Phase 5/6 baseline (max
+   `original_recall_hits × 3` neighbour entities per call, capped
+   by `_GRAPH_EXPAND_PER_HIT_LIMIT = 3`). Cost is controlled via the
+   existing `max_tokens` knob (ADR-0015 §決定 (h) — caller
+   responsibility); there is no `--no-expand-graph` opt-out.
+3. ADR-0017 §決定 (f) was rewritten to record the param-drop
+   landing; Phase 8 plan §2.4 D2 remains as a historical record of
+   the opt-in shape that has now been retired.
+
+## Pre-userbase compat shim cleanup: drop per-phase event union aliases (sub-issue #480)
+
+Epic [#470](https://github.com/ozzy-labs/opshub/issues/470)
+(ADR-0002 §Decision 5 closeout) deletes the 6 per-phase
+discriminated-union aliases — `Phase2Event` / `Phase3Event` /
+`Phase4Event` / `Phase5Event` / `Phase6Event` / `Phase8Event` (Phase 7
+was projection-only and never had a `Phase7Event`) — from
+`src/opshub/domain/events/__init__.py` and consolidates on the flat
+`AllEvent` union. The aliases were historical bookkeeping; the
+persistence layer (`SqlAlchemyEventStore._decode`) always reached for
+`AllEvent` and never touched the per-phase unions.
+
+- **Operator action: none.** Event store rows (`events` table) decode
+  byte-for-byte identically — `AllEvent` already enumerated every event
+  type listed in any per-phase alias, so no `opshub projections rebuild`
+  is required. Existing SQLite databases continue to load.
+- **Internal API change.** The aliases also disappear from `__all__`,
+  and `from opshub.domain.events import Phase5Event` (etc.) now raises
+  `ImportError`. Test fixtures / migration scripts that referenced them
+  switch to `TypeAdapter(AllEvent)` or the individual event classes
+  (`from opshub.domain.events import BriefingRequested`). The
+  phase-scoped grouping never carried production semantics, so this is
+  purely a renaming exercise.
+- **External callers (pre-userbase, expected to be none):** any script
+  that did `from opshub.domain.events import PhaseNEvent` must switch to
+  `AllEvent` or the concrete event classes. There is no transitional
+  re-export; the aliases are gone in one step.
+- **One ADR.** [ADR-0002 §Decision 5](adr/0002-event-sourced-architecture.md)
+  records the `AllEvent`-only consolidation and the rationale for
+  removing the per-phase aliases.
+## Pre-userbase compat shim cleanup: `sources.body NOT NULL` (sub-issue #481)
 
 [ADR-0020 §(d')](adr/0020-full-local-content-retention.md) promotes
 `SourceObserved.body` from `str | None = None` to `str =

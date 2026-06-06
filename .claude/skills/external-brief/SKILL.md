@@ -75,8 +75,9 @@ input:
   topic: "<期間ラベル> の外向き進捗報告。完了 task: <title list>、確定 decision: <title list>。上司 / クライアント向けに要点先出しでまとめる"
   format: "md"
   max_sources: 30
-  expand_graph: true   # 任意。task / decision に紐づく source も拾いたいとき
 ```
+
+graph 拡張 (task / decision に紐づく source も拾う) は default で常時走る (ADR-0017 §(e)+(f)、epic #470 で `expand_graph` param 削除)。
 
 戻り値: `{"format":"md", "briefing_id":"...", "markdown":"...", "source_count": N}`。LLM 未設定 / token 不足の場合は失敗するので、Step 1 + Step 2 の素材だけでホスト LLM が組み立てる fallback に切り替える。
 

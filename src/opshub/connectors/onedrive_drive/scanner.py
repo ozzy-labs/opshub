@@ -56,8 +56,9 @@ class OneDriveDriveScanner(BoxDriveScanner):
 
     Constructor signature, ``scan()`` contract, ``ScannedFile`` shape
     (including the Phase 11 F4 ``body`` / ``office_source_type`` /
-    ``body_truncated`` / ``body_skip_reason`` fields), and exclusion
-    glob semantics are inherited verbatim.
+    ``body_truncated`` / ``body_skip_reason`` fields), and the
+    :class:`~opshub.core.excludes.ExcludeRules` path matcher are
+    inherited verbatim.
     """
 
     #: Structured-log key prefix: ``"onedrive_drive.scan_*"`` (vs

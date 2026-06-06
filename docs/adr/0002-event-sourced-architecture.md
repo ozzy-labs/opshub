@@ -40,6 +40,10 @@ OpsHub の永続化を **Event-Sourced** で構築する。
    - 新 field 追加は OK
    - 既存 field の意味変更は新 event type を起票
    - 破壊的変更は `schema_version` で分岐
+5. **union は `AllEvent` の 1 本**
+   - `src/opshub/domain/events/__init__.py` の `AllEvent` (discriminator: `event_type`) が唯一の event union
+   - persistence (`SqlAlchemyEventStore._decode`) は `TypeAdapter(AllEvent)` のみを使う
+   - per-phase grouping alias (`Phase2Event` … `Phase8Event`) は Phase 1-8 期間中、歴史的経緯の文書化として併存していたが、production decode 経路に登場せず test fixture 用のグルーピングに留まっていたため epic #470 で全廃した。新 event family の追加は `AllEvent` に 1 行足すだけで完結する形に統一する
 
 ## Consequences
 
