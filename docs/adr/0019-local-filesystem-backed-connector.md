@@ -198,6 +198,8 @@ ADR-0005 §決定で言及されている `~/.config/opshub/excludes.yaml` の�
 
 Phase 18 改訂: `[connectors.<name>] exclude_globs` の TOML 読込経路は [ADR-0032](0032-runtime-toml-config-loading.md) で実装される。
 
+epic [#470](https://github.com/ozzy-labs/opshub/issues/470) closeout (pre-userbase compat shim cleanup): inline `[connectors.box_drive] exclude_globs` / `[connectors.onedrive_drive] exclude_globs` の 2 Pydantic field と dual-read merger (`ExcludeRules.merged_with_paths`) と `BoxDriveScanner._is_excluded` の重複 logic を一括撤廃し、path-based exclusion の SSOT を [ADR-0020 §(b)](0020-full-local-content-retention.md) `~/.config/opshub/excludes.yaml` `paths:` selector に集約した。両 settings model は `model_config = ConfigDict(extra="forbid")` を持ち、旧 inline key を残した `opshub.toml` は `ValidationError` で fail-fast する。本節 §(g) の「inline 配置」表現は historical context として残し、現行 SSOT は §(g) ではなく ADR-0020 §(b)。
+
 ### (h) Operator precondition (`mountvol B:` + `wsl --shutdown`) は opshub 範囲外、`docs/box-drive-setup.md` に外出し
 
 WSL2 で `/mnt/b` を出現させる手順:

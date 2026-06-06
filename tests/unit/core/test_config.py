@@ -5,12 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from opshub.core.config import (
     BoxDriveConnectorSettings,
     EmbeddingSettings,
     ExcelOfficeSettings,
     OfficeSettings,
+    OneDriveDriveConnectorSettings,
     OpsHubSettings,
     SlackChannelSpec,
     SlackConnectorSettings,
@@ -64,10 +66,15 @@ def test_box_drive_connector_settings_defaults() -> None:
     arbitrary directory on first run. ``root_path=None`` defers to
     :func:`opshub.core.platform.box_drive_default_root_path` so
     WSL2 / macOS work out of the box. ``max_depth=16`` /
-    ``max_files=100_000`` / ``follow_symlinks=False`` /
-    ``exclude_globs=[]`` mirror the scanner constructor defaults so
-    operators get the same behaviour whether they construct the
-    scanner directly or go through ``opshub connector sync``.
+    ``max_files=100_000`` / ``follow_symlinks=False`` mirror the
+    scanner constructor defaults so operators get the same behaviour
+    whether they construct the scanner directly or go through
+    ``opshub connector sync``.
+
+    Path-based exclusion is no longer a per-connector inline field
+    (epic #470 cleanup of ADR-0020 §(b)) — see
+    :func:`test_box_drive_connector_settings_rejects_inline_exclude_globs`
+    for the fail-fast pin.
     """
     cfg = BoxDriveConnectorSettings()
 
@@ -76,7 +83,36 @@ def test_box_drive_connector_settings_defaults() -> None:
     assert cfg.max_depth == 16
     assert cfg.max_files == 100_000
     assert cfg.follow_symlinks is False
-    assert cfg.exclude_globs == []
+
+
+def test_box_drive_connector_settings_rejects_inline_exclude_globs() -> None:
+    """Epic #470 (ADR-0020 §(b) cleanup): inline ``exclude_globs`` is rejected.
+
+    ``BoxDriveConnectorSettings`` declares
+    ``model_config = ConfigDict(extra="forbid")`` so a stale TOML
+    carrying the Phase 9 / pre-cleanup ``exclude_globs = [...]`` key
+    surfaces as a :class:`pydantic.ValidationError` rather than the
+    silent "no path filter applied" degradation the dual-read shim
+    used to mask. Operators must migrate to
+    ``~/.config/opshub/excludes.yaml`` ``paths:`` (see
+    ``docs/upgrading.md``).
+    """
+    with pytest.raises(ValidationError, match="exclude_globs"):
+        BoxDriveConnectorSettings.model_validate({"exclude_globs": ["**/.DS_Store"]})
+
+
+def test_onedrive_drive_connector_settings_rejects_inline_exclude_globs() -> None:
+    """Symmetric pin for OneDrive: stale inline ``exclude_globs`` is rejected.
+
+    The Phase 11 F4-b inline ``[connectors.onedrive_drive] exclude_globs``
+    was removed by the same epic #470 cleanup. Pinning the
+    ``ValidationError`` here guards against the OneDrive settings
+    drifting back to a permissive ``extra="ignore"`` shape (which
+    would silently swallow the key while the Box Drive sibling kept
+    failing fast).
+    """
+    with pytest.raises(ValidationError, match="exclude_globs"):
+        OneDriveDriveConnectorSettings.model_validate({"exclude_globs": ["**/.DS_Store"]})
 
 
 def test_box_drive_connector_settings_env_var_overrides(

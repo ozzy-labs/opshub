@@ -798,7 +798,7 @@ opshub slack conversations --since 30d --activity=any   # legacy #374 path (any-
 
 This is the documented escape hatch for operators who cannot grant `search:read` (workspace policy, audit committee delay), need broadcast / announcement-only channels in the output, or want live activity without the `search.messages` indexing lag.
 
-### JSON consumer impact
+### JSON consumer impact (Phase 19)
 
 If a downstream script reads `last_activity_ts` from `opshub slack conversations --format=json --since <when>`, it now has to handle the field switching depending on `--activity`:
 
@@ -859,7 +859,7 @@ notice: search.messages may lag by minutes; use --sort=last_activity for live ac
 
 The behaviour is unchanged — the notice still surfaces once per call on the engagement-axis path, still ignores `-q` / `OPSHUB_LOG_LEVEL`, and is still suppressed by switching to `--sort=last_activity` ([ADR-0034](adr/0034-slack-engagement-axis.md) §(i) inherited by [ADR-0035](adr/0035-slack-sort-axis-consolidation.md) §(f)).
 
-### JSON consumer impact
+### JSON consumer impact (Phase 19-D)
 
 The field-switching rule from Phase 19-B is inherited verbatim — only the flag name changes:
 
@@ -1122,3 +1122,94 @@ cursor with `opshub projections rebuild`.
   walks through `--thread-activity-window` tuning, cold-thread reactivation,
   `conversations.replies` rate-limit handling, and recovery from the legacy
   cursor shape.
+
+## Pre-userbase compat shim cleanup: drop inline `exclude_globs`
+
+Epic [#470](https://github.com/ozzy-labs/opshub/issues/470) (ADR-0020 §(b)
+closeout) removes the Phase 9 / Phase 11 F4-b inline `exclude_globs` field
+from `BoxDriveConnectorSettings` and `OneDriveDriveConnectorSettings`. Path-based
+exclusion now has a single SSOT: the `paths:` selector inside
+`~/.config/opshub/excludes.yaml`
+([ADR-0020 §(b)](adr/0020-full-local-content-retention.md)). The dual-read
+shim that used to merge both lists at sync time is gone, and the two settings
+models declare `model_config = ConfigDict(extra="forbid")` so a stale TOML
+key surfaces as a fail-fast `ValidationError` instead of the silent "no path
+filter applied" degradation the old merger could mask.
+
+> **Required operator action (perform before the next sync).** If your
+> `opshub.toml` still carries `[connectors.box_drive] exclude_globs = [...]`
+> or `[connectors.onedrive_drive] exclude_globs = [...]`, **move the
+> patterns into `~/.config/opshub/excludes.yaml` `paths:`** and delete the
+> TOML key. Leaving the inline key in place means the next
+> `opshub box_drive sync` / `opshub onedrive_drive sync` (or any CLI that
+> instantiates `OpsHubSettings`) raises `ValidationError`: `extra fields
+> not permitted` and exits non-zero.
+
+Before (Phase 9 / Phase 11 F4-b shape):
+
+```toml
+# ~/.config/opshub/opshub.toml
+[connectors.box_drive]
+enabled = true
+exclude_globs = ["**/.DS_Store", "**/~$*", "**/secrets/**"]
+
+[connectors.onedrive_drive]
+enabled = true
+exclude_globs = ["**/.DS_Store", "**/~$*"]
+```
+
+After (post-#470 shape — inline key removed, patterns moved to the shared
+`excludes.yaml`):
+
+```toml
+# ~/.config/opshub/opshub.toml
+[connectors.box_drive]
+enabled = true
+
+[connectors.onedrive_drive]
+enabled = true
+```
+
+```yaml
+# ~/.config/opshub/excludes.yaml
+paths:
+  - "**/.DS_Store"
+  - "**/~$*"
+  - "**/secrets/**"
+```
+
+The shared `paths:` selector was already honoured by both connectors
+pre-#470 (ADR-0020 §(b) introduced it in Phase 10), so the migration is a
+pure copy — no semantic change beyond losing the silently-ignored inline
+path. Patterns continue to use fnmatch / gitignore-style syntax matched
+against the POSIX-form `rel_path`; `**/` is treated as optional so a single
+pattern catches both nested and top-level files.
+
+### Why this shape
+
+- `excludes.yaml` is the cross-connector SSOT for ingest exclusion
+  (`channels` / `senders` / `repos` / `paths`); keeping path filtering inline
+  in two connectors left operators with two places to audit and a dual-read
+  merge that could not be expressed in one settings query.
+- The Phase 11 audit Cluster B `_is_excluded` duplicate match logic on
+  `BoxDriveScanner` was wholly redundant with `ExcludeRules.excludes_path`.
+  Both scanners now delegate to the value object, so the four-selector
+  exclusion logic lives in exactly one module
+  (`src/opshub/core/excludes.py`).
+- `extra="forbid"` on the two settings models is scoped to the touched
+  connectors. A repo-wide `extra="forbid"` rollout for every `OpsHubSettings`
+  child is intentionally deferred to a follow-up issue; this epic only
+  removes the two shims it had to remove.
+
+### Specifics
+
+- **No DB migration.** Cleanup is config / schema / docs surface only.
+- **No new extras.** Existing `[connectors-box-drive]` / `[connectors-onedrive-drive]`
+  dependency closures are unchanged.
+- **Breaking config change.** The Conventional Commit lands as `refactor!:`
+  and `release-please` bumps the minor lane (`0.x` line — see top of this
+  document for the SemVer posture). Operators who never used the inline
+  `exclude_globs` key see no behavioural difference.
+- **One ADR.** [ADR-0020 §(b)](adr/0020-full-local-content-retention.md)
+  was re-published with the "future cleanup" comment removed and the
+  Implementation status flipped to `landed`.

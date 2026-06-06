@@ -58,10 +58,11 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 from opshub.core.errors import ConfigError
+from opshub.core.excludes import ExcludeRules
 from opshub.core.logging import get_logger
 
 if TYPE_CHECKING:
@@ -211,7 +212,7 @@ class BoxDriveScanner:
         self,
         root_path: Path,
         *,
-        exclude_globs: list[str] | None = None,
+        excludes: ExcludeRules | None = None,
         max_depth: int = 16,
         follow_symlinks: bool = False,
         max_files: int = 100_000,
@@ -226,11 +227,16 @@ class BoxDriveScanner:
             Absolute path to the Box Drive mount point. Must exist and
             be a directory at construction time, otherwise
             :class:`ConfigError` is raised before any walk begins.
-        exclude_globs:
-            Optional list of fnmatch-style glob patterns. A file is
-            skipped if its ``rel_path`` matches any pattern. Patterns
-            are matched in POSIX form (forward slashes) so
-            ``"**/secrets/**"`` works identically on macOS / WSL2.
+        excludes:
+            Resolved :class:`opshub.core.excludes.ExcludeRules` loaded
+            from the shared ``~/.config/opshub/excludes.yaml`` file
+            (ADR-0020 §(b)). Path-based filtering is delegated to
+            :meth:`ExcludeRules.excludes_path` so every local-FS
+            connector funnels through one match implementation
+            (channel / sender / repo / path are all rooted in the same
+            value object). ``None`` (default — convenient for unit
+            tests) is equivalent to an empty rule set: no path is
+            excluded.
         max_depth:
             Hard cap on recursion depth measured from ``root_path``.
             Default 16 is generous for typical Box Drive workspaces
@@ -282,7 +288,7 @@ class BoxDriveScanner:
             raise ConfigError(f"{self._client_name} root_path is not a directory: {root_path}")
 
         self._root_path = root_path
-        self._exclude_globs = list(exclude_globs) if exclude_globs else []
+        self._excludes = excludes if excludes is not None else ExcludeRules()
         self._max_depth = max_depth
         self._follow_symlinks = follow_symlinks
         self._max_files = max_files
@@ -451,7 +457,7 @@ class BoxDriveScanner:
 
                 rel_path = entry_path.relative_to(self._root_path).as_posix()
 
-                if self._is_excluded(rel_path):
+                if self._excludes.excludes_path(rel_path):
                     continue
 
                 try:
@@ -590,46 +596,3 @@ class BoxDriveScanner:
             result.truncated,
             result.skip_reason,
         )
-
-    def _is_excluded(self, rel_path: str) -> bool:
-        """Return True when ``rel_path`` matches any configured exclude glob.
-
-        Match semantics use :class:`pathlib.PurePosixPath.match` against
-        the POSIX-form ``rel_path`` (forward slashes regardless of
-        host). Python 3.13's matcher supports ``**`` recursion so
-        gitignore-style patterns like ``"**/secrets/**"`` and
-        ``"**/.git/**"`` work as operators expect.
-
-        Two compatibility shims wrap the raw matcher:
-
-        * Bare patterns without ``/`` (``".DS_Store"``, ``"Thumbs.db"``)
-          are also tested against the basename so a top-level match
-          catches the file regardless of nesting depth.
-        * ``PurePosixPath.match`` requires ``**`` to consume at least
-          one path segment, so a pattern like ``"**/secrets/**"`` does
-          *not* match a top-level ``"secrets/key.pem"``. We therefore
-          also test the path with a synthetic ``"./"`` prefix stripped
-          form and against ``pattern`` rewritten without the leading
-          ``**/`` so operators can use a single pattern shape for both
-          nested and top-level cases (matching gitignore intuition).
-        """
-        if not self._exclude_globs:
-            return False
-
-        posix = PurePosixPath(rel_path)
-        basename = posix.name
-        for pattern in self._exclude_globs:
-            if posix.match(pattern):
-                return True
-            if "/" not in pattern and PurePosixPath(basename).match(pattern):
-                return True
-            # Treat ``**/`` prefix as optional so ``**/secrets/**``
-            # matches both ``secrets/key.pem`` and ``a/secrets/key.pem``.
-            # This mirrors gitignore behaviour and is the least
-            # surprising semantics for operators copying patterns from
-            # ``.gitignore`` into ``opshub.toml``.
-            if pattern.startswith("**/"):
-                stripped = pattern.removeprefix("**/")
-                if posix.match(stripped):
-                    return True
-        return False

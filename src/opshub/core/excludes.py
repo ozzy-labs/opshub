@@ -40,12 +40,18 @@ went on ingesting it. The loader now rejects unknown top-level keys
 with :class:`ConfigError` so that drift fails loud on the next sync
 rather than degrading to a silent ingest of restricted content.
 
-The ``box_drive`` connector keeps reading its own
-``[connectors.box_drive] exclude_globs`` *and* honours the shared
-``paths`` selector: the two are merged at the call site so an operator
-can migrate inline globs to the shared file at their own pace
-(ADR-0020 §(b): pre-userbase, no dual-read deprecation window — the
-shared file simply augments the inline list).
+``paths`` is the **sole SSOT** for path-based exclusion across every
+local-FS connector (``box_drive`` / ``onedrive_drive`` and any future
+``local_drive`` sibling). The Phase 9 inline
+``[connectors.box_drive] exclude_globs`` / Phase 11 F4-b
+``[connectors.onedrive_drive] exclude_globs`` dual-read shims were
+removed in epic #470 (ADR-0020 §(b) cleanup): both connector settings
+models now declare ``model_config = ConfigDict(extra="forbid")`` so a
+stale TOML with the inline key surfaces as a fail-fast
+:class:`~pydantic.ValidationError` rather than silently degrading to
+"no path filter applied". Operators upgrading from a pre-cleanup
+release must migrate inline globs into ``excludes.yaml`` ``paths:``
+before the next sync (see ``docs/upgrading.md``).
 
 PyYAML is a base dependency (the file format is YAML); a malformed file
 fails fast with :class:`~opshub.core.errors.ConfigError` so a typo never
@@ -94,8 +100,10 @@ class ExcludeRules:
         POSIX-form path (``box_drive`` / OneDrive / any FS-backed
         connector). ``"**/"`` prefix is treated as optional so a single
         pattern catches both nested and top-level files (gitignore
-        intuition), mirroring
-        :meth:`opshub.connectors.box_drive.scanner.BoxDriveScanner._is_excluded`.
+        intuition). :meth:`excludes_path` is the sole match entrypoint
+        used by every local-FS scanner — the historical
+        ``BoxDriveScanner._is_excluded`` duplicate logic was removed in
+        epic #470 (ADR-0020 §(b) cleanup).
     """
 
     channels: frozenset[str] = field(default_factory=lambda: frozenset[str]())
@@ -140,22 +148,6 @@ class ExcludeRules:
             if pattern.startswith("**/") and fnmatch(posix, pattern.removeprefix("**/")):
                 return True
         return False
-
-    def merged_with_paths(self, extra_paths: list[str]) -> ExcludeRules:
-        """Return a copy with ``extra_paths`` appended to the path globs.
-
-        Used by the ``box_drive`` connector to fold its inline
-        ``[connectors.box_drive] exclude_globs`` into the shared rules
-        without losing either source (ADR-0020 §(b)).
-        """
-        if not extra_paths:
-            return self
-        return ExcludeRules(
-            channels=self.channels,
-            senders=self.senders,
-            repos=self.repos,
-            paths=tuple(self.paths) + tuple(extra_paths),
-        )
 
 
 def load_excludes(config_dir: Path | None = None) -> ExcludeRules:

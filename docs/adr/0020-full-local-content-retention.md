@@ -43,7 +43,16 @@ ADR-0005 (External Content Minimization) を **Superseded** とし、opshub は 
 
 ADR-0005 で言及されていた `~/.config/opshub/excludes.yaml`、および Phase 9 で `box_drive` の `opshub.toml` inline だった `exclude_globs` を、**全 connector 横断の共通 excludes 機構** に統合する。本文保持の第一の安全策は「機密本文をそもそも取り込まない」ことであり、connector ごとにバラバラな除外設定では運用ポリシーを一元管理できない。
 
-excludes は `channel` / `sender` / `repo` / `path` の 4 種の selector を持ち、各 connector が自身の取り込み経路で「観測する前に」除外判定する。box_drive の inline `[connectors.box_drive] exclude_globs` は当面、本機構の shared `excludes.yaml` の `paths` selector に **merge** する (`ExcludeRules.merged_with_paths` 経由)。pre-userbase 段階のため、inline 設定を完全廃止して shared-only に統合するのは将来の cleanup ADR に委ねる。dual-read による互換維持期間 (deprecation window) は設けず、shared-only 化が決まった時点で inline 経路を即時撤去する。
+excludes は `channel` / `sender` / `repo` / `path` の 4 種の selector を持ち、各 connector が自身の取り込み経路で「観測する前に」除外判定する。
+
+**Implementation status: landed (epic [#470](https://github.com/ozzy-labs/opshub/issues/470)).** Phase 10 で `~/.config/opshub/excludes.yaml` を導入した時点では、box_drive (Phase 9) / onedrive_drive (Phase 11 F4-b) の inline `[connectors.<name>] exclude_globs` を shared `excludes.yaml` `paths` selector に **merge** する dual-read shim (`ExcludeRules.merged_with_paths` 経由) を持っていた。pre-userbase 段階のため deprecation window は設けず、本 epic で:
+
+1. `BoxDriveConnectorSettings.exclude_globs` / `OneDriveDriveConnectorSettings.exclude_globs` の 2 Pydantic field を削除
+2. 両 model に `model_config = ConfigDict(extra="forbid")` を追加し、旧 inline key を持つ `opshub.toml` を `ValidationError` で fail-fast (silently ignored を完全に閉じる)
+3. `ExcludeRules.merged_with_paths()` (dual-read merger 唯一の utility) を削除
+4. `BoxDriveScanner._is_excluded` (`ExcludeRules.excludes_path` と完全重複していた logic) を削除し、scanner は `excludes: ExcludeRules` を受け取って `excludes.excludes_path(rel_path)` に委譲
+
+を一括撤廃し、path-based exclusion の SSOT を `excludes.yaml` `paths:` selector に集約した。operator 向けの移行手順は [`docs/upgrading.md`](../upgrading.md) §`Pre-userbase compat shim cleanup` を参照。
 
 ### (c) 保存時暗号化 (詳細は ADR-0021)
 

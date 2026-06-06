@@ -16,9 +16,9 @@ pin the subclass-specific guarantees:
   verbatim (Office extraction enabled / fail-safe behaviour).
 
 The full walk-logic suite (symlink loops, max_depth / max_files
-caps, permission errors, exclude_globs, fingerprint diff, etc.)
-is covered by the box_drive tests and does not need re-running
-here — the subclass inherits the exact same code path.
+caps, permission errors, ``ExcludeRules`` path matching, fingerprint
+diff, etc.) is covered by the box_drive tests and does not need
+re-running here — the subclass inherits the exact same code path.
 """
 
 from __future__ import annotations

@@ -31,7 +31,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic import ValidationError as PydanticValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict, TomlConfigSettingsSource
 from pydantic_settings.sources import PydanticBaseSettingsSource
@@ -557,9 +557,15 @@ class BoxDriveConnectorSettings(BaseModel):
       symlinks of its own, so any link under the root is operator-made
       and likely escapes the workspace. The safe default refuses to
       follow them.
-    * ``exclude_globs = []`` — fnmatch / gitignore-style patterns
-      (``"**/.DS_Store"``, ``"**/secrets/**"``, ...) that the scanner
-      skips. Empty list means "no exclusions".
+
+    Path-based exclusion lives **only** in the shared
+    ``~/.config/opshub/excludes.yaml`` ``paths:`` selector
+    (ADR-0020 §(b)). The Phase 9 inline ``exclude_globs`` field was
+    removed in epic #470 — ``model_config = ConfigDict(extra="forbid")``
+    rejects stale TOML carrying the key so operators get a fail-fast
+    :class:`~pydantic.ValidationError` rather than the silent
+    "no path filter applied" degradation the dual-read shim used to
+    mask. See ``docs/upgrading.md`` for the migration step.
 
     Phase 11 F4 (ADR-0019 §(b') + ADR-0025) adds ``content_extraction``:
 
@@ -581,12 +587,13 @@ class BoxDriveConnectorSettings(BaseModel):
       other files keep the ``"box_drive_file"`` / ``body=None`` shape.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = False
     root_path: Path | None = None
     max_depth: int = 16
     max_files: int = 100_000
     follow_symlinks: bool = False
-    exclude_globs: list[str] = Field(default_factory=list)
     content_extraction: bool = False
 
 
@@ -624,22 +631,29 @@ class OneDriveDriveConnectorSettings(BaseModel):
     * ``follow_symlinks = False`` — OneDrive does not synthesise
       symlinks of its own, so any link under the root is
       operator-introduced and likely escapes the workspace.
-    * ``exclude_globs = []`` — fnmatch / gitignore-style patterns the
-      scanner skips.
     * ``content_extraction = False`` — ADR-0019 §(b') opt-in. When
       ``true``, ``.docx`` / ``.xlsx`` / ``.pptx`` (and legacy
       ``.doc`` / ``.xls`` / ``.ppt``) are routed through
       :func:`opshub.core.document_extract.extract_document`; everything
       else stays on the stat-only path. Default-off path keeps the
       no-``open()`` invariant intact bit-for-bit.
+
+    Path-based exclusion lives **only** in the shared
+    ``~/.config/opshub/excludes.yaml`` ``paths:`` selector
+    (ADR-0020 §(b)). The Phase 11 F4-b inline ``exclude_globs`` field
+    was removed in epic #470 — ``model_config = ConfigDict(extra="forbid")``
+    rejects stale TOML carrying the key, symmetric with
+    :class:`BoxDriveConnectorSettings`. See ``docs/upgrading.md`` for
+    the migration step.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
     root_path: Path | None = None
     max_depth: int = 16
     max_files: int = 100_000
     follow_symlinks: bool = False
-    exclude_globs: list[str] = Field(default_factory=list)
     content_extraction: bool = False
 
 

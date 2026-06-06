@@ -339,10 +339,16 @@ def test_sync_threads_prior_fingerprints_filtered_by_connector_name(
 # ---------------------------------------------------------------------- shared excludes
 
 
-def test_sync_merges_shared_excludes_paths_into_scanner(
+def test_sync_threads_shared_excludes_into_scanner(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """ADR-0020 §(b): shared ``excludes.yaml`` ``paths`` reach the scanner."""
+    """ADR-0020 §(b): shared ``excludes.yaml`` reaches the scanner as ``ExcludeRules``.
+
+    Post-#470 the connector loads :class:`ExcludeRules` from
+    ``excludes.yaml`` and hands the value object to
+    :class:`OneDriveDriveScanner` (no more inline ``exclude_globs``
+    merge). Symmetric with the box_drive sibling.
+    """
     secrets_dir = tmp_path / "drive" / "secrets"
     secrets_dir.mkdir(parents=True)
     (secrets_dir / "key.pem").write_text("PRIVATE")
