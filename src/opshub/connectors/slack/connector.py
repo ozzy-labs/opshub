@@ -586,11 +586,21 @@ def _load_cursors(cursor_value: str | None) -> SlackCursorState:
     # observed*, so even a 1:1 lift into the new ``channels`` axis
     # would be subtly wrong for Phase 20-C's replies-fetch path).
     if "channels" not in parsed_dict or "threads" not in parsed_dict:
+        # Phase 20-E ([#478](https://github.com/ozzy-labs/opshub/issues/478))
+        # audit: the docs (``docs/troubleshooting.md`` §3.12 + the
+        # ``docs/upgrading.md`` §Phase 20 "typical error" block) ship a
+        # verbatim error string that operators grep against. The
+        # connector previously surfaced a paraphrased variant
+        # ("uses the pre-Phase-20-B schema") which broke that
+        # grep-based discovery. Aligning the literal here keeps the
+        # doc + code messages diff-free (doc is canonical; opshub is
+        # pre-userbase and ships no silent migration).
         raise ConfigError(
-            "Slack cursor uses the pre-Phase-20-B schema "
-            "(flat {channel_id: ts} dict). Reset with "
-            "`opshub projections rebuild` to migrate to the "
-            "compound {'channels': ..., 'threads': ...} schema."
+            "Slack cursor envelope is pre-Phase-20-B (flat dict). "
+            "Run `opshub projections rebuild` to migrate to the "
+            '{"channels": ..., "threads": ...} compound schema. '
+            "opshub is pre-userbase and ships no silent migration "
+            "(per ADR-0030 §不変条件 #4)."
         )
     channels_axis = _coerce_axis(parsed_dict["channels"], axis_name="channels")
     threads_axis = _coerce_axis(parsed_dict["threads"], axis_name="threads")
@@ -737,7 +747,7 @@ def _parse_thread_cursor_key(key: str) -> tuple[str, str] | None:
     return channel_id, thread_ts
 
 
-def _window_cutoff_ts(activity_window: timedelta) -> str:
+def _window_cutoff_ts(activity_window: timedelta | None) -> str | None:
     """Compute the Slack ``ts`` cutoff for the activity window (Phase 20-C).
 
     ADR-0030 §(d) revised: threads whose ``last_reply_ts`` falls before
@@ -745,11 +755,20 @@ def _window_cutoff_ts(activity_window: timedelta) -> str:
     phase and pruned from the ``threads`` axis. The cutoff is evaluated
     at sync time (not at config load), so a relative window like
     ``"30d"`` walks forward with each run.
+
+    Phase 20-E ([#478](https://github.com/ozzy-labs/opshub/issues/478)):
+    ``activity_window is None`` (the connector-side coercion of the
+    ``thread_activity_window = "all"`` sentinel) returns ``None`` so
+    the prune is disabled wholesale. :func:`_within_activity_window`
+    and :func:`_prune_inactive_threads` short-circuit on the ``None``
+    cutoff.
     """
+    if activity_window is None:
+        return None
     return since_to_ts(now_utc() - activity_window)
 
 
-def _within_activity_window(last_reply_ts: str | None, cutoff_ts: str) -> bool:
+def _within_activity_window(last_reply_ts: str | None, cutoff_ts: str | None) -> bool:
     """Return ``True`` iff the thread is recent enough to poll (Phase 20-C).
 
     ``None`` means the threads cursor was registered but no reply has
@@ -758,7 +777,14 @@ def _within_activity_window(last_reply_ts: str | None, cutoff_ts: str) -> bool:
     contract violation) also fall through to in-window so the connector
     doesn't silently drop them; the actual polling round-trip will
     surface the error if Slack rejects it.
+
+    Phase 20-E ([#478](https://github.com/ozzy-labs/opshub/issues/478)):
+    ``cutoff_ts is None`` means the operator set
+    ``thread_activity_window = "all"`` (or any case-variant of it) to
+    disable prune entirely — every thread is in-window.
     """
+    if cutoff_ts is None:
+        return True
     if last_reply_ts is None:
         return True
     try:
@@ -767,7 +793,7 @@ def _within_activity_window(last_reply_ts: str | None, cutoff_ts: str) -> bool:
         return True
 
 
-def _prune_inactive_threads(thread_cursors: dict[str, str | None], cutoff_ts: str) -> None:
+def _prune_inactive_threads(thread_cursors: dict[str, str | None], cutoff_ts: str | None) -> None:
     """Drop ``threads`` axis entries older than ``cutoff_ts`` (Phase 20-C).
 
     Mutates ``thread_cursors`` in place. Called on the happy path
@@ -777,7 +803,13 @@ def _prune_inactive_threads(thread_cursors: dict[str, str | None], cutoff_ts: st
     from entry. ADR-0030 §(d) revised: window default 30d, operator
     overrides via ``[connectors.slack] thread_activity_window`` /
     ``--thread-activity-window`` / ``OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW``.
+
+    Phase 20-E ([#478](https://github.com/ozzy-labs/opshub/issues/478)):
+    ``cutoff_ts is None`` (the ``thread_activity_window = "all"`` path)
+    is a no-op — every thread stays in the cursor.
     """
+    if cutoff_ts is None:
+        return
     stale_keys = [
         key
         for key, last_reply_ts in thread_cursors.items()

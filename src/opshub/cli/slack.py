@@ -57,10 +57,12 @@ def slack_sync(
             "ADR-0030 §(d)). Threads whose last reply is older "
             "than this window are skipped on the polling phase and "
             "pruned from the threads cursor. Accepts '7d' / '4w'; "
-            "default 30d (from [connectors.slack] thread_activity_window "
-            "in opshub.toml). Overrides the config-file value for this "
-            "run only; persisted operator overrides belong in opshub.toml "
-            "or OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW."
+            "'all' (case-insensitive) disables the prune entirely "
+            "(Phase 20-E, #478). Default 30d (from [connectors.slack] "
+            "thread_activity_window in opshub.toml). Overrides the "
+            "config-file value for this run only; persisted operator "
+            "overrides belong in opshub.toml or "
+            "OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW."
         ),
     ),
 ) -> None:

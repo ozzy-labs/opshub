@@ -1727,3 +1727,79 @@ def test_fetcher_module_does_not_import_slack_sdk_eagerly() -> None:
         "opshub.connectors.slack.fetcher imports slack_sdk at module level "
         "(must be lazy-loaded inside fetch_messages):\n  - " + "\n  - ".join(offenders)
     )
+
+
+# ----- Phase 20-E: partial-progress on thread reply failure ----------------
+
+
+def test_thread_reply_fetch_failure_yields_parent_then_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parent is observable before ``conversations.replies`` failure (Phase 20-E).
+
+    Audit followup for [#478](https://github.com/ozzy-labs/opshub/issues/478):
+    the fetcher's :meth:`_iter_channel` yields the parent message
+    BEFORE it requests ``conversations.replies`` for its replies, so
+    a downstream consumer iterating the generator one row at a time
+    can persist the parent + advance the cursor before the reply
+    fetch ever fires. The connector relies on that ordering for its
+    partial-progress checkpoint (see :meth:`SlackConnector.sync`'s
+    ``finally`` arm): if the reply fetch raises
+    :class:`ConnectorFailedError` after we've yielded the parent, the
+    channels-axis cursor still advances on the next sync. A
+    regression that re-ordered the parent yield to *after* the reply
+    fetch would break the cascade documented in issue #339.
+
+    Drive the generator manually (``next()`` calls) so the parent
+    yield is observable BEFORE the reply call raises — ``list()``
+    would discard partial yields when the iterator raises, hiding
+    the contract under test.
+    """
+    from slack_sdk.errors import SlackApiError
+
+    parent = _parent_with_latest_reply(
+        ts="1700000010.000100",
+        text="parent",
+        latest_reply="1700000020.000200",
+    )
+
+    bad_response = MagicMock()
+    bad_response.status_code = 200  # Slack quirk: ``ok: false`` on 200
+    bad_response.headers = {}
+    bad_response.get.return_value = "thread_not_found"
+
+    client = _build_client(history=[_history_response([parent])])
+    client.conversations_replies.side_effect = [
+        SlackApiError(  # type: ignore[no-untyped-call]
+            message="not_found",
+            response=bad_response,
+        )
+    ]
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    iterator = fetcher.fetch_messages(cursor_per_channel={})
+
+    # Manual ``next()`` so the parent yield is observable before the
+    # reply fetch raises.
+    parent_channel_id, parent_message, parent_cursor = next(iterator)
+    assert parent_channel_id == "C1"
+    assert parent_message.ts == "1700000010.000100"
+    assert parent_message.text == "parent"
+    # The cursor element for the parent is its own ts (Phase 1
+    # ``conversations.history`` semantics).
+    assert parent_cursor == "1700000010.000100"
+
+    # The next pull triggers the reply fetch which raises after the
+    # parent has already been yielded.
+    with pytest.raises(ConnectorFailedError) as excinfo:
+        next(iterator)
+
+    message = str(excinfo.value)
+    # Reply-path message names channel + thread_ts + error code (the
+    # canonical reply-path error shape per ADR-0030 §(b)).
+    assert "C1" in message
+    assert "1700000010.000100" in message
+    assert "thread_not_found" in message
+    # Token-leak invariant — same as the sibling tests.
+    assert "xoxb-test" not in message

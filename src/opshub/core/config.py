@@ -233,6 +233,19 @@ SLACK_FULL_HISTORY_SENTINEL = "all"
 SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW = timedelta(days=30)
 
 
+#: Sentinel value for ``[connectors.slack] thread_activity_window`` that
+#: disables the late-reply polling prune entirely (Phase 20-E audit
+#: followup, [#478](https://github.com/ozzy-labs/opshub/issues/478)).
+#: ``docs/troubleshooting.md`` §3.12 and ``docs/upgrading.md`` §Phase 20
+#: documented the spelling as ``"all"`` ahead of time; the validator
+#: coerces it to ``None`` so the connector's ``_prune_inactive_threads``
+#: / ``_window_cutoff_ts`` helpers see a single ``None`` sentinel and
+#: skip the prune wholesale. Case-insensitive (``"All"`` / ``"ALL"``
+#: also accepted) so a copy-paste from a doc with title-casing still
+#: works.
+SLACK_THREAD_ACTIVITY_WINDOW_ALL_SENTINEL = "all"
+
+
 #: Phase 20-C duration grammar for ``[connectors.slack] thread_activity_window``.
 #: Accepts ``<N>d`` / ``<N>w`` (lifted from :data:`opshub.core.time._SINCE_RELATIVE_RE`)
 #: so the operator surface is identical to ``sync_since``. Months / years are
@@ -241,17 +254,29 @@ _THREAD_ACTIVITY_WINDOW_RE = re.compile(r"^\s*(\d+)\s*([dw])\s*$")
 
 
 def _coerce_thread_activity_window(value: Any) -> Any:
-    """Accept ``"30d"`` / ``"4w"`` strings alongside :class:`timedelta` / ``int``.
+    """Accept ``"30d"`` / ``"4w"`` / ``"all"`` strings alongside :class:`timedelta` / ``int``.
 
     Pydantic's native ``timedelta`` parsing handles ISO 8601 durations
     (``"P30D"``) and integer seconds, but the operator-facing surface
     for ``[connectors.slack]`` already uses the ``"7d"`` / ``"2w"``
     grammar (``sync_since`` / per-channel ``since``). Mirroring that
     here keeps every Slack-side duration knob spelled the same way.
+
+    Phase 20-E ([#478](https://github.com/ozzy-labs/opshub/issues/478))
+    adds the ``"all"`` sentinel (case-insensitive) that maps to
+    ``None`` to disable the prune entirely — the spelling
+    ``docs/troubleshooting.md`` §3.12 already promises operators.
     A :class:`timedelta` / int / ``None`` passes through unchanged so
     pydantic's existing coercion paths still apply.
     """
     if isinstance(value, str):
+        if value.strip().lower() == SLACK_THREAD_ACTIVITY_WINDOW_ALL_SENTINEL:
+            # ``None`` is the connector-side "disable prune" sentinel.
+            # Coercing the operator-facing ``"all"`` spelling here keeps
+            # ``_prune_inactive_threads`` / ``_window_cutoff_ts`` aware
+            # of a single shape (``timedelta | None``) — they branch on
+            # ``None`` to skip prune wholesale.
+            return None
         match = _THREAD_ACTIVITY_WINDOW_RE.match(value)
         if match is None:
             # Let pydantic raise its native error (e.g. ISO 8601 attempt)
@@ -382,8 +407,13 @@ class SlackConnectorSettings(BaseModel):
     #: flag / ``OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW`` env
     #: var. Accepts ``"7d"`` / ``"4w"`` strings (uniform with
     #: ``sync_since``) plus pydantic's native :class:`timedelta`
-    #: coercion (ISO 8601 ``"P7D"`` / integer seconds).
-    thread_activity_window: timedelta = SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW
+    #: coercion (ISO 8601 ``"P7D"`` / integer seconds). Phase 20-E
+    #: ([#478](https://github.com/ozzy-labs/opshub/issues/478)) adds
+    #: the ``"all"`` (case-insensitive) sentinel that coerces to
+    #: ``None`` so the late-reply polling prune is disabled entirely —
+    #: the spelling ``docs/troubleshooting.md`` §3.12 promised
+    #: operators ahead of the validator catching up.
+    thread_activity_window: timedelta | None = SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW
 
     @field_validator("channels", mode="before")
     @classmethod
