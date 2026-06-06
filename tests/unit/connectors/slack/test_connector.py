@@ -36,6 +36,7 @@ pytest.importorskip(
 from opshub.connectors.context import ConnectorContext
 from opshub.connectors.slack.connector import (
     SlackConnector,
+    SlackCursorState,
     _dump_cursors,  # pyright: ignore[reportPrivateUsage]
     _load_cursors,  # pyright: ignore[reportPrivateUsage]
     _max_ts,  # pyright: ignore[reportPrivateUsage]
@@ -230,39 +231,78 @@ def test_connector_name_is_slack() -> None:
 # ---------------------------------------------------------------------- cursor helpers
 
 
-def test_load_cursors_none_returns_empty_dict() -> None:
-    """First-sync (``cursor_value=None``) → empty resume dict.
+def test_load_cursors_none_returns_empty_compound() -> None:
+    """First-sync (``cursor_value=None``) → empty compound (both axes empty).
 
-    Empty dict tells the fetcher "no per-channel resume" and it pulls
-    the most recent N messages per channel.
+    Phase 20-B: ``_load_cursors`` always returns the compound shape
+    with both ``channels`` and ``threads`` keys present. An empty
+    compound tells the fetcher "no per-channel resume" (empty
+    ``channels`` axis) and tells the late-reply polling path (Phase
+    20-C) "no thread to poll" (empty ``threads`` axis).
     """
-    assert _load_cursors(None) == {}
+    state = _load_cursors(None)
+    assert state == {"channels": {}, "threads": {}}
+    # Both axes must be present and mutable for the sync path to
+    # mutate ``channels`` in-place without raising KeyError.
+    assert "channels" in state
+    assert "threads" in state
 
 
-def test_load_cursors_round_trips_dict() -> None:
-    """``_dump → _load`` preserves the cursor dict exactly.
+def test_load_cursors_round_trips_compound_schema() -> None:
+    """``_dump → _load`` preserves the compound cursor exactly.
 
     The serialised form is the only thing the projection persists, so
-    losing data on the round-trip would silently re-fetch history on
-    every resume. Pinning the symmetry locks the format.
+    losing data on the round-trip would silently re-fetch history /
+    skip late replies on every resume. Pinning the symmetry locks the
+    Phase 20-B format.
     """
-    original: dict[str, str | None] = {
-        "C1": "1700000001.000100",
-        "C2": "1700000002.000200",
+    original: SlackCursorState = {
+        "channels": {
+            "C1": "1700000001.000100",
+            "C2": "1700000002.000200",
+        },
+        "threads": {
+            "C1:1700000000.000000": "1700000003.000300",
+        },
     }
     serialised = _dump_cursors(original)
     assert _load_cursors(serialised) == original
 
 
-def test_load_cursors_accepts_null_values() -> None:
-    """A channel with a ``null`` value (never observed) round-trips.
+def test_load_cursors_accepts_empty_axes() -> None:
+    """Either axis may be empty — first sync, threads not yet populated, etc.
+
+    Pre-20-C the sync path always emits an empty ``threads`` axis, so
+    the parser must accept it without complaint. Symmetrically a
+    workspace whose first sync drained zero channels still emits an
+    empty ``channels`` axis — also valid.
+    """
+    # Empty channels, populated threads (hypothetical mid-state).
+    state_a = _load_cursors('{"channels":{},"threads":{"C1:t1":"ts-1"}}')
+    assert state_a == {"channels": {}, "threads": {"C1:t1": "ts-1"}}
+
+    # Populated channels, empty threads (the Phase 20-B steady state).
+    state_b = _load_cursors('{"channels":{"C1":"ts-1"},"threads":{}}')
+    assert state_b == {"channels": {"C1": "ts-1"}, "threads": {}}
+
+    # Both empty (first sync, zero observed).
+    state_c = _load_cursors('{"channels":{},"threads":{}}')
+    assert state_c == {"channels": {}, "threads": {}}
+
+
+def test_load_cursors_accepts_null_values_per_axis() -> None:
+    """A channel / thread with a ``null`` value (never observed) round-trips.
 
     A first-sync that found no messages in channel ``C-empty`` leaves
     its entry as ``None`` so the next sync still passes the key to
-    the fetcher (helps a future operator-facing diff between
-    "channel missing from cursor" vs. "channel observed nothing").
+    the fetcher. Same applies to threads on the late-reply polling
+    path: a parent that has been registered but whose replies haven't
+    been observed yet sits at ``None``.
     """
-    original: dict[str, str | None] = {"C1": "1700000001.000100", "C-empty": None}
+    original: SlackCursorState = {
+        "channels": {"C1": "1700000001.000100", "C-empty": None},
+        "threads": {"C1:1700000000.000000": None},
+    }
     assert _load_cursors(_dump_cursors(original)) == original
 
 
@@ -283,10 +323,63 @@ def test_load_cursors_rejects_non_dict_root() -> None:
         _load_cursors('["C1"]')
 
 
-def test_load_cursors_rejects_non_string_values() -> None:
+def test_load_cursors_rejects_legacy_flat_dict_schema() -> None:
+    """Pre-20-B flat shape (``{channel_id: ts}``) → ConfigError with rebuild prompt.
+
+    Phase 20-B is a hard schema flip ([epic #465](
+    https://github.com/ozzy-labs/opshub/issues/465)): the pre-20-B
+    flat ``{channel_id: ts}`` shape is rejected with a migration
+    prompt pointing at ``opshub projections rebuild``. opshub is
+    pre-userbase so we do not silently coerce — coercion would lose
+    the operator-facing migration moment and would also be subtly
+    wrong (the legacy ``ts`` was the per-channel max including
+    thread replies *that were never observed*, so a 1:1 lift into the
+    new ``channels`` axis breaks Phase 20-C's increment semantics).
+    """
+    legacy = '{"C1":"1700000001.000100","C2":"1700000002.000200"}'
+    with pytest.raises(ConfigError, match="opshub projections rebuild"):
+        _load_cursors(legacy)
+
+
+def test_load_cursors_rejects_legacy_message_mentions_pre_phase_20b() -> None:
+    """The rejection message names the schema flip so the operator can grep ADRs.
+
+    Pinning the wording (substring match) keeps the error message
+    discoverable from the ADR / epic side — an operator who reads
+    ``docs/upgrading.md`` or the epic body looking for the rebuild
+    prompt should find the same phrase here.
+    """
+    legacy = '{"C1":"ts-1"}'
+    with pytest.raises(ConfigError, match="pre-Phase-20-B"):
+        _load_cursors(legacy)
+
+
+def test_load_cursors_rejects_missing_channels_axis() -> None:
+    """Compound schema requires the ``channels`` axis — drop → ConfigError."""
+    with pytest.raises(ConfigError, match="opshub projections rebuild"):
+        _load_cursors('{"threads":{}}')
+
+
+def test_load_cursors_rejects_missing_threads_axis() -> None:
+    """Compound schema requires the ``threads`` axis — drop → ConfigError."""
+    with pytest.raises(ConfigError, match="opshub projections rebuild"):
+        _load_cursors('{"channels":{}}')
+
+
+def test_load_cursors_rejects_non_object_axis() -> None:
+    """Each axis must be a JSON object — list / scalar reject."""
+    with pytest.raises(ConfigError, match="'channels' axis must be a JSON object"):
+        _load_cursors('{"channels":["C1"],"threads":{}}')
+    with pytest.raises(ConfigError, match="'threads' axis must be a JSON object"):
+        _load_cursors('{"channels":{},"threads":"oops"}')
+
+
+def test_load_cursors_rejects_non_string_values_per_axis() -> None:
     """Values must be ``str | None``; int / bool reject as hand-edit accident."""
-    with pytest.raises(ConfigError, match="must be strings or null"):
-        _load_cursors('{"C1": 42}')
+    with pytest.raises(ConfigError, match="'channels' axis values must be"):
+        _load_cursors('{"channels":{"C1":42},"threads":{}}')
+    with pytest.raises(ConfigError, match="'threads' axis values must be"):
+        _load_cursors('{"channels":{},"threads":{"C1:t1":true}}')
 
 
 def test_max_ts_returns_candidate_when_prior_is_none() -> None:
@@ -372,16 +465,65 @@ def test_max_ts_returns_candidate_when_candidate_non_numeric_but_prior_numeric()
 
 
 def test_dump_cursors_is_deterministic() -> None:
-    """``sort_keys=True`` → identical input dicts produce identical output strings.
+    """``sort_keys=True`` → identical compound inputs produce identical output strings.
 
     Determinism matters because the projection row's ``cursor_value``
     becomes a meaningful diff in operator dashboards — a non-stable
     ordering would mark every sync run as "changed" even when no new
-    messages arrived.
+    messages arrived. The Phase 20-B compound shape recurses into both
+    axes, so this test pins both top-level (``channels`` before
+    ``threads``) and per-axis (``C1`` before ``C2``) ordering.
     """
-    a: dict[str, str | None] = {"C2": "ts-2", "C1": "ts-1"}
-    b: dict[str, str | None] = {"C1": "ts-1", "C2": "ts-2"}
+    a: SlackCursorState = {
+        "channels": {"C2": "ts-2", "C1": "ts-1"},
+        "threads": {"C2:t2": "ts-r2", "C1:t1": "ts-r1"},
+    }
+    b: SlackCursorState = {
+        "channels": {"C1": "ts-1", "C2": "ts-2"},
+        "threads": {"C1:t1": "ts-r1", "C2:t2": "ts-r2"},
+    }
     assert _dump_cursors(a) == _dump_cursors(b)
+
+
+def test_dump_cursors_emits_sorted_top_level_axes() -> None:
+    """Phase 20-B: top-level keys are emitted alphabetically (channels, threads).
+
+    Pins the exact serialised shape so a downstream consumer (operator
+    dashboard, ``opshub projections inspect``) can diff JSON values
+    textually without re-parsing. Drift on the top-level order would
+    silently invalidate textual diffs across runs.
+    """
+    state: SlackCursorState = {
+        "channels": {"C1": "ts-1"},
+        "threads": {"C1:t1": "ts-r1"},
+    }
+    assert _dump_cursors(state) == ('{"channels":{"C1":"ts-1"},"threads":{"C1:t1":"ts-r1"}}')
+
+
+def test_dump_cursors_emits_empty_compound_envelope() -> None:
+    """First-sync (no observations yet) still emits the schema marker.
+
+    Phase 20-B writes the compound envelope even when both axes are
+    empty so subsequent ``_load_cursors`` calls see a valid schema
+    (and the ``connector_cursors`` row advances out of the legacy /
+    NULL state on the first successful sync).
+    """
+    assert _dump_cursors({"channels": {}, "threads": {}}) == ('{"channels":{},"threads":{}}')
+
+
+def test_max_ts_works_on_threads_axis_keys() -> None:
+    """Phase 20-B: ``_max_ts`` is axis-agnostic — same helper for both axes.
+
+    The threads axis keys are ``"channel_id:thread_ts"`` strings, but
+    ``_max_ts`` compares the *values* (Slack ts strings) which are
+    identical in shape to the channels axis values. This test pins
+    the axis-agnostic contract so 20-C can reuse ``_max_ts`` for the
+    per-thread ``conversations.replies(oldest=...)`` cursor advance.
+    """
+    # Both candidate and prior are Slack-format ts strings, the same
+    # shape used on the channels axis.
+    assert _max_ts("1700000001.000100", "1700000002.000200") == "1700000002.000200"
+    assert _max_ts("1700000002.000200", "1700000001.000100") == "1700000002.000200"
 
 
 # ---------------------------------------------------------------------- sync: happy path
@@ -428,31 +570,46 @@ def test_sync_observes_each_yielded_message(monkeypatch: pytest.MonkeyPatch) -> 
     assert all(c["connector_name"] == "slack" for c in service.calls)
     assert all(c["source_type"] == "slack_message" for c in service.calls)
 
-    # New cursor encodes the latest ts per channel.
+    # New cursor encodes the latest ts per channel under the compound schema.
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor) == {"C1": "1700000002.000200"}
+    assert _load_cursors(result.new_cursor) == {
+        "channels": {"C1": "1700000002.000200"},
+        "threads": {},
+    }
 
 
 def test_sync_resumes_from_persisted_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The persisted JSON cursor is parsed and handed to the fetcher.
+    """The persisted JSON cursor is parsed and the channels axis is handed to the fetcher.
 
     Without this, every sync would re-fetch the channel's full
     history. Pinning the kwargs argument shape prevents a regression
-    that loses the resume value.
+    that loses the resume value. Phase 20-B: the fetcher signature
+    still takes ``cursor_per_channel=`` (a flat ``dict[str, str | None]``),
+    so the connector forwards the ``channels`` axis directly without
+    surfacing the compound envelope to the fetcher.
     """
     _patch_settings(monkeypatch, channels=["C1", "C2"])
     _patch_auth(monkeypatch)
     _, captured = _patch_fetcher(monkeypatch, yields=[])
 
-    prior_cursor = _dump_cursors({"C1": "1700000001.000100", "C2": None})
+    prior_cursor = _dump_cursors(
+        {
+            "channels": {"C1": "1700000001.000100", "C2": None},
+            "threads": {},
+        }
+    )
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=prior_cursor))
 
+    # Fetcher receives the channels axis verbatim — not the compound
+    # envelope. Pin Phase 20-A signature stability.
     assert captured["cursor_per_channel"] == {
         "C1": "1700000001.000100",
         "C2": None,
     }
-    # No yields → observed_count=0; cursor stays at the prior value.
+    # No yields → observed_count=0; cursor stays at the prior value
+    # (byte-identical because both axes are unchanged and
+    # ``_dump_cursors`` is deterministic).
     assert result.observed_count == 0
     assert result.new_cursor == prior_cursor
 
@@ -498,9 +655,13 @@ def test_sync_persists_max_ts_when_yield_order_regresses(
     assert result.observed_count == 2
     # The persisted cursor is the maximum ts despite the regression
     # in yield order — this is the load-bearing invariant against
-    # issue #339 inbox inflation.
+    # issue #339 inbox inflation. Wrapped in the Phase 20-B compound
+    # envelope.
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor) == {"C1": "1700000002.000200"}
+    assert _load_cursors(result.new_cursor) == {
+        "channels": {"C1": "1700000002.000200"},
+        "threads": {},
+    }
 
 
 def test_sync_advances_cursor_per_channel(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -521,8 +682,8 @@ def test_sync_advances_cursor_per_channel(monkeypatch: pytest.MonkeyPatch) -> No
     assert result.observed_count == 2
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
-        "C1": "ts-c1-new",
-        "C2": "ts-c2-new",
+        "channels": {"C1": "ts-c1-new", "C2": "ts-c2-new"},
+        "threads": {},
     }
 
 
@@ -612,7 +773,10 @@ def test_sync_skips_excluded_channel_but_advances_cursor(
     assert service.calls[0]["external_id"] == "C1:ts-1"
     # Both channels' cursors advance (skip-but-advance contract).
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor) == {"C1": "ts-1", "C-secret": "ts-2"}
+    assert _load_cursors(result.new_cursor) == {
+        "channels": {"C1": "ts-1", "C-secret": "ts-2"},
+        "threads": {},
+    }
 
 
 def test_sync_skips_excluded_sender_but_advances_cursor(
@@ -641,7 +805,10 @@ def test_sync_skips_excluded_sender_but_advances_cursor(
     assert result.observed_count == 1
     assert service.calls[0]["external_id"] == "C1:ts-human"
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor) == {"C1": "ts-human"}
+    assert _load_cursors(result.new_cursor) == {
+        "channels": {"C1": "ts-human"},
+        "threads": {},
+    }
 
 
 def test_sync_with_no_yields_preserves_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -655,7 +822,7 @@ def test_sync_with_no_yields_preserves_cursor(monkeypatch: pytest.MonkeyPatch) -
     _patch_auth(monkeypatch)
     _patch_fetcher(monkeypatch, yields=[])
 
-    prior_cursor = _dump_cursors({"C1": "ts-old"})
+    prior_cursor = _dump_cursors({"channels": {"C1": "ts-old"}, "threads": {}})
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=prior_cursor))
 
@@ -761,8 +928,13 @@ def test_sync_checkpoints_partial_cursor_on_mid_iteration_failure(
     assert call["sync_started"] is True
     assert call["value"] is not None
     # The persisted JSON contains the latest ts observed before the
-    # crash — pre-fix this would have been missing entirely.
-    assert _load_cursors(call["value"]) == {"C1": "1700000002.000200"}
+    # crash, wrapped in the Phase 20-B compound envelope (channels
+    # axis advanced, threads axis preserved empty — pre-fix this
+    # would have been missing entirely).
+    assert _load_cursors(call["value"]) == {
+        "channels": {"C1": "1700000002.000200"},
+        "threads": {},
+    }
 
 
 def test_sync_no_checkpoint_when_failure_yields_nothing(
@@ -842,7 +1014,10 @@ def test_sync_no_checkpoint_when_failure_yields_only_excluded_messages(
     assert len(service.cursor_set_calls) == 1
     call = service.cursor_set_calls[0]
     assert call["sync_started"] is True
-    assert _load_cursors(call["value"]) == {"C-secret": "1700000001.000100"}
+    assert _load_cursors(call["value"]) == {
+        "channels": {"C-secret": "1700000001.000100"},
+        "threads": {},
+    }
 
 
 def test_sync_no_checkpoint_on_normal_completion(
@@ -873,10 +1048,14 @@ def test_sync_no_checkpoint_on_normal_completion(
     # driver will write the terminal completed event).
     assert len(service.calls) == 1
     assert service.cursor_set_calls == []
-    # The success-path return value still encodes the new cursor.
+    # The success-path return value still encodes the new cursor
+    # under the Phase 20-B compound envelope.
     assert result.observed_count == 1
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor) == {"C1": "1700000001.000100"}
+    assert _load_cursors(result.new_cursor) == {
+        "channels": {"C1": "1700000001.000100"},
+        "threads": {},
+    }
 
 
 def test_sync_checkpoints_partial_progress_on_keyboard_interrupt(
@@ -908,7 +1087,10 @@ def test_sync_checkpoints_partial_progress_on_keyboard_interrupt(
     # BaseException-derived interrupt.
     assert len(service.cursor_set_calls) == 1
     call = service.cursor_set_calls[0]
-    assert _load_cursors(call["value"]) == {"C1": "1700000001.000100"}
+    assert _load_cursors(call["value"]) == {
+        "channels": {"C1": "1700000001.000100"},
+        "threads": {},
+    }
 
 
 def test_sync_checkpoint_preserves_prior_cursor_for_unprocessed_channels(
@@ -941,16 +1123,21 @@ def test_sync_checkpoint_preserves_prior_cursor_for_unprocessed_channels(
         error=ConnectorFailedError("Slack fetch failed for channel B: rate_limited"),
     )
 
-    prior_cursor = _dump_cursors({"A": "ts-a-prior", "B": None})
+    prior_cursor = _dump_cursors({"channels": {"A": "ts-a-prior", "B": None}, "threads": {}})
     service = _RecordingSourceService()
     with pytest.raises(ConnectorFailedError):
         SlackConnector().sync(_context(service, cursor_value=prior_cursor))
 
     # The checkpoint persists both channels' state — A's prior
-    # cursor untouched, B's partial cursor advanced.
+    # cursor untouched, B's partial cursor advanced. Compound
+    # envelope so the next sync's _load_cursors sees a valid Phase
+    # 20-B schema.
     assert len(service.cursor_set_calls) == 1
     call = service.cursor_set_calls[0]
-    assert _load_cursors(call["value"]) == {"A": "ts-a-prior", "B": "ts-b-new"}
+    assert _load_cursors(call["value"]) == {
+        "channels": {"A": "ts-a-prior", "B": "ts-b-new"},
+        "threads": {},
+    }
 
 
 # ---------------------------------------------------------------------- registry

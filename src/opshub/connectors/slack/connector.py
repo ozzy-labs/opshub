@@ -11,29 +11,61 @@ its conventions exactly so a future "common sync orchestrator" refactor
 Sync semantics
 --------------
 
-The per-channel resume cursor is a ``dict[str, str | None]`` mapping
-channel id → last-observed Slack ``ts``. We serialise it as JSON so it
-fits the single ``cursor_value`` column on the
-``connector_cursors`` projection (Phase 3 design — one row per
-``connector_name``, no per-key fan-out yet). Round-trip:
+The persisted resume cursor is a **compound** JSON object with two
+axes (Phase 20-B, [ADR-0030 §(d) revised, epic #465](
+https://github.com/ozzy-labs/opshub/issues/465)):
+
+.. code-block:: json
+
+   {
+     "channels": {"<channel_id>": "<max_ts>"},
+     "threads": {"<channel_id>:<thread_ts>": "<last_reply_ts>"}
+   }
+
+The ``channels`` axis carries the per-channel resume cursor that drives
+``conversations.history`` (Phase 7 semantics, unchanged). The
+``threads`` axis carries the per-thread resume cursor for
+``conversations.replies(oldest=last_reply_ts)`` increments — the late
+thread reply polling path established in Phase 20-C. Phase 20-B
+establishes the schema only; the ``threads`` dict is always written
+empty by this code (20-C populates it). Round-trip:
 
 1. ``context.cursor_value`` is the JSON string we wrote on the previous
    sync (or ``None`` for first-sync).
-2. :func:`_load_cursors` parses it into the ``dict`` shape the fetcher
-   takes via ``cursor_per_channel=``.
-3. As the fetcher yields ``(channel_id, message, new_cursor)`` triples
-   we update the in-memory dict per yield and forward the mapped
+2. :func:`_load_cursors` parses it into the
+   ``{"channels": dict, "threads": dict}`` compound shape. ``None``
+   yields the empty compound (both dicts empty).
+3. The ``channels`` axis is handed to the fetcher via
+   ``cursor_per_channel=`` (the fetcher signature is unchanged in
+   Phase 20-B). As the fetcher yields
+   ``(channel_id, message, new_cursor)`` triples we update the
+   in-memory ``channels`` dict per yield and forward the mapped
    ``SourceObserved`` to :meth:`SourceService.observe`. The dict
    advances in lock-step with the commit so a crash mid-loop loses at
    most one message worth of progress (the one whose ``observe`` call
    was about to commit).
-4. After the iterator drains we serialise the dict back to JSON and
-   hand it to the CLI driver as :attr:`SyncResult.new_cursor`.
+4. After the iterator drains we serialise the compound dict back to
+   JSON and hand it to the CLI driver as :attr:`SyncResult.new_cursor`.
 
 The cursor JSON is opaque to the driver and projection — both treat it
 as a single string. A future operator-facing ``opshub connector status``
-CLI could pretty-print the parsed dict, but Phase 7 MVP does not
-expose it.
+CLI could pretty-print the parsed dict.
+
+Schema migration (pre-userbase, no compat)
+------------------------------------------
+
+The pre-Phase-20-B cursor was a flat ``dict[channel_id, ts]`` (single
+axis, no thread cursor). Phase 20-B is a hard schema flip: the
+:func:`_load_cursors` parser rejects the legacy shape with a
+:class:`ConfigError` that directs the operator to ``opshub projections
+rebuild`` (per opshub's pre-userbase stance — see ``AGENTS.md`` §
+"設計判断のスタンス" and the epic [#465](
+https://github.com/ozzy-labs/opshub/issues/465) discussion). We do
+not silently coerce because the legacy shape is ambiguous: a JSON
+object whose top-level keys are channel ids (``"C1"``, ``"C2"``)
+could be a freshly-rebuilt empty compound (``{"channels": {},
+"threads": {}}``) only by coincidence, and we would lose the chance
+to surface the migration to the operator.
 
 Cursor monotonicity (defense in depth)
 --------------------------------------
@@ -123,7 +155,7 @@ Fail-fast posture (phase-7-plan §1 #8)
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from opshub.connectors.base import SyncResult
 from opshub.connectors.slack.auth import SlackAuth
@@ -135,7 +167,30 @@ if TYPE_CHECKING:
     from opshub.connectors.context import ConnectorContext
 
 
-__all__ = ["SlackConnector"]
+__all__ = ["SlackConnector", "SlackCursorState"]
+
+
+class SlackCursorState(TypedDict):
+    """Compound resume-cursor shape persisted in ``connector_cursors.cursor_value``.
+
+    Phase 20-B ([epic #465](https://github.com/ozzy-labs/opshub/issues/465))
+    schema. Two axes share one JSON object so the projection's TEXT column
+    keeps a single row per connector (no schema migration on
+    ``connector_cursors`` itself):
+
+    * ``channels``: ``{channel_id: max_ts}`` — drives
+      ``conversations.history`` resume (Phase 7 semantics, unchanged).
+    * ``threads``: ``{f"{channel_id}:{thread_ts}": last_reply_ts}`` —
+      drives the per-thread ``conversations.replies(oldest=...)``
+      increment path established in Phase 20-C. Phase 20-B writes this
+      axis as an empty dict; 20-C populates it.
+
+    The TypedDict is the source of truth for the on-disk shape; pyright /
+    mypy strict catch axis name typos at call sites.
+    """
+
+    channels: dict[str, str | None]
+    threads: dict[str, str | None]
 
 
 class SlackConnector:
@@ -201,6 +256,13 @@ class SlackConnector:
         excludes = load_excludes()
 
         cursors = _load_cursors(context.cursor_value)
+        # Phase 20-B: the fetcher signature still takes
+        # ``cursor_per_channel=`` (a flat ``dict[str, str | None]``) so
+        # 20-A and 20-B can land independently. We hand it the
+        # ``channels`` axis directly and mutate that dict per yield;
+        # the ``threads`` axis is owned by 20-C (late-reply polling)
+        # and stays empty here.
+        channel_cursors = cursors["channels"]
         # Snapshot the entry state so the ``finally`` arm below can
         # tell "no progress was made (cursors are byte-identical to
         # the resume point)" apart from "we observed N messages
@@ -209,12 +271,16 @@ class SlackConnector:
         # on a sync that yielded zero messages and then crashed in
         # the fetcher's setup path — emitting a redundant
         # ``ConnectorSyncStarted`` event with a no-op cursor value.
-        cursors_at_entry: dict[str, str | None] = dict(cursors)
+        # We snapshot the channels axis only because Phase 20-B does
+        # not write to the threads axis from within ``sync`` (20-C
+        # adds the per-thread polling path with its own progress
+        # tracking on the threads axis).
+        channels_at_entry: dict[str, str | None] = dict(channel_cursors)
         observed_count = 0
         completed_normally = False
         try:
             for channel_id, raw_message, new_cursor in fetcher.fetch_messages(
-                cursor_per_channel=cursors,
+                cursor_per_channel=channel_cursors,
             ):
                 # Defense-in-depth: never let the persisted cursor regress.
                 # The fetcher (post-#339 fix) yields ts-ascending across
@@ -223,7 +289,7 @@ class SlackConnector:
                 # newer one would otherwise rewind the projection cursor
                 # and cause every subsequent sync to re-ingest the gap
                 # (the regression-cascade documented in issue #339).
-                cursors[channel_id] = _max_ts(cursors.get(channel_id), new_cursor)
+                channel_cursors[channel_id] = _max_ts(channel_cursors.get(channel_id), new_cursor)
                 if excludes.excludes_channel(raw_message.channel_id) or excludes.excludes_sender(
                     raw_message.user_id
                 ):
@@ -261,18 +327,32 @@ class SlackConnector:
             # AND we made progress) to keep the happy path's event log
             # quiet: the CLI's terminal ``ConnectorSyncCompleted``
             # event already pins the same cursor for the success case.
-            if not completed_normally and cursors != cursors_at_entry:
+            if not completed_normally and channel_cursors != channels_at_entry:
                 # ``context.source_service`` is the CLI's
                 # ``_ProgressSourceProxy`` (or the raw ``SourceService``
                 # under unit-test fixtures); both forward ``cursor_set``
                 # via ``__getattr__`` so this call is transparent.
+                # We persist the compound shape (channels axis advanced,
+                # threads axis preserved from the resume point) so the
+                # next sync's :func:`_load_cursors` sees a valid Phase
+                # 20-B schema rather than a half-written legacy dict.
                 context.source_service.cursor_set(
                     self.name,
                     _dump_cursors(cursors),
                     sync_started=True,
                 )
 
-        new_cursor_value = _dump_cursors(cursors) if cursors else context.cursor_value
+        # Phase 20-B: the compound cursor envelope is **always**
+        # populated (both axes are always present, even when empty),
+        # so we always serialise the compound dict back to JSON. The
+        # pre-20-B short-circuit to ``context.cursor_value`` when the
+        # cursor dict was empty is obsolete: returning the empty
+        # compound on a first-sync-with-zero-messages run is now the
+        # desired behaviour, because it advances the projection row
+        # from "legacy / unset" to the Phase 20-B schema marker.
+        # Subsequent syncs then parse it as a valid compound rather
+        # than re-triggering the ConfigError migration prompt.
+        new_cursor_value = _dump_cursors(cursors)
         return SyncResult(observed_count=observed_count, new_cursor=new_cursor_value)
 
     def _resolve_channels(self) -> list[str]:
@@ -292,18 +372,33 @@ class SlackConnector:
         return list(settings.connectors.slack.channels)
 
 
-def _load_cursors(cursor_value: str | None) -> dict[str, str | None]:
-    """Parse the persisted JSON cursor into the fetcher's dict shape.
+def _load_cursors(cursor_value: str | None) -> SlackCursorState:
+    """Parse the persisted JSON cursor into the Phase 20-B compound shape.
 
-    ``None`` means "first sync — no cursors yet" and yields an empty
-    dict. A malformed JSON string raises :class:`ConfigError` so the
-    operator sees an actionable error rather than a silently re-fetched
-    history; this can only happen if a future schema change rolled
-    forward without a migration (very unlikely) or a manual
-    ``connector_cursors`` row edit went wrong.
+    ``None`` means "first sync — no cursors yet" and yields the empty
+    compound (both axes empty). A malformed JSON string or a
+    schema-violating shape raises :class:`ConfigError` so the operator
+    sees an actionable error rather than a silently re-fetched history.
+
+    Schema (Phase 20-B, epic [#465](
+    https://github.com/ozzy-labs/opshub/issues/465)):
+
+    .. code-block:: json
+
+       {"channels": {"<channel_id>": "<ts>"}, "threads": {"<channel_id>:<thread_ts>": "<ts>"}}
+
+    The pre-20-B legacy shape (``{"<channel_id>": "<ts>"}`` at the
+    top level — a flat per-channel dict with no ``channels`` / ``threads``
+    wrapper) is **rejected** with a migration-prompt :class:`ConfigError`
+    pointing at ``opshub projections rebuild``. opshub is pre-userbase
+    (``AGENTS.md`` §"設計判断のスタンス"), so we do not silently
+    coerce the legacy shape — coercion would lose the chance to surface
+    the schema flip to the operator and would also be ambiguous (the
+    legacy shape and a freshly-rebuilt empty compound look identical
+    only when there are no channels).
     """
     if cursor_value is None:
-        return {}
+        return _empty_state()
     try:
         parsed = json.loads(cursor_value)
     except json.JSONDecodeError as exc:
@@ -314,28 +409,75 @@ def _load_cursors(cursor_value: str | None) -> dict[str, str | None]:
         ) from exc
     if not isinstance(parsed, dict):
         raise ConfigError(
-            f"Slack cursor must be a JSON object mapping channel id "
-            f"to ts; got {type(parsed).__name__}"
+            "Slack cursor must be a JSON object with 'channels' and "
+            f"'threads' axes; got {type(parsed).__name__}. "
+            "Reset with `opshub projections rebuild` to recover."
         )
-    # Coerce to the documented ``dict[str, str | None]`` shape. Bool
-    # / int values would be a hand-edit accident; we reject rather
-    # than silently coerce so the operator sees the bad data. The
-    # ``cast`` narrows pyright's ``Unknown`` widen on the
-    # ``json.loads`` return; mypy treats it as redundant (the cast is
-    # from ``Any`` to ``dict[Any, Any]``) so we suppress only mypy.
+    # ``cast`` narrows pyright's ``Unknown`` widen on the ``json.loads``
+    # return; mypy treats the inner cast as redundant (the cast is from
+    # ``Any`` to ``dict[Any, Any]``) so we suppress only mypy.
     parsed_dict = cast(  # type: ignore[redundant-cast]
         dict[Any, Any], parsed
     )
+    # Detect the pre-20-B legacy shape (flat ``{channel_id: ts}``).
+    # Both axes are required keys in 20-B; a payload that lacks them
+    # is either the legacy shape or a hand-edit accident. We surface
+    # a migration prompt rather than silently rebuilding because
+    # operator action is required to drop the now-orphaned channels
+    # axis with the wrong semantics (the legacy values were the
+    # per-channel max ts including thread replies *that were never
+    # observed*, so even a 1:1 lift into the new ``channels`` axis
+    # would be subtly wrong for Phase 20-C's replies-fetch path).
+    if "channels" not in parsed_dict or "threads" not in parsed_dict:
+        raise ConfigError(
+            "Slack cursor uses the pre-Phase-20-B schema "
+            "(flat {channel_id: ts} dict). Reset with "
+            "`opshub projections rebuild` to migrate to the "
+            "compound {'channels': ..., 'threads': ...} schema."
+        )
+    channels_axis = _coerce_axis(parsed_dict["channels"], axis_name="channels")
+    threads_axis = _coerce_axis(parsed_dict["threads"], axis_name="threads")
+    return SlackCursorState(channels=channels_axis, threads=threads_axis)
+
+
+def _empty_state() -> SlackCursorState:
+    """Return a fresh, mutation-safe empty compound cursor.
+
+    Factored into a helper because :class:`SlackCursorState` is a
+    :class:`TypedDict` (so ``{}`` is not type-safe at the call sites)
+    and because the empty compound is referenced from both
+    :func:`_load_cursors` (``cursor_value is None`` branch) and from
+    tests that need to construct a baseline first-sync state.
+    """
+    return SlackCursorState(channels={}, threads={})
+
+
+def _coerce_axis(raw: Any, *, axis_name: str) -> dict[str, str | None]:
+    """Validate one axis of the compound cursor and coerce to ``dict[str, str | None]``.
+
+    Shared between the ``channels`` and ``threads`` axes because both
+    are flat ``str → str | None`` maps — only the key naming convention
+    differs (``channel_id`` vs ``"channel_id:thread_ts"``), which is
+    not enforced at the type layer.
+    """
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"Slack cursor {axis_name!r} axis must be a JSON object; got {type(raw).__name__}"
+        )
+    axis_dict = cast(  # type: ignore[redundant-cast]
+        dict[Any, Any], raw
+    )
     result: dict[str, str | None] = {}
-    for key, value in parsed_dict.items():
+    for key, value in axis_dict.items():
         if not isinstance(key, str):
             raise ConfigError(
-                f"Slack cursor keys must be strings (channel ids); got {type(key).__name__}"
+                f"Slack cursor {axis_name!r} axis keys must be strings; got {type(key).__name__}"
             )
         if value is not None and not isinstance(value, str):
             raise ConfigError(
-                f"Slack cursor values must be strings or null (ts); "
-                f"got {type(value).__name__} for channel {key!r}"
+                f"Slack cursor {axis_name!r} axis values must be "
+                f"strings or null (ts); got {type(value).__name__} "
+                f"for key {key!r}"
             )
         result[key] = value
     return result
@@ -346,11 +488,17 @@ def _max_ts(prior: str | None, candidate: str | None) -> str | None:
 
     Slack ``ts`` is documented as ``"seconds.microseconds"`` so
     :func:`float` comparison is total. ``None`` represents "no prior
-    cursor" (first observation for the channel) and yields the other
-    operand. If both sides parse but the candidate is older, we keep
-    the prior — that's the load-bearing invariant for the issue #339
-    fix: a yielded ``ts`` that goes *backwards* must never overwrite
-    a persisted cursor.
+    cursor" (first observation for the channel or thread) and yields
+    the other operand. If both sides parse but the candidate is older,
+    we keep the prior — that's the load-bearing invariant for the
+    issue #339 fix: a yielded ``ts`` that goes *backwards* must never
+    overwrite a persisted cursor.
+
+    Axis-agnostic: this helper compares raw ``ts`` strings without
+    interpreting the key shape, so Phase 20-B's compound cursor uses
+    the same helper for the ``channels`` axis (key = ``channel_id``)
+    and the ``threads`` axis (key = ``"channel_id:thread_ts"``). The
+    ``ts`` values themselves are Slack-format on both axes.
 
     Defensive fallback: a non-numeric ``ts`` (Slack contract
     violation, would have to be a malformed test fixture or a future
@@ -369,17 +517,21 @@ def _max_ts(prior: str | None, candidate: str | None) -> str | None:
         return candidate
 
 
-def _dump_cursors(cursors: dict[str, str | None]) -> str:
-    """Serialise the per-channel cursor dict to JSON for the projection.
+def _dump_cursors(cursors: SlackCursorState) -> str:
+    """Serialise the Phase 20-B compound cursor to JSON for the projection.
 
-    ``sort_keys=True`` makes the serialised value deterministic so a
-    no-op sync (no new messages) yields a byte-identical cursor and
-    the ``connector_cursors`` row's ``updated_at`` advances on
-    timestamp only — the cursor itself is stable enough to compare
-    across runs in operator dashboards. ``separators`` strips the
-    default whitespace so the row stays compact (one row per
-    connector, the size matters less than the determinism, but
-    matching :func:`json.dumps(..., separators=(",", ":"))` to the
-    GitHub cursor style keeps the projection rows uniformly tight).
+    ``sort_keys=True`` recurses into nested dicts, so both the
+    top-level ``channels`` / ``threads`` keys and every per-axis entry
+    are emitted in sorted order. That makes a no-op sync (no new
+    messages, no new replies) yield a byte-identical cursor across
+    runs — the ``connector_cursors`` row's ``updated_at`` advances on
+    timestamp only and operator dashboards can diff cursor values
+    meaningfully.
+
+    ``separators=(",", ":")`` strips default whitespace so the row
+    stays compact, matching the GitHub cursor style (the size matters
+    less than determinism, but a uniform style keeps the
+    ``connector_cursors`` projection rows visually tight across
+    connectors).
     """
     return json.dumps(cursors, sort_keys=True, separators=(",", ":"))
