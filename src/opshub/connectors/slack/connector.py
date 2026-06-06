@@ -162,14 +162,20 @@ from opshub.connectors.slack.auth import SlackAuth
 from opshub.connectors.slack.fetcher import SlackFetcher
 from opshub.connectors.slack.mapper import map_message
 from opshub.core.errors import ConfigError
-from opshub.core.time import parse_since, since_to_ts
+from opshub.core.time import now_utc, parse_since, since_to_ts
 
 if TYPE_CHECKING:
+    from datetime import timedelta
+
     from opshub.connectors.context import ConnectorContext
     from opshub.core.config import SlackChannelSpec, SlackConnectorSettings
 
 
 __all__ = ["SlackConnector", "SlackCursorState"]
+
+
+# pyright/mypy: ``timedelta`` is imported under ``TYPE_CHECKING`` for the
+# helper signatures; the runtime body lazy-imports it inside the helper.
 
 
 class SlackCursorState(TypedDict):
@@ -301,9 +307,23 @@ class SlackConnector:
             floor = floors.get(channel_id)
             if floor is not None:
                 resume[channel_id] = _max_ts(channel_cursors.get(channel_id), floor)
+        # Phase 20-C: snapshot the threads axis at entry so the
+        # partial-progress checkpoint below can tell "thread cursor
+        # advanced" from "no thread polling yet". The activity-window
+        # prune runs only on the happy path (after both phases drain)
+        # so a mid-iteration crash preserves every thread cursor —
+        # the next sync re-evaluates the window from scratch.
+        thread_cursors = cursors["threads"]
+        threads_at_entry: dict[str, str | None] = dict(thread_cursors)
         observed_count = 0
         completed_normally = False
         try:
+            # Phase 1: ``conversations.history`` (top-level + initial
+            # thread snapshot). Phase 20-A wired the initial snapshot
+            # into the fetcher's yield stream; the connector's only
+            # extra job here is to populate the threads axis so the
+            # Phase 2 polling path (below) knows which threads to
+            # poll on the *next* sync.
             for channel_id, raw_message, new_cursor in fetcher.fetch_messages(
                 cursor_per_channel=resume,
                 excludes=excludes,
@@ -316,6 +336,43 @@ class SlackConnector:
                 # and cause every subsequent sync to re-ingest the gap
                 # (the regression-cascade documented in issue #339).
                 channel_cursors[channel_id] = _max_ts(channel_cursors.get(channel_id), new_cursor)
+                # Phase 20-C: maintain the threads axis as Phase 1
+                # yields parents and reply snapshots. A parent with
+                # replies (``thread_ts == ts``) initialises the
+                # threads cursor at ``latest_reply`` so the polling
+                # phase doesn't re-fetch the snapshot Phase 20-A
+                # already yielded. A reply (``thread_ts != ts``)
+                # advances the threads cursor to ``max(prior, reply.ts)``
+                # so a partial-progress crash mid-snapshot still
+                # resumes from the last yielded reply.
+                if raw_message.thread_ts is not None:
+                    thread_key = _thread_cursor_key(channel_id, raw_message.thread_ts)
+                    if raw_message.thread_ts == raw_message.ts:
+                        # Parent with replies. Initialise the threads
+                        # cursor at the parent's ``latest_reply`` — Slack
+                        # populates it whenever ``reply_count > 0`` and
+                        # Phase 20-A's ``_iter_thread_replies`` already
+                        # yielded every reply up to that point. Falling
+                        # back to the parent ``ts`` (when ``latest_reply``
+                        # is absent — defensive) is harmless because the
+                        # polling phase passes ``oldest`` server-side so
+                        # a low init value just costs one extra
+                        # round-trip on the next sync.
+                        latest_reply_raw = raw_message.raw.get("latest_reply")
+                        latest_reply_ts = (
+                            str(latest_reply_raw)
+                            if latest_reply_raw is not None
+                            else raw_message.ts
+                        )
+                        thread_cursors[thread_key] = _max_ts(
+                            thread_cursors.get(thread_key), latest_reply_ts
+                        )
+                    else:
+                        # Reply yielded via Phase 20-A's initial
+                        # snapshot — advance threads cursor monotonically.
+                        thread_cursors[thread_key] = _max_ts(
+                            thread_cursors.get(thread_key), raw_message.ts
+                        )
                 if excludes.excludes_channel(raw_message.channel_id) or excludes.excludes_sender(
                     raw_message.user_id
                 ):
@@ -328,6 +385,77 @@ class SlackConnector:
                 # via TypeError.
                 context.source_service.observe(**kwargs)
                 observed_count += 1
+
+            # Phase 2: late-reply polling (Phase 20-C). For every
+            # thread the connector knows about that's still inside
+            # the activity window, call
+            # ``conversations.replies(oldest=last_reply_ts)`` to pick
+            # up any replies the workspace landed since the cursor
+            # was last advanced. Threads outside the window are
+            # pruned after the polling drains so the ``threads`` axis
+            # stays bounded by the operator-tunable window (default
+            # 30 days, ADR-0030 §(d) revised).
+            window_cutoff_ts = _window_cutoff_ts(slack_settings.thread_activity_window)
+            # Iterate a snapshot of the keys because the polling loop
+            # below may add new entries (a thread whose cursor was
+            # initialised at ``latest_reply`` and has zero new replies
+            # still leaves its key unchanged) — but never modifies the
+            # iteration set.
+            polling_keys = list(thread_cursors.keys())
+            for thread_key in polling_keys:
+                last_reply_ts = thread_cursors.get(thread_key)
+                if not _within_activity_window(last_reply_ts, window_cutoff_ts):
+                    # Out-of-window threads are pruned below. Skip the
+                    # API round-trip; ``conversations.replies`` would
+                    # still cost a Tier-3 budget slot per cold thread.
+                    continue
+                parsed = _parse_thread_cursor_key(thread_key)
+                if parsed is None:
+                    # Malformed key (operator hand-edit accident). Skip
+                    # and let the next sync's cursor parse error
+                    # (``_load_cursors``) surface the problem.
+                    continue
+                channel_id, thread_ts = parsed
+                if excludes.excludes_channel(channel_id):
+                    # Same short-circuit as Phase 1: an excluded
+                    # channel's replies would be filtered out at the
+                    # per-yield guard below anyway; skipping the API
+                    # call saves a Tier-3 budget slot.
+                    continue
+                for reply_message in fetcher.fetch_thread_replies(
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    oldest_reply_ts=last_reply_ts,
+                ):
+                    # Advance the threads cursor before the observe
+                    # call so a partial-progress crash mid-thread
+                    # still records the reply we got through. The
+                    # parent ``new_cursor`` element on the channels
+                    # axis (Phase 1) intentionally stays anchored to
+                    # the parent ts; threads cursor advancement is
+                    # the *only* signal the polling phase persists,
+                    # which is why ``fetch_thread_replies`` yields a
+                    # bare :class:`RawSlackMessage` (no cursor triple).
+                    thread_cursors[thread_key] = _max_ts(
+                        thread_cursors.get(thread_key), reply_message.ts
+                    )
+                    if excludes.excludes_channel(
+                        reply_message.channel_id
+                    ) or excludes.excludes_sender(reply_message.user_id):
+                        continue
+                    reply_kwargs = map_message(reply_message)
+                    context.source_service.observe(**reply_kwargs)
+                    observed_count += 1
+
+            # Prune out-of-window thread cursors so the ``threads``
+            # axis stays bounded. We do this on the happy path only —
+            # a mid-iteration crash preserves the threads axis from
+            # entry (the ``finally`` arm below persists the partial
+            # state) so the next sync's prune pass re-evaluates the
+            # window cleanly. Pruning earlier would race with the
+            # iteration above; pruning later is safe because
+            # :func:`_window_cutoff_ts` is captured once at sync time.
+            _prune_inactive_threads(thread_cursors, window_cutoff_ts)
             completed_normally = True
         finally:
             # Partial-progress checkpoint for issue #339 Bug 2: when the
@@ -353,15 +481,20 @@ class SlackConnector:
             # AND we made progress) to keep the happy path's event log
             # quiet: the CLI's terminal ``ConnectorSyncCompleted``
             # event already pins the same cursor for the success case.
-            if not completed_normally and channel_cursors != channels_at_entry:
+            if not completed_normally and (
+                channel_cursors != channels_at_entry or thread_cursors != threads_at_entry
+            ):
                 # ``context.source_service`` is the CLI's
                 # ``_ProgressSourceProxy`` (or the raw ``SourceService``
                 # under unit-test fixtures); both forward ``cursor_set``
                 # via ``__getattr__`` so this call is transparent.
-                # We persist the compound shape (channels axis advanced,
-                # threads axis preserved from the resume point) so the
-                # next sync's :func:`_load_cursors` sees a valid Phase
-                # 20-B schema rather than a half-written legacy dict.
+                # We persist the compound shape (both axes advanced as
+                # far as we got) so the next sync's :func:`_load_cursors`
+                # sees a valid Phase 20-B schema rather than a
+                # half-written legacy dict. Phase 20-C: the threads
+                # axis may also have advanced during the late-reply
+                # polling phase, so the checkpoint fires when either
+                # axis moved relative to entry.
                 context.source_service.cursor_set(
                     self.name,
                     _dump_cursors(cursors),
@@ -575,6 +708,83 @@ def _max_ts(prior: str | None, candidate: str | None) -> str | None:
         return candidate if float(candidate) >= float(prior) else prior
     except (TypeError, ValueError):
         return candidate
+
+
+def _thread_cursor_key(channel_id: str, thread_ts: str) -> str:
+    """Compose the ``threads`` axis key (Phase 20-C).
+
+    The Phase 20-B compound schema (:class:`SlackCursorState`) keys the
+    ``threads`` axis on the composite ``"{channel_id}:{thread_ts}"``
+    so a single Slack workspace's threads in two different channels
+    with the same ``thread_ts`` (a vanishingly rare but real
+    possibility — ``thread_ts`` is a per-channel id, not a
+    workspace-global one) don't collide.
+    """
+    return f"{channel_id}:{thread_ts}"
+
+
+def _parse_thread_cursor_key(key: str) -> tuple[str, str] | None:
+    """Decompose a ``threads`` axis key into ``(channel_id, thread_ts)``.
+
+    Returns ``None`` for a malformed key. The split is on the **first**
+    colon so a future ``thread_ts`` shape change that includes a colon
+    (Slack documents ``ts`` as ``"seconds.microseconds"`` so this is
+    defensive) still rejoins correctly on the right-hand side.
+    """
+    channel_id, sep, thread_ts = key.partition(":")
+    if not sep or not channel_id or not thread_ts:
+        return None
+    return channel_id, thread_ts
+
+
+def _window_cutoff_ts(activity_window: timedelta) -> str:
+    """Compute the Slack ``ts`` cutoff for the activity window (Phase 20-C).
+
+    ADR-0030 §(d) revised: threads whose ``last_reply_ts`` falls before
+    this cutoff are considered inactive — they're skipped on the polling
+    phase and pruned from the ``threads`` axis. The cutoff is evaluated
+    at sync time (not at config load), so a relative window like
+    ``"30d"`` walks forward with each run.
+    """
+    return since_to_ts(now_utc() - activity_window)
+
+
+def _within_activity_window(last_reply_ts: str | None, cutoff_ts: str) -> bool:
+    """Return ``True`` iff the thread is recent enough to poll (Phase 20-C).
+
+    ``None`` means the threads cursor was registered but no reply has
+    been observed yet — we treat that as in-window so the next sync
+    gets one chance to fetch replies. Malformed ``ts`` strings (Slack
+    contract violation) also fall through to in-window so the connector
+    doesn't silently drop them; the actual polling round-trip will
+    surface the error if Slack rejects it.
+    """
+    if last_reply_ts is None:
+        return True
+    try:
+        return float(last_reply_ts) >= float(cutoff_ts)
+    except (TypeError, ValueError):
+        return True
+
+
+def _prune_inactive_threads(thread_cursors: dict[str, str | None], cutoff_ts: str) -> None:
+    """Drop ``threads`` axis entries older than ``cutoff_ts`` (Phase 20-C).
+
+    Mutates ``thread_cursors`` in place. Called on the happy path
+    after the polling phase drains — the partial-progress checkpoint
+    (in :meth:`SlackConnector.sync`'s ``finally`` arm) deliberately
+    skips this so a mid-iteration crash preserves the threads axis
+    from entry. ADR-0030 §(d) revised: window default 30d, operator
+    overrides via ``[connectors.slack] thread_activity_window`` /
+    ``--thread-activity-window`` / ``OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW``.
+    """
+    stale_keys = [
+        key
+        for key, last_reply_ts in thread_cursors.items()
+        if not _within_activity_window(last_reply_ts, cutoff_ts)
+    ]
+    for key in stale_keys:
+        del thread_cursors[key]
 
 
 def _dump_cursors(cursors: SlackCursorState) -> str:

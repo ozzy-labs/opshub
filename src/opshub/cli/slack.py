@@ -48,7 +48,22 @@ slack_app.add_typer(slack_mentions_app)
 
 
 @slack_app.command("sync")
-def slack_sync() -> None:
+def slack_sync(
+    thread_activity_window: str | None = typer.Option(
+        None,
+        "--thread-activity-window",
+        help=(
+            "Late-reply polling activity window (Phase 20-C, "
+            "ADR-0030 §(d)). Threads whose last reply is older "
+            "than this window are skipped on the polling phase and "
+            "pruned from the threads cursor. Accepts '7d' / '4w'; "
+            "default 30d (from [connectors.slack] thread_activity_window "
+            "in opshub.toml). Overrides the config-file value for this "
+            "run only; persisted operator overrides belong in opshub.toml "
+            "or OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW."
+        ),
+    ),
+) -> None:
     """Incremental sync from the Slack Web API.
 
     Uses the cursor stored in the ``connector_cursors`` projection.
@@ -57,12 +72,30 @@ def slack_sync() -> None:
     set. ``[connectors.slack] sync_since`` (and per-channel ``since``)
     sets an optional date floor so messages older than the floor are
     never fetched, capping the cold-start backfill (Phase 20,
-    :doc:`ADR-0036 </adr/0036-slack-sync-date-floor>`). See
+    :doc:`ADR-0036 </adr/0036-slack-sync-date-floor>`).
+    ``[connectors.slack] thread_activity_window`` (and the
+    ``--thread-activity-window`` flag) tunes the late-reply polling
+    activity window (Phase 20-C, ADR-0030 §(d)): threads inactive
+    longer than the window are skipped on the polling phase and
+    pruned from the threads cursor. See
     :func:`opshub.cli._connector_common.run_connector_sync`
     for the shared driver invariants (cursor bracket, progress proxy,
     sanitised failure trail).
     """
+    import os
+
     from opshub.cli._connector_common import run_connector_sync
+
+    if thread_activity_window is not None:
+        # The shared driver does not know about per-connector flags
+        # (it only resolves a connector by name), so we surface the
+        # override through the env-var path the pydantic-settings
+        # nested delimiter already understands. Setting the env var
+        # here is process-local — the operator's shell environment is
+        # not mutated — so per-invocation overrides don't leak across
+        # ``opshub`` calls. Persistent overrides live in
+        # ``opshub.toml`` / the operator's exported env var.
+        os.environ["OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW"] = thread_activity_window
 
     run_connector_sync("slack")
 

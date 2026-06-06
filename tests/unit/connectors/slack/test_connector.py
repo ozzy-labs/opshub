@@ -22,6 +22,7 @@ indirectly via the fetcher).
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -154,6 +155,7 @@ def _patch_settings(
     *,
     channels: list[str | Any],
     sync_since: str | None = None,
+    thread_activity_window: timedelta | None = None,
 ) -> None:
     """Patch :class:`OpsHubSettings` so ``_resolve_slack_settings`` returns ``channels``.
 
@@ -169,13 +171,23 @@ def _patch_settings(
     so call sites that only care about ids stay terse; pass a
     :class:`SlackChannelSpec` directly to exercise per-channel ``since``
     (Phase 20, ADR-0036). ``sync_since`` sets the connector-wide floor.
+    ``thread_activity_window`` overrides the Phase 20-C late-reply
+    polling window (default = the production default 30d).
     """
-    from opshub.core.config import SlackChannelSpec
+    from opshub.core.config import (
+        SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW,
+        SlackChannelSpec,
+    )
 
     specs = [c if isinstance(c, SlackChannelSpec) else SlackChannelSpec(id=c) for c in channels]
     fake_settings = MagicMock()
     fake_settings.connectors.slack.channels = specs
     fake_settings.connectors.slack.sync_since = sync_since
+    fake_settings.connectors.slack.thread_activity_window = (
+        thread_activity_window
+        if thread_activity_window is not None
+        else SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW
+    )
     monkeypatch.setattr(
         "opshub.core.config.OpsHubSettings",
         lambda: fake_settings,
