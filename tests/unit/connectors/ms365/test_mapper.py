@@ -186,13 +186,12 @@ def test_map_onedrive_item_basic_conversion() -> None:
     assert event.title == "design-doc.md"
     assert event.summary == "/drive/root:/Projects/design-doc.md"
     assert event.url == "https://onedrive.live.com/?id=abc"
-    # Phase 10 (ADR-0020): OneDrive items are file *references* — the
-    # connector does not read the file body itself (that belongs to a
-    # future file-extraction connector, Phase 11+ — same posture as
-    # box_drive's ADR-0019 §不変条件 (b)). ``body`` stays ``None`` but
-    # the provenance tags still mark the observation as external +
-    # untrusted for cross-connector consistency.
-    assert event.body is None
+    # epic #470 / issue #481: OneDrive metadata-only path emits
+    # body = summary so the SourceObserved.body min_length=1
+    # invariant holds (ADR-0010 §不変条件). The connector still does
+    # not read file contents (ADR-0020 §(d) MS365 OneDrive exception
+    # mirroring box_drive's ADR-0019 §不変条件 (b)).
+    assert event.body == event.summary
     assert event.provenance_origin == "external"
     assert event.provenance_trust == "untrusted"
 
@@ -307,13 +306,16 @@ def test_map_outlook_message_body_at_cap_not_truncated() -> None:
     assert event.body == exact_body  # no marker appended
 
 
-def test_map_outlook_message_backward_compat_meta_only() -> None:
-    """No ``body`` in the Graph payload still produces a valid event.
+def test_map_outlook_message_no_body_falls_back_to_summary() -> None:
+    """A Graph payload without ``body`` still produces a valid event (epic #470 / #481).
 
-    Existing rows captured before the Phase 11 F3 ``$select`` expansion
-    will lack ``body`` on the preserved raw dict; the mapper must
-    surface ``body=None`` rather than raise, so the projection stores
-    NULL and downstream paths fall back to summary-only recall.
+    Outlook messages without a body — historic rows captured before the
+    Phase 11 F3 ``$select`` expansion, or messages Graph returns
+    without ``body.content`` — used to surface ``body=None`` and rely
+    on a Phase 10 ``NULL``-body shim. epic #470 / issue #481 promoted
+    :class:`SourceObserved.body` to ``min_length=1``; the mapper now
+    substitutes the ``bodyPreview``-derived summary as the body so
+    the metadata-only invariant (ADR-0010 §不変条件) holds.
     """
     raw = _outlook(raw_body_content=None)
     event = map_outlook_message(raw)
@@ -322,9 +324,9 @@ def test_map_outlook_message_backward_compat_meta_only() -> None:
     assert event.external_id == "msg-1"
     assert event.title == "Re: deployment plan"
     assert event.summary == "Sounds good — proceeding tomorrow."
-    # Body retention falls back to NULL; provenance tags still apply
-    # for cross-connector consistency.
-    assert event.body is None
+    # Body falls back to the summary; provenance tags still apply for
+    # cross-connector consistency.
+    assert event.body == event.summary
     assert event.provenance_origin == "external"
     assert event.provenance_trust == "untrusted"
 

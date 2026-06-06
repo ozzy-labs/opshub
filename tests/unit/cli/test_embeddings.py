@@ -188,6 +188,9 @@ def _seed_source(engine: Engine, *, summary: str, external_id: str) -> str:
                 summary=summary,
                 observed_at=now,
                 updated_at=now,
+                # epic #470 / issue #481: ``sources.body`` is NOT NULL;
+                # metadata-only paths emit body = summary.
+                body=summary,
             )
         )
     return source_id

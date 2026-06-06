@@ -217,14 +217,21 @@ def _seed_source_with_embedding(
     write both halves — otherwise the entity is invisible to the
     scan.
 
-    Phase 10 step B2: the optional ``body`` kwarg defaults to None
-    so every legacy test path keeps inserting summary-only rows. New
-    Phase 10 tests pass ``body`` explicitly to exercise the
-    ``COALESCE(body, summary)`` fallback in
-    :data:`opshub.services.duplicate_service._ENTITY_TEXT_COLUMNS`.
+    epic #470 / issue #481: ``sources.body`` is ``NOT NULL`` (migration
+    0030). When ``body`` is not passed, the helper substitutes
+    ``summary`` (or a placeholder when both are absent) so the row
+    satisfies the new NOT NULL invariant — the metadata-only rule
+    (ADR-0010 §不変条件) applies in tests the same way it does in
+    production connectors.
     """
     source_id = new_ulid()
     now = now_utc()
+    if body is not None:
+        resolved_body = body
+    elif summary is not None:
+        resolved_body = summary
+    else:
+        resolved_body = "placeholder body"
     with engine.begin() as conn:
         conn.execute(
             insert(sources_table).values(
@@ -237,7 +244,7 @@ def _seed_source_with_embedding(
                 summary=summary,
                 observed_at=now,
                 updated_at=now,
-                body=body,
+                body=resolved_body,
             )
         )
         if summary is not None or body is not None:
@@ -634,13 +641,19 @@ def test_find_duplicates_source_pair_text_prefers_body(
     }
 
 
-def test_find_duplicates_source_text_falls_back_to_summary_when_body_null(
+def test_find_duplicates_source_text_uses_body_after_body_equals_summary_substitution(
     migrated_engine: Engine,
 ) -> None:
-    """A pair with ``body=NULL`` displays the ``summary`` (backward-compat).
+    """Metadata-only sources display the substituted ``body = summary`` text.
 
-    Phase 3-9 / ``box_drive`` rows never carry a body. The COALESCE
-    fallback must preserve the Phase 4 display behaviour for them.
+    epic #470 / issue #481 promoted ``sources.body`` to ``NOT NULL`` +
+    ``min_length=1`` (migration 0030). Stat-only / metadata-only
+    connectors emit ``body = summary`` at mapper time (ADR-0010
+    §不変条件), so the duplicate service reads ``body`` directly and
+    sees the summary content via that column — no COALESCE fallback
+    is required any more. The test fixture mirrors that production
+    pattern: when ``body=None`` is passed, ``_seed_source_with_embedding``
+    substitutes ``summary`` into the body column.
     """
     embedder = _StubEmbedder()
     _seed_source_with_embedding(

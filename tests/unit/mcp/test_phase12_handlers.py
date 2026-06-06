@@ -131,7 +131,8 @@ def _seed_source_at(engine: Engine, *, source_id: str, when: datetime) -> None:
                 title=f"src-{source_id[-3:]}",
                 url=None,
                 summary=None,
-                body=None,
+                # epic #470 / issue #481: ``sources.body`` is NOT NULL.
+                body=f"src-{source_id[-3:]}",
                 provenance_origin=None,
                 provenance_trust=None,
                 observed_at=when,

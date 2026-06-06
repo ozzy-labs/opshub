@@ -320,7 +320,8 @@ class _Phase12Fixture:
     source_type: str
     external_id: str
     title: str
-    body: str | None
+    # epic #470 / issue #481: ``body`` is required + non-empty.
+    body: str
     provenance_origin: ProvenanceOrigin | None
 
 
@@ -359,9 +360,12 @@ _PHASE12_FIXTURES: tuple[_Phase12Fixture, ...] = (
         source_type="box_drive_file",
         external_id="Phase12/skill-catalog.md",
         title="skill-catalog.md",
-        # FS-scan default body=None (ADR-0019 §不変条件 (b)).
-        body=None,
-        provenance_origin=None,
+        # epic #470 / issue #481 (ADR-0010 §不変条件 metadata-only
+        # rule): FS-scan default emits body=summary so the projection
+        # satisfies the body NOT NULL invariant without violating
+        # ADR-0019 §不変条件 (b).
+        body="path: Phase12/skill-catalog.md",
+        provenance_origin="external",
     ),
     _Phase12Fixture(
         connector_name="teams",
@@ -984,14 +988,16 @@ def test_phase12_assistant_lifecycle(
             f" {propose_generate_modes}"
         )
 
-        # 7d. box_drive default body=None round-trip (carried forward
-        #     from Phase 10 / 11 lifecycles).
+        # 7d. box_drive default body=summary round-trip (epic #470 /
+        #     issue #481 replaced the Phase 10/11 ``body=NULL`` shim).
         with engine.connect() as conn:
             row = conn.execute(
                 text("SELECT body FROM sources WHERE id = :id"),
                 {"id": box_drive_source_id},
             ).first()
         assert row is not None
-        assert row.body is None, "ADR-0019 §不変条件 (b) — FS-scan body=NULL"
+        assert row.body == "path: Phase12/skill-catalog.md", (
+            "epic #470 / #481 — FS-scan body=summary (ADR-0010 §不変条件)"
+        )
     finally:
         engine.dispose()

@@ -104,50 +104,36 @@ class EntitySource:
     ``id_column``". The service iterates :data:`_SOURCES` so adding a
     new embeddable entity in Phase 4.x is one entry there.
 
-    Phase 10 step B2 (ADR-0012 改訂版 §4) introduces an optional
-    ``fallback_text_column`` so an entity can declare a **fallback
-    chain** for embedding text. The canonical use case is ``source``:
-    the embed input is ``COALESCE(body, summary)`` — ADR-0020 §決定
-    (a) holds the full body in ``sources.body``, but Phase 3-9 rows
-    (and the ``box_drive`` connector which never reads file contents,
-    ADR-0019 §不変条件 (b)) land with ``body = NULL`` and must fall
-    back to ``summary`` so backward-compat (ADR-0020 §(d)) is
-    preserved without any special-casing in the service body.
-
-    When ``fallback_text_column`` is ``None``, the entity has no
-    fallback and the SQL is exactly the pre-Phase-10 ``SELECT
-    <text_column>`` shape.
+    The entity-to-column mapping is a simple 1:1 contract. The
+    previous ``fallback_text_column`` (Phase 10 step B2) carried a
+    ``COALESCE(body, summary)`` shim for the source entity; epic #470
+    / issue #481 promoted ``sources.body`` to ``NOT NULL`` (migration
+    0030) so the fallback chain is no longer needed — metadata-only
+    connectors emit ``body = summary`` directly at mapper time
+    (ADR-0010 §不変条件).
     """
 
     entity_type: str
     table_name: str  # diagnostic / log breadcrumb
     id_column: str
     text_column: str
-    fallback_text_column: str | None = None
 
 
 # Entity → text column mapping. The columns match the projection
 # tables registered in :mod:`opshub.projections` (verified against the
 # table declarations in PR #45 / PR #4 / PR #11 / PR #5).
 #
-# Phase 10 step B2 (ADR-0012 改訂版 §4 + ADR-0020): the ``source``
-# entry embeds ``COALESCE(body, summary)`` so the new ``sources.body``
-# column (migration 0018) is the embed source whenever the connector
-# populated it. Historic rows + the ``box_drive`` connector (which
-# never reads file bodies) keep landing with ``body = NULL`` and the
-# COALESCE falls through to ``summary``, preserving the Phase 4
-# behaviour.
+# epic #470 / issue #481: ``sources.body`` is required + non-empty
+# (migration 0030); the embed input is ``body`` directly.
+# Metadata-only connectors satisfy the contract by emitting
+# ``body = summary`` (ADR-0010 §不変条件 metadata-only rule), so the
+# embed surface stays uniform across connectors without a COALESCE
+# detour.
 _SOURCES: tuple[EntitySource, ...] = (
     EntitySource("task", "tasks", "id", "title"),
     EntitySource("decision", "decisions", "id", "text"),
     EntitySource("inbox_item", "inbox_items", "id", "summary"),
-    EntitySource(
-        "source",
-        "sources",
-        "id",
-        "body",
-        fallback_text_column="summary",
-    ),
+    EntitySource("source", "sources", "id", "body"),
 )
 
 
@@ -328,14 +314,13 @@ class EmbeddingService:
     def purge_embeddings(self, *, entity_type: str | None = None) -> int:
         """Drop ``embeddings`` rows + vec0 vectors for the given scope.
 
-        Phase 10 step B2 (ADR-0012 改訂版 §4): the embed input for
-        ``source`` switched from ``summary`` to ``COALESCE(body,
-        summary)``. Existing embeddings written before Phase 10 carry
-        the same ``(model_id, model_version)`` as the new path, so the
-        :meth:`embed_pending` ``NOT EXISTS`` filter would skip them
-        even though the underlying text has changed (summary → body).
-        Operators reach this purge first so the next ``embed_pending``
-        re-embeds the affected entity family from the new text source.
+        Phase 10 step B2 (ADR-0012 改訂版 §4) introduced the
+        ``COALESCE(body, summary)`` embed surface; epic #470 / issue
+        #481 simplified it to ``body`` directly now that
+        ``sources.body`` is ``NOT NULL`` (migration 0030, metadata-only
+        connectors emit ``body = summary``). Operators reach this purge
+        when switching embedding backends so the next ``embed_pending``
+        re-embeds the affected entity family from the active model.
 
         Delegates the actual deletion to
         :meth:`VectorStore.delete`, which on the canonical
@@ -517,13 +502,10 @@ class EmbeddingService:
         result is exactly the rows that the current backend has not
         yet embedded.
 
-        Phase 10 step B2: when :class:`EntitySource` declares a
-        ``fallback_text_column``, the SELECT projects
-        ``COALESCE(text_column, fallback_text_column)`` so an entity
-        whose primary column is NULL falls through to the secondary
-        column (``source.body`` → ``source.summary``, ADR-0012 改訂版
-        §4). The COALESCE expression sits on the SQLAlchemy side so
-        the SQL stays statically composed.
+        epic #470 / issue #481: the ``source`` entity reads ``body``
+        directly. ``sources.body`` is ``NOT NULL`` (migration 0030);
+        metadata-only connectors emit ``body = summary`` so the embed
+        surface is dense (ADR-0010 §不変条件).
 
         The ``embeddings`` table is **not** registered on
         :data:`opshub.db.schema.metadata` (matching the SqliteVecStore
@@ -540,7 +522,9 @@ class EmbeddingService:
             for row in conn.execute(stmt):
                 # SQLAlchemy returns ``Any`` for column values; the
                 # projection schemas constrain id_column to ``str`` and
-                # text_column to ``str | None``.
+                # text_column to ``str | None`` for non-source
+                # entities (``task.title`` etc. are nullable per their
+                # projection schemas).
                 yield str(row[0]), (None if row[1] is None else str(row[1]))
 
     def _pending_not_exists(self, source: EntitySource) -> TextClause:
@@ -571,26 +555,18 @@ class EmbeddingService:
     def _text_expr(source: EntitySource, source_table: Table) -> ColumnElement[str]:
         """Return the embed-input SQL expression for ``source``.
 
-        With no fallback declared the expression is the bare
-        ``text_column`` (Phase 4 shape, byte-for-byte identical SQL).
-        With a fallback declared the expression is
-        ``COALESCE(text_column, fallback_text_column)`` so a NULL
-        primary text falls through to the secondary text (Phase 10
-        step B2, ADR-0012 改訂版 §4).
+        The expression is the bare ``text_column`` (Phase 4 shape,
+        byte-for-byte identical SQL). The previous COALESCE fallback
+        chain (Phase 10 step B2, ADR-0012 改訂版 §4) collapsed when
+        ``sources.body`` became ``NOT NULL`` (epic #470 / issue #481,
+        migration 0030); metadata-only connectors emit
+        ``body = summary`` directly so no SQL-level fallback is
+        needed.
 
         Returned as a SQLAlchemy ``ColumnElement[str]`` so the caller
-        can pass it straight into :func:`sqlalchemy.select` with the
-        same static type as the bare ``Column`` it replaces.
+        can pass it straight into :func:`sqlalchemy.select`.
         """
-        primary: ColumnElement[str] = source_table.c[source.text_column]
-        if source.fallback_text_column is None:
-            return primary
-        fallback: ColumnElement[str] = source_table.c[source.fallback_text_column]
-        # ``func.coalesce`` returns ``Function[Any]``; cast to
-        # ``ColumnElement[str]`` so the static type lines up with the
-        # bare-column branch above. The SQL itself stays
-        # ``COALESCE(<primary>, <fallback>)`` regardless.
-        return func.coalesce(primary, fallback).label("text_expr")
+        return source_table.c[source.text_column]
 
     def _fetch_pending_text(self, source: EntitySource, entity_id: str) -> str | None:
         """Return the entity's text iff a current-backend embedding is missing.

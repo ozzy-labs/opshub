@@ -80,11 +80,12 @@ def embeddings_rebuild(
     ``--purge`` (Phase 10 step B2): drops the existing
     ``(model_id, model_version)`` embeddings for the scope before the
     rebuild kicks in. Use this when the embed input shape changed but
-    the model identity did not — the canonical case is migrating from
-    ``sources.summary`` to ``COALESCE(sources.body, sources.summary)``
-    (ADR-0012 改訂版 §4). Without ``--purge`` the rebuild's
+    the model identity did not — historically the canonical case was
+    migrating the ``source`` embed surface (``summary`` →
+    ``COALESCE(body, summary)`` → ``body``, the last hop landed with
+    epic #470 / issue #481). Without ``--purge`` the rebuild's
     ``NOT EXISTS`` filter sees the entity as "already embedded" and
-    keeps the stale summary-based vector.
+    keeps the stale prior-shape vector.
     """
     # Lazy imports: keep CLI cold start fast (ADR-0001).
     from opshub.cli import _progress

@@ -32,7 +32,10 @@ Mapping contract (ADR-0019 §(j) + §決定 (c)(d)(g))
 * ``body`` — extracted markdown from
   :func:`opshub.core.document_extract.extract_document` when the
   scanner ran with ``content_extraction=True`` and the file is
-  Office; ``None`` otherwise (mirrors box_drive F4-a contract).
+  Office. Stat-only paths reuse the ``"path: <rel_path>"`` summary
+  as the body so the ``SourceObserved.body`` ``min_length=1``
+  invariant (ADR-0010 §不変条件, epic #470 / #481) holds for every
+  observation (mirrors box_drive F4-a contract).
 * ``provenance_origin`` = ``"external"`` /
   ``provenance_trust`` = ``"untrusted"`` — OneDrive content is
   SaaS-sourced (operator does not control upstream edits), same
@@ -119,6 +122,11 @@ def map_scanned_file(
     # format-specific tag; everything else keeps the default
     # ``"onedrive_drive_file"`` shape.
     source_type: str = scanned.office_source_type or SOURCE_TYPE
+    # epic #470 / issue #481: ``SourceObserved.body`` is required and
+    # non-empty. Stat-only paths reuse the ``"path: <rel_path>"``
+    # summary as the body so the invariant holds without violating
+    # ADR-0019 §不変条件 (b) (no ``open()`` on stat-only files).
+    body: str = scanned.body if scanned.body else summary
     return SourceObserved(
         aggregate_id=new_ulid(),
         occurred_at=occurred_at,
@@ -130,12 +138,10 @@ def map_scanned_file(
         url=f"file://{abs_path}",
         summary=summary,
         fingerprint=scanned.fingerprint,
-        # ADR-0019 §不変条件 (b) — body is ``None`` by default;
-        # populated only via the ADR-0019 §(b') opt-in path when the
-        # scanner ran with ``content_extraction=True`` on a matching
-        # Office file. Provenance tags are stamped regardless of body
-        # presence for downstream consistency (ADR-0020 §(e)).
-        body=scanned.body,
+        # Provenance tags are stamped regardless of which path supplied
+        # the body (Office extraction vs. stat-only summary duplicate);
+        # OneDrive content is SaaS-sourced (ADR-0020 §(e)).
+        body=body,
         provenance_origin="external",
         provenance_trust="untrusted",
     )

@@ -145,18 +145,29 @@ def map_chat_message(raw: RawTeamsChatMessage) -> dict[str, Any]:
     plain_text = _to_plain_text(raw.body_html, raw.body_content_type)
     chat_label = raw.chat_topic or raw.chat_id or "(chat)"
     sender_label = raw.sender_display_name or "system"
+    title = f"{sender_label} in {chat_label}"
+    summary = _truncate(plain_text.strip(), SUMMARY_MAX_CHARS) or None
+
+    # epic #470 / issue #481 promoted ``SourceObserved.body`` to
+    # required + non-empty. Empty bodies (HTML strips to nothing,
+    # whitespace-only ``<div></div>``) fall back to the title so the
+    # invariant holds (ADR-0010 §不変条件 metadata-only rule); the title
+    # is always non-empty (``"<sender> in <chat>"`` shape).
+    body = plain_text if plain_text else title
 
     return {
         "connector_name": "teams",
         "external_id": f"{raw.chat_id}:{raw.id}",
         "source_type": SOURCE_TYPE,
-        "title": f"{sender_label} in {chat_label}",
-        "summary": _truncate(plain_text.strip(), SUMMARY_MAX_CHARS) or None,
+        "title": title,
+        "summary": summary,
         "url": raw.web_url,
-        # ADR-0020: retain the full message body and tag it
-        # external + untrusted. Empty body → ``None`` so the projection
-        # stores NULL rather than "".
-        "body": plain_text or None,
+        # ADR-0020: retain the full message body and tag it external +
+        # untrusted. epic #470 / #481 (ADR-0010 §不変条件): empty body
+        # falls back to ``title`` so every Teams source carries a
+        # non-empty body without violating the retain-everything
+        # invariant for the (rare) text-less HTML message.
+        "body": body,
         "provenance_origin": "external",
         "provenance_trust": "untrusted",
     }

@@ -251,7 +251,7 @@ class _ReplyToSourceRow:
     source_type: str
     connector_name: str
     title: str
-    body: str | None
+    body: str
     summary: str | None
 
 
@@ -674,7 +674,11 @@ class ProposalService:
                 source_id=reply_to_row.id,
                 source_type=reply_to_row.source_type,
                 title=reply_to_row.title,
-                body=reply_to_row.body or reply_to_row.summary or "",
+                # epic #470 / issue #481: ``sources.body`` is NOT NULL
+                # (migration 0030); metadata-only connectors emit
+                # ``body = summary`` so reading ``body`` directly is
+                # safe and matches the embedding-side input.
+                body=reply_to_row.body,
             ),
             style_examples=style_examples,
             context_sources=context_sources,
@@ -975,9 +979,10 @@ class ProposalService:
 
         Returns a typed dataclass capturing the columns the reply-
         draft prompt needs: ``id`` / ``source_type`` / ``title`` /
-        ``body`` (Phase 10 step A2 ADR-0020) / ``summary`` (Phase 3
-        fallback for rows that have no full body). Missing row →
-        ``None`` so :meth:`generate_reply_draft` can raise a clear
+        ``body`` (Phase 10 step A2 ADR-0020; epic #470 / issue #481
+        promoted ``sources.body`` to ``NOT NULL`` so the field is
+        always populated) / ``summary`` (still optional). Missing row
+        → ``None`` so :meth:`generate_reply_draft` can raise a clear
         ``OpsHubError`` rather than rendering an empty
         ``<reply_to_source>`` block.
         """
@@ -999,7 +1004,10 @@ class ProposalService:
             source_type=str(row[1]),
             connector_name=str(row[2]),
             title=str(row[3]),
-            body=(None if row[4] is None else str(row[4])),
+            # epic #470 / issue #481: ``sources.body`` is NOT NULL so
+            # the column never reads back as ``None``. The ``str()``
+            # cast keeps the SQLAlchemy ``Any`` value typed.
+            body=str(row[4]),
             summary=(None if row[5] is None else str(row[5])),
         )
 
@@ -1036,7 +1044,11 @@ class ProposalService:
         (the "Inbox Zero failure mode avoidance" trade-off from
         ADR-0016 §決定 (k)).
         """
-        query_text = reply_to_row.body or reply_to_row.summary or reply_to_row.title
+        # epic #470 / issue #481: ``sources.body`` is NOT NULL
+        # (migration 0030); metadata-only connectors emit
+        # ``body = summary`` so ``body`` is always populated. No
+        # COALESCE fallback chain is required.
+        query_text = reply_to_row.body
         if not query_text.strip():
             return []
 
@@ -1078,7 +1090,12 @@ class ProposalService:
                 # they just lose the tone-matching benefit.
                 return []
         for row in rows:
-            text_value = row.body or row.summary
+            # epic #470 / issue #481: ``sources.body`` is NOT NULL; no
+            # COALESCE fallback. Whitespace-only bodies (theoretically
+            # unreachable given ``min_length=1`` on the event schema)
+            # are still skipped defensively so a future regression
+            # cannot leak a useless style example into the prompt.
+            text_value = row.body
             if not text_value or not str(text_value).strip():
                 continue
             examples.append(

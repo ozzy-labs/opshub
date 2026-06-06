@@ -34,7 +34,11 @@ Connector の **責務**:
 3. cursor checkpointing (`connector_cursors` テーブル更新)
 4. `SourceObserved` / `SourceReferenced` 等の source event を Application Service 経由で append
 5. inbox item を Application Service 経由で作成 (triage 用キューに投入)
-6. body 本文の minimization (ADR-0005 参照、summary / extracted action items のみ保持)
+6. body 本文の minimization (ADR-0005 参照、summary / extracted action items のみ保持) — **Phase 10 で撤回**: ADR-0020 で「本文を取り込んで `SourceObserved.body` に載せる」方針に転換した。本項は ADR-0005 supersede 後は §不変条件 6 (下記) に置き換わる
+
+Connector の **不変条件** (epic #470 / issue #481 で追加):
+
+6. **`SourceObserved.body` は必ず非空文字列** — Phase 10 当時 Optional だった `body` は epic #470 (pre-userbase compat shim cleanup) で `str = Field(min_length=1)` に格上げされた (ADR-0020 §(d') 参照)。metadata-only / stat-only path (`box_drive` の `content_extraction=False` / Google Workspace `google_workspace_file` catch-all / MS365 OneDrive metadata / Box web-API events / GitHub notifications 等) は `body = summary` を emit することで契約を満たす。summary を持たない event 形は連続して `title` を fallback として使う (e.g. Slack の `channel_join` event)。`SourceObserved` 構築時に Pydantic `ValidationError` で fail-fast し、`NULL` write は projection 層でも `sources.body NOT NULL` 制約で拒否される (migration `0030_enforce_sources_body_not_null`)
 
 Connector の **禁止事項**:
 

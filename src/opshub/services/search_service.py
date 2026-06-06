@@ -39,17 +39,19 @@ returns hits across every connector that populated body. Callers can
 optionally restrict by ``connector_name`` (e.g. for "search only
 Slack").
 
-NULL body rows
---------------
+Body retention contract
+-----------------------
 
-Phase 3-9 historic ``sources`` rows and the ``box_drive`` connector
-(ADR-0019 §不変条件 (b)) land with ``body = NULL``. The migration
-``0019`` trigger inserts an empty FTS document for those rows so the
-index stays 1:1 with sources rowids; empty documents are returned by
-no MATCH query, so they cannot pollute the result set. This matches
-the embedding-side ``COALESCE(body, summary)`` fallback (ADR-0012
-改訂版 §4) — FTS only finds rows the connector enriched with full
-body, recall finds the rest.
+epic #470 / issue #481 promoted :attr:`SourceObserved.body` to required
++ non-empty and :data:`opshub.projections.sources.sources_table`'s
+``body`` column to ``NOT NULL`` (migration
+``0030_enforce_sources_body_not_null``). Every ``sources`` row therefore
+carries a non-empty body — stat-only / metadata-only connectors
+substitute ``body = summary`` (ADR-0010 §不変条件 metadata-only rule).
+The FTS5 index over ``sources.body`` is dense (one searchable document
+per row) and the read path queries ``body`` directly without a
+``COALESCE`` fallback. The previous Phase 3-9 ``NULL``-body shim is gone
+(ADR-0020 §(d) supersedes).
 
 Query syntax
 ------------
@@ -334,13 +336,11 @@ class SearchService:
             where_clauses.append("sources.connector_name = :connector_name")
             params["connector_name"] = connector_name
 
-        # ``sources.body IS NOT NULL`` guards the NULL-body rows
-        # (Phase 3-9 historicals + ``box_drive`` connector, ADR-0019)
-        # so they cannot pollute the LIKE result set. The FTS path
-        # already filters them out via the empty-document trigger
-        # contract from migration 0019 / 0028; the LIKE path needs
-        # an explicit guard because it bypasses the FTS index.
-        where_clauses.append("sources.body IS NOT NULL")
+        # epic #470 / issue #481 promoted ``sources.body`` to NOT NULL
+        # (migration 0030); no NULL-body guard is needed. Every row has
+        # a non-empty body (metadata-only connectors emit
+        # ``body = summary`` to satisfy the invariant, ADR-0010
+        # §不変条件).
 
         sql = (
             "SELECT sources.id AS id, "

@@ -82,6 +82,11 @@ def _slack_observed(
 ) -> SourceObserved:
     if occurred_at is None:
         occurred_at = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+    # epic #470 / issue #481: ``body`` is required + non-empty. The
+    # Slack mapper falls back to the title for text-less messages
+    # (Slackbot pings, ``channel_join`` etc.); mirror that here so
+    # the fixture stays valid under the new contract.
+    resolved_body = body if body else title
     return SourceObserved(
         aggregate_id=new_ulid(),
         occurred_at=occurred_at,
@@ -93,7 +98,7 @@ def _slack_observed(
         title=title,
         url=f"https://example.slack.com/archives/{channel_id}/p{ts.replace('.', '')}",
         summary=body[:200] if body else None,
-        body=body or None,
+        body=resolved_body,
         provenance_origin="external",
         provenance_trust="untrusted",
     )

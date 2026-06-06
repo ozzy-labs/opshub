@@ -247,10 +247,14 @@ def test_upgrade_backfills_existing_rows_into_trigram_index(tmp_path: Path) -> N
 def test_upgrade_backfills_row_count_matches_sources(tmp_path: Path) -> None:
     """Back-fill installs exactly one FTS row per ``sources`` row.
 
-    The trigram rebuild must not silently drop or duplicate rows;
-    we assert ``COUNT(*)`` parity between ``sources`` and
-    ``sources_fts`` (including the NULL-body rows that contribute
-    an empty FTS document but still occupy a rowid slot).
+    The trigram rebuild must not silently drop or duplicate rows; we
+    assert ``COUNT(*)`` parity between ``sources`` and ``sources_fts``.
+
+    epic #470 / issue #481 (migration 0030) deletes pre-existing rows
+    whose ``body IS NULL`` as part of the ``body NOT NULL`` rebuild.
+    The pre-0028 seed therefore stays body-populated so the upgrade
+    chain (0028 → ... → 0030) preserves every row and the FTS index
+    re-back-fills 1:1 against the new table shape.
     """
     db_path = tmp_path / "backfill_count.sqlite"
     cfg = _make_alembic_config(db_path)
@@ -261,7 +265,7 @@ def test_upgrade_backfills_row_count_matches_sources(tmp_path: Path) -> None:
         with engine.begin() as conn:
             _insert_source(conn, body="row one body alpha", external_id="bcount-1")
             _insert_source(conn, body="row two body beta", external_id="bcount-2")
-            _insert_source(conn, body=None, external_id="bcount-3-null")
+            _insert_source(conn, body="row three body gamma", external_id="bcount-3")
     finally:
         engine.dispose()
 

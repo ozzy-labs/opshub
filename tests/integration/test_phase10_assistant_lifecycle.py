@@ -300,7 +300,10 @@ class _SourceFixture:
     source_type: str
     external_id: str
     title: str
-    body: str | None
+    # epic #470 / issue #481: ``body`` is required + non-empty on the
+    # event schema; metadata-only fixtures supply the summary as the
+    # body to satisfy the contract.
+    body: str
     provenance_origin: ProvenanceOrigin | None
 
 
@@ -333,12 +336,16 @@ _SOURCE_FIXTURES: tuple[_SourceFixture, ...] = (
         source_type="box_drive_file",
         external_id="Phase10/assistant-design.md",
         title="assistant-design.md",
-        # box_drive is FS-scan only (ADR-0019); body=None and the
-        # FTS5 row is empty. We still seed via SourceService so the
-        # round-trip exercises the body=NULL branch end-to-end.
-        body=None,
-        # box_drive bodies are never tagged because there is no body.
-        provenance_origin=None,
+        # box_drive is FS-scan only (ADR-0019). epic #470 / issue #481
+        # (ADR-0010 §不変条件 metadata-only rule) replaced the
+        # ``body=None`` shim with ``body = summary``; the test
+        # fixture mirrors that by carrying the path-derived summary
+        # as the body so the lifecycle round-trip stays valid under
+        # the new NOT NULL invariant.
+        body="path: Phase10/assistant-design.md",
+        # box_drive bodies are still tagged external + untrusted —
+        # the body comes from the SaaS-synced filesystem.
+        provenance_origin="external",
     ),
 )
 
@@ -608,18 +615,21 @@ def test_phase10_assistant_lifecycle(
                 " surface a separate ADR + opt-in."
             )
 
-        # ---- 8. ensure box_drive body=None still indexes (no leak) ----
-        # box_drive's body is None by ADR-0019 §不変条件 (b). The FTS5
-        # migration 0019 inserts an empty document so the rowid stays
-        # 1:1 with sources. We confirm the body=NULL round-trip via the
-        # already-imported ``text`` helper rather than rebuilding the
-        # engine.
+        # ---- 8. ensure box_drive body = summary row still indexes ----
+        # box_drive is stat-only by ADR-0019 §不変条件 (b). epic #470 /
+        # issue #481 (ADR-0010 §不変条件 metadata-only rule) replaced
+        # the Phase 10 ``body=None`` shim with ``body = summary`` —
+        # FS-scan connectors still do not ``open()`` files, they just
+        # forward the composed path summary as the body so the
+        # projection satisfies the new NOT NULL invariant.
         with engine.connect() as conn:
             row = conn.execute(
                 text("SELECT id, body FROM sources WHERE id = :id"),
                 {"id": box_drive_source_id},
             ).first()
         assert row is not None
-        assert row.body is None, "ADR-0019 §不変条件 (b) forbids FS-scan body retention"
+        assert row.body == "path: Phase10/assistant-design.md", (
+            "epic #470 / #481: stat-only path emits body=summary"
+        )
     finally:
         engine.dispose()

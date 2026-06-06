@@ -29,11 +29,10 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import inspect, select, text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from opshub.db.engine import create_engine_for_sqlite
-from opshub.projections import sources_table
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT_LOCATION = _REPO_ROOT / "src" / "opshub" / "db" / "migrations"
@@ -141,6 +140,12 @@ def test_alembic_upgrade_existing_row_back_fills_null(tmp_path: Path) -> None:
     connectors. Migration 0017 adds the column without back-fill, so
     every existing row must show ``NULL`` after the upgrade — there
     is no operator action required.
+
+    Stops at ``0017`` rather than ``head`` because epic #470 / issue
+    #481 (migration ``0030``) deletes pre-existing rows whose
+    ``body IS NULL`` as part of the ``body NOT NULL`` rebuild; the
+    Phase 9 back-fill assertion stays observable at the 0017 revision
+    where ``body`` does not yet exist.
     """
     db_path = tmp_path / "phase9_existing.sqlite"
     cfg = _make_alembic_config(db_path)
@@ -184,12 +189,23 @@ def test_alembic_upgrade_existing_row_back_fills_null(tmp_path: Path) -> None:
     finally:
         engine.dispose()
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0017_add_fingerprint_to_sources")
 
     engine = create_engine_for_sqlite(db_path)
     try:
         with engine.connect() as conn:
-            row = conn.execute(select(sources_table)).mappings().one()
+            # The ``sources_table`` Core declaration now carries the
+            # Phase 10 + epic #470 / #481 columns (body, provenance);
+            # selecting it against a 0017-era table would fail. Issue
+            # raw SQL listing the 0017 columns instead.
+            row = (
+                conn.execute(
+                    text("SELECT id, title, fingerprint FROM sources WHERE id = :id"),
+                    {"id": "01HA000000000000000000ABCD"},
+                )
+                .mappings()
+                .one()
+            )
         assert row["fingerprint"] is None, (
             "existing pre-0017 rows must read back as NULL after the upgrade"
         )

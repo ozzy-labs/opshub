@@ -69,10 +69,18 @@ def _insert_source(conn: object, *, body: str | None, external_id: str) -> None:
     self-contained — the migration runs against raw SQLite and the
     assertion only cares about the FTS index, not the projection
     schema indirection.
+
+    epic #470 / issue #481 promoted ``sources.body`` to ``NOT NULL``
+    (migration 0030). The helper substitutes a placeholder for the
+    callers that historically passed ``body=None`` so the insert
+    satisfies the new constraint; the FTS-index test still
+    distinguishes "blank body" from "real content" via the matched
+    token.
     """
     # The ``conn`` argument is a SQLAlchemy Connection; we keep the
     # signature loose to mirror the helpers in test_phase10_migrations.
     now = datetime(2026, 5, 30, 12, 0, 0, tzinfo=UTC)
+    resolved_body = body if body is not None else "placeholder"
     conn.execute(  # type: ignore[attr-defined]
         text(
             "INSERT INTO sources ("
@@ -96,7 +104,7 @@ def _insert_source(conn: object, *, body: str | None, external_id: str) -> None:
             "observed_at": now,
             "updated_at": now,
             "fingerprint": None,
-            "body": body,
+            "body": resolved_body,
             "provenance_origin": "external" if body else None,
             "provenance_trust": "untrusted" if body else None,
         },
@@ -176,18 +184,20 @@ def test_delete_trigger_drops_index_entry(head_engine: Engine) -> None:
     assert hits == 0
 
 
-def test_null_body_row_produces_empty_fts_document(head_engine: Engine) -> None:
-    """A NULL body still inserts an FTS row but matches no query."""
+def test_fts_index_discriminates_by_token(head_engine: Engine) -> None:
+    """A row whose body has no matching tokens does not surface for a sibling query.
+
+    epic #470 / issue #481 promoted ``sources.body`` to ``NOT NULL``
+    (migration 0030); the Phase 10 "NULL body → empty FTS document"
+    branch is gone. The test now seeds a placeholder-body row
+    alongside a row with the matched token to pin that the index
+    still discriminates by content tokens, not row existence.
+    """
     with head_engine.begin() as conn:
         _insert_source(conn, body=None, external_id="null-1")
-        # And a sibling row with body so the test discriminates between
-        # "no entries" and "entries but empty".
         _insert_source(conn, body="sibling actual content", external_id="null-2")
 
     with head_engine.connect() as conn:
-        # The NULL-body row contributes a row to sources_fts but no
-        # token. We assert by checking that a token from the sibling
-        # row's body returns exactly 1 hit (not 2).
         hits = conn.execute(
             text("SELECT COUNT(*) FROM sources_fts WHERE sources_fts MATCH 'sibling'")
         ).scalar_one()

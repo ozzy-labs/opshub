@@ -124,6 +124,15 @@ class GitHubConnector:
         # (A5 placeholder) — runtime type is :class:`SourceService` from
         # PR #47. The untyped attribute access keeps the connector layer
         # compiling without circular imports.
+        #
+        # epic #470 / issue #481 promoted ``SourceObserved.body`` to
+        # required + non-empty. Issues / PRs typically carry a body;
+        # notifications (and the rare body-less issue / PR) fall back
+        # to the summary so the invariant always holds (ADR-0010
+        # §不変条件 metadata-only rule). ``item.title`` is a last-ditch
+        # fallback for the (rare) item with neither body nor summary —
+        # the title is always non-empty by API contract.
+        resolved_body = item.body or item.summary or item.title
         context.source_service.observe(
             connector_name=self.name,
             external_id=item.external_id,
@@ -136,7 +145,7 @@ class GitHubConnector:
             # treats it as reference material, never instructions
             # (content poisoning / indirect prompt injection mitigation,
             # ADR-0020 §(e)).
-            body=item.body,
+            body=resolved_body,
             provenance_origin="external",
             provenance_trust="untrusted",
         )

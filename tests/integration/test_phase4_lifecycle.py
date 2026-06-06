@@ -229,6 +229,10 @@ def _seed_source_via_service(
         source_type="issue",
         title=title,
         summary=summary,
+        # epic #470 / issue #481: ``body`` is required + non-empty.
+        # Real connectors substitute summary on metadata-only paths;
+        # the test fixture mirrors that.
+        body=summary,
     )
     return source_event.aggregate_id
 

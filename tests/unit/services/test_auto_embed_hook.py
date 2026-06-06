@@ -137,6 +137,8 @@ def _source_event(*, aggregate_id: str | None = None) -> SourceObserved:
         external_id="owner/repo#42",
         source_type="issue",
         title="example issue",
+        # epic #470 / issue #481: ``body`` is required + non-empty.
+        body="example issue body",
     )
 
 

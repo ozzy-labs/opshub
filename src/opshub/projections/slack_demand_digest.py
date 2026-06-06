@@ -330,10 +330,13 @@ class SlackDemandDigestProjection:
         # narrowing here matches the runtime invariant. The narrowed
         # form keeps strict pyright happy without an extra ``cast``.
         mention_literal = self._mention_literal
+        # epic #470 / issue #481: ``SourceObserved.body`` is required +
+        # non-empty (``min_length=1``) so the previous ``event.body or
+        # ""`` fallback is gone — read ``event.body`` directly.
         is_mention = (
             self_user_id is not None
             and mention_literal is not None
-            and mention_literal in (event.body or "")
+            and mention_literal in event.body
         )
 
         if not is_dm and not is_mention:

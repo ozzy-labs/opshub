@@ -198,8 +198,11 @@ class BoxConnector:
             title=projected.title,
             url=projected.url,
             summary=projected.summary,
-            # Phase 10 (ADR-0020): thread the provenance the mapper
-            # stamped onto the event (body is ``None`` for Box events).
+            # Phase 10 (ADR-0020): thread the body + provenance the
+            # mapper stamped. Box events are metadata-only, so the
+            # mapper substitutes ``body = summary`` to satisfy the
+            # ``SourceObserved.body`` ``min_length=1`` invariant
+            # (epic #470 / #481, ADR-0010 §不変条件).
             body=projected.body,
             provenance_origin=projected.provenance_origin,
             provenance_trust=projected.provenance_trust,

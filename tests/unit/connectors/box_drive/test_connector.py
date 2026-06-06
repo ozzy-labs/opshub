@@ -376,6 +376,9 @@ def test_sync_threads_prior_fingerprints_from_engine(
                     observed_at=now,
                     updated_at=now,
                     fingerprint="42:99",
+                    # epic #470 / issue #481: ``sources.body`` is NOT
+                    # NULL; stat-only paths emit body=summary.
+                    body="path: existing.txt",
                 )
             )
             # Row from a *different* connector — must not leak into
@@ -392,6 +395,7 @@ def test_sync_threads_prior_fingerprints_from_engine(
                     observed_at=now,
                     updated_at=now,
                     fingerprint="should-not-leak",
+                    body="ITEM_CREATE: foreign",
                 )
             )
             # Row from box_drive with NULL fingerprint — must be
@@ -408,6 +412,7 @@ def test_sync_threads_prior_fingerprints_from_engine(
                     observed_at=now,
                     updated_at=now,
                     fingerprint=None,
+                    body="path: legacy.txt",
                 )
             )
 
@@ -617,7 +622,11 @@ def test_sync_office_observe_call_carries_body_and_source_type(
     assert office_call["provenance_trust"] == "untrusted"
 
     assert plain_call["source_type"] == "box_drive_file"
-    assert plain_call["body"] is None
+    # epic #470 / issue #481: stat-only paths emit body = summary so the
+    # plain (non-Office) file lands with the composed path summary as
+    # its body (ADR-0010 §不変条件 metadata-only rule).
+    assert plain_call["body"] == plain_call["summary"]
+    assert plain_call["body"] and plain_call["body"].strip()
     assert plain_call["provenance_origin"] == "external"
     assert plain_call["provenance_trust"] == "untrusted"
 

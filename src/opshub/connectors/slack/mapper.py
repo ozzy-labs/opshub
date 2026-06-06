@@ -206,19 +206,32 @@ def map_message(raw: RawSlackMessage) -> dict[str, Any]:
     ``updated_at`` round-trips through ``new_cursor`` but never
     becomes a column on its own.
     """
+    # epic #470 / issue #481 promoted ``SourceObserved.body`` to
+    # required + non-empty. Empty-body Slack messages (Slackbot pings,
+    # ``channel_join`` / ``file_share`` notifications, ...) fall back
+    # to the title — the title format already carries either a body
+    # excerpt or an English placeholder like ``"alice joined #general"``
+    # so the projection still gets a meaningful body without
+    # synthesising a separate string (ADR-0010 §不変条件 metadata-only
+    # rule).
+    title = _build_title(raw)
+    summary = _truncate(raw.text.strip(), SUMMARY_MAX_CHARS) or None
+    body = raw.text if raw.text else title
     return {
         "connector_name": "slack",
         "external_id": f"{raw.channel_id}:{raw.ts}",
         "source_type": SOURCE_TYPE,
-        "title": _build_title(raw),
-        "summary": _truncate(raw.text.strip(), SUMMARY_MAX_CHARS) or None,
+        "title": title,
+        "summary": summary,
         "url": raw.permalink,
         # Phase 10 (ADR-0020): retain the full message text and tag it
         # external + untrusted. ``summary`` stays the ≤200-char preview;
         # ``body`` carries the verbatim message for body-based search
-        # (Sub-issue B). Empty text → ``None`` so the projection stores
-        # NULL rather than "".
-        "body": raw.text or None,
+        # (Sub-issue B). epic #470 / #481 (ADR-0010 §不変条件): empty
+        # text falls back to ``title`` so every Slack source carries a
+        # non-empty body without violating the retain-everything
+        # invariant for the (rare) text-less event.
+        "body": body,
         "provenance_origin": "external",
         "provenance_trust": "untrusted",
     }

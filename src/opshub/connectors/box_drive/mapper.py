@@ -160,9 +160,17 @@ def map_scanned_file(
     # (``"word_document"`` / ``"excel_spreadsheet"`` /
     # ``"powerpoint_slide_deck"``) and ``body`` may carry the
     # extracted markdown. Default-off / non-Office files keep the
-    # Phase 9 ``"box_drive_file"`` / ``body=None`` shape exactly so
-    # operators that did not opt in see byte-identical events.
+    # Phase 9 ``"box_drive_file"`` shape.
     source_type: str = scanned.office_source_type or SOURCE_TYPE
+    # epic #470 / issue #481 promoted ``SourceObserved.body`` to
+    # ``str = Field(min_length=1)``: every observation must carry a
+    # non-empty body. Stat-only / metadata-only Box Drive paths (the
+    # ADR-0019 §不変条件 (b) no-``open()`` invariant) satisfy the
+    # contract by reusing the ``"path: <rel_path>"`` summary as the
+    # body (ADR-0010 §不変条件 metadata-only rule). When the scanner
+    # extracted an Office body (ADR-0019 §(b') opt-in path) that
+    # markdown wins.
+    body: str = scanned.body if scanned.body else summary
     # ``title`` carries the bare ``rel_path`` rather than a synthesised
     # ``"<event_type>: <name>"`` because Box Drive does not emit
     # discrete event types — every observation is a "this file's
@@ -179,15 +187,11 @@ def map_scanned_file(
         url=f"file://{abs_path}",
         summary=summary,
         fingerprint=scanned.fingerprint,
-        # Phase 10 (ADR-0020): box_drive's ``body`` is ``None`` by
-        # default (ADR-0019 §不変条件 (b)). Phase 11 F4 (ADR-0019 §(b')
-        # opt-in + ADR-0025) populates ``body`` only when the scanner
-        # was configured with ``content_extraction=True`` and the
-        # extractor succeeded on an Office file. The observation is
-        # external in origin and the synced SaaS content is
-        # untrusted, so it still carries the provenance tags for
-        # downstream consistency regardless of body presence.
-        body=scanned.body,
+        # The observation is external in origin and the synced SaaS
+        # content is untrusted, so the provenance tags stay constant
+        # regardless of whether the body came from Office extraction
+        # or the stat-only summary duplicate.
+        body=body,
         provenance_origin="external",
         provenance_trust="untrusted",
     )

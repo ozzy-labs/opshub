@@ -222,19 +222,20 @@ def test_provenance_is_external_untrusted() -> None:
     assert kwargs["provenance_trust"] == "untrusted"
 
 
-def test_empty_body_yields_none_body_field() -> None:
-    """Empty text body → ``body=None`` so the projection stores NULL.
+def test_empty_body_falls_back_to_title() -> None:
+    """Empty text body → ``body=title`` (epic #470 / issue #481).
 
-    Storing ``""`` would silently mark the row as "has empty body"
-    which is semantically different from "no body at all".
+    The fetcher's ``_normalise_chat_message`` already drops empty
+    bodies, but the mapper must defend against future paths that
+    forward a sender-only message with no body. epic #470 / #481
+    promoted :class:`SourceObserved.body` to ``min_length=1``; the
+    mapper now substitutes the composed title so the projection still
+    receives a non-empty body (ADR-0010 §不変条件 metadata-only rule).
     """
-    # The fetcher's ``_normalise_chat_message`` already drops empty
-    # bodies, but the mapper must defend against future paths that
-    # forward a sender-only message with no body. Construct a hand-
-    # rolled raw to skip the fetcher's filter.
     raw = _raw(body_html="", body_content_type="text")
     kwargs: dict[str, Any] = map_chat_message(raw)
-    assert kwargs["body"] is None
+    assert kwargs["body"] == kwargs["title"]
+    assert kwargs["body"] and kwargs["body"].strip()
 
 
 def test_url_passes_through_web_url() -> None:
@@ -273,7 +274,8 @@ def test_map_chat_message_normalises_empty_plain_text_to_none() -> None:
     )
     kwargs_text: dict[str, Any] = map_chat_message(raw_text_empty)
     assert kwargs_text["summary"] is None
-    assert kwargs_text["body"] is None
+    # epic #470 / issue #481: empty body falls back to title.
+    assert kwargs_text["body"] == kwargs_text["title"]
     assert kwargs_text["title"] == "Alice in Project Alpha"
     assert kwargs_text["external_id"] == "19:abc@thread.v2:1700000000001"
     assert kwargs_text["connector_name"] == "teams"
@@ -288,7 +290,7 @@ def test_map_chat_message_normalises_empty_plain_text_to_none() -> None:
     )
     kwargs_html: dict[str, Any] = map_chat_message(raw_html_strips_empty)
     assert kwargs_html["summary"] is None
-    assert kwargs_html["body"] is None
+    assert kwargs_html["body"] == kwargs_html["title"]
     assert kwargs_html["title"] == "Alice in Project Alpha"
     assert kwargs_html["external_id"] == "19:abc@thread.v2:1700000000001"
     assert kwargs_html["connector_name"] == "teams"
@@ -359,7 +361,9 @@ def test_map_chat_message_normalises_whitespace_only_to_none() -> None:
     )
     kwargs_html_ws: dict[str, Any] = map_chat_message(raw_html_ws)
     assert kwargs_html_ws["summary"] is None
-    assert kwargs_html_ws["body"] is None
+    # epic #470 / issue #481: when the HTML strips to nothing the
+    # mapper falls back to the title.
+    assert kwargs_html_ws["body"] == kwargs_html_ws["title"]
     assert kwargs_html_ws["title"] == "Alice in Project Alpha"
     assert kwargs_html_ws["external_id"] == "19:abc@thread.v2:1700000000001"
     assert kwargs_html_ws["connector_name"] == "teams"

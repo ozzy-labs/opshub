@@ -383,7 +383,8 @@ async def test_handler_item_shape_includes_all_projection_columns(engine: Engine
                 title="alice in #alice: quick question",
                 url=None,
                 summary="quick question about phase 18-c",
-                body=None,
+                # epic #470 / issue #481: ``sources.body`` is NOT NULL.
+                body="quick question about phase 18-c",
                 fingerprint=None,
                 provenance_origin="external",
                 provenance_trust="untrusted",

@@ -208,7 +208,8 @@ class _Phase13Fixture:
     source_type: str
     external_id: str
     title: str
-    body: str | None
+    # epic #470 / issue #481: ``body`` is required + non-empty.
+    body: str
     provenance_origin: ProvenanceOrigin | None
 
 
@@ -272,10 +273,13 @@ _PHASE13_FIXTURES: tuple[_Phase13Fixture, ...] = (
         # that are not Workspace native (uploaded PDF / image /
         # folder etc.). Drive API returns 403 ``fileNotExportable``
         # for these mimeTypes, so even with ``content_extraction =
-        # true`` the connector keeps body=None for them. Pinned here
-        # so the NULL branch round-trips end-to-end alongside the
-        # extracted bodies above.
-        body=None,
+        # true`` the connector cannot pull a body. epic #470 / issue
+        # #481 (ADR-0010 §不変条件 metadata-only rule) replaced the
+        # Phase 13 ``body=None`` shim with ``body = summary`` so the
+        # projection satisfies the new NOT NULL invariant; the
+        # mapper substitutes the composed Drive summary (owner +
+        # mimeType + status markers).
+        body="catch-all metadata-only summary stand-in",
         provenance_origin="external",
     ),
     _Phase13Fixture(
@@ -585,21 +589,24 @@ def test_phase13_google_workspace_lifecycle(
 
         # ---- 6. catch-all metadata-only round-trip -------------------
         # ADR-0025 §決定 (d') catch-all: a ``google_workspace_file``
-        # row keeps body=NULL even with ``content_extraction = true``
-        # because Drive returns 403 ``fileNotExportable`` for the
-        # non-Native mimeTypes. The same query path that returns
-        # extracted Google Workspace bodies above must round-trip
-        # NULL cleanly for the catch-all row.
+        # row cannot pull a body even with ``content_extraction =
+        # true`` because Drive returns 403 ``fileNotExportable`` for
+        # the non-Native mimeTypes. epic #470 / issue #481
+        # (ADR-0010 §不変条件 metadata-only rule) replaced the
+        # ``body=NULL`` shim with ``body = summary`` so the projection
+        # satisfies the new NOT NULL invariant; the same query path
+        # that returns extracted Workspace bodies above now round-trips
+        # the substituted summary for the catch-all row.
         with engine.connect() as conn:
             row = conn.execute(
                 text("SELECT id, body, source_type FROM sources WHERE id = :id"),
                 {"id": catchall_id},
             ).first()
         assert row is not None
-        assert row.body is None, (
-            "ADR-0025 §決定 (d') — google_workspace_file (catch-all) rows must"
-            " keep body=NULL because Drive returns 403 fileNotExportable for"
-            " non-Native mimeTypes"
+        assert row.body and row.body.strip(), (
+            "epic #470 / #481 — google_workspace_file (catch-all) rows must"
+            " carry a non-empty body via the summary substitution path"
+            " (ADR-0010 §不変条件)"
         )
         assert row.source_type == "google_workspace_file"
 

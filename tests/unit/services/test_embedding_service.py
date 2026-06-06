@@ -351,14 +351,26 @@ def _seed_source(
 ) -> str:
     """Insert one :data:`sources_table` row.
 
-    Phase 10 step B2: the optional ``body`` kwarg defaults to None so
-    every legacy test path keeps inserting summary-only rows. New
-    Phase 10 tests pass ``body`` explicitly to exercise the
-    ``COALESCE(body, summary)`` fallback in
-    :class:`EmbeddingService._iter_pending`.
+    epic #470 / issue #481: ``sources.body`` is ``NOT NULL`` (migration
+    0030). When the test does not pass an explicit ``body``, fall back
+    to ``summary`` (the metadata-only rule, ADR-0010 §不変条件) — or to
+    the title placeholder when both are absent — so the insert
+    satisfies the NOT NULL constraint without forcing every legacy
+    test path to spell out a body value. Whitespace-only summaries
+    (``"   "``) are forwarded verbatim as the body so the embed
+    service's "skip empty / whitespace-only" branch (no-op skip on
+    :meth:`EmbeddingService._embed_one`) still gets covered.
     """
     source_id = new_ulid()
     now = now_utc()
+    if body is not None:
+        resolved_body = body
+    elif summary is not None:
+        # Forward summary verbatim — including whitespace-only — so
+        # tests pinning the "skip whitespace text" branch stay valid.
+        resolved_body = summary
+    else:
+        resolved_body = "placeholder body"
     with engine.begin() as conn:
         conn.execute(
             insert(sources_table).values(
@@ -371,7 +383,7 @@ def _seed_source(
                 summary=summary,
                 observed_at=now,
                 updated_at=now,
-                body=body,
+                body=resolved_body,
             )
         )
     return source_id
@@ -505,18 +517,33 @@ def test_embed_pending_embeds_only_pending_rows(migrated_engine: Engine) -> None
     assert {e.aggregate_id for e in embedded_events} == set(seeded)
 
 
-def test_embed_pending_skips_rows_with_empty_text(migrated_engine: Engine) -> None:
-    """A row with NULL ``summary`` (source) is reported as skipped, no event."""
+def test_embed_pending_skips_rows_with_whitespace_only_body(migrated_engine: Engine) -> None:
+    """A row with whitespace-only ``body`` is reported as skipped, no event.
+
+    epic #470 / issue #481 promoted ``sources.body`` to ``NOT NULL`` +
+    ``min_length=1`` so the previous NULL-body skip path is gone — a
+    Pydantic ``ValidationError`` blocks the event before it reaches
+    the projection. The embed service still defends against
+    whitespace-only bodies that slip through the schema (e.g.
+    operator-authored ingest paths that explicitly stamp ``"  "``).
+    """
     embedder = _StubEmbedder()
-    _seed_source(migrated_engine, summary=None, external_id="repo#null-summary")
-    _seed_source(migrated_engine, summary="   ", external_id="repo#whitespace")
+    # Whitespace-only body via explicit override — bypasses the
+    # ``_seed_source`` summary substitution to exercise the skip
+    # branch.
+    _seed_source(
+        migrated_engine,
+        summary=None,
+        external_id="repo#whitespace",
+        body="   ",
+    )
     _seed_source(migrated_engine, summary="real summary", external_id="repo#ok")
 
     service = _make_service(migrated_engine, embedder=embedder)
     result = service.embed_pending(entity_type="source")
 
     assert result.embedded_count == 1
-    assert result.skipped_count == 2
+    assert result.skipped_count == 1
     assert result.failed_count == 0
     embedded_events = _events_of_type(migrated_engine, "embedding.text_embedded")
     assert len(embedded_events) == 1
@@ -549,10 +576,14 @@ def test_count_pending_matches_scope_and_drops_to_zero_after_embed(
 def test_embed_pending_invokes_progress_callback_once_per_processed_row(
     migrated_engine: Engine,
 ) -> None:
-    """The callback fires once per row processed (embedded + skipped alike)."""
+    """The callback fires once per row processed (embedded + skipped alike).
+
+    epic #470 / issue #481: ``sources.body`` is NOT NULL; only
+    whitespace-only bodies trigger the embed-service skip branch.
+    """
     embedder = _StubEmbedder()
-    _seed_source(migrated_engine, summary=None, external_id="repo#null")
-    _seed_source(migrated_engine, summary="   ", external_id="repo#ws")
+    _seed_source(migrated_engine, summary=None, external_id="repo#ws1", body="   ")
+    _seed_source(migrated_engine, summary=None, external_id="repo#ws2", body="\t\n")
     _seed_source(migrated_engine, summary="real summary", external_id="repo#ok")
     service = _make_service(migrated_engine, embedder=embedder)
 
@@ -582,9 +613,16 @@ def test_embed_pending_progress_callback_fires_for_failed_rows_too(
     embedder = _StubEmbedder(fail_on="poison row")
     _seed_task(migrated_engine, title="harmless")
     _seed_task(migrated_engine, title="poison row")
-    # A skipped row (NULL summary on a source) lets the assertion span
-    # all three outcomes in a single batch.
-    _seed_source(migrated_engine, summary=None, external_id="repo#null-summary")
+    # A skipped row (whitespace-only body on a source) lets the
+    # assertion span all three outcomes in a single batch.
+    # epic #470 / issue #481: ``sources.body`` is NOT NULL — explicit
+    # whitespace body exercises the embed-side skip branch.
+    _seed_source(
+        migrated_engine,
+        summary=None,
+        external_id="repo#whitespace",
+        body="   ",
+    )
 
     service = _make_service(migrated_engine, embedder=embedder)
 
@@ -907,16 +945,19 @@ def test_source_embed_prefers_body_over_summary(migrated_engine: Engine) -> None
     assert embedder.calls == ["the full body text retained per ADR-0020"]
 
 
-def test_source_embed_falls_back_to_summary_when_body_null(
+def test_source_metadata_only_embed_reads_body_directly(
     migrated_engine: Engine,
 ) -> None:
-    """A source with ``body=NULL`` falls back to ``summary`` (backward-compat).
+    """Metadata-only sources embed the ``body`` column directly (epic #470 / #481).
 
-    Phase 3-9 rows and the ``box_drive`` connector (ADR-0019
-    §不変条件 (b)) always land with ``body = NULL``. ADR-0012
-    改訂版 §4 + ADR-0020 §(d) require the embed path to fall
-    through to ``summary`` so historic data keeps producing
-    vectors.
+    epic #470 / issue #481: stat-only / metadata-only connectors
+    emit ``body = summary`` at mapper time (ADR-0010 §不変条件), so
+    the embed surface is ``body`` directly — the previous
+    ``COALESCE(body, summary)`` fallback chain (ADR-0012 改訂版 §4
+    + ADR-0020 §(d)) is gone. The ``_seed_source`` helper mirrors
+    the connector behaviour: when the test passes ``body=None``,
+    the helper substitutes ``summary`` so the row satisfies the new
+    ``NOT NULL`` invariant and the embedder sees the summary text.
     """
     embedder = _StubEmbedder()
     _seed_source(
@@ -933,17 +974,39 @@ def test_source_embed_falls_back_to_summary_when_body_null(
     assert embedder.calls == ["summary-only legacy row"]
 
 
-def test_source_with_both_body_and_summary_null_is_skipped(
+def test_source_with_whitespace_only_body_is_skipped(
     migrated_engine: Engine,
 ) -> None:
-    """No body and no summary → skipped (no useful vector)."""
+    """A whitespace-only body is skipped (no useful vector).
+
+    epic #470 / issue #481 promoted ``sources.body`` to ``NOT NULL``
+    + ``min_length=1`` so a strictly empty / ``None`` body cannot
+    reach the projection any more. The embed service still defends
+    against whitespace-only content because
+    :meth:`EmbeddingService._embed_one` treats those as no-op
+    skipped rows (no event appended, no vector written) — the same
+    contract used to apply to the legacy NULL-body path.
+    """
     embedder = _StubEmbedder()
-    _seed_source(
-        migrated_engine,
-        summary=None,
-        body=None,
-        external_id="repo#blank",
-    )
+    # Hand-roll the insert because ``_seed_source`` substitutes
+    # placeholder text whenever both summary and body are absent.
+    source_id = new_ulid()
+    now = now_utc()
+    with migrated_engine.begin() as conn:
+        conn.execute(
+            insert(sources_table).values(
+                id=source_id,
+                connector_name="github",
+                external_id="repo#blank",
+                source_type="issue",
+                title="placeholder title",
+                url=None,
+                summary=None,
+                observed_at=now,
+                updated_at=now,
+                body="   ",
+            )
+        )
 
     service = _make_service(migrated_engine, embedder=embedder)
     result = service.embed_pending(entity_type="source")

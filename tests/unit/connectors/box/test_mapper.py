@@ -178,18 +178,23 @@ def test_map_event_uses_custom_actor() -> None:
     assert observed.actor == "cli:test-suite"
 
 
-def test_map_event_body_none_provenance_tagged() -> None:
-    """ADR-0020: Box *events* describe file activity, not content.
+def test_map_event_body_equals_summary_provenance_tagged() -> None:
+    """epic #470 / issue #481: metadata-only Box events emit ``body = summary``.
 
-    Mirrors ``box_drive``'s
-    :func:`tests.unit.connectors.box_drive.test_mapper.test_map_scanned_file_body_none_provenance_tagged`
-    posture: there is no file body to retain (the event payload is
-    metadata only), so ``body`` is ``None``. The observation is still
-    external in origin, so the provenance tags are stamped (external /
-    untrusted) for cross-connector consistency with the SaaS family.
+    ADR-0020: Box *events* describe file activity, not content. The
+    mapper has no body to retain (the event payload is metadata-only),
+    so the metadata-only rule (ADR-0010 §不変条件) applies: the
+    composed ``"path: <item_path>"`` summary is reused as the body to
+    satisfy the :class:`SourceObserved.body` ``min_length=1``
+    invariant. The observation is still external in origin, so the
+    provenance tags are stamped (external / untrusted) for
+    cross-connector consistency with the SaaS family.
     """
     observed = map_event(_raw_event())
 
-    assert observed.body is None
+    assert observed.body == observed.summary, (
+        "metadata-only path must reuse summary as body (epic #470 / #481)"
+    )
+    assert observed.body is not None and observed.body.strip()
     assert observed.provenance_origin == "external"
     assert observed.provenance_trust == "untrusted"

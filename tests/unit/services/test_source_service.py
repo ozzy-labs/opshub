@@ -144,6 +144,7 @@ def test_observe_appends_source_observed_then_item_enqueued() -> None:
         source_type="issue",
         title="Bug: thing is broken",
         url="https://github.com/owner/repo/issues/42",
+        body="Bug body — full description.",
     )
 
     # Return-tuple types match the contract.
@@ -200,6 +201,7 @@ def test_observe_falls_back_when_summary_is_empty_string() -> None:
         source_type="slack_message",
         title="ozzy in #general",
         summary="",
+        body="ozzy in #general",
     )
 
     # The inbox preview falls back to the identifiable shape rather
@@ -240,6 +242,7 @@ def test_observe_falls_back_when_summary_is_whitespace_only() -> None:
         source_type="slack_message",
         title="ozzy in #general",
         summary="  ",
+        body="ozzy in #general",
     )
     assert inbox_event.summary == "slack_message: ozzy in #general"
     # The source event retains the caller's whitespace summary verbatim.
@@ -252,6 +255,7 @@ def test_observe_falls_back_when_summary_is_whitespace_only() -> None:
         source_type="slack_message",
         title="ozzy in #general",
         summary="\t\n ",
+        body="ozzy in #general",
     )
     assert mixed_inbox.summary == "slack_message: ozzy in #general"
 
@@ -267,6 +271,7 @@ def test_observe_uses_explicit_summary_when_provided() -> None:
         source_type="pull_request",
         title="Refactor parser",
         summary="PR by ozzy, needs review",
+        body="PR body — refactor details.",
     )
 
     assert inbox_event.summary == "PR by ozzy, needs review"
@@ -291,6 +296,7 @@ def test_observe_default_fingerprint_is_none() -> None:
         external_id="owner/repo#42",
         source_type="issue",
         title="legacy connector",
+        body="legacy body",
     )
 
     assert source_event.fingerprint is None
@@ -314,6 +320,7 @@ def test_observe_passes_fingerprint_through_to_event() -> None:
         source_type="box_drive_file",
         title="docs/spec.md",
         fingerprint="100:1234567890",
+        body="path: docs/spec.md",
     )
 
     assert source_event.fingerprint == "100:1234567890"
@@ -334,12 +341,14 @@ def test_observe_re_observation_emits_fresh_event_with_new_ulid() -> None:
         external_id="owner/repo#42",
         source_type="issue",
         title="First sighting",
+        body="first body",
     )
     second_source, _ = service.observe(
         connector_name="github",
         external_id="owner/repo#42",
         source_type="issue",
         title="Second sighting (title drifted)",
+        body="second body",
     )
 
     assert first_source.aggregate_id != second_source.aggregate_id
@@ -450,6 +459,7 @@ def test_actor_is_stamped_on_observe_and_inbox_events() -> None:
         external_id="owner/repo#1",
         source_type="issue",
         title="Hello",
+        body="Hello body",
     )
 
     assert source_event.actor == "connector:github"
@@ -488,6 +498,7 @@ def test_observe_rolls_back_uow_when_projector_fails() -> None:
             external_id="owner/repo#42",
             source_type="issue",
             title="will not persist",
+            body="will not persist",
         )
 
     assert spy.entered == 1
@@ -516,6 +527,7 @@ def test_observe_commits_uow_on_success() -> None:
         external_id="owner/repo#1",
         source_type="issue",
         title="ok",
+        body="ok body",
     )
 
     assert spy.entered == 1
@@ -578,6 +590,7 @@ def test_observe_rolls_back_both_events_when_projector_fails(
             external_id="owner/repo#42",
             source_type="issue",
             title="will not persist",
+            body="will not persist",
         )
 
     with migrated_engine.connect() as conn:
@@ -626,19 +639,32 @@ def test_cursor_get_returns_none_then_value_after_started(
 # ---- Phase 10 (ADR-0020): body + provenance ------------------------------
 
 
-def test_observe_defaults_body_and_provenance_to_none() -> None:
-    """Callers that omit body / provenance produce ``None`` (backward-compat)."""
+def test_observe_provenance_defaults_to_none() -> None:
+    """Callers that omit provenance produce ``None`` (operator-authored ingest path).
+
+    epic #470 / issue #481 promoted ``body`` to required + non-empty
+    (the Phase 10 backward-compat shim is gone), but ``provenance_*``
+    stays Optional because the operator-authored workspace ingest
+    path leaves both unset.
+    """
     store = InMemoryEventStore()
     service = _make_service(store=store)
 
+    # epic #470 / issue #481: ``body`` is required + non-empty. The
+    # "default" body shape — when a connector emits only metadata — is
+    # for the connector to substitute ``summary`` (or ``title``) on
+    # the mapper side; ``SourceService.observe`` itself does not
+    # synthesise a fallback. ``provenance_*`` stays Optional because
+    # the operator-authored workspace ingest path leaves it unset.
     source_event, _ = service.observe(
         connector_name="github",
         external_id="owner/repo#42",
         source_type="issue",
         title="legacy connector",
+        body="legacy connector body",
     )
 
-    assert source_event.body is None
+    assert source_event.body == "legacy connector body"
     assert source_event.provenance_origin is None
     assert source_event.provenance_trust is None
 
