@@ -61,9 +61,10 @@ tool: propose.generate
 input:
   topic: "<source title or 抽出指示>"
   mode: "source_extract"
-  expand_graph: true       # graph 1-hop で文脈拡張 (ADR-0017 §(e)+(f))
   max_candidates: 5        # 1〜20
 ```
+
+graph 1-hop の文脈拡張は default で常時走る (ADR-0017 §(e)+(f)、epic #470 で `expand_graph` param 削除)。
 
 `mode=source_extract` は Phase 12 H4 で追加された dispatch key（ADR-0016 改訂 §決定 (l)(b)）。`proposals.scope` に `source_extract` が stamp され、後から「どの skill が起こした proposal か」を audit log で join できる。`reply_to_source_id` とは排他（reply-draft mode は別経路で、本 skill では `topic` + `mode` 経由で source 文脈を引く）。
 

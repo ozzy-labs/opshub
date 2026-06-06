@@ -395,7 +395,6 @@ def build_brief_handler(engine: Engine) -> ToolHandler:
         from opshub.cli._wiring import build_briefing_service
 
         topic: str = arguments["topic"]
-        expand_graph = bool(arguments.get("expand_graph", False))
         fmt: str = arguments.get("format", "md")
         max_sources = int(arguments.get("max_sources", 20))
         max_tokens = int(arguments.get("max_tokens", 1500))
@@ -405,7 +404,6 @@ def build_brief_handler(engine: Engine) -> ToolHandler:
             topic,
             max_sources=max_sources,
             max_tokens=max_tokens,
-            expand_graph=expand_graph,
         )
         if fmt == "json":
             return _json_dump(

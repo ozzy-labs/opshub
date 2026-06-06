@@ -39,7 +39,7 @@ from pydantic import BaseModel, TypeAdapter
 from sqlalchemy import insert, select
 from sqlalchemy.engine import Engine
 
-from opshub.core.errors import ConfigError, OpsHubError
+from opshub.core.errors import OpsHubError
 from opshub.db.engine import create_engine_for_sqlite
 from opshub.db.event_store import SqlAlchemyEventStore
 from opshub.db.schema import events_table
@@ -358,15 +358,17 @@ def _make_service(
     projector: ProposalsProjection | _FailingProposalsProjector | None = None,
     task_service: TaskService | None = None,
     decision_service: DecisionService | None = None,
-    link_service: LinkService | None = None,
+    link_service: LinkService | _StubLinkService | None = None,
 ) -> ProposalService:
     """Build a :class:`ProposalService` against the migrated engine.
 
-    ``link_service`` is the Phase 8 D2 dependency; default ``None``
-    preserves the Phase 6 wiring shape so existing tests construct
-    the service without it (backward-compat). Tests exercising
-    ``expand_graph=True`` pass a stub :class:`LinkService` whose
-    ``related`` method returns canned :class:`Link` rows.
+    ``link_service`` is a required dependency since epic #470 dropped
+    the Phase 5/6 backward-compat ``None`` shape. Tests that do not
+    care about graph expansion pass an empty :class:`_StubLinkService`
+    (its ``related`` method returns ``[]`` so no neighbours surface in
+    the prompt). Tests asserting on graph expansion supply a stub
+    whose ``returns`` dict yields canned :class:`Link` rows per
+    ``(entity_type, entity_id)`` call.
     """
     return ProposalService(
         recall_service=recall_service,  # type: ignore[arg-type]
@@ -380,7 +382,7 @@ def _make_service(
         engine=engine,
         actor="test:proposals",
         uow_factory=engine.begin,
-        link_service=link_service,
+        link_service=link_service if link_service is not None else _StubLinkService(),  # type: ignore[arg-type]
     )
 
 
@@ -883,7 +885,7 @@ def test_apply_path_uses_existing_task_service(migrated_engine: Engine) -> None:
     assert recording.calls == [("Forwarded title", "Forwarded body")]
 
 
-# ---- expand_graph (Phase 8 D2) --------------------------------------------
+# ---- graph expansion (ADR-0017 §決定 (e)+(f), unconditional from epic #470)
 
 
 class _StubLinkService:
@@ -939,30 +941,10 @@ def _make_link(
     )
 
 
-def test_generate_with_expand_graph_false_does_not_call_link_service(
+def test_generate_expands_via_link_service(
     migrated_engine: Engine,
 ) -> None:
-    """Phase 6 backward-compat pin: default ``expand_graph=False`` skips graph traversal."""
-    task_id = _seed_task(migrated_engine, title="alpha body")
-    recall = _StubRecallService([_make_recall_hit("task", task_id, "alpha body")])
-    llm = _StubLLMClient()
-    link_stub = _StubLinkService()
-    service = _make_service(
-        migrated_engine,
-        recall_service=recall,
-        llm_client=llm,
-        link_service=link_stub,  # type: ignore[arg-type]
-    )
-
-    service.generate("phase 6 baseline")
-
-    assert link_stub.calls == []
-
-
-def test_generate_with_expand_graph_true_expands_via_link_service(
-    migrated_engine: Engine,
-) -> None:
-    """``expand_graph=True`` materialises graph neighbours into the prompt."""
+    """Graph expansion is unconditional: neighbours always materialise into the prompt."""
     task_a = _seed_task(migrated_engine, title="alpha body")
     task_b = _seed_task(migrated_engine, title="beta body")
     task_c = _seed_task(migrated_engine, title="gamma body")
@@ -992,10 +974,10 @@ def test_generate_with_expand_graph_true_expands_via_link_service(
         migrated_engine,
         recall_service=recall,
         llm_client=llm,
-        link_service=link_stub,  # type: ignore[arg-type]
+        link_service=link_stub,
     )
 
-    service.generate("graph expansion", expand_graph=True)
+    service.generate("graph expansion")
 
     assert len(link_stub.calls) == 1
     call_entity_type, call_entity_id, call_link_types, call_limit = link_stub.calls[0]
@@ -1011,7 +993,7 @@ def test_generate_with_expand_graph_true_expands_via_link_service(
     assert f'<source id="{task_c}" type="task">' in user_content
 
 
-def test_generate_with_expand_graph_true_dedupes_against_original_hits(
+def test_generate_dedupes_against_original_hits(
     migrated_engine: Engine,
 ) -> None:
     """Graph-expansion neighbour matching an original recall hit appears once."""
@@ -1044,10 +1026,10 @@ def test_generate_with_expand_graph_true_dedupes_against_original_hits(
         migrated_engine,
         recall_service=recall,
         llm_client=llm,
-        link_service=link_stub,  # type: ignore[arg-type]
+        link_service=link_stub,
     )
 
-    service.generate("dedupe vs original", expand_graph=True)
+    service.generate("dedupe vs original")
 
     messages, _, _ = llm.structured_calls[0]
     user_content = messages[1].content
@@ -1055,7 +1037,7 @@ def test_generate_with_expand_graph_true_dedupes_against_original_hits(
     assert user_content.count(f'<source id="{task_y}" type="task">') == 1
 
 
-def test_generate_with_expand_graph_true_dedupes_across_recall_hits(
+def test_generate_dedupes_across_recall_hits(
     migrated_engine: Engine,
 ) -> None:
     """Two recall hits sharing the same graph neighbour Z emit Z exactly once."""
@@ -1095,30 +1077,37 @@ def test_generate_with_expand_graph_true_dedupes_across_recall_hits(
         migrated_engine,
         recall_service=recall,
         llm_client=llm,
-        link_service=link_stub,  # type: ignore[arg-type]
+        link_service=link_stub,
     )
 
-    service.generate("dedupe across hits", expand_graph=True)
+    service.generate("dedupe across hits")
 
     messages, _, _ = llm.structured_calls[0]
     user_content = messages[1].content
     assert user_content.count(f'<source id="{task_z}" type="task">') == 1
 
 
-def test_generate_with_expand_graph_true_without_link_service_raises_config_error(
+def test_construct_without_link_service_raises_type_error(
     migrated_engine: Engine,
 ) -> None:
-    """``expand_graph=True`` + missing LinkService → :class:`ConfigError`."""
+    """Epic #470 made ``link_service`` a required keyword argument."""
     recall = _StubRecallService([])
     llm = _StubLLMClient()
-    # link_service=None (default) — Phase 6 backward-compat shape.
-    service = _make_service(migrated_engine, recall_service=recall, llm_client=llm)
+    task_service = _make_task_service(migrated_engine)
+    decision_service = _make_decision_service(migrated_engine)
 
-    with pytest.raises(ConfigError, match="expand_graph"):
-        service.generate("expand without dep", expand_graph=True)
-
-    requested = _events_of_type(migrated_engine, "proposal.requested")
-    assert requested == []
+    with pytest.raises(TypeError, match="link_service"):
+        ProposalService(  # type: ignore[call-arg]
+            recall_service=recall,  # type: ignore[arg-type]
+            llm_client=llm,
+            store=SqlAlchemyEventStore(migrated_engine),
+            projector=ProposalsProjection(),
+            task_service=task_service,
+            decision_service=decision_service,
+            engine=migrated_engine,
+            actor="test:proposals",
+            uow_factory=migrated_engine.begin,
+        )
 
 
 # ---- reply_draft (Phase 10 step E2, ADR-0016 §決定 (i)+(j)+(k)) -----------
@@ -1211,19 +1200,6 @@ def test_generate_reply_draft_raises_when_source_missing(
     unknown = new_ulid()
     with pytest.raises(OpsHubError, match="not found"):
         service.generate_reply_draft(unknown)
-
-
-def test_generate_reply_draft_with_expand_graph_without_link_service_raises(
-    migrated_engine: Engine,
-) -> None:
-    """``expand_graph=True`` + missing LinkService → :class:`ConfigError`."""
-    recall = _StubRecallService([])
-    llm = _StubLLMClient()
-    service = _make_service(migrated_engine, recall_service=recall, llm_client=llm)
-
-    src_id = _seed_source(migrated_engine)
-    with pytest.raises(ConfigError, match="expand_graph"):
-        service.generate_reply_draft(src_id, expand_graph=True)
 
 
 def test_generate_reply_draft_uses_reply_draft_system_prompt(
@@ -1376,10 +1352,10 @@ def test_apply_reply_draft_does_not_send_external_request(
         service.apply(proposal.proposal_id, 0)
 
 
-def test_generate_reply_draft_with_expand_graph_writes_context_source_refs(
+def test_generate_reply_draft_writes_context_source_refs(
     migrated_engine: Engine,
 ) -> None:
-    """``expand_graph=True`` materialises graph neighbours into the event."""
+    """Graph expansion is unconditional: neighbours materialise into the event."""
     src_id = _seed_source(migrated_engine, title="DM source")
     # Seed a task that the source links to so the graph walk surfaces it.
     task_id = _seed_task(migrated_engine, title="related task")
@@ -1411,10 +1387,10 @@ def test_generate_reply_draft_with_expand_graph_writes_context_source_refs(
         migrated_engine,
         recall_service=recall,
         llm_client=llm,
-        link_service=link_stub,  # type: ignore[arg-type]
+        link_service=link_stub,
     )
 
-    service.generate_reply_draft(src_id, expand_graph=True)
+    service.generate_reply_draft(src_id)
 
     generated = _events_of_type(migrated_engine, "proposal.generated")
     assert len(generated) == 1

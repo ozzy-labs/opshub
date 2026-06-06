@@ -288,7 +288,7 @@ class ProposalCandidatesSchema(BaseModel):
 要点:
 
 - **recall query 設計**: `author = self` を Phase 10 で確立される provenance タグ (ADR-0020 §(e)、`provenance_origin = "internal"` または source 側の sender ID = operator) で絞り、返信先 channel / counterpart は `source_type` + `connector_name` + 既存 `body` で絞る。Phase 10 Sub-issue B (本文 embedding + FTS5) でハイブリッド検索が可能なため、過去の「自分が送信した、同じ channel / 同じ相手宛て、同じ topic の」message を 1-3 件 recall し `<style_example>` ブロックに展開
-- **`<context_source>` ブロック (= `--expand-graph` 経由)**: 文体だけでなく**文脈**も提供する。Phase 8 で導入した `--expand-graph` (ADR-0017 §決定 (f)) を `reply_draft` 生成でも opt-in で発火し、返信元 source の knowledge graph 1-hop neighbours を `<context_source>` ブロックとして注入する。Read AI Ada の自前 graph 相当を既存機構で代替できる
+- **`<context_source>` ブロック (= graph 1-hop 拡張経由)**: 文体だけでなく**文脈**も提供する。`reply_draft` 生成では返信元 source の knowledge graph 1-hop neighbours を `<context_source>` ブロックとして自動注入する (ADR-0017 §決定 (f)、epic #470 以前は `--expand-graph` opt-in だったが、epic #470 で flag を廃止し常時実行に統一)。Read AI Ada の自前 graph 相当を既存機構で代替できる
 - **`<style_example>` も DATA**: ADR-0015 §決定 (f) do-not-follow preamble を維持する。`<style_example>` 内の文字列に「無視して X せよ」が含まれていても LLM は従わない (preamble で system レベル指示として明示)。html-escape も Phase 5 D1 の delimiter wrap 防御を継承
 - **薄い静的 About**: 署名 / 役割 (e.g. "I am OpsHub's reply-draft assistant.") は system prompt 側に短く置く (≤200 chars)。「LLM の性格設定」を肥大化させず、文体は entirely recall ベースで決まる方針 = Inbox Zero の弱点 (テンプレ口調の暴走) を回避
 - **依存**: Sub-issue A (本文保持、ADR-0020) と Sub-issue B (本文 embedding + FTS5、ADR-0012 改訂) が prerequisite。本文保持していない世界では style_example が summary だけになり文体注入の意義が薄れる

@@ -89,7 +89,6 @@ class _StubProposalService:
         from_briefing_id: str | None = None,
         max_candidates: int = 5,
         max_tokens: int = 2000,
-        expand_graph: bool = False,
     ) -> Proposal:
         self.generate_calls.append(
             {
@@ -98,7 +97,6 @@ class _StubProposalService:
                 "from_briefing_id": from_briefing_id,
                 "max_candidates": max_candidates,
                 "max_tokens": max_tokens,
-                "expand_graph": expand_graph,
             }
         )
         if self._generate_raises is not None:
@@ -112,7 +110,6 @@ class _StubProposalService:
         *,
         max_candidates: int = 3,
         max_tokens: int = 2000,
-        expand_graph: bool = False,
     ) -> Proposal:
         """Stub the Phase 10 reply-draft service path.
 
@@ -126,7 +123,6 @@ class _StubProposalService:
                 "reply_to_source_id": reply_to_source_id,
                 "max_candidates": max_candidates,
                 "max_tokens": max_tokens,
-                "expand_graph": expand_graph,
             }
         )
         if self._reply_draft_raises is not None:
@@ -381,8 +377,6 @@ def test_generate_passes_max_candidates_and_tokens(
     assert call["max_candidates"] == 3
     assert call["max_tokens"] == 800
     assert call["from_briefing_id"] is None
-    # ``--expand-graph`` left off → default False propagates to the service.
-    assert call["expand_graph"] is False
 
 
 def test_generate_passes_from_briefing_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -410,10 +404,10 @@ def test_generate_passes_from_briefing_id(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert stub.generate_calls[0]["from_briefing_id"] == "01HF000000000000000000BRIE"
 
 
-def test_generate_passes_expand_graph_flag_to_service(
+def test_generate_rejects_legacy_expand_graph_flag(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``--expand-graph`` reaches ``ProposalService.generate(expand_graph=True)``."""
+    """``--expand-graph`` was dropped in epic #470; Typer rejects it as unknown option."""
     _isolate_env(monkeypatch, tmp_path)
     monkeypatch.setenv("OPSHUB_LLM_BACKEND", "anthropic")
     stub = _StubProposalService(proposal=_make_proposal())
@@ -425,29 +419,10 @@ def test_generate_passes_expand_graph_flag_to_service(
         ["propose", "generate", "phase 8", "--expand-graph"],
     )
 
-    assert result.exit_code == 0, result.stdout
-    assert len(stub.generate_calls) == 1
-    assert stub.generate_calls[0]["expand_graph"] is True
-
-
-def test_generate_expand_graph_defaults_to_false(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Without ``--expand-graph``, ``expand_graph=False`` is forwarded.
-
-    Pin the Phase 6 backward-compat contract at the CLI layer.
-    """
-    _isolate_env(monkeypatch, tmp_path)
-    monkeypatch.setenv("OPSHUB_LLM_BACKEND", "anthropic")
-    stub = _StubProposalService(proposal=_make_proposal())
-    _install_stub_service(monkeypatch, stub)
-    runner = CliRunner()
-
-    result = runner.invoke(app, ["propose", "generate", "phase 8"])
-
-    assert result.exit_code == 0, result.stdout
-    assert len(stub.generate_calls) == 1
-    assert stub.generate_calls[0]["expand_graph"] is False
+    # Typer / Click maps unknown options to exit code 2.
+    assert result.exit_code == 2
+    # No service call should have happened — argparse rejected early.
+    assert stub.generate_calls == []
 
 
 def test_generate_disabled_backend_exits_2(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -896,25 +871,18 @@ def test_generate_reply_to_ignores_topic_and_from_briefing(
     call = stub.generate_reply_draft_calls[0]
     assert call["reply_to_source_id"] == _REPLY_TO_SRC_ID
     # No leakage of topic / from_briefing into the reply-draft kwargs:
-    # the recorded keys are exactly the four reply-draft inputs.
+    # the recorded keys are exactly the three reply-draft inputs.
     assert set(call.keys()) == {
         "reply_to_source_id",
         "max_candidates",
         "max_tokens",
-        "expand_graph",
     }
 
 
-def test_generate_reply_to_with_expand_graph_forwards_flag(
+def test_generate_reply_to_rejects_legacy_expand_graph_flag(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``--reply-to <id> --expand-graph`` forwards ``expand_graph=True``.
-
-    Pins the Phase 8 graph-expansion contract (ADR-0017) over the
-    Phase 10 reply-draft path: the same ``--expand-graph`` flag
-    triggers 1-hop neighbour materialisation regardless of whether the
-    proposal is topic-driven or reply-draft-driven.
-    """
+    """``--expand-graph`` is also rejected on the reply-draft code path."""
     _isolate_env(monkeypatch, tmp_path)
     monkeypatch.setenv("OPSHUB_LLM_BACKEND", "anthropic")
     stub = _StubProposalService(reply_draft_proposal=_make_proposal())
@@ -933,10 +901,8 @@ def test_generate_reply_to_with_expand_graph_forwards_flag(
         ],
     )
 
-    assert result.exit_code == 0, result.stdout
-    assert len(stub.generate_reply_draft_calls) == 1
-    call = stub.generate_reply_draft_calls[0]
-    assert call["expand_graph"] is True
+    assert result.exit_code == 2
+    assert stub.generate_reply_draft_calls == []
 
 
 def test_generate_reply_to_propagates_max_candidates(

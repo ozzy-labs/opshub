@@ -202,7 +202,7 @@ These illustrate the new surface in JSON form. Inputs match `inputSchema`; outpu
 
 ```json
 // input
-{"topic": "today", "format": "md", "expand_graph": false}
+{"topic": "today", "format": "md"}
 
 // output (format=md)
 {"format":"md", "briefing_id":"01H…", "topic":"today",

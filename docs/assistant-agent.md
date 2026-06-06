@@ -220,7 +220,7 @@ skill 側で source_type 別の分岐 logic を追加する必要はなく、`so
 ### 7.1 できること
 
 - opshub に蓄積された **本文ベースの operational memory** (Phase 10 Sub A: 本文保持 + 暗号化、Sub B: 本文 embedding + FTS5) を横断検索 / 要約 / 関連抽出する
-- 過去の decision / task / proposal / event を踏まえた **文脈付き** の応答 (`--expand-graph` で知識グラフ拡張、ADR-0017)
+- 過去の decision / task / proposal / event を踏まえた **文脈付き** の応答 (knowledge graph 1-hop 拡張、ADR-0017 §決定 (e)+(f)、epic #470 以降は常時実行)
 - 返信下書きを「自分の過去送信 event」の文体を recall して再現 (ADR-0016 §決定 (k))
 - 複数 agent host (Claude Code / Codex CLI / Gemini CLI / GitHub Copilot CLI) から **同一の MCP 面** を叩いて同じ記憶を共有
 - Phase 11 で追加された **MS Office 由来の文脈**をアシスタントの素材として使う (14 skills 全てが `source.body` ベースで透過的に対応):

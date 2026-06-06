@@ -433,8 +433,9 @@ def build_briefing_service(actor: str = "cli:brief") -> BriefingService:
         vector_store=vector_store,
         engine=engine,
     )
-    # Phase 8 D2: read-only LinkService for the optional
-    # ``--expand-graph`` path. We pass only the engine (writer deps
+    # Read-only LinkService for the unconditional 1-hop graph
+    # expansion path (ADR-0017 §決定 (e)+(f), Phase 8 D2 → epic #470
+    # で param 削除、常時実行). We pass only the engine (writer deps
     # left None) because :meth:`BriefingService.generate` only ever
     # calls :meth:`LinkService.related` — no events emitted from the
     # briefing path. The CLI ``link add`` / ``link remove`` paths
@@ -535,10 +536,11 @@ def build_proposal_service(actor: str = "cli:propose") -> ProposalService:
         vector_store=vector_store,
         engine=engine,
     )
-    # Phase 8 D2: read-only LinkService for ``--expand-graph`` (the
-    # proposal-side path symmetric to the briefing one). Writer deps
-    # left None because :meth:`ProposalService.generate` only calls
-    # :meth:`LinkService.related`.
+    # Read-only LinkService for the unconditional 1-hop graph
+    # expansion (the proposal-side path symmetric to the briefing one;
+    # ADR-0017 §決定 (e)+(f), Phase 8 D2 → epic #470 で param 削除).
+    # Writer deps left None because :meth:`ProposalService.generate`
+    # only calls :meth:`LinkService.related`.
     return ProposalService(
         recall_service=recall,
         llm_client=build_llm_client(settings),
