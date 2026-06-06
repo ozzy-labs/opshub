@@ -1,7 +1,7 @@
 # 0030. Slack Thread Reply Ingestion Policy
 
-- Status: Accepted
-- Date: 2026-06-02
+- Status: Accepted + Landed (revised, Phase 20)
+- Date: 2026-06-02 (revised 2026-06-07 — §(d) を Phase 20 実装に合わせて改訂、`## Implementation plan` を deferred → landed 化)
 - Deciders: opshub maintainers
 - Related: [ADR-0036](0036-slack-sync-date-floor.md) — sync の date floor で親メッセージが `oldest` 以前に落ちると、その thread reply (`conversations.replies`) も取得対象外になる (floor と整合)
 
@@ -77,23 +77,58 @@ duplicate dedup には `external_id = f"{channel_id}:{ts}"` を natural key と�
 - `thread_ts` を使う消費者は `recall.search` / `find-document` ではなく `reply-draft` が中心で、消費側は `SourceObserved.raw["thread_ts"]` を読めば足りる
 - thread 単位の集約クエリ (「この thread に属する全 source を recall」) は projection 層を追加するときに別 ADR で議論する
 
-### (d) Cursor 戦略: 親 ingest と同期取得、thread 専用 cursor は持たない
+### (d) Cursor 戦略: 2 軸 compound cursor + late reply polling + activity window pruning (Phase 20 revised)
 
-`SlackFetcher` の resume cursor (`cursor[channel_id] = 最大 ts`) は現行維持。thread reply 専用 cursor は導入しない。
+`SlackFetcher` の resume cursor は **2 軸 compound 構造** に拡張する (Phase 20-B `connector_cursors.cursor_value` schema 改訂、PR [#473](https://github.com/ozzy-labs/opshub/pull/473)):
 
-- 親メッセージ ingest と同じ for-loop の中で `conversations.replies` を同期取得する
-- partial-progress checkpoint (caller がメッセージ単位で cursor を commit する既存パターン) は親 ingest 後に advance するため、thread reply 取得失敗時の resume も自然に成立する (次回 sync で親が同じ cursor 位置から再取得され、reply 取得が再試行される)
+```json
+{
+  "channels": {"C012345": "1717000000.000100", ...},
+  "threads":  {"C012345:1717000000.000100": "1717100000.000500", ...}
+}
+```
 
-#### Late thread reply の取り扱い (将来オプション)
+- `channels` 軸 = 旧 Phase 7 互換の `{channel_id: 最大 ts}` (channel-level resume)
+- `threads` 軸 = `{f"{channel_id}:{parent_ts}": 最大 reply ts}` (per-thread resume)
 
-`conversations.replies` は親 ingest 時点でのスナップショットしか取得できない。親が thread として ingest された **後で** 追加の子返信が投稿されるケース (late reply) は、現行 cursor strategy では検知できない (親の `ts` は不変なので resume cursor を超えない)。
+両軸とも `_max_ts(prior, new)` で monotonic に advance し、片方の axis を mid-sync で advance しても他方を巻き戻さない。compound envelope の dump は axes を sorted で deterministic 出力する。
 
-これは本 ADR では **解決しない**。将来オプションとして以下を残す:
+旧 flat-dict cursor (`{channel_id: ts}`) は Phase 20-B で **silent migration を持たず** `ConfigError` で reject し、`opshub projections rebuild` を案内する (pre-userbase posture、ADR-0034 §migration 系列を継承)。
 
-- `reply-draft` 等の skill で「特定 source の late reply を考慮した最新化が必要」と判定されたとき、その source の `thread_ts` に対して `conversations.replies` を on-demand 再 fetch する経路
-- `opshub connector sync slack --include-late-thread-replies` のような opt-in 再 sync flag (active thread 集合を別 cursor で再走査)
+#### Phase 1 (channel history) と Phase 2 (thread late-reply polling) の 2 phase sync
 
-両 option とも本 ADR §(f) の実装 scope 外で、Phase 17 候補時に必要性を再評価する。
+Phase 20-A ([#474](https://github.com/ozzy-labs/opshub/pull/474)) で `SlackFetcher.fetch_messages` を拡張し、Phase 20-C ([#476](https://github.com/ozzy-labs/opshub/pull/476)) で Phase 2 polling を追加した。1 回の `opshub slack sync` は次の 2 phase を順に流す:
+
+1. **Phase 1 — channel history + snapshot replies**
+   - `conversations.history(channel, oldest=channels_cursor)` で親メッセージを取り直す
+   - 各親について `latest_reply` を保持していれば (= `reply_count > 0` の thread)、その場で `conversations.replies(channel, ts=thread_ts)` を呼び `messages[0]` (親自身) を skip して child のみ yield
+   - reply yield 時の cursor element は **親の `ts`** (reply ts ではなく) を採用し、reply ts が親 ts 間の隙間を skip しないようにする
+   - parent ingest と同時に `threads` 軸へ `latest_reply_ts` を seed する (Phase 2 が同じ reply を二重取得しないため)
+2. **Phase 2 — late-reply polling for known threads**
+   - `threads` 軸に entry を持つ各 `(channel, thread_ts)` について、`oldest=threads_cursor + inclusive=False` で `conversations.replies` を再 call し、Phase 1 以降に投稿された late reply のみ ingest する
+   - 各 reply ingest 毎に `threads` 軸を `_max_ts(prior, reply.ts)` で advance
+   - happy path 完了後、activity window (下記) を超えた entry を `threads` 軸から prune する
+
+これにより、ADR §Context で挙げた「親 ingest 後に投稿される子返信が永久に取りこぼされる」失敗モードが解消される。
+
+#### Activity window pruning (`thread_activity_window`、default 30d)
+
+cold thread を永久に polling し続けないために、`[connectors.slack] thread_activity_window` (default `"30d"`、CLI `--thread-activity-window` / env `OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW` で上書き) を設けた:
+
+- Phase 2 polling 開始時、`threads` 軸の entry のうち `now - threads_cursor > thread_activity_window` のものを skip
+- Phase 2 happy path 完了時に同 entry を `threads` 軸から prune (mid-iteration crash は prune を実行せず entry を残す = resume safety)
+- `parse_since` 共通経路 ([ADR-0036](0036-slack-sync-date-floor.md)) を流用、`"all"` 指定で prune 無効化
+
+window は **pruning だけに作用する floor** で、ADR-0036 の `sync_since` (history floor) とは独立。
+
+#### Cold thread reactivation は limitation (将来オプション)
+
+`thread_activity_window` 経過後の thread に late reply が投稿されても、`threads` 軸から prune されているため Phase 2 は触らず、Phase 1 は親 ts が `channels_cursor` を超えないため再取得しない。これは **本 ADR scope の意図された limitation** で、cold thread = inactive と判断する SaaS-side 慣習に整合する。reactivation が必要なケースは `opshub projections rebuild` で cursor をリセットするか、将来オプションとして以下を残す:
+
+- `reply-draft` 等の skill で「特定 source の cold thread を強制再 fetch」と判定されたとき、その source の `thread_ts` に対して `conversations.replies` を on-demand 再 fetch する経路
+- `opshub slack sync --include-cold-threads` のような opt-in flag (`thread_activity_window` を bypass する run-time override)
+
+両 option とも本 ADR scope 外で、必要性が顕在化した時点で別 ADR を切る。
 
 ### (e) Rate limit budget: `_retry.retry_on_rate_limit` helper を share
 
@@ -105,19 +140,16 @@ duplicate dedup には `external_id = f"{channel_id}:{ts}"` を natural key と�
 
 active channel × thread 比率次第で API call が増える可能性に対し、実装 Phase で `--max-threads-per-sync` cap (per-sync で `conversations.replies` を叩く上限) を検討する余地を残す (本 ADR では cap 数値も命名も pin しない)。
 
-### (f) 実装 scope: 本 ADR は方針 pin のみ、実装は別 issue で起票
+### (f) 実装 scope: Phase 20 で landed (4 sub-PR)
 
-本 ADR は **方針 pin のみ**。以下の実装作業は **本 ADR の scope 外** とし、Phase 17 候補または Post-Phase 15 Maintenance 節の別 issue で起票する:
+本 ADR §(a)-(e) を Phase 20 ([epic #465](https://github.com/ozzy-labs/opshub/issues/465)) で 4 sub-PR に分割して着地させた。具体的な PR / 検証範囲は `## Implementation plan (landed)` を参照:
 
-1. `SlackFetcher.fetch_messages` で `reply_count > 0` の親について `conversations.replies` を追加 call
-2. `RawSlackMessage` に `thread_ts: str | None` field 追加
-3. `SlackMessageMapper` で `SourceObserved.raw["thread_ts"]` 保持
-4. `_call_replies` を新規追加し `_retry.retry_on_rate_limit` helper を経由
-5. `tests/integration/test_phase7_slack_sync.py` に thread happy path / late reply / rate limit のシナリオ追加
-6. `--max-threads-per-sync` cap の必要性検討
-7. `CLAUDE.md` / `AGENTS.md` の Slack 取り込み単位記述更新 (本 PR の doc 同期 §で初期化済、実装 Phase で詳細追記)
+1. Phase 20-A (PR [#474](https://github.com/ozzy-labs/opshub/pull/474)) — fetcher 拡張 + `thread_ts` field + `_call_replies` helper share
+2. Phase 20-B (PR [#473](https://github.com/ozzy-labs/opshub/pull/473)) — `connector_cursors.cursor_value` 2 軸 compound schema
+3. Phase 20-C (PR [#476](https://github.com/ozzy-labs/opshub/pull/476)) — Phase 2 late-reply polling + `thread_activity_window` prune
+4. Phase 20-D (本 PR) — ADR §(d) revise + landed 化 + docs 一括更新
 
-実装 PR は本 ADR を参照し、§(a)-(e) の不変条件を変更しない範囲で着地させる。
+§(a) 取り込み単位 / §(b) Fetcher 拡張 / §(c) Mapper / §(e) Retry helper share の不変条件は維持し、§(d) は cursor 戦略を 2 軸 compound + late-reply polling + activity window prune に書き換えた (旧「late reply は scope 外」記述を撤回)。`--max-threads-per-sync` cap は採用せず、`thread_activity_window` (Phase 20-C) で rate limit budget を抑える設計に確定。
 
 ### (g) 非対称設計の不採用: `slack_thread` source_type 新設しない
 
@@ -131,13 +163,14 @@ active channel × thread 比率次第で API call が増える可能性に対し
 
 ## 不変条件
 
-本 ADR で確立する不変条件:
+本 ADR で確立する不変条件 (Phase 20 revised):
 
 1. **取り込み単位は message 単位 (`slack_message`)** — 親も子返信も同じ source_type 1 種で表現。thread 単位の source_type (`slack_thread`) は作らない。Gmail / Outlook の message 単位と symmetric ([ADR-0010 §Phase 14 改訂 (l) 不変条件 1](0010-connector-contract.md))
-2. **`thread_ts` は field 保持** — `SourceObserved.raw["thread_ts"]` に Slack API verbatim で保持。`sources` projection に新 column は追加しない (Phase 15+ で projection 層の thread aggregation を切るときに別 ADR で議論)
+2. **`thread_ts` は field 保持** — `SourceObserved.raw["thread_ts"]` に Slack API verbatim で保持し、`RawSlackMessage.thread_ts: str | None` mapper field でも明示保持する (Phase 20-A landed)。`sources` projection に新 column は追加しない (Phase 15+ で projection 層の thread aggregation を切るときに別 ADR で議論)
 3. **duplicate dedup は `external_id = f"{channel_id}:{ts}"` の UNIQUE 制約に委ねる** — `conversations.replies` レスポンスの `messages[0]` (親自身) を mapper 側で skip しなくても、`sources.external_id` UNIQUE で idempotent に弾かれる構造を維持
-4. **thread reply 専用 cursor を持たない** — `cursor[channel_id] = 最大 ts` 1 軸で resume する既存 contract を維持。late reply は本 ADR scope 外
-5. **`conversations.replies` の retry は `_retry.retry_on_rate_limit` helper を share** — 新 call site 専用の retry 実装を作らない (PR [#378](https://github.com/ozzy-labs/opshub/pull/378) で確立した「policy 1 箇所更新で全 call site 同期」原則を維持)
+4. **resume cursor は 2 軸 compound schema (`channels` + `threads`)** — Phase 20-B で `{"channels": {...}, "threads": {...}}` envelope に拡張。両軸とも `_max_ts(prior, new)` で monotonic、片軸の advance が他軸を巻き戻さない。旧 flat-dict schema (`{channel_id: ts}`) は silent migration せず `ConfigError` で `opshub projections rebuild` を案内 (pre-userbase posture)
+5. **late thread reply は Phase 2 polling で追従、activity window 経過後の cold thread は prune** — `thread_activity_window` (default 30d、`parse_since` 経路で `"all"` 指定可) を超えた `threads` 軸 entry は happy path 完了時に prune される。cold thread reactivation は本 ADR の意図された limitation で `opshub projections rebuild` か将来 opt-in flag で対応
+6. **`conversations.replies` の retry は `_retry.retry_on_rate_limit` helper を share** — 新 call site (Phase 1 の `_call_replies` + Phase 2 polling) も `oldest` / `inclusive` kwarg を helper の signature に乗せて 4 番目以降の share 利用者となる (PR [#378](https://github.com/ozzy-labs/opshub/pull/378) で確立した「policy 1 箇所更新で全 call site 同期」原則を維持)
 
 ## Consequences
 
@@ -150,24 +183,38 @@ active channel × thread 比率次第で API call が増える可能性に対し
 
 ### Negative / Trade-offs
 
-- **API call 増** — 親メッセージに `reply_count > 0` がある分だけ追加の `conversations.replies` call が発生。active channel + thread 数次第で rate limit budget を圧迫する可能性がある (Tier 3、`50+ /min`)。実装 Phase で `--max-threads-per-sync` cap を検討
-- **late thread reply の取りこぼし** — 親 ingest 後に投稿される子返信は本 ADR §(d) 経路では検知できない。on-demand 再 fetch / `--include-late-thread-replies` opt-in flag を将来オプションとして残す
-- **同期取得の latency** — `conversations.replies` を親 ingest と同期 (シリアル) 取得するため、active な channel の cold-start sync に追加 latency が乗る。並列化 (asyncio / thread pool) は本 ADR scope 外、実装 Phase で必要性が顕在化した時点で別 ADR
+- **API call 増** — Phase 1 で `reply_count > 0` の親 1 件あたり 1 回、Phase 2 polling で `threads` 軸 entry 1 件あたり 1 回の `conversations.replies` call が追加発生する。active channel × thread 数次第で rate limit budget (Tier 3、`50+ /min`) を圧迫する可能性があるため、`thread_activity_window` (Phase 20-C landed、default 30d) で polling 対象を窓内 entry に絞る経路を持つ
+- **cold thread reactivation の structural drop** — `thread_activity_window` を経過した thread に late reply が投稿されても本 ADR §(d) 経路では検知できない (`threads` 軸から prune 済み、`channels` 軸は親 ts を超えない)。`opshub projections rebuild` で cursor をリセットするか、将来オプションの `--include-cold-threads` flag / skill 経由 on-demand 再 fetch で対応
+- **同期取得の latency** — `conversations.replies` を Phase 1 で親 ingest と同期 (シリアル) 取得し、Phase 2 polling も channel × thread 順に直列に流すため、active な channel が多い workspace の cold-start sync に追加 latency が乗る。並列化 (asyncio / thread pool) は本 ADR scope 外、必要性が顕在化した時点で別 ADR
 
-## Implementation plan (deferred)
+## Implementation plan (landed)
 
-本 ADR §(f) で defer 確定した実装作業を Phase 17 候補 / Post-Phase 15 Maintenance で扱うときの想定タスク:
+Phase 20 ([epic #465](https://github.com/ozzy-labs/opshub/issues/465)) で本 ADR の実装作業を 4 つの sub-PR に分割して着地させた。
 
-1. **Fetcher 拡張** — `SlackFetcher._fetch_channel` に `reply_count > 0` の分岐追加、`_call_replies` を `_retry.retry_on_rate_limit` 経由で実装
-2. **Mapper 拡張** — `RawSlackMessage.thread_ts: str | None` field 追加、`SlackMessageMapper` で `raw["thread_ts"]` を保持
-3. **Event field 保持** — `SourceObserved.raw["thread_ts"]` の field 保持 (mapper layer で対応、event schema は touch せず)
-4. **Retry helper share** — `_call_replies` が `opshub.connectors.slack._retry.retry_on_rate_limit` を経由することを test pin (既存 3 call site の test を参考)
-5. **Integration test 追加** — `tests/integration/test_phase7_slack_sync.py` に以下を追加:
-    - thread happy path (親 + 子返信 2 件で `slack_message` 3 件 ingest)
-    - late reply (親 ingest 後に追加 reply が来ても resume cursor が advance しない確認)
-    - rate limit (`conversations.replies` 側の 429 が helper 経由で retry される確認)
-6. **`--max-threads-per-sync` cap 検討** — per-sync で `conversations.replies` を叩く上限。命名と数値は実装 Phase で決定
-7. **Docs 同期** — `docs/assistant-agent.md` の Slack 取り込み単位記述に「thread reply も対象」を反映 (本 ADR の doc 同期 §では Post-Phase 15 Maintenance 追記のみで、詳細は実装 PR で追加)
+1. **Phase 20-A** — Fetcher 拡張 + `RawSlackMessage.thread_ts` field landed (PR [#474](https://github.com/ozzy-labs/opshub/pull/474), closes #466)
+    - `SlackFetcher._iter_channel` で `latest_reply` 持ち parent について `conversations.replies` を Phase 1 で追加 fetch、`messages[0]` (parent 自身) skip
+    - 新 `_call_replies` が `_retry.retry_on_rate_limit` helper の 4 番目の share 利用者となる
+    - Reply yield 時の cursor element は親の `ts` を採用 (reply ts が親 ts 間隙を skip しないため)
+    - `fetch_messages` に optional `excludes` kwarg 追加 → 親が `excludes.channels` / `excludes.senders` 該当時は `conversations.replies` を skip (API budget guard)
+    - integration test (thread happy path / mixed threads / idempotent re-run) + unit test (`thread_ts` field set / cursor element / 429 retry / excludes 該当 skip)
+2. **Phase 20-B** — `connector_cursors.cursor_value` compound schema landed (PR [#473](https://github.com/ozzy-labs/opshub/pull/473), closes #467)
+    - 旧 flat-dict `{channel_id: ts}` を `{"channels": {...}, "threads": {...}}` envelope に張り替え
+    - 旧 shape は `ConfigError` で reject し `opshub projections rebuild` を案内 (pre-userbase posture、silent migration なし)
+    - DB schema (migration) は touch せず、`cursor_value` TEXT column の JSON 値のみ拡張
+    - `SlackFetcher.fetch_messages` の signature (`cursor_per_channel=`) は維持し、20-A と並行実装可能
+    - unit test (round-trip / 両軸 empty / legacy reject / missing axis reject / deterministic dump) + integration test (legacy cursor reject + monotonicity)
+3. **Phase 20-C** — Phase 2 late-reply polling + activity window pruning landed (PR [#476](https://github.com/ozzy-labs/opshub/pull/476), closes #468)
+    - `SlackFetcher.fetch_thread_replies(channel_id, thread_ts, oldest_reply_ts)` を新規追加し、`threads` 軸 cursor を起点に late reply のみ ingest
+    - `[connectors.slack] thread_activity_window` (default 30d) + CLI `--thread-activity-window` flag + env `OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW`
+    - `_call_replies` に `oldest` kwarg 追加し `inclusive=False` で境界 reply の二重 emit を防止
+    - Phase 1 で parent ingest 時に `threads` 軸を `latest_reply_ts` で seed (Phase 2 が snapshot を再 fetch しないため)
+    - Window prune は happy path のみ実行 (mid-iteration crash は cursor を残し resume-safe)
+    - unit test 13 件 (`test_thread_polling.py`) + integration test 3 件 (late-reply ingest / prune / 429 retry)
+4. **Phase 20-D** — 本 ADR §(d) revise + landed 化 + docs 同期 (本 PR, closes #469)
+    - 本 ADR §(d) を late-reply 対応の最終形に書き換え、`## Implementation plan` を deferred → landed に昇格
+    - `CLAUDE.md` / `AGENTS.md` / `docs/assistant-agent.md` / `docs/architecture.md` / `docs/troubleshooting.md` / `docs/upgrading.md` を一括更新
+
+`--max-threads-per-sync` cap は本 Phase では採用せず、`thread_activity_window` が prune 経路を提供することで rate limit budget を抑える設計に確定した。
 
 ## 採用しなかった代替
 

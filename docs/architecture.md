@@ -170,7 +170,7 @@ Phase 3 で確立した connector framework (ADR-0010 + ADR-0014 + ADR-0005) を
 
 | Connector | 取得対象 | source_type | OAuth flow | Extras |
 |---|---|---|---|---|
-| Slack | channel messages (Phase 20 [ADR-0036](adr/0036-slack-sync-date-floor.md): optional `[connectors.slack] sync_since` / per-channel `since` date floor bounds the `conversations.history` backfill) | `slack_message` | Bot token (`xoxb-`) | `[connectors-slack]` (slack-sdk) |
+| Slack | channel messages + thread reply (late reply 含む、Phase 20 [ADR-0030](adr/0030-slack-thread-reply-ingestion.md) revised + landed); optional `[connectors.slack] sync_since` / per-channel `since` date floor bounds the `conversations.history` backfill ([ADR-0036](adr/0036-slack-sync-date-floor.md)) | `slack_message` (親 + 子返信を同 source_type で表現、Gmail / Outlook と symmetric) | Bot token (`xoxb-`) | `[connectors-slack]` (slack-sdk) |
 | Microsoft 365 | Calendar / OneDrive / Outlook | `ms365_calendar` / `ms365_onedrive` / `ms365_outlook` | OAuth 2.0 paste-code (msal) | `[connectors-ms365]` (msal + httpx) |
 | Box | file/folder events | `box_event` | OAuth 2.0 paste-code (boxsdk) | `[connectors-box]` (boxsdk) |
 
@@ -181,6 +181,10 @@ Phase 3 で確立した connector framework (ADR-0010 + ADR-0014 + ADR-0005) を
 CLI: `opshub <slack|ms365|box> auth set` でクレデンシャル保存、`opshub <slack|ms365|box> sync` で取り込み (Phase 17 ADR-0031 で旧 `opshub connector auth set connector:<name>` / `opshub connector sync <name>` から per-noun group に再編、旧 form は廃止)。Phase 5 brief / Phase 6 propose は新 source_type を automatic に活用 (RecallService が `sources` projection 横断 query する設計のため)。
 
 connector-side automatic `SourceReferenced` 発行 (Slack message URL parse / GitHub issue link parse 等) は Phase 8.x で各 connector mapper を拡張する形で対応。
+
+Phase 20 ([ADR-0030](adr/0030-slack-thread-reply-ingestion.md) revised + landed) で `opshub slack sync` を thread reply (late reply 含む) も含む message 単位の全量取得に拡張した。1 回の sync は **2 phase 構成** を順に流す: Phase 1 で `conversations.history` 経由の親 + `reply_count > 0` の親について `conversations.replies` を即時 fetch (`messages[0]` = 親自身は `external_id = f"{channel_id}:{ts}"` UNIQUE 制約により idempotent に弾かれる)、Phase 2 で 2 軸 compound cursor の `threads` 軸を起点に late reply のみ追加 fetch する。`thread_activity_window` (default 30d、`parse_since` 共通経路 + `"all"` で prune 無効化) を超えた `threads` 軸 entry は Phase 2 happy path 完了時に prune される (mid-iteration crash は resume-safe で entry を残す)。窓経過後の cold thread に投稿された late reply は本経路では追従しない意図された limitation で、必要時は `opshub projections rebuild` で cursor をリセットする。
+
+Phase 20-B で `connector_cursors.cursor_value` JSON 値を旧 flat-dict `{channel_id: ts}` から **2 軸 compound envelope** `{"channels": {channel_id: 最大 ts}, "threads": {f"{channel_id}:{parent_ts}": 最大 reply ts}}` に張り替えた。両軸とも `_max_ts(prior, new)` で monotonic に advance し、片軸の advance が他軸を巻き戻さない。compound envelope の dump は axes を sorted で deterministic 出力する。旧 flat-dict は silent migration を持たず `ConfigError` で `opshub projections rebuild` を案内する (pre-userbase posture、ADR-0034 系列を継承)。DB schema (Alembic migration) は touch せず、既存の `cursor_value` TEXT column の JSON 値のみ拡張する変更で済む。
 
 ### 2.10 Knowledge graph layer (Phase 8)
 
