@@ -1,14 +1,18 @@
 """Tests for the Phase 2 domain events.
 
-Covers all 11 new event classes plus the :data:`Phase2Event` and the
-extended :data:`AllEvent` discriminated unions. The shape mirrors
-``test_task.py`` so the conventions stay obvious to future readers:
+Covers all 11 new event classes plus their dispatch through the unified
+:data:`AllEvent` discriminated union. The shape mirrors ``test_task.py``
+so the conventions stay obvious to future readers:
 
 - happy-path construction
 - field validation (length bounds, ``Literal`` enums)
 - ``frozen=True`` and ``extra="forbid"`` invariants
-- round-trip through each union's ``TypeAdapter``
-- the extended ``AllEvent`` still dispatches to legacy task events
+- round-trip through ``AllEvent``'s ``TypeAdapter``
+- ``AllEvent`` still dispatches to legacy task events
+
+Phase-scoped grouping aliases (``Phase2Event`` ... ``Phase8Event``) were
+dropped in epic #470 — :data:`AllEvent` is the single discriminated
+union over every event family OpsHub knows how to decode.
 """
 
 from __future__ import annotations
@@ -31,14 +35,12 @@ from opshub.domain.events import (
     ItemTriaged,
     LockAcquired,
     LockReleased,
-    Phase2Event,
     TaskCreated,
     WorkSessionEnded,
     WorkSessionStarted,
 )
 
-# Module-level singletons so each test pays the schema-build cost once.
-_Phase2Adapter: TypeAdapter[Phase2Event] = TypeAdapter(Phase2Event)  # pyright: ignore[reportCallIssue]
+# Module-level singleton so each test pays the schema-build cost once.
 _AllEventAdapter: TypeAdapter[AllEvent] = TypeAdapter(AllEvent)  # pyright: ignore[reportCallIssue]
 
 
@@ -267,7 +269,7 @@ def test_phase2_event_forbids_extra_fields() -> None:
         )
 
 
-# ---- Phase2Event discriminated union --------------------------------------
+# ---- AllEvent dispatch for Phase 2 event types ----------------------------
 
 
 _PHASE2_FACTORIES: list[tuple[str, Any]] = [
@@ -337,25 +339,9 @@ _PHASE2_FACTORIES: list[tuple[str, Any]] = [
 def test_phase2_event_roundtrip_via_model_dump(event_type: str, factory: Any) -> None:
     event = factory()
     assert event.event_type == event_type
-    restored = _Phase2Adapter.validate_python(event.model_dump(mode="json"))
+    restored = _AllEventAdapter.validate_python(event.model_dump(mode="json"))
     assert restored == event
     assert type(restored) is type(event)
-
-
-def test_phase2_event_rejects_task_event_payload() -> None:
-    """A ``task.created`` payload must NOT be accepted by Phase2Event.
-
-    The phase-scoped union should be conservative; a wider deserializer
-    (``AllEvent``) is the place that knows about both phases.
-    """
-    payload = {
-        "event_type": "task.created",
-        "aggregate_id": _agg(),
-        "actor": "cli:create",
-        "title": "t",
-    }
-    with pytest.raises(PydanticValidationError):
-        _Phase2Adapter.validate_python(payload)
 
 
 # ---- AllEvent extension ----------------------------------------------------

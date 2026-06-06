@@ -1276,3 +1276,34 @@ Operator impact:
 3. ADR-0017 §決定 (f) was rewritten to record the param-drop
    landing; Phase 8 plan §2.4 D2 remains as a historical record of
    the opt-in shape that has now been retired.
+
+## Pre-userbase compat shim cleanup: drop per-phase event union aliases (sub-issue #480)
+
+Epic [#470](https://github.com/ozzy-labs/opshub/issues/470)
+(ADR-0002 §Decision 5 closeout) deletes the 6 per-phase
+discriminated-union aliases — `Phase2Event` / `Phase3Event` /
+`Phase4Event` / `Phase5Event` / `Phase6Event` / `Phase8Event` (Phase 7
+was projection-only and never had a `Phase7Event`) — from
+`src/opshub/domain/events/__init__.py` and consolidates on the flat
+`AllEvent` union. The aliases were historical bookkeeping; the
+persistence layer (`SqlAlchemyEventStore._decode`) always reached for
+`AllEvent` and never touched the per-phase unions.
+
+- **Operator action: none.** Event store rows (`events` table) decode
+  byte-for-byte identically — `AllEvent` already enumerated every event
+  type listed in any per-phase alias, so no `opshub projections rebuild`
+  is required. Existing SQLite databases continue to load.
+- **Internal API change.** The aliases also disappear from `__all__`,
+  and `from opshub.domain.events import Phase5Event` (etc.) now raises
+  `ImportError`. Test fixtures / migration scripts that referenced them
+  switch to `TypeAdapter(AllEvent)` or the individual event classes
+  (`from opshub.domain.events import BriefingRequested`). The
+  phase-scoped grouping never carried production semantics, so this is
+  purely a renaming exercise.
+- **External callers (pre-userbase, expected to be none):** any script
+  that did `from opshub.domain.events import PhaseNEvent` must switch to
+  `AllEvent` or the concrete event classes. There is no transitional
+  re-export; the aliases are gone in one step.
+- **One ADR.** [ADR-0002 §Decision 5](adr/0002-event-sourced-architecture.md)
+  records the `AllEvent`-only consolidation and the rationale for
+  removing the per-phase aliases.

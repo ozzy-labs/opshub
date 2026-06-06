@@ -38,13 +38,13 @@ and :class:`opshub.domain.events.proposal.ProposalFailed`.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import Field
 
 from opshub.domain.events.base import DomainEvent
 
-__all__ = ["LinkCreated", "LinkDeleted", "Phase8Event"]
+__all__ = ["LinkCreated", "LinkDeleted"]
 
 
 class LinkCreated(DomainEvent):
@@ -120,23 +120,3 @@ class LinkDeleted(DomainEvent):
     schema_version: int = 1
     deleted_by: str = Field(min_length=1, max_length=200)
     reason: str | None = Field(default=None, max_length=1000)
-
-
-# ---- Phase8Event discriminated union --------------------------------------
-
-Phase8Event = Annotated[
-    LinkCreated | LinkDeleted,
-    Field(discriminator="event_type"),
-]
-"""Phase 8 discriminated union over the 2 manual link CRUD events.
-
-``TypeAdapter(Phase8Event)`` is the right tool for tests / migration
-scripts that want phase-scoped deserialisation. Persistence code
-should reach for :data:`opshub.domain.events.AllEvent` instead so
-the dispatch stays version-neutral.
-
-Auto-extracted links (``ProposalApplied`` / ``BriefingGenerated`` /
-``ProposalRequested.briefing_id`` / ``SourceReferenced``) do NOT
-appear in this union — they are derived state, not events
-(ADR-0017 §決定 (c)).
-"""

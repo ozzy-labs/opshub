@@ -164,7 +164,7 @@ src/opshub/
 │   │   ├── coordination.py         # work_session / agent_run / lock [P1+2]
 │   │   ├── handoff.py              # [P1+2]
 │   │   ├── source.py               # SourceObserved / SourceReferenced (Phase 8 で `SourceReferenced` consumer 第一級化、Phase 9 で `SourceObserved.fingerprint: str | None = None` field 追加、backward-compat、schema_version 据え置き 1) [P1+2+3+8+9]
-│   │   ├── link.py                 # LinkCreated / LinkDeleted (Phase8Event、manual link CRUD) [P8]
+│   │   ├── link.py                 # LinkCreated / LinkDeleted (manual link CRUD) [P8]
 │   │   ├── connector.py            # ConnectorSyncStarted / Completed / Failed [P1+2+3]
 │   │   ├── file_ingest.py          # FileIngested [P1+2+3]
 │   │   ├── embedding.py            # TextEmbedded / EmbeddingRebuildRequested / EmbeddingFailed [P1+2+3+4]
