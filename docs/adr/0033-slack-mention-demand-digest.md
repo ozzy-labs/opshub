@@ -256,9 +256,11 @@ projection が mention parse / DM 判定で必要とする self user_id は、`S
   に projection を改修する必要がある。Slack API 公式仕様変更は monitoring で検知し、
   必要なら本 ADR を superseded で書き直す
 - **late thread reply への追従** — [ADR-0030](0030-slack-thread-reply-ingestion.md)
-  §(d) で defer された「親 ingest 後に追加された thread reply」は demand projection
-  にも届かない。本 ADR scope 外で、ADR-0030 と同じ将来オプション (on-demand 再 fetch /
-  `--include-late-thread-replies`) に乗る
+  Phase 20-C で `thread_activity_window` (default 30d) 内の late thread reply は
+  Phase 2 polling で追従する経路が landed。窓経過後の cold thread reply は引き続き
+  本 demand projection にも届かない (`threads` 軸から prune される、ADR-0030
+  §(d) 不変条件 #5 の意図された limitation)。`opshub projections rebuild` で cursor
+  をリセットすれば再取得可能
 
 ### Scope 外 (Phase 19+ 候補)
 

@@ -445,6 +445,81 @@ opshub slack mentions list --format json | jq .  # JSON 出力 (full row schema)
 - [`src/opshub/db/migrations/versions/0029_create_slack_demand_digest.py`](../src/opshub/db/migrations/versions/0029_create_slack_demand_digest.py) — table schema (natural key + 2 CHECK + FK + 2 INDEX)
 - Phase 18-C で MCP `slack.demand.list` tool が同 projection 上に薄く乗る予定 ([#430](https://github.com/ozzy-labs/opshub/issues/430))
 
+### 3.12 Slack thread reply の取り込みが想定通りでない
+
+Phase 20 ([ADR-0030](adr/0030-slack-thread-reply-ingestion.md) revised + landed、epic [#465](https://github.com/ozzy-labs/opshub/issues/465)) で `opshub slack sync` を thread reply (late reply 含む) も含む message 単位の全量取得に拡張した。本節は thread reply が期待どおり ingest されない / `--thread-activity-window` の調整 / cold thread reactivation / `conversations.replies` rate limit / 旧形状 cursor からの recovery の 4 系統をまとめる。
+
+**前提**: 親も子返信も `slack_message` source_type 1 種で表現され、`thread_ts` は `SourceObserved.raw["thread_ts"]` に Slack API verbatim で保持される (Gmail / Outlook の message 単位 ingest と symmetric、ADR-0030 §不変条件 #1 #2)。`sources` projection に新 column は追加しない。
+
+**`--thread-activity-window` のチューニング**:
+
+`[connectors.slack] thread_activity_window` (default `"30d"`、CLI `--thread-activity-window` / 環境変数 `OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW`) は Phase 2 polling 対象を絞る pruning floor。`parse_since` 共通経路 ([ADR-0036](adr/0036-slack-sync-date-floor.md)) を流用し、相対 (`"30d"` / `"4w"`) でも ISO 絶対日付 (`"2026-05-01"`) でも、`"all"` で prune 無効化指定可。
+
+```toml
+[connectors.slack]
+enabled = true
+thread_activity_window = "60d"   # 直近 60 日に reply のあった thread のみ polling
+# thread_activity_window = "all" # 全 thread 永久 polling (rate limit budget に注意)
+```
+
+- 窓を **狭める** → 古い thread を polling から除外し API call 数を抑える。窓経過後の thread に late reply が来ても追従しない (= cold thread reactivation の意図された limitation)
+- 窓を **広げる** → 既知 thread を長く polling し続けるが、Phase 2 で `threads` 軸 entry 数に比例して `conversations.replies` call が増える。Tier 3 (`50+ /min`) を圧迫する場合は `--thread-activity-window` を絞り戻す
+
+**cold thread reactivation の limitation**:
+
+`thread_activity_window` を経過した thread の `threads` 軸 entry は Phase 2 happy path 完了時に prune される (mid-iteration crash は resume-safe のため prune しない)。窓経過後に投稿された late reply は本経路では追従しない (`channels` 軸は親 ts を超えないため Phase 1 でも再取得されない)。再取得が必要なケース:
+
+```bash
+opshub projections rebuild
+# Slack の compound cursor がリセットされ、次回 sync で全 channel + thread が cold-start で取り直される。
+# WARNING: 大規模 workspace では rate limit budget と sync 時間が顕著に増える。`sync_since` で範囲を絞ってから rebuild するのが現実的。
+```
+
+将来オプションとして `opshub slack sync --include-cold-threads` のような opt-in flag を残しているが、本 Phase では実装しない (ADR-0030 §(d) `## 採用しなかった代替` の追加項目候補)。
+
+**`conversations.replies` の rate limit (429)**:
+
+`conversations.replies` は Slack Tier 3 (`50+ /min`)。Phase 1 で `latest_reply` 持ち親について 1 件、Phase 2 で `threads` 軸 entry 1 件あたり 1 件の追加 call が発生する。active な workspace で 429 が頻発する場合は次の順で対処:
+
+1. `--thread-activity-window` を狭めて Phase 2 polling 対象を減らす (例: `"30d"` → `"14d"`)
+2. `[connectors.slack] sync_since` ([ADR-0036](adr/0036-slack-sync-date-floor.md)) で `conversations.history` の floor を上げ、Phase 1 で追加 fetch する thread を減らす
+3. `[connectors.slack] excludes.channels` / `excludes.senders` で API call が走らないよう除外 (Phase 20-A で `excludes` 該当 parent は `conversations.replies` を skip する API budget guard を追加済)
+
+retry policy は `opshub.connectors.slack._retry.retry_on_rate_limit` helper を 4 つの call site (`_call_history` + `conversations._call_history_oldest` + `conversations._call_list` + `_call_replies`) で share しているため、3 attempts + `Retry-After` honoured + fallback 1s / 2s / 4s exponential が一律に適用される ([ADR-0030 §不変条件 #6](adr/0030-slack-thread-reply-ingestion.md))。
+
+**旧形状 cursor (`{channel_id: ts}` flat-dict) からの recovery**:
+
+Phase 20-B で `connector_cursors.cursor_value` を 2 軸 compound envelope (`{"channels": {...}, "threads": {...}}`) に張り替えた (ADR-0030 §不変条件 #4)。Pre-Phase-20-B な flat-dict を持つ DB で `opshub slack sync` を回すと **`ConfigError` で reject** され、次のメッセージが exit 1 で出る:
+
+```text
+Error: Slack cursor envelope is pre-Phase-20-B (flat dict). Run `opshub projections rebuild`
+to migrate to the {"channels": ..., "threads": ...} compound schema. opshub is pre-userbase
+and ships no silent migration (per ADR-0030 §不変条件 #4).
+```
+
+復旧手順:
+
+```bash
+opshub projections rebuild
+# 既存 event を全 projection に流し直す。connector_cursors も含めて再構築される。
+opshub slack sync     # 通常通り起動。新 compound envelope で cursor が persist される。
+```
+
+`channels` 軸の最大 ts は migration で正しく再計算されるため、過去 ingest 分が再取得されることはない (event store 上の `SourceObserved.raw["ts"]` から projection で max を取り直す)。`threads` 軸は次回 sync の Phase 1 で seed され直す。
+
+**典型エラー**:
+
+- `Error: Slack cursor envelope is pre-Phase-20-B (flat dict). Run \`opshub projections rebuild\` ...` (exit 1) → 上記「旧形状 cursor からの recovery」手順
+- `Error: Slack conversations.replies failed: thread_not_found (channel=C..., thread_ts=...)` (exit 1) → 親 thread が削除された / Slack Connect / channel から自身が外れた等。ADR-0030 §Decision (b) では `conversations.replies` のエラーは fail-fast (skip しない) のため、structural な失敗は operator のリカバリ手段なし
+- `Error: Slack conversations.replies failed: missing_scope (needed: 'channels:history' / 'groups:history' / 'im:history' / 'mpim:history')` (exit 1) → `conversations.replies` は channel type と同じ `*:history` scope を要求する ([ADR-0018](adr/0018-slack-token-principal.md) §Decision (7))。Slack App OAuth scope を追加し再認可、`opshub slack auth set` でトークンを更新する
+
+**関連**:
+
+- [ADR-0030 Slack Thread Reply Ingestion Policy](adr/0030-slack-thread-reply-ingestion.md) — 設計根拠 + 6 軸決定の SSOT (Phase 20 で revised + landed)
+- [ADR-0036 Slack Sync Date Floor](adr/0036-slack-sync-date-floor.md) — `sync_since` (Phase 1 history floor)、`thread_activity_window` (Phase 2 polling prune) とは独立した floor 経路
+- [`src/opshub/connectors/slack/_retry.py`](../src/opshub/connectors/slack/_retry.py) — 4 call site で share される rate limit retry helper
+- Phase 20-A PR [#474](https://github.com/ozzy-labs/opshub/pull/474) / 20-B PR [#473](https://github.com/ozzy-labs/opshub/pull/473) / 20-C PR [#476](https://github.com/ozzy-labs/opshub/pull/476) — 実装の対応 PR
+
 ## 4. セキュリティ注意書き
 
 `-v` / `-vv` / `--debug` / `--log-file` を使うときに operator が知っておくこと:

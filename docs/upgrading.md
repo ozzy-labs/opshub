@@ -956,3 +956,169 @@ The env override accepts either shape: `OPSHUB_CONNECTORS__SLACK__CHANNELS='["C1
   and `release-please` bumps the minor lane.
 - **One new ADR ([ADR-0036](adr/0036-slack-sync-date-floor.md)).** Full rationale,
   cursor-authoritative semantics, and rejected alternatives live there.
+
+## Phase 20 (Slack thread reply ingestion): `conversations.replies` ingest + 2-axis compound cursor + `thread_activity_window`
+
+Phase 20 ([ADR-0030](adr/0030-slack-thread-reply-ingestion.md) revised + landed,
+epic [#465](https://github.com/ozzy-labs/opshub/issues/465)) extends
+`opshub slack sync` to ingest **thread replies (late replies included) as
+message-level `slack_message` rows** — symmetric with Gmail (`gmail_message`)
+and Outlook (`ms365_outlook`). Parents and replies share the same source type,
+and `thread_ts` is retained verbatim on `SourceObserved.raw["thread_ts"]`. The
+`sources` projection schema is unchanged.
+
+This is mostly behavioural — the only operator-visible action is a one-shot
+`opshub projections rebuild` to migrate the Slack connector cursor envelope from
+the pre-Phase-20-B flat dict to the new 2-axis compound schema.
+
+### Behavioural change: thread replies are now ingested
+
+Before Phase 20-A ([#466](https://github.com/ozzy-labs/opshub/issues/466) → PR
+[#474](https://github.com/ozzy-labs/opshub/pull/474)), `opshub slack sync` only
+called `conversations.history` and never walked into `conversations.replies`, so
+any discussion happening inside a thread was structurally dropped (see ADR-0030
+§Context for the failure modes per assistant skill).
+
+After Phase 20:
+
+1. **Phase 1 — channel history + snapshot replies.** Each
+   `conversations.history` parent whose payload carries `latest_reply` triggers
+   a single `conversations.replies(channel, ts=thread_ts)` call. `messages[0]`
+   is the parent itself and is dropped (the
+   `external_id = f"{channel_id}:{ts}"` UNIQUE constraint would also reject it
+   idempotently). Children are yielded as additional `slack_message` rows. The
+   cursor element on each reply yield is the **parent's `ts`** (not the reply
+   ts) so reply timestamps do not skip past the gap between parents.
+2. **Phase 2 — late-reply polling.** Known threads stored on the new `threads`
+   axis of the cursor are re-polled with
+   `conversations.replies(channel, ts=thread_ts, oldest=threads_cursor,
+   inclusive=False)`; only late replies (those that arrived after the previous
+   sync) are yielded. The `threads` axis is then advanced per yielded reply.
+3. **Activity-window prune.** Threads whose `threads` cursor is older than
+   `thread_activity_window` are skipped on Phase 2 and pruned from the cursor
+   at the end of a successful sync (mid-iteration crashes preserve the entry so
+   resume re-tries are safe).
+
+### Apply the cursor schema migration (one-shot)
+
+Phase 20-B ([#467](https://github.com/ozzy-labs/opshub/issues/467) → PR
+[#473](https://github.com/ozzy-labs/opshub/pull/473)) reshapes the JSON value
+stored in the existing `connector_cursors.cursor_value` TEXT column from the
+legacy flat dict to a 2-axis envelope:
+
+```json
+{
+  "channels": {"C012345": "1717000000.000100"},
+  "threads":  {"C012345:1717000000.000100": "1717100000.000500"}
+}
+```
+
+`opshub` is pre-userbase, so ADR-0030 ships **no silent migration**. The first
+`opshub slack sync` against a pre-Phase-20-B database exits with:
+
+```text
+Error: Slack cursor envelope is pre-Phase-20-B (flat dict). Run
+`opshub projections rebuild` to migrate to the {"channels": ..., "threads": ...}
+compound schema. opshub is pre-userbase and ships no silent migration
+(per ADR-0030 §不変条件 #4).
+```
+
+Recovery is one command:
+
+```bash
+opshub projections rebuild
+# Replays all `SourceObserved` events into every projection, including
+# connector_cursors. The `channels` axis is recomputed exactly from event
+# history (no re-fetch from Slack), and the `threads` axis is left empty so it
+# will be seeded by the next sync's Phase 1.
+
+opshub slack sync
+```
+
+No Alembic migration is required — only the JSON value in the existing TEXT
+column changes shape.
+
+### Opt-in: tune `thread_activity_window`
+
+The Phase 2 polling phase only walks threads whose `threads` cursor is within
+`thread_activity_window` (default `"30d"`). Operators can widen or narrow the
+window from `opshub.toml`, the CLI, or an env override:
+
+```toml
+[connectors.slack]
+enabled = true
+thread_activity_window = "60d"   # double the default window
+# thread_activity_window = "all" # disable pruning entirely (rate-limit risk)
+```
+
+```bash
+opshub slack sync --thread-activity-window 14d
+OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW=14d opshub slack sync
+```
+
+The value goes through the shared `opshub.core.time.parse_since` helper
+(Phase 20 [ADR-0036](adr/0036-slack-sync-date-floor.md) introduced this), so
+relative durations (`"30d"` / `"4w"`) and ISO absolute dates (`"2026-05-01"`)
+both work. `"all"` disables pruning (threads stay on the cursor forever and are
+polled every sync).
+
+Narrowing the window reduces `conversations.replies` budget pressure but
+introduces a **cold-thread reactivation limitation**: replies posted to a thread
+after its `threads` entry has been pruned will not be ingested. The
+`channels` cursor is monotonic on parent `ts`, so Phase 1 will not re-fetch the
+parent either. If you need to bring an old thread back into ingest, reset the
+cursor with `opshub projections rebuild`.
+
+### Behavioural notes (Phase 20 thread reply)
+
+- **Symmetric with Gmail / Outlook.** Parents and replies share
+  `source_type = slack_message`; the assistant skills (`find-document`,
+  `research`, `reply-draft`, `recall.search`, `next-actions`,
+  `personal-brief`, `meeting-followup`, `inbox-triage`) transparently benefit
+  because they consume `sources.body` without branching on whether a source is
+  a parent or a child. No SKILL.md change ships in Phase 20-D.
+- **`conversations.replies` joins the rate-limit retry pool.** The new
+  `_call_replies` is the 4th call site sharing
+  `opshub.connectors.slack._retry.retry_on_rate_limit` (3 attempts, `Retry-After`
+  honoured, fallback `1s / 2s / 4s` exponential). Bumping any of the
+  per-Tier-3 budgets is a one-line change in `_retry.py` (ADR-0030 §不変条件 #6).
+- **`excludes` is honoured before the `conversations.replies` call.** If a
+  parent matches `[connectors.slack] excludes.channels` or `excludes.senders`,
+  the additional `conversations.replies` call is skipped entirely (Phase 20-A
+  API-budget guard, PR [#474](https://github.com/ozzy-labs/opshub/pull/474)).
+- **Activity-window prune is independent of [ADR-0036](adr/0036-slack-sync-date-floor.md)
+  `sync_since`.** `sync_since` bounds Phase 1's `conversations.history` floor;
+  `thread_activity_window` bounds Phase 2's polling. They are orthogonal —
+  `sync_since` can be unset while `thread_activity_window = "30d"` (or vice
+  versa).
+- **No new MCP tool / no new `source_type`.** `sources` projection, MCP surface,
+  and `SourceObserved` event schema are all unchanged. ADR-0030 §不変条件 #1 #2
+  #3 are reaffirmed.
+
+### Phase 20 (thread reply) specifics
+
+- **No DB migration.** Phase 20 thread-reply work is `cursor_value` JSON shape
+  only — the Alembic head is untouched.
+- **No new extras.** The change reuses `[connectors-slack]` (slack-sdk).
+- **No breaking change for assistant skills.** `find-document` /
+  `reply-draft` / `recall.search` transparently see thread reply rows.
+- **One revised ADR, zero new ADRs.** [ADR-0030](adr/0030-slack-thread-reply-ingestion.md)
+  was re-published as **Accepted + Landed (revised)** with §(d) rewritten from
+  "late reply scope 外" to "2-axis compound cursor + Phase 2 polling + activity
+  window prune".
+- **Sub-PRs landed across Phase 20-A through 20-D.**
+  - 20-A — fetcher + `thread_ts` field
+    ([#466](https://github.com/ozzy-labs/opshub/issues/466) →
+    PR [#474](https://github.com/ozzy-labs/opshub/pull/474))
+  - 20-B — cursor compound schema
+    ([#467](https://github.com/ozzy-labs/opshub/issues/467) →
+    PR [#473](https://github.com/ozzy-labs/opshub/pull/473))
+  - 20-C — late-reply polling + activity window
+    ([#468](https://github.com/ozzy-labs/opshub/issues/468) →
+    PR [#476](https://github.com/ozzy-labs/opshub/pull/476))
+  - 20-D — ADR §(d) revise + docs sync
+    ([#469](https://github.com/ozzy-labs/opshub/issues/469))
+- **Troubleshooting:** [`docs/troubleshooting.md`](troubleshooting.md) §3.12
+  walks through `--thread-activity-window` tuning, cold-thread reactivation,
+  `conversations.replies` rate-limit handling, and recovery from the legacy
+  cursor shape.

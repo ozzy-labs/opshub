@@ -201,6 +201,20 @@ Phase 15+ で symmetric に拡張する候補: Calendar instance 展開 projecti
 
 `slack.demand.list` は Phase 18-B `slack_demand_digest` projection ([ADR-0033](adr/0033-slack-mention-demand-digest.md)) を読む read-only tool。`readOnlyHint=true` / `destructiveHint=false` / `openWorldHint=false` (local SQLite のみ、Slack API 不発火 = projection 自体は既存 `SourceObserved` event を消費するため新 fetch 経路を持たない)。Slack への投稿 / reaction / reply 送信は本 tool 経路に含まない (ADR-0010 §禁止事項 7、ADR-0033 §決定 (a))。skill 利用者は `next-actions` (priority 上位に組み込む) / `personal-brief` (「期間内の状況」に含める) / `inbox-triage` (補助的に priority 補強) の 3 経路 (§6.1 マトリクス参照)。
 
+### 6.6 Slack 取り込み単位: thread reply (late reply 含む) も含む message 単位 (Phase 20 ADR-0030 landed)
+
+Phase 20 ([ADR-0030](adr/0030-slack-thread-reply-ingestion.md) revised + landed、epic [#465](https://github.com/ozzy-labs/opshub/issues/465)) で `opshub slack sync` が **thread reply (late reply 含む) も含む message 単位の全量取得** に拡張された (Gmail `gmail_message` / Outlook `ms365_outlook` と symmetric、ADR-0010 §Phase 14 改訂 (k) 不変条件 3 と対称)。親も子返信も `slack_message` source_type 1 種で表現し、`thread_ts` を `SourceObserved.raw["thread_ts"]` field に保持する (thread 単位の集約 source_type `slack_thread` は作らない、§6.3 表参照)。
+
+実装は 2 phase sync で、Phase 1 で `conversations.history` 経由の親 + 親 ingest 時点での子返信スナップショット (`conversations.replies`) を fetch、Phase 2 で 2 軸 compound cursor (`connector_cursors.cursor_value` = `{"channels": {...}, "threads": {...}}`) の `threads` 軸を起点に late reply のみ fetch する。`thread_activity_window` (default 30d、CLI `--thread-activity-window` / env `OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW`、`"all"` で prune 無効化) で polling 対象を絞り、窓を超えた `threads` 軸 entry は happy path 完了時に prune される。窓経過後の cold thread に late reply が来ても本経路では追従しないため (意図された limitation)、必要時は `opshub projections rebuild` で cursor をリセットする。詳細は [`docs/troubleshooting.md`](troubleshooting.md) §3.12 と [`docs/upgrading.md`](upgrading.md) §Phase 20 (Slack thread reply ingestion) 節を参照。
+
+アシスタント 14 Skill 側への波及 (透過的に挙動が向上、SKILL.md 改訂なし):
+
+- **`find-document` / `research` / `recall.search`** — Slack 議論本体が thread で行われていた場合でも、子返信が `slack_message` row として ingest されているため FTS5 substring match ([ADR-0028](adr/0028-fts5-japanese-tokenizer.md) trigram) も embedding semantic recall ([ADR-0012](adr/0012-embedding-strategy.md)) も子返信本文に hit する。「#foo であの議論」相当の要求が thread 内容まで到達する
+- **`reply-draft`** — Slack message を返信元 (`reply_to_source_id`) として指定したとき、兄弟返信 (同 `thread_ts` を持つ他の子返信) を `recall.search` で参照できるため、文脈付きの draft を構成できる (Phase 12 H1 で確立した draft 系統一方針と整合、ADR-0016 §決定 (k) (l))
+- **`next-actions` / `personal-brief` / `meeting-followup` / `inbox-triage`** — 自分が thread 内で受けた action item / ping / 議事録引用に対する議論が抽出経路に乗る (ADR-0030 §Context「Claude Code / Codex CLI ユーザー視点の失敗モード」表で挙げた構造的取りこぼしが解消)
+
+skill 側で source_type 別の分岐 logic を追加する必要はなく、`sources.body` ベースの既存経路がそのまま機能する (Gmail / Outlook の message 単位ingest と symmetric な構造を保つ、§6.3 参照)。
+
 ## 7. できること / できないこと
 
 ### 7.1 できること
