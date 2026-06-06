@@ -94,6 +94,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from opshub.connectors.slack.auth import SlackAuth
+    from opshub.core.excludes import ExcludeRules
 
 
 __all__ = ["RawSlackMessage", "SlackFetcher"]
@@ -159,6 +160,18 @@ class RawSlackMessage:
         verbatim for forensic debugging (mapper test fixtures, future
         backfill of new fields without re-syncing). The mapper must
         not persist this — only its derived fields land in projections.
+    thread_ts:
+        The Slack ``thread_ts`` field — the parent message's ``ts``
+        for a thread reply, or the parent's own ``ts`` for a thread
+        root that already has replies. ``None`` for ordinary top-level
+        messages that are not part of any thread (ADR-0030 §(c)).
+
+        The field carries the same semantics as Gmail's ``threadId``
+        (ADR-0010 §Phase 14 改訂 (k) 不変条件 3): thread membership is a
+        per-message field, not a separate source_type. Downstream
+        consumers (``reply-draft``, ``recall.search``) read it off
+        ``SourceObserved.raw["thread_ts"]`` to assemble sibling-reply
+        context without a projection schema change.
     """
 
     channel_id: str
@@ -170,6 +183,7 @@ class RawSlackMessage:
     permalink: str
     raw: dict[str, Any]
     subtype: str | None = None
+    thread_ts: str | None = None
 
 
 class SlackFetcher:
@@ -213,6 +227,7 @@ class SlackFetcher:
         *,
         cursor_per_channel: dict[str, str | None],
         max_per_channel: int = 100,
+        excludes: ExcludeRules | None = None,
     ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
         """Yield ``(channel_id, message, new_cursor)`` for every new message.
 
@@ -229,6 +244,20 @@ class SlackFetcher:
             (``conversations.history``) allow up to ~1000 per page,
             but 100 is the SDK default and a comfortable per-call
             budget that avoids the rare large-response timeout.
+        excludes:
+            Optional :class:`~opshub.core.excludes.Excludes` filter
+            (ADR-0020 §(b) shared ingest excludes). When a parent
+            message would be excluded by ``channels`` or ``senders``,
+            the fetcher skips the follow-up
+            ``conversations.replies`` call as well — the reply
+            messages would also be filtered out at the connector
+            boundary, and skipping the call saves API budget on
+            workspaces where excluded channels are noisy enough to
+            dominate the Tier-3 ``conversations.replies`` budget
+            (ADR-0030 §(b)). Pass ``None`` (the default) to fetch
+            every thread reply unconditionally — the connector still
+            applies its own per-yield excludes filter on the
+            returned messages.
 
         Yields
         ------
@@ -236,11 +265,18 @@ class SlackFetcher:
             The triple ``(channel_id, message, new_cursor)``. The
             third element is the cursor to persist *after* committing
             the SourceObserved event for ``message`` — i.e. the
-            message's own ``ts``. The caller writes this back into
-            ``connector_cursors`` inside the same UoW that commits
-            the event, so a crash here means at-most-once-or-no-loss
-            delivery (the next sync resumes from the last committed
-            cursor and re-fetches anything not yet committed).
+            parent message's own ``ts`` for both parent and reply
+            yields (ADR-0030 §(d): thread reply ts is **not** allowed
+            to advance the per-channel resume cursor because the
+            cursor must remain anchored to the channel's parent
+            timeline so a partial-progress resume re-fetches the
+            parent's replies after the cursor write but never skips a
+            parent that lies between two reply timestamps). The
+            caller writes this back into ``connector_cursors`` inside
+            the same UoW that commits the event, so a crash here
+            means at-most-once-or-no-loss delivery (the next sync
+            resumes from the last committed cursor and re-fetches
+            anything not yet committed).
 
         Raises
         ------
@@ -254,6 +290,10 @@ class SlackFetcher:
             ``needed`` scope (when Slack populates it) and a link to
             ADR-0018 + ``https://api.slack.com/scopes`` so the
             operator can remediate without round-tripping the docs.
+            For ``conversations.replies`` failures the message also
+            includes the offending ``thread_ts`` so an operator can
+            map the failure back to a specific thread (ADR-0030 §(e)
+            error surface).
         """
         # Lazy-imported inside the method so importing this module
         # never pulls slack_sdk onto the cold-start path. The static
@@ -274,6 +314,7 @@ class SlackFetcher:
                     channel_name=channel_name,
                     oldest=oldest,
                     limit=max_per_channel,
+                    excludes=excludes,
                 )
             except SlackApiError as exc:
                 # ``invalid_auth`` / ``channel_not_found`` /
@@ -322,6 +363,7 @@ class SlackFetcher:
         channel_name: str,
         oldest: str | None,
         limit: int,
+        excludes: ExcludeRules | None = None,
     ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
         """Yield messages for a single channel in chronological (ts-ascending) order.
 
@@ -411,7 +453,10 @@ class SlackFetcher:
                 # contract says every message has it. Skip rather
                 # than crash so a single bad row doesn't poison
                 # the whole sync; the malformed message stays in
-                # ``raw`` for forensic inspection.
+                # ``raw`` for forensic inspection. Thread replies are
+                # gated on a valid parent ``ts`` (the
+                # ``conversations.replies`` request requires it), so
+                # the malformed-ts skip arm covers replies too.
                 continue
             user_id = str(raw.get("user", ""))
             # Slack populates ``subtype`` for bot messages and system
@@ -433,6 +478,19 @@ class SlackFetcher:
                 client=client, raw=raw, user_id=user_id
             )
             permalink = self._resolve_permalink(client=client, channel_id=channel_id, ts=ts)
+            # ADR-0030 §(c) thread_ts semantics for a parent message
+            # from ``conversations.history``: if Slack populated
+            # ``thread_ts`` (even when equal to ``ts``, the convention
+            # Slack uses to mark a parent that already has replies)
+            # we forward the value verbatim; otherwise the parent is a
+            # standalone top-level message and ``thread_ts`` stays
+            # ``None``. The downstream ``reply-draft`` skill reads
+            # this off ``SourceObserved.raw["thread_ts"]`` to assemble
+            # sibling-reply context without a projection schema bump.
+            parent_thread_ts_raw = raw.get("thread_ts")
+            parent_thread_ts = (
+                str(parent_thread_ts_raw) if parent_thread_ts_raw is not None else None
+            )
             message = RawSlackMessage(
                 channel_id=channel_id,
                 channel_name=channel_name,
@@ -443,8 +501,153 @@ class SlackFetcher:
                 permalink=permalink,
                 raw=raw,
                 subtype=subtype,
+                thread_ts=parent_thread_ts,
             )
             yield channel_id, message, ts
+
+            # ADR-0030 §(b) thread reply fetch. Slack only returns
+            # parent messages via ``conversations.history``; child
+            # replies live behind ``conversations.replies``. The
+            # ``latest_reply`` field on the parent payload is the
+            # documented "this parent has at least one reply" signal
+            # (Slack populates it whenever ``reply_count > 0``); we
+            # gate the follow-up API call on its presence to keep the
+            # Tier-3 budget headroom intact on workspaces dominated by
+            # standalone messages.
+            #
+            # Excludes short-circuit (ADR-0030 §(b)): if the connector
+            # would drop the parent on its per-yield filter
+            # (``channels`` / ``senders``), the replies would be
+            # dropped too (the connector applies the same filter
+            # on every yield). Skipping the API call here saves
+            # ``conversations.replies`` budget on workspaces where
+            # excluded channels are noisy. The connector still
+            # applies its own per-yield filter on every reply we do
+            # yield, so this guard is purely a budget optimisation
+            # and does not change the observable connector behaviour.
+            if raw.get("latest_reply") is None:
+                continue
+            if excludes is not None and (
+                excludes.excludes_channel(channel_id) or excludes.excludes_sender(user_id)
+            ):
+                continue
+            yield from self._iter_thread_replies(
+                client=client,
+                channel_id=channel_id,
+                channel_name=channel_name,
+                parent_ts=ts,
+            )
+
+    def _iter_thread_replies(
+        self,
+        *,
+        client: Any,
+        channel_id: str,
+        channel_name: str,
+        parent_ts: str,
+    ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
+        """Yield thread reply messages for a parent (ADR-0030 §(b) §(c)).
+
+        Calls ``conversations.replies(channel, ts=parent_ts)`` via the
+        shared :func:`opshub.connectors.slack._retry.retry_on_rate_limit`
+        helper (ADR-0030 §(e), the 4th call site alongside
+        :meth:`_call_history`,
+        :func:`opshub.connectors.slack.conversations._call_history_oldest`,
+        and :func:`opshub.connectors.slack.conversations._call_list`).
+
+        Yield semantics
+        ---------------
+
+        * ``messages[0]`` is the parent message itself
+          (``conversations.replies`` includes the parent as the
+          envelope head). We **skip it** explicitly to avoid the
+          duplicate ``external_id = f"{channel_id}:{ts}"`` (parent
+          already yielded by :meth:`_iter_channel`). ADR-0030 §不変条件
+          3 leaves dedup to the projection's ``UNIQUE`` constraint as
+          a fallback, but skipping at the source keeps the event log
+          clean and saves one ``users.info`` / ``chat.getPermalink``
+          round-trip per parent.
+        * Replies yielded carry the parent's ``ts`` as their
+          ``thread_ts`` field (ADR-0030 §(c) reply semantics) and the
+          parent's ``ts`` as the cursor element (ADR-0030 §(d): the
+          per-channel resume cursor is anchored to the channel's
+          parent timeline, so reply yields must not advance it past
+          the parent).
+        """
+        response = self._call_replies(
+            client=client,
+            channel_id=channel_id,
+            thread_ts=parent_ts,
+        )
+        messages_obj = response.get("messages")
+        messages: list[dict[str, Any]] = (
+            cast(list[dict[str, Any]], messages_obj) if isinstance(messages_obj, list) else []
+        )
+        # Sort defensively even though Slack documents
+        # ``conversations.replies`` as returning messages in ts-ascending
+        # order (parent + replies). A bad response shape would otherwise
+        # yield replies out of order and silently break the cursor
+        # monotonicity contract on the connector side.
+        for reply_raw in sorted(messages, key=lambda raw: self._reply_ts_key(raw)):
+            reply_ts = str(reply_raw.get("ts", ""))
+            if not reply_ts:
+                # Defensive skip mirroring the parent-side guard. A
+                # reply without ``ts`` cannot be deduplicated nor
+                # cursor-tracked.
+                continue
+            if reply_ts == parent_ts:
+                # ``messages[0]`` is the parent itself — skip to keep
+                # the event log clean (the parent was already yielded
+                # by ``_iter_channel``). Belt-and-braces: the
+                # projection's UNIQUE constraint on ``external_id``
+                # would catch a regression that forgot this skip
+                # (ADR-0030 §不変条件 3), but explicit avoidance saves
+                # one ``users.info`` / ``chat.getPermalink`` budget
+                # per parent.
+                continue
+            reply_user_id = str(reply_raw.get("user", ""))
+            reply_subtype_raw = reply_raw.get("subtype")
+            reply_subtype = str(reply_subtype_raw) if reply_subtype_raw else None
+            reply_display = self._resolve_author_display(
+                client=client, raw=reply_raw, user_id=reply_user_id
+            )
+            reply_permalink = self._resolve_permalink(
+                client=client, channel_id=channel_id, ts=reply_ts
+            )
+            reply_message = RawSlackMessage(
+                channel_id=channel_id,
+                channel_name=channel_name,
+                ts=reply_ts,
+                text=str(reply_raw.get("text", "")),
+                user_id=reply_user_id,
+                user_display_name=reply_display,
+                permalink=reply_permalink,
+                raw=reply_raw,
+                subtype=reply_subtype,
+                thread_ts=parent_ts,
+            )
+            # ADR-0030 §(d): yield the parent's ``ts`` as the cursor
+            # element, not the reply's own ts, so the per-channel
+            # resume cursor stays anchored to the parent timeline.
+            # A reply with a ts > parent_ts must NOT advance the
+            # cursor past the parent — otherwise a later sync would
+            # skip parents whose ts lies between two reply
+            # timestamps.
+            yield channel_id, reply_message, parent_ts
+
+    @staticmethod
+    def _reply_ts_key(raw: dict[str, Any]) -> float:
+        """Return a float sort key for a thread reply payload.
+
+        Mirrors the ``_ts_key`` helper inside :meth:`_iter_channel`
+        but is hoisted to a static method so the reply-yield loop
+        can share the malformed-ts defence without an inner closure.
+        """
+        ts_raw = raw.get("ts")
+        try:
+            return float(ts_raw) if ts_raw is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
 
     def _call_history(
         self,
@@ -488,6 +691,70 @@ class SlackFetcher:
             return client.conversations_history(**kwargs)
 
         return _as_response_dict(retry_on_rate_limit(_call))
+
+    def _call_replies(
+        self,
+        *,
+        client: Any,
+        channel_id: str,
+        thread_ts: str,
+    ) -> dict[str, Any]:
+        """Call ``conversations.replies`` with 429 backoff (ADR-0030 §(e)).
+
+        4th call site of
+        :func:`opshub.connectors.slack._retry.retry_on_rate_limit`
+        alongside :meth:`_call_history`,
+        :func:`opshub.connectors.slack.conversations._call_history_oldest`,
+        and :func:`opshub.connectors.slack.conversations._call_list`.
+        Maintaining a shared helper keeps the retry policy (3 attempts,
+        ``Retry-After`` honoured, 1s / 2s / 4s exponential fallback)
+        in one place — any future tweak (jitter, longer budget, etc.)
+        propagates uniformly.
+
+        Error surface
+        -------------
+
+        Non-429 :class:`SlackApiError` (and the final 429 after the
+        budget is spent) is mapped here to :class:`ConnectorFailedError`
+        with the offending channel id **and** thread ts in the message
+        — distinct from the per-channel error path
+        (:meth:`fetch_messages`) so an operator can tell a
+        ``conversations.replies`` failure from a
+        ``conversations.history`` failure at a glance. ``missing_scope``
+        gets the same ADR-0018 + scope catalogue hint as the parent
+        path so the operator has one-hop remediation regardless of
+        which endpoint reported the miss. The bot / user token never
+        appears in the surfaced message regardless of error code (the
+        token-leak invariant pinned by the per-channel error tests
+        applies here too).
+        """
+        from slack_sdk.errors import SlackApiError
+
+        kwargs: dict[str, Any] = {
+            "channel": channel_id,
+            "ts": thread_ts,
+        }
+
+        def _call() -> Any:
+            return client.conversations_replies(**kwargs)
+
+        try:
+            return _as_response_dict(retry_on_rate_limit(_call))
+        except SlackApiError as exc:
+            response_any = cast(Any, exc.response)
+            error_code = response_any.get("error") or type(exc).__name__
+            if error_code == "missing_scope":
+                needed = response_any.get("needed") or ""
+                raise ConnectorFailedError(
+                    f"Slack thread reply fetch failed for channel "
+                    f"{channel_id} thread_ts={thread_ts}: missing_scope "
+                    f"(needed: {needed!r}). See ADR-0018 §Decision (7) or "
+                    f"https://api.slack.com/scopes for the scope catalogue."
+                ) from exc
+            raise ConnectorFailedError(
+                f"Slack thread reply fetch failed for channel "
+                f"{channel_id} thread_ts={thread_ts}: {error_code}"
+            ) from exc
 
     def _resolve_author_display(self, *, client: Any, raw: dict[str, Any], user_id: str) -> str:
         """Resolve a human-recognisable author name for any message shape.

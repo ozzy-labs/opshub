@@ -135,8 +135,16 @@ def _patch_slack_fetcher(
         *,
         cursor_per_channel: dict[str, str | None],
         max_per_channel: int = 100,
+        excludes: Any = None,
     ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
-        del cursor_per_channel, max_per_channel
+        # ADR-0030 (#466): the connector now forwards the resolved
+        # ``Excludes`` filter so the real fetcher can short-circuit
+        # ``conversations.replies`` calls for excluded parents. The
+        # integration mock accepts and ignores it — the connector's
+        # per-yield ``excludes`` arm still runs on the yielded
+        # ``RawSlackMessage`` rows, so the contract observed by these
+        # tests is unchanged.
+        del cursor_per_channel, max_per_channel, excludes
         if error is not None:
             raise error
         return iter(yields or [])
@@ -897,8 +905,11 @@ def test_slack_sync_resumes_without_duplicates_after_mid_iteration_failure(
         *,
         cursor_per_channel: dict[str, str | None],
         max_per_channel: int = 100,
+        excludes: Any = None,
     ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
-        del cursor_per_channel, max_per_channel
+        # See ``_patch_slack_fetcher`` for the ``excludes`` mock kwarg
+        # rationale (ADR-0030 / #466).
+        del cursor_per_channel, max_per_channel, excludes
         yield ("C1", msg_1, "1700000001.000100")
         yield ("C1", msg_2, "1700000002.000200")
         raise ConnectorFailedError("Slack fetch failed for channel C1: rate_limited")
@@ -1408,5 +1419,387 @@ def test_slack_sync_persists_compound_cursor_with_channels_monotonic(
                 .one()["cursor_value"]
             )
         assert cursor_after_second == cursor_after_first
+    finally:
+        engine.dispose()
+
+
+# ----- thread reply ingestion (ADR-0030 / #466) ----------------------------
+
+
+def _slack_history_msg(
+    *,
+    ts: str,
+    text: str,
+    user: str = "U1",
+    latest_reply: str | None = None,
+) -> dict[str, Any]:
+    """Build a ``conversations.history`` message payload.
+
+    ``latest_reply`` (when set) signals that the parent has at least
+    one child reply, gating the follow-up ``conversations.replies``
+    call (ADR-0030 §(b)). Slack also sets ``thread_ts`` on a parent
+    with replies; we mirror that convention so the parent's
+    ``RawSlackMessage.thread_ts`` is non-``None``.
+    """
+    msg: dict[str, Any] = {"ts": ts, "text": text, "user": user}
+    if latest_reply is not None:
+        msg["thread_ts"] = ts
+        msg["latest_reply"] = latest_reply
+        msg["reply_count"] = 1
+    return msg
+
+
+def _slack_reply_msg(
+    *,
+    ts: str,
+    thread_ts: str,
+    text: str,
+    user: str = "U2",
+) -> dict[str, Any]:
+    """Build a ``conversations.replies`` reply payload (Slack contract)."""
+    return {"ts": ts, "text": text, "user": user, "thread_ts": thread_ts}
+
+
+def _build_slack_web_client(
+    *,
+    history_pages: list[dict[str, Any]],
+    replies_by_thread_ts: dict[str, list[dict[str, Any]]],
+) -> Any:
+    """Build a :class:`MagicMock` ``WebClient`` for thread reply tests.
+
+    ``replies_by_thread_ts`` maps parent ``ts`` → the
+    ``messages`` list the ``conversations.replies`` stub should
+    return (parent + children, in Slack-contract order).
+    """
+    from unittest.mock import MagicMock
+
+    web_client = MagicMock()
+    web_client.conversations_history.side_effect = list(history_pages)
+    web_client.conversations_info.return_value = {
+        "ok": True,
+        "channel": {"id": "C1", "name": "general"},
+    }
+    web_client.users_info.return_value = {
+        "ok": True,
+        "user": {
+            "id": "U1",
+            "name": "alice",
+            "profile": {"display_name": "alice", "real_name": "Alice"},
+        },
+    }
+
+    def _replies_side_effect(*, channel: str, ts: str) -> dict[str, Any]:
+        del channel
+        messages = replies_by_thread_ts.get(ts)
+        if messages is None:
+            raise AssertionError(f"unexpected conversations.replies call for ts={ts!r}")
+        return {"ok": True, "messages": messages, "has_more": False}
+
+    web_client.conversations_replies.side_effect = _replies_side_effect
+
+    def _permalink_fn(*, channel: str, message_ts: str) -> dict[str, Any]:
+        slug = message_ts.replace(".", "")
+        return {
+            "ok": True,
+            "permalink": f"https://acme.slack.com/archives/{channel}/p{slug}",
+        }
+
+    web_client.chat_getPermalink.side_effect = _permalink_fn
+    return web_client
+
+
+def test_slack_sync_thread_happy_path_ingests_parent_and_replies(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """End-to-end thread happy path: 1 parent + 2 replies → 3 ``slack_message`` rows.
+
+    ADR-0030 §(b) §(c) end-to-end pin. The real :class:`SlackFetcher`
+    runs against a mocked :class:`slack_sdk.WebClient` so the
+    ``conversations.history`` → ``conversations.replies`` →
+    yield-with-``thread_ts`` pipeline is exercised through the
+    mapper + ``SourceService.observe`` boundary. Three distinct
+    ``external_id`` values (one per message) land in ``sources`` and
+    ``inbox_items``; the cursor advances to the parent's ts (NOT
+    the latest reply's ts — ADR-0030 §(d)).
+    """
+    import slack_sdk
+
+    parent = _slack_history_msg(
+        ts="1700000010.000100",
+        text="parent message",
+        latest_reply="1700000020.000200",
+    )
+    reply_1 = _slack_reply_msg(
+        ts="1700000015.000150",
+        thread_ts="1700000010.000100",
+        text="first reply",
+    )
+    reply_2 = _slack_reply_msg(
+        ts="1700000020.000200",
+        thread_ts="1700000010.000100",
+        text="second reply",
+    )
+    web_client = _build_slack_web_client(
+        history_pages=[
+            {
+                "ok": True,
+                "messages": [parent],
+                "has_more": False,
+                "response_metadata": {"next_cursor": ""},
+            }
+        ],
+        replies_by_thread_ts={"1700000010.000100": [parent, reply_1, reply_2]},
+    )
+
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=web_client))
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["slack", "sync"])
+    assert result.exit_code == 0, result.stdout
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        from sqlalchemy import select
+        from sqlalchemy import text as sql_text
+
+        assert _row_count(engine, "sources") == 3
+        assert _row_count(engine, "inbox_items") == 3
+
+        with engine.connect() as conn:
+            external_ids = {
+                row["external_id"]
+                for row in conn.execute(select(sources_table.c.external_id)).mappings()
+            }
+            cursor_row = (
+                conn.execute(
+                    sql_text(
+                        "SELECT cursor_value FROM connector_cursors WHERE connector_name = 'slack'"
+                    )
+                )
+                .mappings()
+                .one()
+            )
+
+        # Parent + both replies all landed with distinct external_ids
+        # (``f"{channel_id}:{ts}"`` per ADR-0030 §不変条件 3).
+        assert external_ids == {
+            "C1:1700000010.000100",
+            "C1:1700000015.000150",
+            "C1:1700000020.000200",
+        }
+        # Cursor anchored to the parent ts even though replies have
+        # newer ts (ADR-0030 §(d)). Pre-ADR-0030 a naive impl would
+        # have advanced the cursor to ``1700000020.000200`` (the
+        # latest reply's ts) which would silently skip a parent
+        # posted between two reply timestamps on the next sync.
+        assert cursor_row["cursor_value"] is not None
+        assert "1700000010.000100" in cursor_row["cursor_value"]
+        # ``conversations.replies`` was called exactly once (the
+        # single parent with ``latest_reply`` set).
+        assert web_client.conversations_replies.call_count == 1
+    finally:
+        engine.dispose()
+
+
+def test_slack_sync_mixed_threads_calls_replies_only_for_parents_with_latest_reply(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """Mixed history (A: 2 replies, B: 0 replies, C: 1 reply) → 2 replies calls.
+
+    ADR-0030 §(b) gates the ``conversations.replies`` call on the
+    presence of ``latest_reply`` on each parent payload. The
+    standalone parent (no replies) must not trigger a call —
+    otherwise the Tier-3 budget would be burned on workspaces where
+    most messages are standalone.
+
+    End-to-end on-disk shape: 3 parents + 3 replies = 6 distinct
+    ``slack_message`` source rows; 2 ``conversations.replies`` calls
+    total (one per parent with ``latest_reply``).
+    """
+    from unittest.mock import MagicMock
+
+    import slack_sdk
+
+    parent_a = _slack_history_msg(
+        ts="1700000010.000100",
+        text="parent-A",
+        latest_reply="1700000020.000200",
+    )
+    parent_b = _slack_history_msg(ts="1700000011.000110", text="parent-B-standalone")
+    parent_c = _slack_history_msg(
+        ts="1700000012.000120",
+        text="parent-C",
+        latest_reply="1700000030.000300",
+    )
+    reply_a1 = _slack_reply_msg(
+        ts="1700000015.000150",
+        thread_ts="1700000010.000100",
+        text="A-reply-1",
+    )
+    reply_a2 = _slack_reply_msg(
+        ts="1700000020.000200",
+        thread_ts="1700000010.000100",
+        text="A-reply-2",
+    )
+    reply_c1 = _slack_reply_msg(
+        ts="1700000030.000300",
+        thread_ts="1700000012.000120",
+        text="C-reply-1",
+    )
+
+    web_client = _build_slack_web_client(
+        history_pages=[
+            {
+                "ok": True,
+                "messages": [parent_a, parent_b, parent_c],
+                "has_more": False,
+                "response_metadata": {"next_cursor": ""},
+            }
+        ],
+        replies_by_thread_ts={
+            "1700000010.000100": [parent_a, reply_a1, reply_a2],
+            "1700000012.000120": [parent_c, reply_c1],
+        },
+    )
+
+    monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=web_client))
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["slack", "sync"])
+    assert result.exit_code == 0, result.stdout
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        # 3 parents + 3 replies = 6 distinct source rows.
+        assert _row_count(engine, "sources") == 6
+        assert _row_count(engine, "inbox_items") == 6
+        # Parent B (no ``latest_reply``) contributes zero
+        # ``conversations.replies`` calls; A + C contribute one each.
+        assert web_client.conversations_replies.call_count == 2
+    finally:
+        engine.dispose()
+
+
+def test_slack_sync_thread_reply_idempotent_on_rerun(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """Second sync with the same stubbed thread history → zero duplicate rows.
+
+    ADR-0030 §(b) dedup pin. The
+    ``sources.external_id = f"{channel_id}:{ts}"`` UNIQUE constraint
+    catches the parent / reply dedup at the projection boundary,
+    but a more direct invariant is the cursor: after sync #1
+    advances the per-channel cursor past the parent's ``ts``, sync
+    #2's ``conversations.history`` call with
+    ``oldest=cursor + inclusive=False`` returns zero parents — and
+    therefore zero replies — so the projection counts are stable
+    across re-runs.
+
+    Counterpart for the cursor-anchored-to-parent-ts invariant
+    pinned by :func:`test_slack_sync_thread_happy_path_ingests_parent_and_replies`.
+    """
+    from unittest.mock import MagicMock
+
+    import slack_sdk
+
+    parent = _slack_history_msg(
+        ts="1700000010.000100",
+        text="parent",
+        latest_reply="1700000020.000200",
+    )
+    reply = _slack_reply_msg(
+        ts="1700000020.000200",
+        thread_ts="1700000010.000100",
+        text="reply",
+    )
+
+    web_client = MagicMock()
+
+    def _history_side_effect(**kwargs: Any) -> dict[str, Any]:
+        if kwargs.get("oldest") is None:
+            # First sync: serve the single parent.
+            return {
+                "ok": True,
+                "messages": [parent],
+                "has_more": False,
+                "response_metadata": {"next_cursor": ""},
+            }
+        # Second sync: ``oldest = parent_ts + inclusive=False`` →
+        # Slack-side filter returns zero messages.
+        return {
+            "ok": True,
+            "messages": [],
+            "has_more": False,
+            "response_metadata": {"next_cursor": ""},
+        }
+
+    web_client.conversations_history.side_effect = _history_side_effect
+    web_client.conversations_info.return_value = {
+        "ok": True,
+        "channel": {"id": "C1", "name": "general"},
+    }
+    web_client.users_info.return_value = {
+        "ok": True,
+        "user": {
+            "id": "U1",
+            "name": "alice",
+            "profile": {"display_name": "alice", "real_name": "Alice"},
+        },
+    }
+    web_client.conversations_replies.return_value = {
+        "ok": True,
+        "messages": [parent, reply],
+        "has_more": False,
+    }
+
+    def _permalink_fn(*, channel: str, message_ts: str) -> dict[str, Any]:
+        slug = message_ts.replace(".", "")
+        return {
+            "ok": True,
+            "permalink": f"https://acme.slack.com/archives/{channel}/p{slug}",
+        }
+
+    web_client.chat_getPermalink.side_effect = _permalink_fn
+
+    monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=web_client))
+
+    runner = CliRunner()
+
+    # ---- First sync: parent + reply ingested.
+    first = runner.invoke(app, ["slack", "sync"])
+    assert first.exit_code == 0, first.stdout
+    assert _row_count(create_engine_for_sqlite(isolated_env["db_path"]), "sources") == 2
+
+    # ---- Second sync: same stub. ``conversations.history`` returns
+    # zero parents (cursor-filtered), so ``conversations.replies``
+    # is not called either, and the projection counts stay unchanged.
+    replies_call_count_after_first = web_client.conversations_replies.call_count
+    second = runner.invoke(app, ["slack", "sync"])
+    assert second.exit_code == 0, second.stdout
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        # Projection counts unchanged — pre-ADR-0030 a regression
+        # that forgot the ``messages[0]`` skip in the replies
+        # response would have re-emitted the parent via the
+        # ``UNIQUE`` constraint upsert path. The projection counts
+        # would still match (UPSERT is idempotent) but the events
+        # log would grow on every re-run. We assert the call count
+        # directly to catch the wasted API call.
+        assert _row_count(engine, "sources") == 2
+        assert _row_count(engine, "inbox_items") == 2
+        # No additional ``conversations.replies`` call on the
+        # resume sync (no new parents → no thread fetch). Pre-fix
+        # a naive impl that re-fetched replies for every parent in
+        # the response would have called once more.
+        assert web_client.conversations_replies.call_count == replies_call_count_after_first
     finally:
         engine.dispose()

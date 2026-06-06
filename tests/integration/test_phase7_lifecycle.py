@@ -309,8 +309,14 @@ def _install_slack_stub(
         *,
         cursor_per_channel: dict[str, str | None],
         max_per_channel: int = 100,
+        excludes: object = None,
     ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
-        del cursor_per_channel, max_per_channel
+        # ADR-0030 (#466): the connector forwards the resolved
+        # ``ExcludeRules`` filter to ``fetch_messages``. The lifecycle
+        # mock accepts and ignores it — see
+        # :mod:`tests.integration.test_phase7_slack_sync` for the
+        # rationale.
+        del cursor_per_channel, max_per_channel, excludes
         return iter(yields)
 
     fake_fetcher_cls.return_value.fetch_messages.side_effect = _fetch_messages
