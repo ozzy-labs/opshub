@@ -58,7 +58,6 @@ Box は Linux native client を提供していない。WSL2 / macOS / VM 経由�
 enabled = true                               # default: false
 # root_path は省略時 platform default (WSL2=/mnt/b, macOS=~/Box)
 # root_path = "/mnt/b/Work/Project"          # サブツリーに絞ることも可
-exclude_globs = ["**/.DS_Store", "**/~$*"]   # 任意
 max_depth = 16                               # default: 16
 max_files = 100_000                          # default: 100_000
 follow_symlinks = false                      # default: false
@@ -67,6 +66,27 @@ follow_symlinks = false                      # default: false
 env 経由の override も同じ pattern で動作する
 (`OPSHUB_CONNECTORS__BOX_DRIVE__ROOT_PATH=/mnt/b/Work/Project`)。
 CI / container では env 経由が便利。
+
+### 除外 path の設定
+
+path-based exclusion は共通 `~/.config/opshub/excludes.yaml` の
+`paths:` selector に集約する ([ADR-0020](adr/0020-full-local-content-retention.md) §(b))。
+連携前は Phase 9 で `[connectors.box_drive] exclude_globs = [...]`
+inline で設定していたが、epic #470 で `model_config = ConfigDict(extra="forbid")`
+化したため `opshub.toml` に inline `exclude_globs` を残すと
+`ValidationError` で sync が起動しない (移行手順は [`docs/upgrading.md`](upgrading.md) §Pre-userbase compat shim cleanup)。
+
+```yaml
+# ~/.config/opshub/excludes.yaml
+paths:
+  - "**/.DS_Store"
+  - "**/~$*"
+  - "**/secrets/**"          # 機密 path はここで遮断
+```
+
+`excludes.yaml` は box_drive / onedrive_drive 含む全 connector 横断の
+SSOT。channel / sender / repo selector と path selector が同一 file 上で
+読めるので、運用ポリシーを 1 箇所で管理できる。
 
 ## sync 実行
 

@@ -28,6 +28,7 @@ import pytest
 
 from opshub.connectors.box_drive import BoxDriveScanner
 from opshub.core.errors import ConfigError
+from opshub.core.excludes import ExcludeRules
 
 # ---------------------------------------------------------------------------
 # Basic walk semantics
@@ -358,8 +359,8 @@ def test_scanner_raises_config_error_when_root_is_not_dir(tmp_path: Path) -> Non
         BoxDriveScanner(root_path=not_a_dir)
 
 
-def test_scanner_applies_exclude_globs(tmp_path: Path) -> None:
-    """``exclude_globs`` filters by POSIX-form ``rel_path``.
+def test_scanner_applies_excludes(tmp_path: Path) -> None:
+    """``excludes`` filters by POSIX-form ``rel_path`` via :class:`ExcludeRules`.
 
     Three exclusion shapes are tested in one scan:
 
@@ -369,6 +370,11 @@ def test_scanner_applies_exclude_globs(tmp_path: Path) -> None:
       to keep sensitive paths out of the projection.
     * Top-level exact match (``"keepme.tmp"``) — the operator might
       pin a single transient file.
+
+    Post-#470 the scanner delegates the match to
+    :meth:`ExcludeRules.excludes_path` rather than re-implementing the
+    glob loop, so the test wires the patterns through ``ExcludeRules``
+    directly.
     """
     (tmp_path / ".DS_Store").write_text("noise")
     (tmp_path / "nested").mkdir()
@@ -380,11 +386,48 @@ def test_scanner_applies_exclude_globs(tmp_path: Path) -> None:
 
     scanner = BoxDriveScanner(
         root_path=tmp_path,
-        exclude_globs=[".DS_Store", "**/secrets/**", "keepme.tmp"],
+        excludes=ExcludeRules(paths=(".DS_Store", "**/secrets/**", "keepme.tmp")),
     )
     results = sorted(s.rel_path for s in scanner.scan(prior_fingerprints={}))
 
     assert results == ["ok.txt"]
+
+
+def test_scanner_delegates_path_match_to_exclude_rules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Epic #470 pin: the scanner calls :meth:`ExcludeRules.excludes_path`.
+
+    Post-cleanup the scanner no longer reimplements the glob loop
+    (``_is_excluded`` was deleted); path filtering is delegated to
+    :class:`ExcludeRules`. This test patches ``excludes_path`` to a
+    recording stub and confirms the scanner reaches the helper for
+    every file walk — guards against a regression that silently
+    re-introduces an in-scanner glob loop and bypasses the shared
+    match implementation.
+    """
+    (tmp_path / "a.txt").write_text("a")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.md").write_text("b")
+
+    calls: list[str | None] = []
+    real_excludes_path = ExcludeRules.excludes_path
+
+    def recording(self: ExcludeRules, path: str | None) -> bool:
+        calls.append(path)
+        return real_excludes_path(self, path)
+
+    monkeypatch.setattr(ExcludeRules, "excludes_path", recording)
+
+    scanner = BoxDriveScanner(
+        root_path=tmp_path,
+        excludes=ExcludeRules(paths=("**/never-matches/**",)),
+    )
+    list(scanner.scan(prior_fingerprints={}))
+
+    # Both files reached the helper. Set semantics tolerates ordering
+    # differences from os.scandir.
+    assert set(calls) == {"a.txt", "sub/b.md"}
 
 
 def test_scanner_exposes_root_path(tmp_path: Path) -> None:
