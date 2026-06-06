@@ -1224,6 +1224,205 @@ def test_slack_sync_truncates_long_message_text(
         engine.dispose()
 
 
+# ---------------------------------------------------------------------- Phase 20-B cursor schema
+
+
+def test_slack_sync_rejects_legacy_cursor_with_rebuild_prompt(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """Phase 20-B: a pre-20-B legacy cursor row → ConfigError + rebuild prompt + exit 1.
+
+    The pre-20-B cursor schema was a flat ``{<channel_id>: <ts>}``
+    dict. Phase 20-B ([epic #465](
+    https://github.com/ozzy-labs/opshub/issues/465)) is a hard schema
+    flip to a compound ``{"channels": {...}, "threads": {...}}``
+    envelope. opshub is pre-userbase (``AGENTS.md``
+    §"設計判断のスタンス") so we do not silently coerce: the legacy
+    shape is rejected with a :class:`ConfigError` whose message
+    points at ``opshub projections rebuild``.
+
+    We exercise the rejection via the public CLI because the
+    legacy-cursor case only fires when the connector's
+    :func:`_load_cursors` runs against a real
+    ``connector_cursors.cursor_value`` row populated outside the
+    happy path. We seed the row directly via SQLAlchemy to simulate
+    an existing operator upgrade scenario without having to roll
+    back the connector module to the pre-20-B implementation.
+    """
+    import datetime as dt
+
+    from sqlalchemy import insert as sql_insert
+
+    from opshub.projections.connector_cursors import connector_cursors_table
+
+    # Seed a legacy-shape cursor row directly. The CLI driver's
+    # cursor bracket will read this row via the
+    # ``connector_cursors`` projection, hand it to
+    # :class:`SlackConnector` via ``ConnectorContext.cursor_value``,
+    # and the connector's :func:`_load_cursors` should reject it.
+    legacy_cursor = '{"C1":"1700000001.000100"}'
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                sql_insert(connector_cursors_table).values(
+                    connector_name="slack",
+                    cursor_value=legacy_cursor,
+                    updated_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+                    last_synced_at=dt.datetime(2026, 1, 1, tzinfo=dt.UTC),
+                )
+            )
+    finally:
+        engine.dispose()
+
+    # The fetcher's ``fetch_messages`` must never be reached — the
+    # connector raises in :func:`_load_cursors` before the iteration
+    # loop runs. We install a sentinel that constructs OK (the
+    # connector calls ``SlackFetcher(auth, channels=channels)``
+    # before ``_load_cursors``) but raises on any ``fetch_messages``
+    # invocation. A silent-coercion regression would call
+    # ``fetch_messages`` and the AssertionError would surface as a
+    # test failure rather than a swallowed coercion.
+    from unittest.mock import MagicMock
+
+    fake_fetcher_cls = MagicMock()
+    fake_fetcher_cls.return_value.fetch_messages.side_effect = AssertionError(
+        "fetch_messages must not be reached when the legacy cursor is rejected"
+    )
+    monkeypatch.setattr(
+        "opshub.connectors.slack.connector.SlackFetcher",
+        fake_fetcher_cls,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["slack", "sync"])
+    # CLI driver catches the ConfigError, records ConnectorSyncFailed,
+    # and exits 1 with the sanitised type name on stderr.
+    assert result.exit_code == 1, result.stdout
+    assert "ConfigError" in result.stderr
+
+    # The error message bubbled to ConnectorSyncFailed must carry the
+    # rebuild prompt (so an operator inspecting the failure event can
+    # recover without grepping the source). The CLI driver sanitises
+    # the event payload to the **type name only** by design (R3 / ADR-0027),
+    # so the rebuild prompt only reaches the operator via stderr in
+    # ``--debug`` mode. Pin the type-name sanitisation here so we do
+    # not accidentally start leaking the legacy cursor value in the
+    # event log.
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        from sqlalchemy import text as sql_text
+
+        with engine.connect() as conn:
+            failed_rows = [
+                dict(row)
+                for row in conn.execute(
+                    sql_text(
+                        "SELECT payload FROM events WHERE event_type = 'connector.sync_failed'"
+                    )
+                ).mappings()
+            ]
+        assert len(failed_rows) == 1
+        payload = failed_rows[0]["payload"]
+        assert "ConfigError" in payload
+        # The raw legacy cursor value must not leak into the event
+        # log — the projection failure path sanitises to type name
+        # only.
+        assert legacy_cursor not in payload
+    finally:
+        engine.dispose()
+
+
+def test_slack_sync_persists_compound_cursor_with_channels_monotonic(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+    slack_env: None,
+) -> None:
+    """Phase 20-B: the persisted cursor is the compound envelope, channels axis advances.
+
+    Pre-Phase-20-B regression guard re-pinned on the new schema. After
+    the schema flip the persisted ``connector_cursors.cursor_value``
+    is a JSON object with two axes — the channels axis carries the
+    per-channel max ts (just like pre-20-B's flat ``{channel_id: ts}``
+    dict, but nested one level deeper), and the threads axis is
+    always written as an empty dict because 20-B writes no threads
+    cursor (20-C populates it).
+
+    The cursor-monotonicity invariant (issue #339) is unchanged: a
+    second sync with no new yields preserves the byte-identical
+    cursor value, because ``_dump_cursors`` is deterministic
+    (``sort_keys=True``) and the both axes are unchanged.
+    """
+    # First sync: two messages, deliberately yielded ts-ascending
+    # to mirror the post-#339 fetcher behaviour.
+    yields_first: list[tuple[str, RawSlackMessage, str | None]] = [
+        (
+            "C1",
+            _raw_message(ts="1700000001.000100", text="first"),
+            "1700000001.000100",
+        ),
+        (
+            "C1",
+            _raw_message(ts="1700000002.000200", text="second"),
+            "1700000002.000200",
+        ),
+    ]
+    _patch_slack_fetcher(monkeypatch, yields=yields_first)
+
+    runner = CliRunner()
+    first = runner.invoke(app, ["slack", "sync"])
+    assert first.exit_code == 0, first.stdout
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        from sqlalchemy import text as sql_text
+
+        with engine.connect() as conn:
+            cursor_after_first = (
+                conn.execute(
+                    sql_text(
+                        "SELECT cursor_value FROM connector_cursors WHERE connector_name = 'slack'"
+                    )
+                )
+                .mappings()
+                .one()["cursor_value"]
+            )
+        assert cursor_after_first is not None
+
+        # Parse the persisted JSON and pin the compound envelope.
+        import json
+
+        parsed_first = json.loads(cursor_after_first)
+        assert parsed_first == {
+            "channels": {"C1": "1700000002.000200"},
+            "threads": {},
+        }
+
+        # Second sync with no new yields: cursor is byte-identical
+        # (deterministic dump + unchanged inputs). Pre-20-B this same
+        # invariant held under the flat-dict shape; we now pin it
+        # under the compound envelope.
+        _patch_slack_fetcher(monkeypatch, yields=[])
+        second = runner.invoke(app, ["slack", "sync"])
+        assert second.exit_code == 0, second.stdout
+
+        with engine.connect() as conn:
+            cursor_after_second = (
+                conn.execute(
+                    sql_text(
+                        "SELECT cursor_value FROM connector_cursors WHERE connector_name = 'slack'"
+                    )
+                )
+                .mappings()
+                .one()["cursor_value"]
+            )
+        assert cursor_after_second == cursor_after_first
+    finally:
+        engine.dispose()
+
+
 # ----- thread reply ingestion (ADR-0030 / #466) ----------------------------
 
 
