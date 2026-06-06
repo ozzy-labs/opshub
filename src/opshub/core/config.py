@@ -27,14 +27,15 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic import ValidationError as PydanticValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict, TomlConfigSettingsSource
 from pydantic_settings.sources import PydanticBaseSettingsSource
 
-from opshub.core.errors import ConfigError
+from opshub.core.errors import ConfigError, ValidationError
+from opshub.core.time import parse_since
 
 
 def _xdg_config_home() -> Path:
@@ -213,8 +214,76 @@ class OllamaLLMSettings(BaseModel):
     timeout_seconds: float = 60.0
 
 
+#: Per-channel ``since`` value that disables the date floor for that
+#: channel, i.e. "sync this channel's full history regardless of the
+#: global ``sync_since``" (Phase 20, ADR-0036 §(d)). Kept as a module
+#: constant so the connector's floor resolver
+#: (:func:`opshub.connectors.slack.connector._floor_to_ts`) and these
+#: validators agree on the sentinel spelling.
+SLACK_FULL_HISTORY_SENTINEL = "all"
+
+
+def _validate_slack_floor(value: str | None, *, field: str) -> str | None:
+    """Validate a Slack date-floor value (``sync_since`` / per-channel ``since``).
+
+    ``None`` (inherit / no floor) and the :data:`SLACK_FULL_HISTORY_SENTINEL`
+    (``"all"`` — explicit full backfill) pass through untouched. Any
+    other value must parse as a :func:`opshub.core.time.parse_since`
+    relative duration (``90d`` / ``4w``) or ISO date (``2026-01-01``);
+    a malformed value raises :class:`~opshub.core.errors.ConfigError` at
+    settings-construction time (fail-fast) rather than surfacing as a
+    cryptic failure mid-sync. The raw string is preserved (not the
+    parsed datetime) so relative floors are re-evaluated at sync time
+    (ADR-0036 §(f)).
+    """
+    if value is None or value == SLACK_FULL_HISTORY_SENTINEL:
+        return value
+    try:
+        parse_since(value, field=field)
+    except ValidationError as exc:
+        raise ConfigError(str(exc)) from exc
+    return value
+
+
+class SlackChannelSpec(BaseModel):
+    """One ``[[connectors.slack.channels]]`` entry (Phase 20, ADR-0036).
+
+    ``id`` is the Slack channel / DM id (``"C0123ABC"`` / ``"D0123ABC"``).
+    ``since`` is the optional per-channel date floor: ``None`` (the
+    default) inherits the connector-wide :attr:`SlackConnectorSettings.sync_since`,
+    :data:`SLACK_FULL_HISTORY_SENTINEL` (``"all"``) forces a full-history
+    backfill for this channel even when a global floor is set, and any
+    other value (``"90d"`` / ``"2026-01-01"``) sets a channel-specific
+    floor that overrides the global default (ADR-0036 §(d)/(e)).
+
+    Operators may also write a bare channel id string in the ``channels``
+    array (``channels = ["C0123ABC"]``); :meth:`SlackConnectorSettings._coerce_channel_ids`
+    normalises it to ``{"id": "C0123ABC"}`` so the historical string-array
+    form (and the ``opshub slack conversations --format=toml`` snippet)
+    keeps working unchanged.
+    """
+
+    id: str
+    since: str | None = None
+
+    @field_validator("since")
+    @classmethod
+    def _check_since(cls, value: str | None) -> str | None:
+        return _validate_slack_floor(value, field="[connectors.slack] channels[].since")
+
+
+def _empty_channel_list() -> list[SlackChannelSpec]:
+    """Typed ``default_factory`` for :attr:`SlackConnectorSettings.channels`.
+
+    A bare ``default_factory=list`` infers ``list[Unknown]`` under pyright
+    strict for a model-typed list (unlike ``list[str]``, which the builtin
+    factory resolves cleanly), so we spell the factory's return type out.
+    """
+    return []
+
+
 class SlackConnectorSettings(BaseModel):
-    """Slack connector tuning (Phase 7 step A3).
+    """Slack connector tuning (Phase 7 step A3; Phase 20 date floor).
 
     ``enabled = False`` is the default per Phase 7 plan §1 #2 — every
     SaaS connector is opt-in so a fresh ``uv tool install`` never tries
@@ -222,16 +291,28 @@ class SlackConnectorSettings(BaseModel):
     ``channels`` after running ``opshub slack auth set`` to
     store the OAuth access token.
 
-    ``channels`` is the list of Slack channel ids
-    (``["C0123ABC", "C0456DEF"]``) the connector will sync. Channel
-    *names* (``#general``) are intentionally not accepted — channel
-    membership / access is keyed on the id and Slack does not
-    guarantee name stability, so accepting names would force a
-    per-sync ``conversations.list`` lookup that risks the Tier-2
-    rate-limit budget. Empty list means "no channels configured" —
-    the connector surfaces this as a structured warning and runs as
-    a no-op (the sync command still exits 0; the operator sees the
-    warning in the structured log).
+    ``channels`` selects the Slack channel ids / DMs the connector will
+    sync. Each entry is a :class:`SlackChannelSpec` (``id`` + optional
+    per-channel ``since`` floor); a bare id string is also accepted and
+    normalised to ``{"id": ...}`` so ``channels = ["C0123ABC"]`` and the
+    ``opshub slack conversations --format=toml`` snippet keep working.
+    Channel *names* (``#general``) are intentionally not accepted —
+    channel membership / access is keyed on the id and Slack does not
+    guarantee name stability. Empty list means "no channels configured"
+    — the connector surfaces this as a structured warning and runs as a
+    no-op (the sync command still exits 0).
+
+    ``sync_since`` (Phase 20, ADR-0036) is the connector-wide date floor:
+    ``conversations.history`` is bounded so messages older than the floor
+    are never fetched, capping the cold-start / newly-added-channel
+    backfill. ``None`` (the default) keeps the historical behaviour of
+    backfilling the full channel history. Accepts a relative duration
+    (``"90d"`` / ``"4w"``, evaluated at sync time) or an ISO date
+    (``"2026-01-01"``). Per-channel :attr:`SlackChannelSpec.since`
+    overrides it; ``since = "all"`` opts a single channel back into full
+    backfill. The floor only ever moves the resume bound *forward* — an
+    already-synced channel's cursor is authoritative, so enabling
+    ``sync_since`` never re-fetches or deletes history (ADR-0036 §(g)).
 
     The OAuth access token lives in the OS keyring under
     ``connector:slack:token`` per ADR-0014 / ADR-0018 — it never
@@ -241,7 +322,50 @@ class SlackConnectorSettings(BaseModel):
     """
 
     enabled: bool = False
-    channels: list[str] = Field(default_factory=list)
+    channels: list[SlackChannelSpec] = Field(default_factory=_empty_channel_list)
+    sync_since: str | None = None
+
+    @field_validator("channels", mode="before")
+    @classmethod
+    def _coerce_channel_ids(cls, value: Any) -> Any:
+        """Accept a bare id string per entry, normalising to ``{"id": ...}``.
+
+        Keeps the historical ``channels = ["C0123ABC", "C0456DEF"]``
+        string-array form (and the ``opshub slack conversations
+        --format=toml`` paste snippet, which emits exactly that shape)
+        valid alongside the new ``[[connectors.slack.channels]]`` table
+        form (ADR-0036 §(b)). Non-list / already-dict entries pass
+        through for pydantic to validate / reject normally.
+        """
+        if isinstance(value, list):
+            # ``cast`` narrows pyright's ``isinstance(Any, list)`` widen to
+            # ``list[Unknown]``; mypy treats it as redundant (Any → list[Any])
+            # so we suppress only mypy, mirroring ``_load_cursors`` in the
+            # Slack connector.
+            items = cast(  # type: ignore[redundant-cast]
+                "list[Any]", value
+            )
+            return [{"id": item} if isinstance(item, str) else item for item in items]
+        return value
+
+    @field_validator("sync_since")
+    @classmethod
+    def _check_sync_since(cls, value: str | None) -> str | None:
+        return _validate_slack_floor(value, field="[connectors.slack] sync_since")
+
+    @model_validator(mode="after")
+    def _check_unique_channel_ids(self) -> SlackConnectorSettings:
+        """Reject duplicate channel ids — a copy-paste accident otherwise
+        silently double-syncs (and double-floors) a channel.
+        """
+        ids = [spec.id for spec in self.channels]
+        duplicates = sorted({cid for cid in ids if ids.count(cid) > 1})
+        if duplicates:
+            raise ConfigError(
+                f"[connectors.slack] channels has duplicate id(s): {duplicates}; "
+                "each channel id must appear at most once."
+            )
+        return self
 
 
 class MS365ConnectorSettings(BaseModel):

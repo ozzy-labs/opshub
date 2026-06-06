@@ -53,8 +53,12 @@ def slack_sync() -> None:
 
     Uses the cursor stored in the ``connector_cursors`` projection.
     ``[connectors.slack] channels`` in ``opshub.toml`` (or
-    ``OPSHUB_CONNECTORS_SLACK_CHANNELS``) selects the conversation
-    set. See :func:`opshub.cli._connector_common.run_connector_sync`
+    ``OPSHUB_CONNECTORS__SLACK__CHANNELS``) selects the conversation
+    set. ``[connectors.slack] sync_since`` (and per-channel ``since``)
+    sets an optional date floor so messages older than the floor are
+    never fetched, capping the cold-start backfill (Phase 20,
+    :doc:`ADR-0036 </adr/0036-slack-sync-date-floor>`). See
+    :func:`opshub.cli._connector_common.run_connector_sync`
     for the shared driver invariants (cursor bracket, progress proxy,
     sanitised failure trail).
     """

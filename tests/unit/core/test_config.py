@@ -12,6 +12,8 @@ from opshub.core.config import (
     ExcelOfficeSettings,
     OfficeSettings,
     OpsHubSettings,
+    SlackChannelSpec,
+    SlackConnectorSettings,
     default_config_dir,
     default_data_dir,
 )
@@ -559,3 +561,94 @@ def test_config_dir_field_uses_xdg_by_default(
     settings = OpsHubSettings()
 
     assert settings.config_dir == xdg_opshub_dir
+
+
+# --------------------------------------------------- Slack date floor (Phase 20, ADR-0036)
+
+
+def test_slack_channels_string_array_coerced_to_specs() -> None:
+    """The historical ``channels = ["C1", "C2"]`` string-array form keeps working.
+
+    This is the shape ``opshub slack conversations --format=toml`` emits,
+    so it must stay valid alongside the new table form (ADR-0036 §(b)).
+    """
+    # ``model_validate`` (untyped ``obj``) mirrors how TOML / env config
+    # actually reaches the model — a list of raw strings, not pre-built
+    # ``SlackChannelSpec`` instances.
+    settings = SlackConnectorSettings.model_validate({"channels": ["C1", "C2"]})
+    assert [c.id for c in settings.channels] == ["C1", "C2"]
+    assert all(c.since is None for c in settings.channels)
+
+
+def test_slack_channels_table_form_with_since() -> None:
+    settings = SlackConnectorSettings.model_validate(
+        {"channels": [{"id": "C1", "since": "30d"}, {"id": "C2", "since": "all"}]},
+    )
+    assert settings.channels[0].id == "C1"
+    assert settings.channels[0].since == "30d"
+    assert settings.channels[1].since == "all"
+
+
+def test_slack_channels_mixed_string_and_table() -> None:
+    settings = SlackConnectorSettings.model_validate(
+        {"channels": ["C1", {"id": "C2", "since": "2026-01-01"}]},
+    )
+    assert [c.id for c in settings.channels] == ["C1", "C2"]
+    assert settings.channels[0].since is None
+    assert settings.channels[1].since == "2026-01-01"
+
+
+def test_slack_sync_since_accepts_relative_and_iso_and_all() -> None:
+    assert SlackConnectorSettings(sync_since="90d").sync_since == "90d"
+    assert SlackConnectorSettings(sync_since="2026-01-01").sync_since == "2026-01-01"
+    assert SlackConnectorSettings(sync_since="all").sync_since == "all"
+    assert SlackConnectorSettings().sync_since is None
+
+
+def test_slack_sync_since_invalid_raises_config_error() -> None:
+    with pytest.raises(ConfigError, match=r"\[connectors\.slack\] sync_since"):
+        SlackConnectorSettings(sync_since="not-a-date")
+
+
+def test_slack_channel_since_invalid_raises_config_error() -> None:
+    with pytest.raises(ConfigError, match=r"\[connectors\.slack\] channels"):
+        SlackConnectorSettings.model_validate({"channels": [{"id": "C1", "since": "5h"}]})
+
+
+def test_slack_channel_since_keeps_raw_string_for_runtime_eval() -> None:
+    """Relative floors are stored as the raw string (re-evaluated at sync time)."""
+    spec = SlackChannelSpec(id="C1", since="90d")
+    assert spec.since == "90d"  # not frozen to a parsed datetime
+
+
+def test_slack_duplicate_channel_ids_rejected() -> None:
+    with pytest.raises(ConfigError, match="duplicate id"):
+        SlackConnectorSettings.model_validate({"channels": ["C1", "C1"]})
+
+
+def test_slack_channels_env_override_json_table_form(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The table form round-trips through the JSON env override."""
+    _isolate_xdg(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '[{"id": "C1", "since": "30d"}]')
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__SYNC_SINCE", "90d")
+
+    settings = OpsHubSettings()
+
+    assert [c.id for c in settings.connectors.slack.channels] == ["C1"]
+    assert settings.connectors.slack.channels[0].since == "30d"
+    assert settings.connectors.slack.sync_since == "90d"
+
+
+def test_slack_channels_env_override_json_string_array(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The legacy string-array env form still works (integration suite relies on it)."""
+    _isolate_xdg(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '["C1"]')
+
+    settings = OpsHubSettings()
+
+    assert [c.id for c in settings.connectors.slack.channels] == ["C1"]
+    assert settings.connectors.slack.channels[0].since is None

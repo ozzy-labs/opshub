@@ -55,6 +55,20 @@ STARTER_CONFIG_TOML = """\
 
 [embedding]
 backend = "disabled"
+
+# Slack connector (opt-in). Store the OAuth token with `opshub slack auth set`,
+# then enable + list channels. `opshub slack conversations --format=toml` prints
+# a ready-to-paste `channels = [...]` snippet. Phase 20 (ADR-0036) adds an
+# optional date floor so `opshub slack sync` skips messages older than the floor:
+#   [connectors.slack]
+#   enabled = true
+#   channels = ["C0123ABC"]        # bare ids (legacy form) still work
+#   sync_since = "90d"             # global floor: relative "90d"/"4w" or ISO "2026-01-01"
+#                                  # omit for full-history backfill (default)
+#   # ...or the table form for per-channel overrides:
+#   # [[connectors.slack.channels]]
+#   # id = "C0123ABC"
+#   # since = "all"                # opt this channel back into full backfill
 """
 
 
