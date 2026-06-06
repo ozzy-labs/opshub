@@ -273,11 +273,12 @@ def _make_service(
 ) -> BriefingService:
     """Build a :class:`BriefingService` against the migrated engine.
 
-    ``link_service`` is the Phase 8 D2 dependency; defaults to ``None``
-    so the existing Phase 5 tests continue to construct the service
-    without it (backward-compat). Tests exercising
-    ``expand_graph=True`` pass a real :class:`LinkService` bound to
-    the migrated engine.
+    ``link_service`` is required since epic #470 dropped the Phase 5
+    backward-compat ``None`` shape. When the test does not care about
+    graph expansion the helper binds a real :class:`LinkService` to
+    the migrated engine (its 1-hop walks return [] for entities with
+    no links seeded). Tests asserting on graph expansion can pass an
+    explicit ``link_service`` to override that default.
     """
     return BriefingService(
         recall_service=recall_service,  # type: ignore[arg-type]
@@ -286,7 +287,7 @@ def _make_service(
         projector=projector if projector is not None else BriefingsProjection(),  # type: ignore[arg-type]
         engine=engine,
         uow_factory=engine.begin,
-        link_service=link_service,
+        link_service=link_service if link_service is not None else LinkService(engine=engine),
     )
 
 
@@ -529,7 +530,7 @@ def test_failing_projector_rolls_back_briefing_generated(
     assert rows == []
 
 
-# ---- expand_graph (Phase 8 D2) --------------------------------------------
+# ---- graph expansion (ADR-0017 §決定 (e)+(f), unconditional from epic #470)
 
 
 class _StubLinkService:
@@ -590,37 +591,10 @@ def _make_link(
     )
 
 
-def test_generate_with_expand_graph_false_does_not_call_link_service(
+def test_generate_expands_via_link_service(
     migrated_engine: Engine,
 ) -> None:
-    """Phase 5 backward-compat pin: ``expand_graph=False`` (default) skips graph traversal.
-
-    A regression that flips the default or accidentally invokes the
-    LinkService for every brief would surface here as a non-empty
-    ``stub.calls`` accumulator.
-    """
-    task_id = _seed_task(migrated_engine, title="alpha body")
-    recall = _StubRecallService([_make_recall_hit("task", task_id, "alpha body")])
-    llm = _StubLLMClient()
-    link_stub = _StubLinkService()
-    service = _make_service(
-        migrated_engine,
-        recall_service=recall,
-        llm_client=llm,
-        link_service=link_stub,  # type: ignore[arg-type]
-    )
-
-    service.generate("phase 5 baseline")
-
-    # The LinkService.related must NOT be called when expand_graph
-    # is left at its default False value.
-    assert link_stub.calls == []
-
-
-def test_generate_with_expand_graph_true_expands_via_link_service(
-    migrated_engine: Engine,
-) -> None:
-    """``expand_graph=True`` materialises graph neighbours into the prompt."""
+    """Graph expansion is unconditional: neighbours always materialise into the prompt."""
     task_a = _seed_task(migrated_engine, title="alpha body")
     task_b = _seed_task(migrated_engine, title="beta body")
     task_c = _seed_task(migrated_engine, title="gamma body")
@@ -654,7 +628,7 @@ def test_generate_with_expand_graph_true_expands_via_link_service(
         link_service=link_stub,  # type: ignore[arg-type]
     )
 
-    briefing = service.generate("graph expansion", expand_graph=True)
+    briefing = service.generate("graph expansion")
 
     # LinkService.related is called once per recall hit with the
     # project's graph-expansion link-type whitelist (see
@@ -680,7 +654,7 @@ def test_generate_with_expand_graph_true_expands_via_link_service(
     }
 
 
-def test_generate_with_expand_graph_true_dedupes_against_original_hits(
+def test_generate_dedupes_against_original_hits(
     migrated_engine: Engine,
 ) -> None:
     """Graph-expansion neighbour that matches an original recall hit appears once."""
@@ -720,7 +694,7 @@ def test_generate_with_expand_graph_true_dedupes_against_original_hits(
         link_service=link_stub,  # type: ignore[arg-type]
     )
 
-    briefing = service.generate("dedupe vs original", expand_graph=True)
+    briefing = service.generate("dedupe vs original")
 
     # Final source_refs: X once, Y once.
     assert sorted(briefing.source_refs) == sorted(
@@ -736,7 +710,7 @@ def test_generate_with_expand_graph_true_dedupes_against_original_hits(
     assert user_content.count(f'<source id="{task_y}" type="task">') == 1
 
 
-def test_generate_with_expand_graph_true_dedupes_across_recall_hits(
+def test_generate_dedupes_across_recall_hits(
     migrated_engine: Engine,
 ) -> None:
     """Two recall hits sharing the same graph neighbour Z emit Z exactly once."""
@@ -779,7 +753,7 @@ def test_generate_with_expand_graph_true_dedupes_across_recall_hits(
         link_service=link_stub,  # type: ignore[arg-type]
     )
 
-    briefing = service.generate("dedupe across hits", expand_graph=True)
+    briefing = service.generate("dedupe across hits")
 
     # Two recall hits + Z once (not twice).
     assert sorted(briefing.source_refs) == sorted(
@@ -794,25 +768,19 @@ def test_generate_with_expand_graph_true_dedupes_across_recall_hits(
     assert user_content.count(f'<source id="{task_z}" type="task">') == 1
 
 
-def test_generate_with_expand_graph_true_without_link_service_raises_config_error(
+def test_construct_without_link_service_raises_type_error(
     migrated_engine: Engine,
 ) -> None:
-    """``expand_graph=True`` + missing LinkService → :class:`ConfigError`.
-
-    A loud failure mode keeps wiring mistakes (``_wiring.py`` dropping
-    the ``link_service=`` kwarg) from silently degrading the
-    operator-requested graph expansion.
-    """
+    """Epic #470 made ``link_service`` a required keyword argument."""
     recall = _StubRecallService([])
     llm = _StubLLMClient()
-    # Note: ``link_service=None`` (the default) — exactly the Phase
-    # 5/6 backward-compat construction shape.
-    service = _make_service(migrated_engine, recall_service=recall, llm_client=llm)
 
-    with pytest.raises(ConfigError, match="expand_graph"):
-        service.generate("expand without dep", expand_graph=True)
-
-    # No events should be appended — the guard fires before
-    # BriefingRequested.
-    requested = _events_of_type(migrated_engine, "briefing.requested")
-    assert requested == []
+    with pytest.raises(TypeError, match="link_service"):
+        BriefingService(  # type: ignore[call-arg]
+            recall_service=recall,  # type: ignore[arg-type]
+            llm_client=llm,
+            store=SqlAlchemyEventStore(migrated_engine),
+            projector=BriefingsProjection(),
+            engine=migrated_engine,
+            uow_factory=migrated_engine.begin,
+        )

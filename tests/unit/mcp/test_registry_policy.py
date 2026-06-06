@@ -20,7 +20,7 @@ keep the data shape honest:
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -171,6 +171,35 @@ def test_propose_generate_is_hitl_write(specs: list[Any]) -> None:
             assert spec.policy.open_world is True
             return
     raise AssertionError("propose.generate spec missing from registry")
+
+
+def test_brief_and_propose_generate_drop_expand_graph_property(specs: list[Any]) -> None:
+    """``brief`` / ``propose.generate`` no longer expose ``expand_graph``.
+
+    Epic #470 dropped the param from both the Service / CLI surfaces
+    and the MCP schemas — graph expansion is the unconditional Phase
+    8+ behaviour (ADR-0017 §決定 (e)+(f)). With
+    ``additionalProperties: false`` already pinned by
+    :func:`test_all_input_schemas_are_closed`, a caller passing
+    ``{"expand_graph": ...}`` will fail schema validation, so dropping
+    the property both removes the affordance and makes any legacy
+    invocation fail loud.
+    """
+    seen: set[str] = set()
+    for spec in specs:
+        if spec.name not in {"brief", "propose.generate"}:
+            continue
+        seen.add(spec.name)
+        schema_any: Any = spec.input_schema
+        assert isinstance(schema_any, dict)
+        schema_dict = cast(dict[str, Any], schema_any)
+        properties_raw: Any = schema_dict.get("properties", {})
+        assert isinstance(properties_raw, dict)
+        properties = cast(dict[str, Any], properties_raw)
+        assert "expand_graph" not in properties, (
+            f"{spec.name!r} still advertises the dropped ``expand_graph`` property"
+        )
+    assert seen == {"brief", "propose.generate"}, f"missing tool spec(s); saw {sorted(seen)}"
 
 
 def test_brief_is_read_only_local(specs: list[Any]) -> None:

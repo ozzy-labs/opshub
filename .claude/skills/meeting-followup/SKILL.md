@@ -66,9 +66,10 @@ tool: propose.generate
 input:
   topic: "<会議トピック + 主要な議題>"
   mode: "meeting_followup"
-  expand_graph: true       # graph 1-hop で文脈拡張 (ADR-0017 §(e)+(f))
   max_candidates: 8        # 1〜20。会議は action items が多めなので余裕を持つ
 ```
+
+graph 1-hop の文脈拡張は default で常時走る (ADR-0017 §(e)+(f)、epic #470 で `expand_graph` param 削除)。
 
 `mode=meeting_followup` は Phase 12 H4 で追加された dispatch key（ADR-0016 改訂 §決定 (l)(b)）。`proposals.scope` に `meeting_followup` が stamp され、後から audit 可能。`reply_to_source_id` とは排他。
 

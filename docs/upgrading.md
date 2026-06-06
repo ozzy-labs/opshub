@@ -1213,3 +1213,66 @@ pattern catches both nested and top-level files.
 - **One ADR.** [ADR-0020 §(b)](adr/0020-full-local-content-retention.md)
   was re-published with the "future cleanup" comment removed and the
   Implementation status flipped to `landed`.
+
+## Pre-userbase compat shim cleanup: drop `expand_graph` param + make LinkService required (sub-issue #472)
+
+Epic [#470](https://github.com/ozzy-labs/opshub/issues/470)
+(ADR-0017 §決定 (f) closeout) drops the
+`expand_graph: bool = False` keyword from
+`BriefingService.generate` / `ProposalService.generate` /
+`ProposalService.generate_reply_draft` and promotes
+`link_service: LinkService` to a required keyword on both service
+constructors. Graph 1-hop expansion is now the unconditional Phase
+8+ behaviour (ADR-0017 §決定 (e)+(f)).
+
+ADR-0017 §決定 (f) was originally landed (Phase 8 D2) with the
+`expand_graph: bool = False` default as a backward-compat shim so
+the Phase 5/6 prompt-snapshot tests would keep passing. In
+practice, all 6 graph-aware assistant skill SSOTs
+(`docs/skills/{reply-draft,inbox-triage,meeting-followup,
+source-extract,research,external-brief}/SKILL.md`) explicitly
+passed `expand_graph: true`, and `cli/_wiring.py` always supplied
+a `LinkService` — the `expand_graph=True + link_service=None`
+`ConfigError` dead-branch never fired in production. Sub-issue
+#472 drops the entire opt-in surface:
+
+- **Service `generate` / `generate_reply_draft`** no longer accept
+  an `expand_graph: bool` keyword; graph 1-hop expansion runs
+  unconditionally.
+- **`ProposalService` / `BriefingService` constructors** require a
+  `link_service: LinkService` keyword (no `None` default). Passing
+  `link_service=None` raises `TypeError` at construction time.
+- **`ConfigError("expand_graph=True requires LinkService ...")`**
+  is removed; the dead-branch no longer exists.
+- **MCP `briefing.generate` / `proposal.generate` tool schemas**
+  drop the `expand_graph` property. With `additionalProperties:
+  false` already pinned, an agent host calling `{"expand_graph":
+  ...}` now fails schema validation (caught by
+  `tests/unit/mcp/test_registry_policy.py::test_brief_and_propose_generate_drop_expand_graph_property`).
+- **CLI `opshub brief --expand-graph` / `opshub propose generate
+  --expand-graph` flags** are removed. Typer reports unknown
+  option and exits 2 (pinned in
+  `test_brief_rejects_legacy_expand_graph_flag` /
+  `test_generate_rejects_legacy_expand_graph_flag`).
+- **6 SKILL.md SSOTs** drop the `expand_graph: true` argument line
+  and replace it with a short note that graph expansion is the
+  default. `uv run opshub skills install --scope project`
+  regenerates `.claude/skills/` + `.agents/skills/` mirrors;
+  the `skills-sync-check` lefthook hook pins drift.
+
+Operator impact:
+
+1. Any caller passing `expand_graph=...` / `--expand-graph` /
+   `{"expand_graph": ...}` will **fail fast** at the boundary
+   (unknown option / additional property not allowed / `TypeError`).
+   Pre-userbase posture → no compat shim, no deprecation period.
+2. Graph expansion now runs on every `brief` / `propose generate` /
+   `propose generate --reply-to` invocation. LLM prompt size + cost
+   increase up to ~20-30% versus the Phase 5/6 baseline (max
+   `original_recall_hits × 3` neighbour entities per call, capped
+   by `_GRAPH_EXPAND_PER_HIT_LIMIT = 3`). Cost is controlled via the
+   existing `max_tokens` knob (ADR-0015 §決定 (h) — caller
+   responsibility); there is no `--no-expand-graph` opt-out.
+3. ADR-0017 §決定 (f) was rewritten to record the param-drop
+   landing; Phase 8 plan §2.4 D2 remains as a historical record of
+   the opt-in shape that has now been retired.

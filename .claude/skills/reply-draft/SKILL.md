@@ -44,10 +44,11 @@ tool: propose.generate
 input:
   topic: ""                          # 空でよい (reply_to_source_id 指定時は無視)
   reply_to_source_id: "<source ULID>"
-  expand_graph: true                  # ADR-0017 §(e)+(f) graph 1-hop で文脈拡張
   max_candidates: 3                   # 1〜20 (既定 5)
   from_briefing_id: ""                # 任意。previous briefing markdown を seed に使う場合のみ
 ```
+
+graph 1-hop の文脈拡張は default で常時走る (ADR-0017 §(e)+(f)、epic #470 で `expand_graph` param 削除)。
 
 `propose.generate` は write tool (`destructiveHint=true` 相当の HITL 境界、ADR-0016 §決定 (c))。LLM round-trip を伴い `ProposalGenerated` event を durable log に書く。apply はこの後の Step 4 で別途人が叩く (auto-apply 経路は存在しない)。
 

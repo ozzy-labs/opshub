@@ -279,7 +279,6 @@ def build_propose_generate_handler(engine: Engine) -> ToolHandler:
         reply_to_source_id = _nz(arguments.get("reply_to_source_id", ""))
         from_briefing_id = _nz(arguments.get("from_briefing_id", ""))
         mode_raw = _nz(arguments.get("mode", ""))
-        expand_graph = bool(arguments.get("expand_graph", False))
         max_candidates = int(arguments.get("max_candidates", 5))
         max_tokens = int(arguments.get("max_tokens", 2000))
 
@@ -314,7 +313,6 @@ def build_propose_generate_handler(engine: Engine) -> ToolHandler:
                 reply_to_source_id,
                 max_candidates=max_candidates,
                 max_tokens=max_tokens,
-                expand_graph=expand_graph,
             )
         else:
             if topic_raw is None:
@@ -333,7 +331,6 @@ def build_propose_generate_handler(engine: Engine) -> ToolHandler:
                 from_briefing_id=from_briefing_id,
                 max_candidates=max_candidates,
                 max_tokens=max_tokens,
-                expand_graph=expand_graph,
             )
 
         # Render candidates as plain dicts — the typed discriminated

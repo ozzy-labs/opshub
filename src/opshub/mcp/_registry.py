@@ -537,14 +537,6 @@ def build_tool_specs(
                         "minLength": 1,
                         "maxLength": 500,
                     },
-                    "expand_graph": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": (
-                            "When true, walk 1-hop graph neighbours of each recall hit"
-                            " to widen the prompt context (ADR-0017 §(e)+(f))."
-                        ),
-                    },
                     "format": {
                         "type": "string",
                         "enum": ["md", "json"],
@@ -1002,14 +994,6 @@ def build_tool_specs(
                             " exclusive with ``reply_to_source_id`` (reply-draft mode is"
                             " signalled by that field, not by ``mode``). When unset the"
                             ' service falls back to ``scope="all"`` (Phase 6 default).'
-                        ),
-                    },
-                    "expand_graph": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": (
-                            "Walk 1-hop graph neighbours of each recall hit to widen the"
-                            " prompt context (ADR-0017 §(e)+(f))."
                         ),
                     },
                     "max_candidates": {

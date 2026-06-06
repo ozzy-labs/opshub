@@ -84,11 +84,10 @@ tool: brief
 input:
   topic: "<トピック>"
   format: "md"
-  expand_graph: true
   max_sources: 30
 ```
 
-`brief` は内部で `recall.search` を再実行し、`expand_graph=true` なら 1-hop graph neighbours まで広げて LLM に渡して Markdown 要約を返す (ADR-0017 §(e)+(f))。戻り値は `{format, briefing_id, markdown, source_count, source_refs}`。
+`brief` は内部で `recall.search` を再実行し、1-hop graph neighbours まで広げて LLM に渡して Markdown 要約を返す (ADR-0017 §(e)+(f)、epic #470 で `expand_graph` param 削除、graph 拡張は default 経路として常時実行)。戻り値は `{format, briefing_id, markdown, source_count, source_refs}`。
 
 `brief` の hit と Step 1〜3 の hit の overlap が高い場合、Step 1〜3 の生データを **裏付け** として並べ、`brief` の Markdown を本文に据えるのが効率良い。LLM backend 未設定 / token 不足の場合は失敗するので、その場合は Step 1〜3 の素材だけでホスト側 LLM が要約する。
 
