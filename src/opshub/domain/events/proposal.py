@@ -61,7 +61,6 @@ from opshub.domain.events.base import DomainEvent
 __all__ = [
     "Candidate",
     "DecisionCandidatePayload",
-    "Phase6Event",
     "ProposalApplied",
     "ProposalFailed",
     "ProposalGenerated",
@@ -302,18 +301,3 @@ class ProposalFailed(DomainEvent):
     scope: str = Field(min_length=1, max_length=200)
     model_id: str = Field(min_length=1, max_length=200)
     error_message: str = Field(min_length=1, max_length=2000)
-
-
-# ---- Phase6Event discriminated union --------------------------------------
-
-Phase6Event = Annotated[
-    ProposalRequested | ProposalGenerated | ProposalApplied | ProposalRejected | ProposalFailed,
-    Field(discriminator="event_type"),
-]
-"""Phase 6 discriminated union over the 5 proposal lifecycle events.
-
-``TypeAdapter(Phase6Event)`` is the right tool for tests / migration
-scripts that want phase-scoped deserialisation. Persistence code
-should reach for :data:`opshub.domain.events.AllEvent` instead so the
-dispatch stays version-neutral.
-"""
