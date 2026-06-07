@@ -205,9 +205,9 @@ opshub embeddings rebuild                        # re-embed with the new body co
 
 Limits ([ADR-0025](adr/0025-office-document-content-extraction.md) §決定 (b)):
 
-- Files larger than 50 MB are skipped with `body=None` + a warning log
+- Files larger than 50 MB are skipped with **internal** `ExtractResult.body=None` + a warning log; the mapper substitutes `body = summary` so the projection persists a non-empty string (epic [#470](https://github.com/ozzy-labs/opshub/issues/470) / [ADR-0010](adr/0010-connector-contract.md) §不変条件 6 / [ADR-0020](adr/0020-full-local-content-retention.md) §(d'))
 - Extracted text longer than 500 000 chars is head-truncated and annotated
-- Extraction failures (corrupted file, password-protected workbook, unsupported sub-format) surface as `body=None` + sanitised warning; the metadata row is still emitted so the scan never blocks on a single bad file
+- Extraction failures (corrupted file, password-protected workbook, unsupported sub-format) surface as **internal** `ExtractResult.body=None` + sanitised warning; the same `body = summary` substitute applies so the projection persists a non-empty string. The metadata row is still emitted so the scan never blocks on a single bad file
 
 Per-operator overrides live under `[office]` in `opshub.toml` (`max_file_size_mb`, `max_chars`).
 
@@ -371,9 +371,9 @@ opshub embeddings rebuild                        # re-embed with the new body co
 
 When `content_extraction = true`, the connector calls Drive API `files.export(fileId, mimeType=<MS Office mediatype>)` for the three Workspace native source_types (`google_doc` → `.docx`, `google_slides` → `.pptx`, `google_sheets` → `.xlsx`) and routes the bytes through `core/document_extract.extract_workspace_export(bytes, source_type)`. The same caps from Phase 11 apply ([ADR-0025](adr/0025-office-document-content-extraction.md) §決定 (b)):
 
-- Files larger than 50 MB are skipped with `body=None` + a warning log (configurable via `[office] max_file_size_mb`).
+- Files larger than 50 MB are skipped with **internal** `ExtractResult.body=None` + a warning log (configurable via `[office] max_file_size_mb`); the mapper substitutes `body = summary` so the projection persists a non-empty string (epic [#470](https://github.com/ozzy-labs/opshub/issues/470) / [ADR-0010](adr/0010-connector-contract.md) §不変条件 6 / [ADR-0020](adr/0020-full-local-content-retention.md) §(d')).
 - Extracted text longer than 500 000 chars is head-truncated and annotated (configurable via `[office] max_chars`).
-- Export failures (Drive throttling, file permission loss, malformed export) surface as `body=None` + sanitised warning; the metadata `SourceObserved` is still emitted so the sync never gets blocked on a single bad export.
+- Export failures (Drive throttling, file permission loss, malformed export) surface as **internal** `ExtractResult.body=None` + sanitised warning; the same `body = summary` substitute applies so the projection persists a non-empty string. The metadata `SourceObserved` is still emitted so the sync never gets blocked on a single bad export.
 
 Non-native files (the catch-all `google_workspace_file` source_type — Drive returns 403 `fileNotExportable` for them) stay metadata-only regardless of `content_extraction`.
 

@@ -72,7 +72,7 @@ manual path の `link_type` は free-form 文字列 (`--type` の値は自由) �
 | link_type (Phase 10 追加) | 発行経路 | 意味 |
 |---|---|---|
 | `reply_draft_replies_to` | `ProposalApplied` 自動抽出 (`applied_entity_type = "reply_draft"` の場合) + Phase 10 reply_draft candidate の `reply_to_source_id` を `metadata` 経由で源として確定 | `proposal:<id>` → `source:<reply_to_source_id>` (返信下書きが返信先 source を参照) |
-| `referenced_in_reply_draft` | `BriefingGenerated.source_refs` 拡張パターンと同じく、reply_draft の生成プロンプトで `<context_source>` (ADR-0017 §決定 (f) `--expand-graph` 経由) として注入された entity 群を materialise | `proposal:<id>` → `<referenced_entity_type>:<referenced_entity_id>` (reply_draft 生成 context として参照した entity) |
+| `referenced_in_reply_draft` | `BriefingGenerated.source_refs` 拡張パターンと同じく、reply_draft の生成プロンプトで `<context_source>` (ADR-0017 §決定 (f) graph 1-hop 拡張経由) として注入された entity 群を materialise | `proposal:<id>` → `<referenced_entity_type>:<referenced_entity_id>` (reply_draft 生成 context として参照した entity) |
 
 要点:
 
@@ -228,14 +228,14 @@ end-to-end の整合確認は以下 4 ファイルで pin した (Phase 8 E1 clo
 2. **Graph visualisation web UI 不在** — Phase 8 は CLI + DOT (`--format dot`) 出力のみ。HTML / SVG renderer (`opshub graph serve` で HTTP server) は Phase 8.x
 3. **`links` の soft delete 不在** — §決定 (h) のとおり hard delete を採択。「削除済 link を一覧する」CLI subcommand は events table query で代替可能だが、専用 CLI (`opshub link list --include-deleted` 相当) は Phase 8.x で use case が顕在化したら検討
 4. **link_type ごとの quota / rate 制限不在** — 1 entity に 1000 link が張られた場合の `related` / `expand` の出力サイズ制御は `limit` 引数のみで実装。`link_type` ごとに weight を持って ranking する仕組みは Phase 8.x
-5. **graph 経由の semantic recall (vector + graph hybrid) 不在** — `--expand-graph` は recall hit を graph 拡張するのみで、graph traversal 結果を vector 空間にも投影して二次 recall する hybrid 検索は Phase 8.x
+5. **graph 経由の semantic recall (vector + graph hybrid) 不在** — graph 1-hop 拡張は recall hit を graph 拡張するのみで、graph traversal 結果を vector 空間にも投影して二次 recall する hybrid 検索は Phase 8.x
 
 ## Open Questions
 
 Phase 8 内で確定しない (Phase 8.x / 9 持ち越し):
 
 1. **Connector-side automatic `SourceReferenced` 発行の per-connector parsing rule** — GitHub Issue body の `#123` parse は markdown / plain text 両対応か、`org/repo#123` cross-repo notation を扱うか / Slack message の URL parse は permalink のみ or 全 URL か / MS365 Calendar attendee → email match で entity 引きをどう実装するか / Box file metadata の何を見るか。Phase 8.x で connector ごとに mapper 設計
-2. **`--expand-graph` の品質 validation** — graph 拡張で briefing / propose の品質 (operator 採用率 / hallucination 率 / latency) が実測で改善するか。Phase 8.x の運用 metric で評価し、結果次第で default on / off の議論
+2. **graph 1-hop 拡張の品質 validation** — 常時実行となった graph 拡張で briefing / propose の品質 (operator 採用率 / hallucination 率 / latency) が実測で改善するか。Phase 8.x の運用 metric で評価し、結果次第で opt-out 経路 (`--no-expand-graph` 相当) を再導入するか議論 (default on/off の議論は epic [#470](https://github.com/ozzy-labs/opshub/issues/470) で closeout 済)
 3. **`opshub graph serve` HTTP server + SVG / interactive visualisation** — CLI + DOT 出力では大規模 graph の俯瞰が困難。Phase 8.x で web UI / 別 ADR
 4. **`opshub link list --include-deleted` 相当の CLI** — 「過去存在したが現在は削除された link」を CLI で 1 コマンドで出したい use case が出てきたら追加検討 (現状は events table 直接 query で代替)
 5. **Multi-machine sync と `links` projection の関係** — principles.md §Open Q #5 (Multi-machine sync) は Phase 9 候補。Phase 9 で「`links` table が follower に複製されるのか / follower 側で events から再 derive するのか」を別 ADR で判断する必要がある (event log の sync で `links` を再 derive できるため後者が自然だが、large graph での initial rebuild コストとのトレードオフ)。本 ADR は §決定 (c) で「auto extraction は pure derived state」を pin したため、後者の選択肢が技術的に成立することは既に保証される
@@ -320,7 +320,7 @@ Phase 8 MVP scope に GitHub / Slack / MS365 / Box の body parse → `SourceRef
 - [ADR-0002: Event-Sourced Architecture](0002-event-sourced-architecture.md) — auto extraction が新 event を発行しない pure derived state である根拠、`LinkCreated` / `LinkDeleted` を manual path で必須化する根拠、hard delete でも event log で trace が残る根拠
 - [ADR-0005: External Content Minimization](0005-external-content-minimization.md) — `links` projection は ID + link_type のみ持ち、body を含まない (External Content Minimization と整合)
 - [ADR-0010: Connector Contract](0010-connector-contract.md) — connector-side `SourceReferenced` 自動発行を Phase 8.x に持ち越す根拠 (connector contract に body parse を加える場合の影響を別 phase で評価)
-- [ADR-0012: Embedding Strategy](0012-embedding-strategy.md) — `--expand-graph` で graph 拡張 entity を LLM prompt に含める設計の前提 (RecallService が semantic recall の結果を返す経路)
-- [ADR-0015: LLM Usage Strategy](0015-llm-usage-strategy.md) — `LinkDeleted.reason` の sanitise 経路 + `--expand-graph` が LLM 経路を変えない (Pluggable LLMClient signature 不変) ことの根拠
+- [ADR-0012: Embedding Strategy](0012-embedding-strategy.md) — graph 1-hop 拡張で graph 拡張 entity を LLM prompt に含める設計の前提 (RecallService が semantic recall の結果を返す経路)
+- [ADR-0015: LLM Usage Strategy](0015-llm-usage-strategy.md) — `LinkDeleted.reason` の sanitise 経路 + graph 1-hop 拡張が LLM 経路を変えない (Pluggable LLMClient signature 不変) ことの根拠
 - [ADR-0016: Action Loop and Structured Output](0016-action-loop-and-structured-output.md) — `ProposalApplied.applied_entity_id` を link 派生元として使う前提、`schema_version` literal + 両 version 読み分けの pattern を本 ADR でも踏襲する根拠
 - [Phase 8 Plan §1 (確定済み事項) + §2.1 (sub-issue A)](../phase-8-plan.md)

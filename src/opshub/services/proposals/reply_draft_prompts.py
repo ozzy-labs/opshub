@@ -16,9 +16,9 @@ but with three additions:
   query is the responsibility of the caller (ProposalService); this
   module only renders the prompt.
 * ``<context_source>`` blocks injected from the knowledge graph 1-hop
-  neighbours of the source being replied to (ADR-0017 §決定 (f)
-  ``--expand-graph``). Optional — the caller may pass an empty list
-  when ``--expand-graph`` is off.
+  neighbours of the source being replied to (ADR-0017 §決定 (f),
+  graph 1-hop 拡張). Optional — the caller may pass an empty list
+  when no graph neighbours were resolved.
 
 Same DATA-not-instructions contract as Phase 6 propose prompts:
 ``<style_example>`` and ``<context_source>`` blocks are wrapped in
@@ -144,7 +144,7 @@ def render_reply_draft_user_prompt(
        Empty list → no style block (the model falls back to the
        system prompt's terse role description).
     3. ``<context_source>`` blocks — graph-expanded context entities
-       (Phase 8 ``--expand-graph`` neighbours of the reply target).
+       (Phase 8 graph 1-hop 拡張 neighbours of the reply target).
        Empty list → no context block.
     4. ``<reply_to_source>`` — the message being replied to. Always
        present; the LLM must emit the ``reply_to_source_id`` /
@@ -163,7 +163,7 @@ def render_reply_draft_user_prompt(
     context_sources:
         Graph-expanded neighbours of ``reply_to`` materialised as
         ``(entity_type, entity_id, text)`` tuples. Reuses the existing
-        ``--expand-graph`` source loader so reply-draft generation
+        graph 1-hop 拡張 source loader so reply-draft generation
         shares the same context loading machinery as brief / propose.
     max_candidates:
         Cap on the number of reply_draft candidates the LLM may

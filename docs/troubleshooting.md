@@ -186,7 +186,7 @@ sqlite3 ~/.local/share/opshub/db/opshub.sqlite \
 **対応**:
 
 - migration を当てていなければ `opshub db migrate` を実行する (back-fill 自動)
-- 既に当たっているのに hit しない場合、本文 (`sources.body`) に該当文字列が入っているかを §3.5 と同じ要領で `sqlite3` で確認する。`sources.body IS NULL` の source (Phase 3-9 historical 行と `box_drive` / `onedrive_drive` の metadata-only 行、[ADR-0019](adr/0019-local-filesystem-backed-connector.md) §不変条件 (b)) は FTS5 / LIKE どちらの経路でも対象外
+- 既に当たっているのに hit しない場合、本文 (`sources.body`) に該当文字列が入っているかを §3.5 と同じ要領で `sqlite3` で確認する。`sources.body IS NULL` 行は **post-epic [#470](https://github.com/ozzy-labs/opshub/issues/470) で存在しない** (migration `0030_enforce_sources_body_not_null` で Phase 3-9 historical NULL 行は破棄、metadata-only 行は `body = summary` substitute、[ADR-0019](adr/0019-local-filesystem-backed-connector.md) §不変条件 (b) + [ADR-0010](adr/0010-connector-contract.md) §不変条件 6)。FTS5 / LIKE で hit しないように見える場合は (1) connector が summary 自体を populate していない、(2) sync 未実行、のいずれか
 - 3 文字以上で「本文に literal phrase が存在する」のに hit しない場合は **regression なので issue 起票**。`opshub --debug search "<query>"` で再現 + 直近の migration head と DB 暗号化状態を添えて報告する
 
 **動作仕様の補足**:

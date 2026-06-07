@@ -232,7 +232,7 @@ class ProposalGenerated(DomainEvent):
     tokens_in: int = Field(ge=0)
     tokens_out: int = Field(ge=0)
     # Phase 10 step E2 (ADR-0017 §決定 (b) Phase 10 改訂):
-    # ``--expand-graph`` neighbours injected as ``<context_source>``
+    # graph 1-hop 拡張 neighbours injected as ``<context_source>``
     # blocks during reply_draft generation. The LinksProjector
     # materialises one ``referenced_in_reply_draft`` link per entry
     # so a later ``opshub graph trace <proposal-id>`` can recover

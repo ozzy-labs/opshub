@@ -65,7 +65,7 @@ Phase 10 以降は次を保持する:
 - 要約・抽出された action items
 - **provenance タグ** (`provenance_origin` ＝ external/internal、`provenance_trust` ＝ trusted/untrusted、[ADR-0020](adr/0020-full-local-content-retention.md) §(e))
 
-Phase 11 では「本文」の対象が Office 文書 (Word/Excel/PowerPoint) 由来のテキスト抽出結果まで広がる ([ADR-0025](adr/0025-office-document-content-extraction.md))。markitdown 経由で `.docx` / `.xlsx` / `.pptx` を markdown 化したテキストを `sources.body` に載せる。本文取り込みは local-FS-backed connector の `content_extraction = true` opt-in 経路でのみ発火し、抽出失敗は warning log + `body=None` の fail-safe で skip (§6 と同じ provenance タグ規律を継承)。
+Phase 11 では「本文」の対象が Office 文書 (Word/Excel/PowerPoint) 由来のテキスト抽出結果まで広がる ([ADR-0025](adr/0025-office-document-content-extraction.md))。markitdown 経由で `.docx` / `.xlsx` / `.pptx` を markdown 化したテキストを `sources.body` に載せる。本文取り込みは local-FS-backed connector の `content_extraction = true` opt-in 経路でのみ発火し、抽出失敗は内部 `ExtractResult.body=None` だが mapper で `body = summary` fallback され、projection (`sources.body`) は非空文字列で persist される ([ADR-0010](adr/0010-connector-contract.md) §不変条件 6 metadata-only rule、epic [#470](https://github.com/ozzy-labs/opshub/issues/470) で `sources.body` NOT NULL 化、§6 と同じ provenance タグ規律を継承)。
 
 Phase 13 では Google Workspace native 形式 (`google_doc` / `google_slides` / `google_sheets`) も同じ Phase 11 markitdown 経路で `sources.body` に取り込めるようになった ([ADR-0025](adr/0025-office-document-content-extraction.md) §決定 (d') + (j))。Drive API `files.export` で Google native → MS Office mediatype (docx / pptx / xlsx) → markitdown → markdown text と変換することで、Phase 11 で確立した 1 つの抽出経路 (`core/document_extract.py`) を再利用する。Workspace export 経路は `[connectors.google_workspace] content_extraction = true` opt-in でのみ起動し、size cap (50MB) / chars cap (500K) / fail-safe / provenance タグ規律は Phase 11 と同じ。
 
@@ -86,7 +86,7 @@ Phase 13 では Google Workspace native 形式 (`google_doc` / `google_slides` /
 
 本文をローカルに保持する設計 (§6 本文 + ADR-0020 §決定 (a)) は、横断検索の二経路をシンプルに成立させる。
 
-- (i) **本文を持つから hybrid search が成立** — `sources.body` (NULL なら `summary` に fallback) を SSOT に、vector recall (sqlite-vec) と FTS5 (`sources_fts`) の両方が同じ本文列を index 化できる。要約のみだった Phase 1-9 の時代は recall の細部・固有名詞・依頼の機微が summary 段階で抜け落ちており、アシスタントユースケース (返信下書き / 本文検索) で再要約・上流再取得を強いられていた ([ADR-0012](adr/0012-embedding-strategy.md) §4 改訂 / Alternative #8)。
+- (i) **本文を持つから hybrid search が成立** — `sources.body` を SSOT に (epic [#470](https://github.com/ozzy-labs/opshub/issues/470) で NOT NULL 化、migration `0030_enforce_sources_body_not_null`、metadata-only path では mapper が `body = summary` を substitute するため COALESCE/NULL fallback は廃止済)、vector recall (sqlite-vec) と FTS5 (`sources_fts`) の両方が同じ本文列を index 化できる。要約のみだった Phase 1-9 の時代は recall の細部・固有名詞・依頼の機微が summary 段階で抜け落ちており、アシスタントユースケース (返信下書き / 本文検索) で再要約・上流再取得を強いられていた ([ADR-0012](adr/0012-embedding-strategy.md) §4 改訂 / Alternative #8)。
 - (ii) **`opshub recall` (semantic) と `opshub search` (exact/token) の役割分担** — `recall` は vector 類似度で「意味が近い」を引く (semantic、語彙ゆれに強い)。`search` は FTS5 で「キーワードが含まれる」を引く (exact / token、固有名詞・引用句に強い)。両者は補完関係で、エージェント host (MCP tool 経由 `recall.search`) はまず semantic recall を引き、外したら FTS で取り直すフォールバック動線を取れる ([ADR-0022](adr/0022-mcp-server-surface.md) §(a)/(d))。
 - (iii) 本文を持つ前提が両経路を裏打ちする ([ADR-0020](adr/0020-full-local-content-retention.md) §決定 (a) / §(d) backward-compat、[ADR-0012](adr/0012-embedding-strategy.md) §4 改訂版)。
 

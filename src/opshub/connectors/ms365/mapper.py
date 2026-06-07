@@ -294,7 +294,11 @@ def _body_from_raw(raw: dict[str, Any]) -> str | None:
     body as ``{"contentType": "html"|"text", "content": "..."}``. We
     keep the raw content verbatim (HTML or text) — Sub-issue B / the
     assistant skills decide on rendering. An empty / missing body
-    normalises to ``None`` so the projection stores ``NULL``.
+    normalises to ``None`` at the helper level; the caller
+    (:func:`map_outlook_message` etc.) routes through the metadata-only
+    substitution path so the projection persists ``body = summary`` per
+    epic #470 / ADR-0010 §不変条件 6 (``sources.body`` is NOT NULL
+    post-migration ``0030_enforce_sources_body_not_null``).
     """
     body = raw.get("body")
     if not isinstance(body, dict):
