@@ -527,6 +527,8 @@ def test_h4_propose_apply_annotation_is_not_read_only() -> None:
         "search",
         # Phase 18-C (ADR-0033 §決定 (c)): Slack mention / DM demand digest.
         "slack.demand.list",
+        # Phase 21-D (ADR-0037 §決定 (e) + ADR-0022 改訂): browser fetch.
+        "browser.fetch",
     )
     handlers: dict[str, object] = dict.fromkeys(handler_names, _noop)
 
@@ -586,6 +588,8 @@ def test_h4_propose_generate_schema_includes_mode_enum() -> None:
         "search",
         # Phase 18-C (ADR-0033 §決定 (c)): Slack mention / DM demand digest.
         "slack.demand.list",
+        # Phase 21-D (ADR-0037 §決定 (e) + ADR-0022 改訂): browser fetch.
+        "browser.fetch",
     )
     handlers: dict[str, object] = dict.fromkeys(handler_names, _noop)
 

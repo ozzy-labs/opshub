@@ -437,11 +437,14 @@ def test_phase10_assistant_lifecycle(
         specs_by_name = {spec.name: spec for spec in specs}
 
         # Sanity: the Phase 10 C2 baseline + Step 1 widening + Phase 12
-        # H1 widening + Phase 18-C widening advertises 18 tools (13 read,
-        # 5 write). A regression that drops one would surface here.
-        # Phase 12 H1 (ADR-0022 改訂) added ``search`` (FTS5 read) and
-        # ``propose.apply`` (HITL write, idempotent). Phase 18-C
-        # (ADR-0033 §決定 (c)) added ``slack.demand.list`` (read).
+        # H1 widening + Phase 18-C widening + Phase 21-D widening
+        # advertises 19 tools (13 read, 6 write). A regression that drops
+        # one would surface here. Phase 12 H1 (ADR-0022 改訂) added
+        # ``search`` (FTS5 read) and ``propose.apply`` (HITL write,
+        # idempotent). Phase 18-C (ADR-0033 §決定 (c)) added
+        # ``slack.demand.list`` (read). Phase 21-D (ADR-0037 §決定 (e) +
+        # ADR-0022 改訂) added ``browser.fetch`` (write, network egress,
+        # no persist).
         assert set(specs_by_name) == {
             # Phase 10 C2 baseline.
             "recall.search",
@@ -466,6 +469,8 @@ def test_phase10_assistant_lifecycle(
             "propose.apply",
             # Phase 18-C widening (ADR-0033 §決定 (c)).
             "slack.demand.list",
+            # Phase 21-D widening (ADR-0037 §決定 (e) + ADR-0022 改訂).
+            "browser.fetch",
         }
 
         # ---- 4. personal-brief script (read-only tool calls) --------------

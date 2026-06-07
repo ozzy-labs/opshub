@@ -30,11 +30,12 @@ as an actual subprocess and driving it through the official Python
 Invariants pinned
 -----------------
 
-1. **17-tool surface (Phase 12 H1 / ADR-0022 §決定 (f))** — the
-   ``tools/list`` reply contains exactly the 12 read + 5 write tools
-   the assistant 14-skill catalog depends on. A regression that
-   drops or renames any of them surfaces here as a missing-name
-   assertion failure before it reaches a real agent host.
+1. **19-tool surface (Phase 21-D / ADR-0022 改訂)** — the
+   ``tools/list`` reply contains exactly the 13 read + 6 write tools
+   the assistant 14-skill catalog + the Phase 21-D ``browser.fetch``
+   surface depend on. A regression that drops or renames any of them
+   surfaces here as a missing-name assertion failure before it reaches
+   a real agent host.
 2. **``serverInfo`` schema** — :class:`mcp.types.InitializeResult`
    exposes ``serverInfo.name == "opshub"`` so an agent host's
    capability discovery does not pivot on a renamed server.
@@ -97,7 +98,7 @@ _PathsDict = dict[str, Path]
 # a blocking call before the JSON-RPC loop starts).
 _E2E_TIMEOUT_SECONDS = 30.0
 
-# Phase 12 H1 MCP tool surface — 12 read + 5 write. The set is pinned
+# MCP tool surface — 13 read + 6 write (Phase 21-D). The set is pinned
 # verbatim against the names in :func:`opshub.mcp.server
 # .build_tool_specs_for_engine` (the in-process test in
 # :mod:`tests.integration.test_phase12_assistant_lifecycle` pins the
@@ -130,6 +131,9 @@ _EXPECTED_TOOL_NAMES: frozenset[str] = frozenset(
         "propose.apply",
         # Phase 18-C widening (ADR-0033 §決定 (c)).
         "slack.demand.list",
+        # Phase 21-D widening (ADR-0037 §決定 (e) + ADR-0022 改訂) —
+        # write-category ad-hoc browser fetch (network egress, no persist).
+        "browser.fetch",
     }
 )
 
@@ -229,7 +233,7 @@ def test_mcp_stdio_initialize_and_list_tools_via_subprocess(
        value would raise inside :func:`ClientSession.initialize`).
     2. ``capabilities.tools`` is advertised — without it an agent host
        skips the assistant 14-skill surface entirely.
-    3. ``tools/list`` carries exactly the 17-tool Phase 12 H1 surface
+    3. ``tools/list`` carries exactly the 19-tool Phase 21-D surface
        defined in :data:`_EXPECTED_TOOL_NAMES`. A regression that
        drops, renames, or accidentally exposes a new tool fails
        here before it reaches a real Claude Code / Codex CLI host.

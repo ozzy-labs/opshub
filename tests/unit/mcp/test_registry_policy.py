@@ -63,6 +63,9 @@ _TOOL_NAMES: tuple[str, ...] = (
     "propose.apply",
     # Phase 18-C (ADR-0033 §決定 (c)): Slack mention / DM demand digest.
     "slack.demand.list",
+    # Phase 21-D (ADR-0037 §決定 (e) + ADR-0022 改訂): ad-hoc browser fetch
+    # (write-category, network egress, no persist). 18 → 19 tools.
+    "browser.fetch",
 )
 
 # Phase 12 H1: ``propose.apply`` is the only write-class tool with
@@ -379,3 +382,78 @@ def test_list_tools_expose_physical_column_time_filters(specs: list[Any]) -> Non
             field_schema: Any = properties[field_name]
             assert field_schema.get("type") == "string"
             assert field_schema.get("format") == "date-time"
+
+
+# ---------------------------------------------------------------------------
+# Phase 21-D (ADR-0037 §決定 (e) + ADR-0022 改訂) — ``browser.fetch`` pins.
+# ---------------------------------------------------------------------------
+
+
+def test_registry_surface_is_nineteen_tools(specs: list[Any]) -> None:
+    """The MCP surface is exactly 19 tools = 13 read + 6 write (Phase 21-D).
+
+    Phase 18-C shipped 18 (13 read + 5 write). Phase 21-D adds the
+    ``browser.fetch`` write tool (ADR-0037 §決定 (e)), bringing the total
+    to 19. The count pin makes any accidental add / drop fail loud
+    alongside the per-name :func:`test_registry_covers_phase_10_c2_surface`
+    check (which catches *which* tool drifted; this one catches the
+    *count* split between the read / write namespaces).
+    """
+    read_count = sum(1 for s in specs if isinstance(s.category, ReadCategory))
+    write_count = sum(1 for s in specs if isinstance(s.category, WriteCategory))
+    assert len(specs) == 19, f"expected 19 MCP tools, got {len(specs)}"
+    assert read_count == 13, f"expected 13 read tools, got {read_count}"
+    assert write_count == 6, f"expected 6 write tools, got {write_count}"
+
+
+def test_browser_fetch_is_open_world_write(specs: list[Any]) -> None:
+    """``browser.fetch`` must surface as an open-world destructive write.
+
+    ADR-0037 §決定 (e): ``browser.fetch`` egresses the local box for the
+    public network, so it sits in the same HITL bucket as
+    ``connector.sync`` — ``readOnlyHint=false`` (host prompts the
+    operator), ``destructiveHint=true`` (observable upstream side
+    effect), ``openWorldHint=true`` (network round-trip). It is NOT a
+    member of the ``_NON_DESTRUCTIVE_WRITES`` carve-out — only
+    ``propose.apply`` lives there. This pin keeps the "read tool = local
+    SQLite only" invariant honest: a regression that reclassifies
+    ``browser.fetch`` as a read tool (so a host auto-approves a network
+    fetch) fails here.
+    """
+    for spec in specs:
+        if spec.name == "browser.fetch":
+            assert isinstance(spec.category, WriteCategory), (
+                "browser.fetch must be a WriteCategory tool (network egress"
+                " stays out of the auto-approve read surface, ADR-0037 §決定 (e))"
+            )
+            assert spec.policy.read_only is False
+            assert spec.policy.destructive is True
+            assert spec.policy.open_world is True
+            assert spec.name not in _NON_DESTRUCTIVE_WRITES
+            return
+    raise AssertionError("browser.fetch spec missing from registry")
+
+
+def test_browser_fetch_schema_takes_url_only(specs: list[Any]) -> None:
+    """``browser.fetch`` input schema must take a single required ``url`` field.
+
+    The MCP boundary stays minimal: only ``url`` is accepted (no token,
+    no per-call timeout / headless override — those resolve from
+    ``[browser]`` settings inside opshub). ``additionalProperties: false``
+    is checked globally by :func:`test_all_input_schemas_are_closed`; this
+    pin asserts the ``url`` field shape so a relaxation surfaces clearly.
+    """
+    for spec in specs:
+        if spec.name == "browser.fetch":
+            schema_any: Any = spec.input_schema
+            properties: Any = schema_any.get("properties", {})
+            assert "url" in properties, "browser.fetch must accept ``url``"
+            assert set(properties) == {"url"}, (
+                f"browser.fetch input schema must expose only ``url``; got {sorted(properties)}"
+            )
+            required: Any = schema_any.get("required", [])
+            assert "url" in required, "``url`` must be required"
+            url_schema: Any = properties["url"]
+            assert url_schema.get("type") == "string"
+            return
+    raise AssertionError("browser.fetch spec missing from registry")
