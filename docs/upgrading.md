@@ -771,7 +771,7 @@ opshub skills install --scope project
 - **No new extras.** The MCP server continues to use the existing `[mcp]` extras; the new tool reuses the standing engine.
 - **No new Slack scope.** Existing Slack operators already have the data (the Phase 18-B projection is purely derived from `SourceObserved` events the Phase 7 connector already emits).
 - **No CLI breaking changes.** The Phase 18-B debug CLI (`opshub slack mentions list`) stays in place; `slack.demand.list` is the MCP surface twin, not a CLI replacement.
-- **MCP tool surface: total 18 tools** = 13 read + 5 write (was 17 = 12 read + 5 write after Phase 12 H1). The single new read tool brings the count to 18.
+- **MCP tool surface after Phase 18-C: 13 read + 5 write** (was 12 read + 5 write after Phase 12 H1; the single new read tool `slack.demand.list` brought the read count to 13). Phase 21-D later adds the write tool `browser.fetch`, taking the surface to **19 tools = 13 read + 6 write** (see [Phase 21](#phase-21-browser-read-layer-playwright--web-connector--mcp-browserfetch) below).
 - **No new ADR — implements [ADR-0033 §決定 (c)](adr/0033-slack-mention-demand-digest.md) + adds the §(f) 補遺 cross-reference to [ADR-0022](adr/0022-mcp-server-surface.md)** (delivered in Phase 18-A docs-only PR [#431](https://github.com/ozzy-labs/opshub/pull/431) — the MCP read tool addition is a documented extension under the existing 5 不変条件).
 
 ## Phase 19: `opshub slack conversations` engagement axis default — **BREAKING CHANGE**
@@ -1418,3 +1418,95 @@ reads `sources.body` (no more `COALESCE(body, summary)` fallback).
 - **Idempotent connectors.** Each `<connector> sync` upserts on the
   natural key `(connector_name, external_id)`, so re-syncing
   reproduces the same projection state with the new body contract.
+
+## Phase 21: Browser read layer (Playwright) + web connector + MCP `browser.fetch`
+
+Phase 21 ([epic #504](https://github.com/ozzy-labs/opshub/issues/504), [ADR-0037](adr/0037-browser-read-layer-playwright.md) new + [ADR-0010](adr/0010-connector-contract.md) §Phase 21 revision (n)/(o) + [ADR-0022](adr/0022-mcp-server-surface.md) §決定 (g) revision) adds a Playwright-backed **browser read layer**: an 11th connector (`web`) that renders operator-listed URLs and a new MCP write tool (`browser.fetch`) for ad-hoc page reads. **No DB migration, no breaking CLI changes** — the additions are purely additive (a new opt-in connector, a new opt-in extras group, a new MCP tool). The PRs: 21-A [#510](https://github.com/ozzy-labs/opshub/pull/510) (ADRs), 21-B [#511](https://github.com/ozzy-labs/opshub/pull/511) (browser core + `[browser]` config + `browser` extras + CI Chromium), 21-C [#513](https://github.com/ozzy-labs/opshub/pull/513) (web connector + `opshub web sync`), 21-D [#512](https://github.com/ozzy-labs/opshub/pull/512) (MCP `browser.fetch`), 21-E (this docs closeout).
+
+### New extras: `browser` (Playwright)
+
+The browser layer is gated behind a new optional-dependency group so operators who never read Web pages pay nothing:
+
+```bash
+uv sync --extra browser          # pulls playwright>=1.50
+uv run playwright install chromium   # one-time Chromium binary provisioning (operator step, ADR-0037 §決定 (g))
+```
+
+`uv tool install` users add it the same way:
+
+```bash
+uv tool install "ozzylabs-opshub[browser]"
+playwright install chromium
+```
+
+The `playwright` import is lazy inside `opshub.browser.core.fetch_page`, so the cold-start guard (`opshub --help` ≤ 300 ms) is unaffected when the extra is absent. When Chromium is missing, the `web` connector and `browser.fetch` fail with a `ConfigError` that names `playwright install chromium` (ADR-0037 §決定 (g)) rather than a raw Playwright "executable doesn't exist" trace.
+
+### New config: `[browser]` (shared infrastructure)
+
+Browser tuning lives at the **settings root** (`[browser]` / `OPSHUB_BROWSER__*`), not under any connector, because both the `web` connector and the `browser.fetch` MCP tool drive the same browser core (ADR-0037 §決定 (c)):
+
+```toml
+[browser]
+headless = true        # run Chromium without a GUI (default; flip to false only when debugging a render)
+# channel = "chrome"   # use a branded system Chromium instead of the bundled one; default = bundled
+timeout = 30000        # per-navigation ceiling in milliseconds (Playwright unit); 0 disables (discouraged)
+# cdp_endpoint = "http://localhost:9222"  # attach to an operator-launched Chrome (connect_over_cdp escape hatch); default = launch our own persistent context
+```
+
+Env override examples: `OPSHUB_BROWSER__HEADLESS=false`, `OPSHUB_BROWSER__TIMEOUT=60000`. The Chromium profile uses an **opshub-dedicated user-data-dir** under the data dir (`default_data_dir() / "browser"`); your everyday Chrome profile is never touched (ADR-0037 §決定 (c)).
+
+### New config: `[connectors.web]` (the web connector)
+
+The `web` connector is opt-in like every connector (default `enabled = false`). Configure it with a **plain list of URL strings**:
+
+```toml
+[connectors.web]
+enabled = true
+pages = [
+  "https://example.com/status",
+  "https://docs.internal.example/runbook",
+]
+```
+
+The table form `[[connectors.web.pages]]` is deliberately **not** accepted — a Web page has no per-page knobs worth a table (no `since` window, no auth principal), so the string array is the whole contract. Stale / mistyped keys are rejected with a fail-fast `ValidationError` (`model_config = ConfigDict(extra="forbid")`).
+
+Then provision Chromium once and sync:
+
+```bash
+playwright install chromium
+opshub web sync          # renders each listed URL, persists changed pages as web_page sources
+```
+
+`opshub web sync` has **no `auth` sub-app** (public pages need no auth; `opshub web auth set` falls through to Typer's `No such command 'auth'` exit-2, the ADR-0031 §決定 (6) box_drive precedent). Progress renders on a TTY (ADR-0026); override with `--progress` / `--no-progress` / `OPSHUB_PROGRESS`.
+
+### Behavioural notes (Phase 21 web connector)
+
+- **Operator-listed URLs only — not a crawler.** The connector fetches exactly the URLs in `[connectors.web] pages` and never follows `<a href>` links found on them, nor walks a sitemap (ADR-0010 §Phase 21 revision (n)). Link-following / sitemap crawling is structurally absent (no code path) to keep form-A (no proactive runtime) integrity.
+- **Change detection by fingerprint, not delta API.** Web pages have no "what changed since last time" API, so the connector reuses the [ADR-0019](adr/0019-local-filesystem-backed-connector.md) §決定 (d) `sources.fingerprint` pattern (the same one `box_drive` / `onedrive_drive` use): each URL's extracted body is SHA-256 hashed and compared against the prior `sources.fingerprint`. An **unchanged page emits no event**, so re-running `opshub web sync` is idempotent. No new column or event field is added — the existing `sources.fingerprint TEXT NULL` (migration 0017) and `SourceObserved.fingerprint` field are reused.
+- **A single dead URL is logged at WARN and skipped**; the other pages still sync (navigation error / timeout → `BrowserFetchError`, a `ConnectorFailedError` subclass, handled by the existing per-page fail-safe).
+- **Bodies are extracted from the rendered DOM** (`page.inner_text("body")` after `wait_until="load"`), head-truncated at 500K chars with the ADR-0025 marker (`opshub.core.text_limits.truncate_with_marker`, shared with Office extraction). This is the Playwright-adoption payoff: JS-rendered SPA / dynamic-page bodies that `requests` + HTML parsing cannot reach land in `sources.body`, searchable from FTS5 / recall / the assistant skills.
+- **External write-back stays forbidden** (ADR-0010 §禁止事項 7). The browser layer is **read-only** — it carries no `page.click` / `page.fill` / `page.set_input_files` / form-submit code path. Operations (click / fill / submit) are deferred to a later phase that must first settle HITL approval granularity, Web-page-sourced prompt-injection defence, and the ADR-0010 write-back ban整理 (ADR-0037 §決定 (f)).
+
+### New MCP tool: `browser.fetch` (write-category, HITL)
+
+Phase 21-D adds one new MCP **write** tool, taking the surface from 18 to **19 tools (13 read + 6 write)**:
+
+| Field | Value |
+| --- | --- |
+| name | `browser.fetch` |
+| category | `WriteCategory.BROWSER_FETCH` |
+| annotation | `readOnlyHint=false`, `destructiveHint=true`, `idempotentHint=false`, `openWorldHint=true` (same pattern as `connector.sync`) |
+| input | `url` (required; `http` / `https` only — `file` / `data` / `ftp` / `javascript` are rejected by the handler) |
+| output | 200-char DOM-text snippet (secret-redacted) + `<title>` + `text_chars` (full length) + `truncated` (browser core 500K cap hit) + `persisted: false` |
+
+It is classified **write-category even though it returns data** because it **egresses the public network** (ADR-0037 §決定 (e), ADR-0022 §決定 (g)). The "read tool = local SQLite only" invariant reserves the network-egress bucket for the same HITL treatment as `connector.sync`: the call leaves a trace in the remote's rate-limit / audit log, and the fetched body is an indirect-prompt-injection carrier — so a host should confirm with the operator before invoking. **Nothing is persisted** — durable ingestion is the `web` connector's job. The async MCP handler bridges to the synchronous browser core via `asyncio.to_thread` (Playwright's sync API cannot run inside the asyncio loop, ADR-0037 §決定 (h)).
+
+No assistant skill calls `browser.fetch` as a primary path yet; the `research`-skill wiring is deferred to the operations phase together with the click / fill / submit work (ADR-0037 §Non-goals). The 14-skill catalog and every `SKILL.md` are unchanged in Phase 21 (`test_skills_install_only_writes_14_assistant_skills` stays green).
+
+### Phase 21 specifics
+
+- **No DB migration.** No new columns / events — the web connector reuses `sources.fingerprint` (migration 0017) and `SourceObserved.fingerprint`.
+- **New extras `browser`** (`playwright>=1.50`) + one-time `playwright install chromium` operator step.
+- **New config sections** `[browser]` (shared) and `[connectors.web]` (web connector). Both opt-in; absent config means the layer never runs.
+- **MCP surface 18 → 19 tools = 13 read + 6 write** (the new write tool `browser.fetch`).
+- **CI** runs the `browser` integration tests (`@pytest.mark.browser`) against a localhost `http.server` fixture with a real Chromium provisioned by `playwright install chromium` — no external network egress from CI (epic #504 test plan).

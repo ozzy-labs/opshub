@@ -548,6 +548,85 @@ opshub slack sync     # 通常通り起動。新 compound envelope で cursor �
 - [`src/opshub/connectors/slack/_retry.py`](../src/opshub/connectors/slack/_retry.py) — 4 call site で share される rate limit retry helper
 - Phase 20-A PR [#474](https://github.com/ozzy-labs/opshub/pull/474) / 20-B PR [#473](https://github.com/ozzy-labs/opshub/pull/473) / 20-C PR [#476](https://github.com/ozzy-labs/opshub/pull/476) — 実装の対応 PR
 
+### 3.13 `opshub web sync` / MCP `browser.fetch` が失敗する (Chromium 未 install / headless / timeout)
+
+Phase 21 ([ADR-0037](adr/0037-browser-read-layer-playwright.md)) の browser read 層 (`web` connector + MCP `browser.fetch`) は Playwright の Chromium binary を必要とする。binary は opshub package に同梱されないため、operator が一度だけ provisioning する。
+
+#### A. Chromium が install されていない (`ConfigError`)
+
+`opshub web sync` または MCP `browser.fetch` が次のようなエラーで止まる:
+
+```text
+Error: Chromium is not installed. Run 'playwright install chromium' to provision it. (exit 1)
+```
+
+これは Playwright が「executable doesn't exist」系エラーを返したのを opshub が `ConfigError` に wrap して install コマンドを誘導している (ADR-0037 §決定 (g)、`core/platform.py` が box_drive の root 不在を誘導するのと同型)。recovery:
+
+```bash
+# browser extras を入れていない場合はまず extras を sync
+uv sync --extra browser            # uv tool install ユーザーは: uv tool install "ozzylabs-opshub[browser]"
+
+# Chromium binary を一度だけ取得
+uv run playwright install chromium  # uv tool ユーザーは: playwright install chromium
+```
+
+`playwright>=1.50` の import は `opshub.browser.core.fetch_page` の関数ボディに閉じ込めてあるため、`browser` extras 未導入でも `opshub --help` は冷起動 ≤ 300 ms を維持する (extras なしの operator は影響ゼロ)。
+
+#### B. headless を切り替えたい / render を目視デバッグしたい
+
+default は `[browser] headless = true` (GUI なし、CI / cron / headless サーバで動く既定)。ローカルで render を目視確認したいときだけ false にする:
+
+```toml
+[browser]
+headless = false
+```
+
+または env で一時上書き:
+
+```bash
+OPSHUB_BROWSER__HEADLESS=false opshub web sync
+```
+
+`headless = false` は GUI 環境 (X / Wayland / macOS / Windows desktop) でのみ意味がある。headless サーバ / WSL2 で GUI なしに false を立てると Chromium が起動に失敗するため、運用 (sync / MCP) は `true` のままにする。
+
+#### C. ページが重くて timeout する
+
+`[browser] timeout` は per-navigation の上限 (**ミリ秒**、Playwright の native 単位)。default 30000 (30 秒)。重い SPA が settle しきらず timeout する場合は引き上げる:
+
+```toml
+[browser]
+timeout = 60000   # 60 秒
+```
+
+または env:
+
+```bash
+OPSHUB_BROWSER__TIMEOUT=60000 opshub web sync
+```
+
+`web` connector では 1 つの URL が timeout / navigation error になっても `BrowserFetchError` (= `ConnectorFailedError` サブクラス) として WARN ログ + per-page skip され、他のページは sync が続く (ADR-0037 §決定 (d) の fail-safe)。どの URL で失敗したかは `-v` (INFO) で確認できる。`timeout = 0` は timeout 無効化 (Playwright 慣習) だが、wedge したページが sync 全体を hang させるため非推奨。
+
+#### D. operator 起動済みの Chrome に attach したい (escape hatch)
+
+`[browser] cdp_endpoint` を設定すると、`connect_over_cdp` で operator が `--remote-debugging-port` を開いて起動した既存 Chrome に attach する (ADR-0037 §決定 (b))。これは将来の認証付きページ session 再利用のための予約経路で、default (`None`) は opshub 専用 user-data-dir で自前の persistent context を起動する。普段使いの Chrome profile には触れない (専用 user-data-dir、ADR-0037 §決定 (c))。
+
+```toml
+[browser]
+cdp_endpoint = "http://localhost:9222"
+```
+
+#### E. MCP `browser.fetch` が「scheme 拒否」になる
+
+`browser.fetch` は `http` / `https` URL のみ許容する。`file` / `data` / `ftp` / `javascript` は handler 層で `OpsHubError` 拒否される (headless browser を local file 読み出しの踏み台にしない安全ゲート、ADR-0022 §決定 (g))。社内ファイルを読みたい場合は file connector (box_drive / onedrive_drive) を使う。`browser.fetch` は **write-category (HITL per call)** なので host 側で人確認を求められる — auto-approve されないのは仕様 (ネットワークに egress するため、`connector.sync` と同 bucket)。
+
+**関連**:
+
+- [ADR-0037 Browser Read Layer via Playwright](adr/0037-browser-read-layer-playwright.md) — 設計根拠 (Playwright 採用 / CDP escape hatch / 専用 user-data-dir / 抽出契約 / 操作系 defer) の SSOT
+- [ADR-0010 §Phase 21 改訂 (n)/(o)](adr/0010-connector-contract.md) — web connector の contract (crawler 非該当 + fingerprint 変更検知)
+- [ADR-0022 §決定 (g)](adr/0022-mcp-server-surface.md) — `browser.fetch` write-category 分類
+- [docs/upgrading.md §Phase 21](upgrading.md) — `[browser]` / `[connectors.web]` config + extras + `playwright install chromium` 手順
+- Phase 21 実装 PR: 21-A [#510](https://github.com/ozzy-labs/opshub/pull/510) / 21-B [#511](https://github.com/ozzy-labs/opshub/pull/511) / 21-C [#513](https://github.com/ozzy-labs/opshub/pull/513) / 21-D [#512](https://github.com/ozzy-labs/opshub/pull/512)
+
 ## 4. セキュリティ注意書き
 
 `-v` / `-vv` / `--debug` / `--log-file` を使うときに operator が知っておくこと:

@@ -100,6 +100,8 @@ external metadata → source entity → source event → inbox item
 
 Connector は task / decision / link を勝手に生成しない。それらは **triage を必ず通す**。
 
+Phase 21 ([ADR-0037](adr/0037-browser-read-layer-playwright.md)) で **Playwright ベースの browser read 層**と 11 番目の `web` connector を追加した。`web` connector も本 contract (`Connector` Protocol + 責務 1-6 + 禁止事項 1-7) をそのまま適用する ([ADR-0010](adr/0010-connector-contract.md) §Phase 21 改訂 (n)/(o))。headless Chromium で render 後の DOM text を抽出し `web_page` source として append するだけで、operator が `[connectors.web] pages` に明示登録した URL のみ取得する (**crawler 非該当** = リンク追跡 / sitemap 巡回なし、能動性抑制は形 A = §4 の自然延長)。delta API を持たないため [ADR-0019](adr/0019-local-filesystem-backed-connector.md) §決定 (d) の `fingerprint` 変更検知 pattern (box_drive / onedrive_drive と同型) を抽出後本文の安定 hash に適用する。ブラウザ操作系 (click / fill / submit) は read 層に code path を持たせないことで write-back ban (§禁止事項 7) の不変条件を保ち、後続 Phase に defer する (ADR-0037 §決定 (f))。アシスタントが ad-hoc に Web を読む MCP `browser.fetch` tool はネットワークに egress するため read tool ではなく write-category (HITL per call) に置く ([ADR-0022](adr/0022-mcp-server-surface.md) §決定 (g))。
+
 ## 8. Replayability
 
 projection・graph・markdown はすべて event 列の純粋関数。

@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-共通方針は AGENTS.md を参照（Phase 1-20 + epic #470 closeout 状態の記載含む）。以下は Claude Code 固有の設定。
+共通方針は AGENTS.md を参照（Phase 1-21 + epic #470 closeout 状態の記載含む）。以下は Claude Code 固有の設定。
+
+Phase 21 (epic #504、[ADR-0037](docs/adr/0037-browser-read-layer-playwright.md)) で **Playwright ベースの browser read 層**を新設した: (1) `src/opshub/browser/core.py` browser core (Chromium / headless default / opshub 専用 user-data-dir / render 後の `page.inner_text("body")` を 500K char cap で抽出、`[browser]` config = `headless` / `channel` / `timeout` / `cdp_endpoint`、`browser` extras = `playwright>=1.50`、binary は `playwright install chromium` が operator 手順で不在時 `ConfigError`)、(2) `connectors/web/` web connector (`web_page` source_type、operator が `[connectors.web] pages` に明示登録した URL のみ取得 = **crawler 非該当**、delta API なしのため抽出後本文 SHA-256 fingerprint 変更検知、`opshub web sync` CLI、connector 数 10 → 11)、(3) MCP `browser.fetch` tool (ad-hoc Web ページ read、ネットワークに egress するため **write-category** = HITL per call、`asyncio.to_thread` bridge、MCP surface 18 → **19 tools = read 13 + write 6**)。**read 専用** — 操作系 (click / fill / submit) は ADR-0037 §決定 (f) で後続 Phase に defer。詳細は [`docs/upgrading.md`](docs/upgrading.md) §Phase 21 / [`docs/troubleshooting.md`](docs/troubleshooting.md) §3.13 (chromium 未 install / headless 切替 / timeout) を参照。
 
 ## 基本ルール
 

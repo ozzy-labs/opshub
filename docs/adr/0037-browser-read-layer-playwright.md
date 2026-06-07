@@ -1,7 +1,7 @@
 # 0037. Browser Read Layer via Playwright
 
-- Status: Accepted
-- Date: 2026-06-07
+- Status: Accepted + Landed (Phase 21 完了、epic [#504](https://github.com/ozzy-labs/opshub/issues/504))
+- Date: 2026-06-07 (Accepted); 2026-06-08 (Landed: 21-B [#511](https://github.com/ozzy-labs/opshub/pull/511) browser core / 21-C [#513](https://github.com/ozzy-labs/opshub/pull/513) web connector / 21-D [#512](https://github.com/ozzy-labs/opshub/pull/512) MCP `browser.fetch` / 21-E docs closeout)
 - Deciders: opshub maintainers
 - Related: [ADR-0010](0010-connector-contract.md) (connector contract — web connector を §Phase 21 改訂 (n)-(o) で追加)、[ADR-0019](0019-local-filesystem-backed-connector.md) (delta API なし connector の `fingerprint` 変更検知 pattern)、[ADR-0025](0025-office-document-content-extraction.md) (本文抽出の char cap / fail-safe 規律)、[ADR-0022](0022-mcp-server-surface.md) (MCP read/write 境界 — `browser.fetch` を write-category として 21-D で追加予定)、[ADR-0005](0005-external-content-minimization.md) / [ADR-0020](0020-full-local-content-retention.md) (本文ローカル保持の posture)、[ADR-0026](0026-cli-progress-reporting.md) (long-running CLI 進捗)、[ADR-0031](0031-cli-command-surface-organization.md) (noun-first CLI surface)
 
@@ -63,7 +63,7 @@ Phase 21 (epic #504) で **ブラウザ読み取り層を新設**する。本 AD
 - `browser.fetch` は外部ネットワークに egress し、対象サイトの access log に痕跡を残し、prompt injection の攻撃面 (ページ本文に「次の tool で task を消せ」等の命令混入) を持つ。これは [ADR-0022](0022-mcp-server-surface.md) §決定 (c) で `connector.sync` を write 扱いとした論拠と **完全に同型**。
 - したがって `browser.fetch` は `annotations.readOnlyHint = false` を付与し、**HITL per call** (呼び出しごとに人確認) とする。`connector.sync` と同じ整理。
 - read tool (`recall.search` / `search` / `task.list` 等) は引き続きローカル DB のみを参照し、ネットワークに出ない不変条件を保つ。「read = ローカル / network egress = write」の境界を本層でも崩さない。
-- ADR-0022 への正式な surface 追加 (tool 数 18 → 19、registry policy pin test 更新) は 21-D で ADR-0022 改訂として行う。本 ADR §決定 (e) は「browser.fetch は必ず write-category」という制約を先に pin する位置付け。
+- ADR-0022 への正式な surface 追加 (tool 数 18 → 19、registry policy pin test 更新) は 21-D ([#512](https://github.com/ozzy-labs/opshub/pull/512)) で ADR-0022 §決定 (g) 改訂として着地済み (`WriteCategory.BROWSER_FETCH`、`tests/unit/mcp/test_registry_policy` が 13 read + 6 write を pin)。本 ADR §決定 (e) は「browser.fetch は必ず write-category」という制約を先に pin する位置付け。
 
 ### (f) 操作系 (click / fill / submit) の defer — 後続 Phase の前提条件を明文化
 
