@@ -976,6 +976,47 @@ class TeamsConnectorSettings(BaseModel):
     fallback_window_days: int = 30
 
 
+class WebConnectorSettings(BaseModel):
+    """Web page connector configuration (Phase 21-C, ADR-0037 / ADR-0010 §Phase 21 改訂).
+
+    The ``web`` connector renders each URL the operator lists in
+    ``[connectors.web] pages`` with the Playwright browser core
+    (:mod:`opshub.browser.core`) and persists the rendered DOM text as a
+    ``web_page`` :class:`~opshub.domain.events.source.SourceObserved`.
+    Browser tuning (headless / channel / timeout / cdp_endpoint) lives in
+    the shared root-level :class:`BrowserSettings` (``[browser]``), not
+    here, because the browser layer is shared infrastructure that the MCP
+    ``browser.fetch`` tool also drives (ADR-0037 §決定 (c)).
+
+    ``enabled = False`` is the default per the Phase 7 plan §1 #2
+    convention shared by every connector — a fresh ``uv tool install``
+    never reaches out to the network on first run. Operators set
+    ``enabled = true`` once they have provisioned Chromium
+    (``playwright install chromium``) and listed at least one page.
+
+    ``pages`` is a **plain list of URL strings** (``["https://..."]``).
+    The table form ``[[connectors.web.pages]]`` is deliberately *not*
+    accepted — a web page has no per-page knobs worth a table (no
+    ``since`` window like Slack, no auth principal), so a string array is
+    the whole contract (YAGNI, issue #507). ``model_config =
+    ConfigDict(extra="forbid")`` rejects stale / mistyped keys with a
+    fail-fast :class:`~pydantic.ValidationError` rather than silently
+    ignoring them (matches :class:`BoxDriveConnectorSettings`).
+
+    The connector applies the [ADR-0019](0019) §決定 (d) fingerprint
+    change-detection pattern (ADR-0010 §Phase 21 改訂 (o)): each URL's
+    extracted body is hashed and compared against the prior
+    ``sources.fingerprint``; an unchanged page emits no event. There is
+    no crawler — only the listed URLs are fetched, never links found on
+    them (ADR-0010 §Phase 21 改訂 (n)).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    pages: list[str] = Field(default_factory=list)
+
+
 class ConnectorSettings(BaseModel):
     """External SaaS / local-FS connector configuration root.
 
@@ -1024,6 +1065,11 @@ class ConnectorSettings(BaseModel):
     # refresh token with ``google_workspace`` (Phase 14 plan §1 OQ6 +
     # §X.1: one Google account = one principal, three connectors).
     google_mail: GoogleMailConnectorSettings = Field(default_factory=GoogleMailConnectorSettings)
+    # Phase 21-C (#507, ADR-0037 / ADR-0010 §Phase 21 改訂) — Web page
+    # connector. Renders operator-listed URLs with the Playwright browser
+    # core and persists rendered DOM text as ``web_page`` sources; browser
+    # tuning lives in the shared root-level ``[browser]`` section.
+    web: WebConnectorSettings = Field(default_factory=WebConnectorSettings)
 
 
 class BrowserSettings(BaseModel):
