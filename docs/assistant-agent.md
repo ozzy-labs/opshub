@@ -157,7 +157,7 @@ auto-apply 経路は構造的に存在しない (ADR-0016 §決定 (c))。`opshu
 
 Phase 11 で追加された source_type (`teams_message` / `ms365_outlook` (body deep retention) / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`) と Phase 13 で追加された source_type (`google_doc` / `google_slides` / `google_sheets` / `google_workspace_file` catch-all) と Phase 14 で追加された source_type (`gmail_message` / `google_calendar`) は、14 skills 全てから `recall.search` / `search` / `source.list` / `source.get` 経由で透過的に利用可能。mapper が `sources.body` に persist する限り skill 側に追加の変更は不要 (Phase 11 plan §7.3 step 1 / Phase 13 plan §7.3 step 4 / Phase 14 plan §6 step 2)。
 
-find-document が利用できる本文系 source_type は計 9 種 (Phase 11 office 3 種 + Phase 13 Google Workspace native 3 種 + Phase 14 Gmail / Google Calendar / Outlook の 3 種だが Outlook は Phase 11) + その他 metadata + body 各 connector で 1 つ MCP / 1 つ search だけで横断可能。`google_workspace_file` (catch-all、非 native = Drive にアップロードされた PDF / 画像 / フォルダ等) は metadata-only (`body=None`) で persist されるため、find-document の対象になるのは title / URL / observed_at のみ。
+find-document が利用できる本文系 source_type は計 9 種 (Phase 11 office 3 種 + Phase 13 Google Workspace native 3 種 + Phase 14 Gmail / Google Calendar / Outlook の 3 種だが Outlook は Phase 11) + その他 metadata + body 各 connector で 1 つ MCP / 1 つ search だけで横断可能。`google_workspace_file` (catch-all、非 native = Drive にアップロードされた PDF / 画像 / フォルダ等) は metadata-only path で持ち、SourceObserved.body は mapper が `summary` を substitute して persist する (epic #470 で `sources.body NOT NULL` 化 + ADR-0010 §不変条件 6)。本文抽出は走らないため find-document の hit はファイル名 / パス / metadata ベース (title / URL / observed_at + body=summary) に留まる。
 
 ### 6.3.1 Phase 14 mapper symmetry 対照表
 
