@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Literal
+from typing import Final, Literal
 
 Platform = Literal["wsl2", "macos", "linux", "unsupported"]
 """Discrete host-platform tag for FS-backed connector defaults.
@@ -169,3 +169,48 @@ def onedrive_drive_default_root_path(platform: Platform | None = None) -> Path |
     if platform == "macos":
         return Path.home() / "OneDrive"
     return None
+
+
+#: Name of the opshub-dedicated browser profile directory under the
+#: data dir (Phase 21-B, ADR-0037 §決定 (c)). Module constant so the
+#: browser core and any future caller agree on the spelling.
+BROWSER_PROFILE_DIRNAME: Final[str] = "browser"
+
+
+def browser_user_data_dir(data_dir: Path) -> Path:
+    """Return the opshub-dedicated browser ``user-data-dir`` (ADR-0037 §決定 (c)).
+
+    The browser read layer launches Chromium against an
+    **opshub-owned** persistent profile under the data dir rather than
+    the operator's everyday Chrome profile. ADR-0037 §決定 (c) pins two
+    reasons:
+
+    * **Isolation** — opshub never touches the operator's browsing
+      cookies / extensions, and a crashed render can never corrupt the
+      operator's real profile.
+    * **Chrome 136+ constraint** — Chrome 136+ refuses a debug
+      connection against the default profile and requires a dedicated
+      ``user-data-dir``; keeping our own directory means the
+      ``connect_over_cdp`` escape hatch (ADR-0037 §決定 (b)) stays
+      compatible with that hardening.
+
+    The directory is ``<data_dir>/browser`` — a sibling of the
+    ``db`` / ``cache`` trees under
+    :func:`opshub.core.config.default_data_dir`. The caller passes the
+    resolved data dir (typically ``settings.data_dir``) so the function
+    stays stdlib-only and import-cheap (ADR-0001 cold-start budget — this
+    module must not pull in :mod:`opshub.core.config`'s pydantic graph).
+
+    Parameters
+    ----------
+    data_dir:
+        The resolved opshub data dir (``settings.data_dir`` /
+        :func:`opshub.core.config.default_data_dir`).
+
+    Returns
+    -------
+    Path
+        ``<data_dir>/browser``. The path is **not** created here — the
+        browser core / Playwright creates it on first launch.
+    """
+    return data_dir / BROWSER_PROFILE_DIRNAME
