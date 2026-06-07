@@ -110,6 +110,7 @@ NNNN-kebab-case-title.md
 | 0034 | [Slack Engagement Axis (Self-Posted Last Activity)](0034-slack-engagement-axis.md) | Accepted (partially superseded by ADR-0035 — CLI surface only) |
 | 0035 | [Slack Sort Axis Consolidation (`--sort` 軸統合 / `--activity` 廃止)](0035-slack-sort-axis-consolidation.md) | Accepted |
 | 0036 | [Slack Sync Date Floor (`sync_since` + per-channel `since`)](0036-slack-sync-date-floor.md) | Accepted |
+| 0037 | [Browser Read Layer via Playwright](0037-browser-read-layer-playwright.md) | Accepted |
 
 ## Open Questions
 
