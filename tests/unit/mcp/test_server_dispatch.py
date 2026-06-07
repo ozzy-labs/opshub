@@ -202,6 +202,8 @@ async def test_recall_search_schema_rejects_unknown_field() -> None:
         "propose.apply",
         # Phase 18-C (ADR-0033 §決定 (c)): Slack mention / DM demand digest.
         "slack.demand.list",
+        # Phase 21-D (ADR-0037 §決定 (e) + ADR-0022 改訂): browser fetch.
+        "browser.fetch",
     )
     specs = build_tool_specs(handlers=dict.fromkeys(tool_names, _stub))
     recall = next(s for s in specs if s.name == "recall.search")

@@ -107,12 +107,28 @@ class WriteCategory(StrEnum):
     surface with ``destructiveHint=true`` so a compliant host prompts
     before invoking. ``open_world`` is ``true`` because the LLM round
     trip leaves the local box (model provider audit).
+
+    ``browser.fetch`` (Phase 21-D, ADR-0037 §決定 (e) + ADR-0022 改訂)
+    is the first **ad-hoc read that egresses the local box**: it renders
+    a Web page with Chromium and returns the extracted text + title
+    **without persisting anything** (no ``SourceObserved`` event — that
+    is the Phase 21-C ``web`` connector's job). Despite returning data
+    rather than mutating local state, it is classified **write** to keep
+    the "read tool = local SQLite only" invariant intact: any tool that
+    leaves the box for the public network sits in the same HITL bucket
+    as ``connector.sync`` (rate limit / audit-trail observability on the
+    remote, plus the indirect-prompt-injection attack surface of fetched
+    Web content). ``open_world`` is ``true`` (network egress); the fetch
+    is not durable, so ``destructive`` is ``true`` only in the
+    "observable upstream side effect" sense ``connector.sync`` already
+    uses — not because it deletes local data.
     """
 
     TASK_CREATE = "task.create"
     INBOX_ADD = "inbox.add"
     CONNECTOR_SYNC = "connector.sync"
     PROPOSE_GENERATE = "propose.generate"
+    BROWSER_FETCH = "browser.fetch"
     # Phase 12 H1 (ADR-0022 改訂): HITL apply path closes the
     # ``propose.generate`` → ``propose.apply`` round-trip at the MCP
     # boundary. Unlike the other write categories this one advertises
@@ -1066,6 +1082,59 @@ def build_tool_specs(
             policy=_policy_for_propose_apply(),
             category=WriteCategory.PROPOSE_APPLY,
             handler=handlers["propose.apply"],
+        ),
+        # ------------------------------------------------------------------
+        # Phase 21-D (ADR-0037 §決定 (e) + ADR-0022 改訂) — ``browser.fetch``
+        # is an ad-hoc Web page read that **egresses the local box**. It
+        # renders ``url`` with Chromium and returns the extracted text +
+        # title with **no persistence** (the Phase 21-C ``web`` connector
+        # owns durable ``SourceObserved`` ingestion). Classified
+        # write-category so the "read tool = local SQLite only" invariant
+        # holds: any tool that reaches the public network sits in the same
+        # HITL bucket as ``connector.sync`` (rate-limit / audit on the
+        # remote + indirect-prompt-injection surface of fetched content).
+        # ``open_world=true`` (network egress); ``destructive=true`` in the
+        # same "observable upstream side effect" sense ``connector.sync``
+        # uses — the fetch is not durable, it does not delete local data.
+        # The handler bridges the async MCP boundary to the sync browser
+        # core via ``asyncio.to_thread`` (ADR-0037 §決定 (h): the
+        # Playwright sync API cannot run inside the asyncio loop).
+        # ------------------------------------------------------------------
+        ToolSpec(
+            name="browser.fetch",
+            title="Fetch a Web page (browser render)",
+            description=(
+                "Render ``url`` with headless Chromium and return the extracted"
+                " post-render DOM text + page title. Ad-hoc read only — nothing is"
+                " persisted (use the ``web`` connector for durable ingestion)."
+                " Egresses the public network (rate limit / remote audit applies),"
+                " so the host should confirm with the operator before invoking. Only"
+                " ``http`` / ``https`` URLs are accepted; the snippet is truncated"
+                " for context efficiency (ADR-0022 §(d)) and run through the secret"
+                " redaction net. Requires the 'browser' extra + 'playwright install"
+                " chromium' (a ConfigError names the install command otherwise)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": (
+                            "Absolute http/https URL to render. Other schemes"
+                            " (file / data / ftp / javascript) are rejected."
+                        ),
+                        "minLength": 1,
+                        "maxLength": 2048,
+                    },
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+            # Network egress → open world. Classified write (HITL) even
+            # though it returns data: see the ``WriteCategory`` docstring.
+            policy=_policy_for_write(open_world=True),
+            category=WriteCategory.BROWSER_FETCH,
+            handler=handlers["browser.fetch"],
         ),
     ]
     return specs

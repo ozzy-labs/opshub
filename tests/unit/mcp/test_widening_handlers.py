@@ -341,6 +341,11 @@ def specs() -> list[Any]:
         "inbox.add",
         "connector.sync",
         *_NEW_TOOL_NAMES,
+        # Phase 21-D (ADR-0037 §決定 (e)): ``browser.fetch`` is materialised
+        # alongside the widening surface so ``build_tool_specs`` does not
+        # KeyError; its dedicated handler / policy pins live in
+        # ``test_browser_fetch_handler`` / ``test_registry_policy``.
+        "browser.fetch",
     )
     handlers = {name: _stub_handler() for name in tool_names}
     return build_tool_specs(handlers=handlers)

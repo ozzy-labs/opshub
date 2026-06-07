@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
 
 
 __all__ = [
+    "build_browser_fetch_handler",
     "build_connector_sync_handler",
     "build_inbox_add_handler",
     "build_propose_apply_handler",
@@ -517,6 +519,132 @@ def build_propose_apply_handler(engine: Engine) -> ToolHandler:
                 "applied_entity_id": applied_entity_id,
                 "proposal_id": proposal_id,
                 "candidate_index": candidate_index,
+            }
+        )
+
+    return handler
+
+
+# ------------------------------------------------------------- browser.fetch
+
+
+#: Schemes :func:`build_browser_fetch_handler` accepts. ADR-0037 §決定
+#: (e) pins ``browser.fetch`` as a network-egress tool; restricting the
+#: scheme to ``http`` / ``https`` keeps it from being abused as a local
+#: file / data-URI exfiltration primitive (``file:///etc/passwd`` style)
+#: through the headless browser. The connector layer (Phase 21-C) owns
+#: full URL normalisation; the MCP boundary only needs this safety gate.
+_BROWSER_FETCH_ALLOWED_SCHEMES: frozenset[str] = frozenset({"http", "https"})
+
+#: Snippet cap on the rendered page text returned to the agent context
+#: window (ADR-0022 §(d)). Matches :data:`opshub.mcp._tools._SNIPPET_MAX_CHARS`
+#: so both surfaces stay context-frugal — the full 500K-char body never
+#: crosses the MCP boundary. ``browser.fetch`` is an ad-hoc *preview*
+#: read; an operator who wants the persisted full body runs the Phase
+#: 21-C ``web`` connector + ``source.get``.
+_BROWSER_FETCH_SNIPPET_MAX_CHARS = 200
+
+
+def _browser_snippet(text: str, limit: int = _BROWSER_FETCH_SNIPPET_MAX_CHARS) -> str:
+    """Head-clip ``text`` to ``limit`` chars with an ellipsis marker.
+
+    Mirrors :func:`opshub.mcp._tools._truncate` (the read-tool snippet
+    helper) so the browser preview is capped identically to the other
+    MCP surfaces. Kept local to :mod:`opshub.mcp._writes` rather than
+    imported so the write module does not reach into the read module's
+    private helper.
+    """
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
+def build_browser_fetch_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``browser.fetch`` (Phase 21-D).
+
+    Write-category ad-hoc read (ADR-0037 §決定 (e) + ADR-0022 改訂). The
+    handler:
+
+    * validates ``url`` is an absolute ``http`` / ``https`` URL — other
+      schemes (``file`` / ``data`` / ``ftp`` / ``javascript``) are
+      rejected with an :class:`OpsHubError` so the headless browser is
+      never turned into a local-file exfiltration primitive;
+    * bridges the **async** MCP handler to the **sync** browser core
+      (:func:`opshub.browser.core.fetch_page`) via
+      :func:`asyncio.to_thread` — the Playwright sync API raises if
+      called inside a running asyncio loop (ADR-0037 §決定 (h)), so the
+      blocking render must run on a worker thread;
+    * returns the page ``title`` + a **truncated** text snippet
+      (ADR-0022 §(d) context efficiency) plus the ``text_chars`` /
+      ``truncated`` hints, and **persists nothing** — there is no
+      ``SourceObserved`` event, mirroring the "ad-hoc read" posture
+      (durable ingestion is the Phase 21-C ``web`` connector's job).
+
+    ``ConfigError`` (missing ``[browser]`` extra / Chromium binary) and
+    ``BrowserFetchError`` (navigation / timeout / render) propagate to
+    the server wrapper as MCP ``isError`` responses with the message run
+    through :func:`opshub.mcp._redact.redact_secrets` — so a URL-embedded
+    token never leaks across the boundary.
+
+    ``engine`` is accepted for symmetry with the other write handlers;
+    ``OpsHubSettings`` is resolved per call (env / TOML) so a config
+    change takes effect on the next invocation without restarting.
+    """
+    _ = engine
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        import asyncio
+
+        from opshub.browser.core import fetch_page
+        from opshub.core.config import OpsHubSettings
+        from opshub.core.errors import OpsHubError
+
+        url: str = str(arguments["url"]).strip()
+        if not url:
+            raise OpsHubError("browser.fetch requires a non-empty ``url``")
+
+        parsed = urlparse(url)
+        scheme = parsed.scheme.lower()
+        if scheme not in _BROWSER_FETCH_ALLOWED_SCHEMES:
+            allowed = ", ".join(sorted(_BROWSER_FETCH_ALLOWED_SCHEMES))
+            raise OpsHubError(
+                f"browser.fetch only accepts {{{allowed}}} URLs; got scheme"
+                f" {scheme or '(none)'!r}. Other schemes (file / data / ftp /"
+                " javascript) are rejected to keep the headless browser from"
+                " reading local files."
+            )
+        if not parsed.netloc:
+            raise OpsHubError(
+                "browser.fetch requires an absolute URL with a host"
+                f" (e.g. https://example.com/page); got {url!r}"
+            )
+
+        settings = OpsHubSettings()
+        # Bridge to the sync browser core off the event loop — the
+        # Playwright sync API raises inside a running asyncio loop
+        # (ADR-0037 §決定 (h)). ``fetch_page`` already head-truncates the
+        # body at the 500K char cap; we further clip to a context-frugal
+        # preview snippet below (the full body is never persisted here).
+        page = await asyncio.to_thread(fetch_page, url, settings=settings)
+
+        return _json_dump(
+            {
+                "ok": True,
+                "url": page.url,
+                "title": page.title,
+                "text": _browser_snippet(page.text),
+                # ``text_chars`` is the rendered body length *before* the
+                # MCP preview clip (it already reflects the browser-core
+                # 500K cap). ``truncated`` flags whether the browser core
+                # hit that cap. Together they tell the agent how much it
+                # is NOT seeing in the preview snippet.
+                "text_chars": len(page.text),
+                "truncated": page.truncated,
+                # Ad-hoc read: nothing was written to the event log /
+                # projection. The host should run the ``web`` connector
+                # for durable ingestion (ADR-0037 §決定 (e)).
+                "persisted": False,
             }
         )
 

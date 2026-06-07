@@ -1,7 +1,7 @@
 # 0022. MCP Server Surface
 
-- Status: Accepted (revised 2026-06-03 for Phase 18 補遺: `slack.demand.list` の追加根拠を §決定 (f) 補遺で pin)
-- Date: 2026-05-30 (initial); 2026-05-31 (Phase 12 H1 改訂: + `search` FTS5 + `propose.apply` HITL idempotent + 4 read tools 物理列ベース時間フィルタ + MCP 引数名 → projection 物理列 写像表追加); 2026-06-03 (Phase 18 補遺: 新 read tool `slack.demand.list` の追加根拠を §決定 (f) 末尾に追記。ADR-0033 で詳細を pin、5 不変条件は継承、本 ADR の write tool 集合 / annotation pattern は不変)
+- Status: Accepted (revised 2026-06-07 for Phase 21-D: write-category `browser.fetch` の追加根拠を §決定 (g) で pin、surface 18 → 19 tools)
+- Date: 2026-05-30 (initial); 2026-05-31 (Phase 12 H1 改訂: + `search` FTS5 + `propose.apply` HITL idempotent + 4 read tools 物理列ベース時間フィルタ + MCP 引数名 → projection 物理列 写像表追加); 2026-06-03 (Phase 18 補遺: 新 read tool `slack.demand.list` の追加根拠を §決定 (f) 末尾に追記。ADR-0033 で詳細を pin、5 不変条件は継承、本 ADR の write tool 集合 / annotation pattern は不変); 2026-06-07 (Phase 21-D 改訂: 新 write tool `browser.fetch` を §決定 (g) で pin。外部ネットワーク egress = write 分類で「read tool = ローカル DB のみ」不変条件を維持、5 不変条件は継承、surface 18 → 19 tools = 13 read + 6 write)
 - Deciders: ozzy
 
 ## Context
@@ -185,6 +185,33 @@ write (5): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` /
 - 実装 PR は Phase 18-C ([#430](https://github.com/ozzy-labs/opshub/issues/430)) で
   `src/opshub/mcp/_registry.py` に登録し、register policy guard test を更新する
 
+### (g) Phase 21-D surface 拡張 — `browser.fetch` (write-category、2026-06-07 改訂)
+
+Phase 21 ([epic #504](https://github.com/ozzy-labs/opshub/issues/504)、[ADR-0037: Browser Read Layer via Playwright](0037-browser-read-layer-playwright.md)) で Playwright ベースのブラウザ読み取り層を新設したのに合わせ、アシスタントエージェントが ad-hoc に Web ページを読む手段として新 tool `browser.fetch` を本 ADR の MCP surface に追加する (Phase 21-D [#508](https://github.com/ozzy-labs/opshub/issues/508))。本 ADR の 5 不変条件 (stdio 一択 / token passthrough 禁止 / read/write 分離 / context 効率 / OTel naming) はすべて継承する。
+
+#### (g-1) `browser.fetch` (新規 write tool、`WriteCategory.BROWSER_FETCH`)
+
+- `url` を受け取り、headless Chromium で render した後の DOM text + `<title>` を返す。**persist なし** = ad-hoc read (durable な `SourceObserved` 取り込みは Phase 21-C `web` connector の責務、本 tool は event log / projection に何も書かない)
+- annotation: **`readOnlyHint=false, destructiveHint=true, idempotentHint=false, openWorldHint=true`** (`connector.sync` と同パターン)
+- **write 分類の根拠 = 「read tool = ローカル DB のみ」不変条件の維持**: 本 tool は data を返すだけで local state を変えないが、**外部ネットワークに egress する** (ADR-0037 §決定 (e))。read tool 群はすべて SQLite ローカルのみを叩く (`open_world=false`) という既存の境界を崩さないため、ネットワークに出る tool は `connector.sync` と同じ write bucket に置く。根拠は二つ: (1) remote 側の rate limit / audit log に痕跡が残る観測可能な副作用 (`connector.sync` の write 分類と同論理)、(2) 取得した Web 本文が indirect prompt injection の運搬路になりうるため、auto-approve せず host に人確認させる (§決定 (c) tool poisoning 84% vs <5%)
+- `destructive=true` は `connector.sync` と同じ「観測可能な上流副作用」の意味であり、local data を削除する意味ではない (`propose.apply` の `destructive=false` carve-out には**該当しない** = `_NON_DESTRUCTIVE_WRITES` に追加しない)
+- 入力 schema は `url` のみ (required)。token は受けない (§決定 (b))。scheme は `http` / `https` のみ許容し、`file` / `data` / `ftp` / `javascript` 等は handler 層で `OpsHubError` 拒否する (headless browser を local file 読み出しの踏み台にしない安全ゲート)。`headless` / `timeout` 等の per-call override は出さず `[browser]` settings から解決する (MCP 面を最小に保つ)
+- 戻り値は §決定 (d) の context 効率に従い text を snippet truncate (200 char、read tool 群と同 cap) して返し、`text_chars` (render 後の全長) / `truncated` (browser core の 500K cap hit) / `persisted: false` を hint として添える。full body は MCP 境界を越えない (必要時は `web` connector + `source.get`)
+- async handler は **`asyncio.to_thread` 経由で sync browser core (`opshub.browser.core.fetch_page`) を呼ぶ** (Playwright sync API は asyncio loop 内で直接呼べず raise する、ADR-0037 §決定 (h))。出力は §決定 (b) の redaction net (`opshub.mcp._redact.redact_secrets`) を通る (取得 Web 本文に混入した token shape を scrub)
+- 実装 PR は Phase 21-D ([#508](https://github.com/ozzy-labs/opshub/issues/508)) で `src/opshub/mcp/_registry.py` に登録し、registry policy guard test を 18 → 19 tools に更新する
+
+#### Phase 21-D 後の surface 一覧 (合計 19 = 13 read + 6 write)
+
+read (13): `recall.search` / `task.list` / `inbox.list` / `decision.list` / `brief` / `graph.related` / `graph.trace` / `graph.expand` / `source.list` / `source.get` / `embeddings.find_duplicates` / `search` / `slack.demand.list`
+
+write (6): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` / `propose.apply` / **`browser.fetch`** (Phase 21-D)
+
+#### Phase 21-D で導入される invariant
+
+- **`browser.fetch` = open-world write の policy guard**: `tests/unit/mcp/test_registry_policy` の `test_browser_fetch_is_open_world_write` が `readOnlyHint=false` + `destructiveHint=true` + `openWorldHint=true` を pin し、かつ `_NON_DESTRUCTIVE_WRITES` carve-out に**含まれない**ことを assert する。`browser.fetch` を read tool に reclassify する regression (host が network fetch を auto-approve してしまう) は即時 fail
+- **surface count pin**: `test_registry_surface_is_nineteen_tools` が 19 tools = 13 read + 6 write を pin。tool の追加 / 削除は count split で fail
+- **scheme 安全ゲート**: handler の unit test (`tests/unit/mcp/test_browser_fetch_handler`) が `file` / `data` / `javascript` / host-less URL を `OpsHubError` 拒否することを pin
+
 ## Consequences
 
 ### Positive
@@ -279,4 +306,4 @@ write (5): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` /
 - [Phase 10 Plan §3 Sub-issue C / §4-C / §8 Open Q #3 / #3b](../phase-10-plan.md) — 本 ADR が確定する論点の起票元。
 - [ADR-0031: CLI Command Surface Organization](0031-cli-command-surface-organization.md) — CLI 表面 (top-level group の組織方針) は ADR-0031 で確定。CLI と MCP は **並列の agent-facing surface** で、本 ADR が pin する MCP tool surface (stdio / token passthrough 禁止 / read/write 分離 / context 効率 / OTel naming) は CLI 表面再編とは独立で **不変** (MCP tool 名 `recall.search` / `task.create` / `connector.sync` 等は ADR-0031 の CLI 再編に伴って変更しない)。
 - [ADR-0033: Slack Mention / DM Demand Digest](0033-slack-mention-demand-digest.md) — Phase 18 で本 ADR の MCP surface に新 read tool `slack.demand.list` を追加する根拠。本 ADR §決定 (f) 補遺 (Phase 18) で詳細を pin。5 不変条件は継承、新規 invariant の追加なし (write tool 集合に変化なし、annotation pattern は既存 read tool と同)。
-- [ADR-0037: Browser Read Layer via Playwright](0037-browser-read-layer-playwright.md) — Phase 21 で追加する `browser.fetch` は外部ネットワークに egress するため **write-category** (HITL per call、`connector.sync` と同整理、本 ADR §決定 (c))。「read tool = ローカル DB のみ」不変条件は維持される。正式 surface 追加 (tool 数 18 → 19) + registry policy pin test 更新は Phase 21-D (#508) で本 ADR 改訂として行う。
+- [ADR-0037: Browser Read Layer via Playwright](0037-browser-read-layer-playwright.md) — Phase 21 で追加した `browser.fetch` は外部ネットワークに egress するため **write-category** (HITL per call、`connector.sync` と同整理、本 ADR §決定 (c))。「read tool = ローカル DB のみ」不変条件は維持される。正式 surface 追加 (tool 数 18 → 19) + registry policy pin test 更新は Phase 21-D (#508) で本 ADR §決定 (g) として着地した。
