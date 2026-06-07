@@ -5,6 +5,48 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0](https://github.com/ozzy-labs/opshub/compare/v0.4.1...v0.5.0) (2026-06-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* enforce sources.body NOT NULL and drop body=NULL fallback paths ([#486](https://github.com/ozzy-labs/opshub/issues/486))
+* drop per-phase event union aliases (Phase[2-9]Event → AllEvent only) ([#482](https://github.com/ozzy-labs/opshub/issues/482))
+* drop expand_graph param + make LinkService required ([#485](https://github.com/ozzy-labs/opshub/issues/485))
+* drop inline exclude_globs in box_drive / onedrive_drive ([#484](https://github.com/ozzy-labs/opshub/issues/484))
+* drop inline exclude_globs in box_drive / onedrive_drive (ADR-0020 §(b) cleanup) ([#483](https://github.com/ozzy-labs/opshub/issues/483))
+
+### Added
+
+* **browser:** add Playwright browser core module + [browser] config + extras + CI chromium ([#511](https://github.com/ozzy-labs/opshub/issues/511)) ([5d7d17a](https://github.com/ozzy-labs/opshub/commit/5d7d17a766e2bcfdd1e95e6ac16bcd2f905b18a1))
+* **connectors:** add web connector + opshub web sync CLI (Phase 21-C) ([#513](https://github.com/ozzy-labs/opshub/issues/513)) ([2f92027](https://github.com/ozzy-labs/opshub/commit/2f920279ac784552349f9ed6dac698b5a589f19d))
+* **mcp:** add browser.fetch write-category tool + revise ADR-0022 ([#512](https://github.com/ozzy-labs/opshub/issues/512)) ([1a2035a](https://github.com/ozzy-labs/opshub/commit/1a2035a1c7694469a1f2ded3ebbbbc3064bf954b))
+* **slack:** connector_cursors cursor_value compound schema (Phase 20-B) ([#473](https://github.com/ozzy-labs/opshub/issues/473)) ([8dbf6f5](https://github.com/ozzy-labs/opshub/commit/8dbf6f506bb0fd7592abb327e891b6f72c9cef1c))
+* **slack:** ingest thread replies via conversations.replies (Phase 20-A) ([#474](https://github.com/ozzy-labs/opshub/issues/474)) ([5e1931f](https://github.com/ozzy-labs/opshub/commit/5e1931f7359ba00f986580e866a1ca41e0d92629))
+* **slack:** late-reply polling phase + activity window pruning (Phase 20-C) ([#476](https://github.com/ozzy-labs/opshub/issues/476)) ([eca602b](https://github.com/ozzy-labs/opshub/commit/eca602bbfa29d4e4a142232969fdf479d469ca3d))
+
+
+### Fixed
+
+* **slack:** Phase 20-E audit followup ([#478](https://github.com/ozzy-labs/opshub/issues/478)) ([#479](https://github.com/ozzy-labs/opshub/issues/479)) ([67d9053](https://github.com/ozzy-labs/opshub/commit/67d9053cc67e59768df572ebc28265ef3e2e96ad))
+
+
+### Changed
+
+* **db:** make sqlite busy timeout explicit and document concurrency assumptions ([#502](https://github.com/ozzy-labs/opshub/issues/502)) ([761778a](https://github.com/ozzy-labs/opshub/commit/761778a5dd891f8210fc76be5093a9da6b4478ec))
+* drop expand_graph param + make LinkService required ([#485](https://github.com/ozzy-labs/opshub/issues/485)) ([45a46ae](https://github.com/ozzy-labs/opshub/commit/45a46ae6287c3362ddab13b5c40e9d7d3cbabe01))
+* drop inline exclude_globs in box_drive / onedrive_drive ([#484](https://github.com/ozzy-labs/opshub/issues/484)) ([88b8700](https://github.com/ozzy-labs/opshub/commit/88b8700a74af0a92526fba5676d7e6fe93053cb1))
+* drop inline exclude_globs in box_drive / onedrive_drive (ADR-0020 §(b) cleanup) ([#483](https://github.com/ozzy-labs/opshub/issues/483)) ([dbe9a55](https://github.com/ozzy-labs/opshub/commit/dbe9a559b8925e8b5f080eb22d1a0faa1c8abfa3))
+* drop per-phase event union aliases (Phase[2-9]Event → AllEvent only) ([#482](https://github.com/ozzy-labs/opshub/issues/482)) ([b45e724](https://github.com/ozzy-labs/opshub/commit/b45e7247c7a127ebbe0eceaeaba8b5a4433ccd08))
+* enforce sources.body NOT NULL and drop body=NULL fallback paths ([#486](https://github.com/ozzy-labs/opshub/issues/486)) ([b98bed4](https://github.com/ozzy-labs/opshub/commit/b98bed4766a310718d657b06b1b7dcfff8ea1bac))
+
+
+### Documentation
+
+* **adr:** add ADR-0037 browser read layer + revise ADR-0010 web connector ([#510](https://github.com/ozzy-labs/opshub/issues/510)) ([1f878e0](https://github.com/ozzy-labs/opshub/commit/1f878e021f76f8ad0624f8a884ed434dab4521a5))
+* reflect Phase 21 browser read layer + closeout (epic [#504](https://github.com/ozzy-labs/opshub/issues/504)) ([#514](https://github.com/ozzy-labs/opshub/issues/514)) ([8d37cb3](https://github.com/ozzy-labs/opshub/commit/8d37cb3535f27b788950bdb4973a384e02d6049f))
+* **slack:** ADR-0030 revise + landed + Phase 20 thread reply docs sync (Phase 20-D) ([#477](https://github.com/ozzy-labs/opshub/issues/477)) ([21952ca](https://github.com/ozzy-labs/opshub/commit/21952cafb7fe8a780b15543f82d710269df16812))
+
 ## [0.4.1](https://github.com/ozzy-labs/opshub/compare/v0.4.0...v0.4.1) (2026-06-04)
 
 
