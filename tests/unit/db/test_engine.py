@@ -88,6 +88,47 @@ def test_default_db_path_accepts_explicit_settings(tmp_path: Path) -> None:
     assert default_db_path(settings) == tmp_path / "custom" / "db" / "opshub.sqlite"
 
 
+def test_connect_args_pin_explicit_busy_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``create_engine_for_sqlite`` must pin ``connect_args["timeout"]`` rather
+    than relying on the implicit CPython ``sqlite3.connect()`` default.
+
+    OpsHub opens the same WAL database from multiple stdio MCP sessions plus
+    routines; the busy timeout is what turns transient write contention into a
+    short wait instead of a ``database is locked`` error (see the engine module
+    docstring). We assert two things:
+
+    * the ``timeout`` key is *present* in the kwargs the dialect hands to the
+      DBAPI ``connect`` — a structural guard, since the implicit stdlib default
+      would otherwise mask the key being dropped;
+    * the resulting connection reports ``PRAGMA busy_timeout`` = 5000 ms, i.e.
+      ``timeout=5.0`` s took effect end to end.
+    """
+    engine = create_engine_for_sqlite(tmp_path / "timeout.sqlite")
+    try:
+        # ``connect_args`` are baked into the pool creator closure and are not
+        # introspectable after construction, so we spy on the DBAPI ``connect``
+        # to capture the kwargs actually passed. ``monkeypatch`` restores the
+        # real attribute even if the assertions fail. The pool is lazy, so no
+        # connection has been opened before we install the spy.
+        captured: dict[str, object] = {}
+        real_connect = engine.dialect.dbapi.connect  # type: ignore[union-attr]
+
+        def _spy(*args: object, **kwargs: object) -> object:
+            captured.update(kwargs)
+            return real_connect(*args, **kwargs)
+
+        monkeypatch.setattr(engine.dialect.dbapi, "connect", _spy)
+        with engine.connect() as conn:
+            busy_ms = conn.execute(text("PRAGMA busy_timeout")).scalar_one()
+
+        assert captured.get("timeout") == 5.0
+        assert busy_ms == 5000
+    finally:
+        engine.dispose()
+
+
 def test_foreign_key_enforcement_actually_blocks_orphan_insert(tmp_path: Path) -> None:
     """Smoke-test that PRAGMA foreign_keys=ON is not just reported but enforced."""
     engine = create_engine_for_sqlite(tmp_path / "enforce.sqlite")
