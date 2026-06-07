@@ -14,6 +14,41 @@ Why these PRAGMAs:
   while a writer holds a transaction. Required for CLI ergonomics where a
   background ``projections rebuild`` should not block ``opshub task list``.
 
+Concurrency model (why we set ``timeout`` explicitly):
+
+OpsHub runs the MCP server over stdio, which means each agent-host session
+spawns its *own* process (ADR-0022). Multiple concurrent sessions — plus
+scheduled routines (e.g. cron-driven connector sync) and HITL writes — can
+therefore open the *same* on-disk WAL database from *different processes*
+at the same time. Under WAL:
+
+* Reads never block, even while a writer holds a transaction, so the
+  read-heavy assistant skills stay responsive across sessions.
+* Writes serialise: SQLite permits exactly one writer at a time. A second
+  process attempting to write while another holds the write lock does not
+  fail immediately — it waits up to the connection's busy timeout, retrying
+  internally, and only raises ``database is locked`` if the timeout elapses
+  first.
+
+The busy timeout is therefore the knob that turns transient write
+contention (one routine syncing while a session records a decision) into a
+short wait instead of an error. We set ``connect_args["timeout"] = 5.0``
+explicitly below: 5.0 s is the CPython ``sqlite3.connect()`` default, so
+this changes no behaviour, but it removes an implicit dependency on the
+stdlib default and makes the concurrency contract visible at the call site
+(and robust against a future DBAPI swap that defaults differently).
+
+SQLCipher path (encryption extras, ADR-0021): when ``[storage] encryption``
+is enabled the engine is bound to ``sqlcipher3.dbapi2`` (shipped by
+``sqlcipher3-binary`` under the ``encryption`` extras). ``sqlcipher3`` is a
+fork of CPython's own ``sqlite3`` C extension module, so its ``connect()``
+signature and ``timeout`` semantics are inherited verbatim from the stdlib
+— the same ``timeout=5.0`` kwarg flows through ``connect_args`` unchanged.
+This was not exercised here against an installed extras build (a default
+install carries no ``sqlcipher3``); it is recorded as "unverified at
+runtime, presumed equivalent because sqlcipher3 derives from the same
+stdlib sqlite3 implementation".
+
 Datetime handling: SQLAlchemy 2.x already round-trips tz-aware ``datetime``
 objects against SQLite when the column type is ``DateTime(timezone=True)``
 and the value is timezone-aware. ``opshub.core.time`` enforces tz-awareness
@@ -109,6 +144,12 @@ def create_engine_for_sqlite(
     connect_args: dict[str, Any] = {
         "check_same_thread": False,
         "detect_types": sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+        # Busy timeout for write contention. 5.0 s is the CPython
+        # ``sqlite3.connect()`` default, set explicitly here so the WAL
+        # single-writer concurrency contract (multiple stdio MCP sessions +
+        # routines writing the same DB; see module docstring) does not rely
+        # on the implicit stdlib default and survives a future DBAPI swap.
+        "timeout": 5.0,
     }
     # ``future=True`` is the default on SQLAlchemy 2.x but we set it explicitly
     # for clarity. ``check_same_thread=False`` lets a connection be passed

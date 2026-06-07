@@ -132,6 +132,34 @@ opshub --debug db migrate
 
 `--debug` の traceback には keyring slot 名 (`db:encryption_key` 等) は出るが、鍵そのものは redaction processor で marker 化される。
 
+### 3.4a `database is locked` が出る
+
+`opshub` の書き込み系コマンド (`<connector> sync` / `projections rebuild` / task・decision の記録、MCP server 経由の HITL write 等) が `sqlite3.OperationalError: database is locked` で失敗するケース。
+
+**背景**: OpsHub の MCP server は stdio 型でセッションごとに 1 プロセス起動するため、複数セッション + routines (cron sync) が同一 SQLite (WAL) DB を別プロセスから同時に開く。WAL では読み取りは非ブロックだが、writer は常に 1 本に直列化される。2 本目以降の write は即座に失敗するのではなく、connection の busy timeout (OpsHub では `connect_args["timeout"] = 5.0` = 5 秒、`src/opshub/db/engine.py`) の間リトライし、超過してはじめて `database is locked` を返す。
+
+**典型原因と対応**:
+
+- **長時間 write の競合**: 大規模 `projections rebuild` や connector sync が 5 秒を超えて write lock を保持している間に別の write が来た。並行実行を避ける (sync と rebuild を同時に走らせない) か、片方の完了を待ってから再実行する。
+- **WAL になっていない**: 何らかの理由で `journal_mode` が `wal` 以外になっていると read も write をブロックする。確認:
+
+  ```bash
+  sqlite3 ~/.local/share/opshub/db/opshub.sqlite "PRAGMA journal_mode;"
+  # 期待値: wal
+  ```
+
+  `opshub` 経由で開けば connect listener が毎回 `PRAGMA journal_mode=WAL` を当て直すため、通常は wal に戻る。
+- **busy timeout の確認**: 実効値は connection の `PRAGMA busy_timeout` で確認できる (ミリ秒、期待値 `5000`):
+
+  ```bash
+  sqlite3 ~/.local/share/opshub/db/opshub.sqlite "PRAGMA busy_timeout;"
+  ```
+
+  注: 上記 `sqlite3` CLI 直接実行は OpsHub の connect listener を通らないため CLI 既定値を返す。OpsHub プロセスが使う 5000 ms は `src/opshub/db/engine.py` の `connect_args` で固定している。
+- **stale lock / クラッシュ残骸**: プロセスが異常終了して `-wal` / `-shm` ファイルが残った場合、全 `opshub` プロセスを停止してから当該 DB に対し read-only 接続を 1 度開く (WAL checkpoint が走る) と解消することがある。
+
+`[storage] encryption = true` の場合は SQLCipher 経由でアクセスする必要がある (§3.4 参照)。encryption 経路でも `connect` の `timeout` セマンティクスは stdlib `sqlite3` と同一 (`sqlcipher3` は CPython sqlite3 モジュールの fork) のため、busy timeout の挙動は変わらない。
+
 ### 3.5 source の summary が空白に見えるが、body には content がある
 
 SaaS connector (Slack / Teams / Outlook / Gmail / Drive 等) の source preview が `opshub recall` / `opshub brief` で空白 / 改行のみで表示されるのに、本文 (`sources.body` 列) には content が入っているように見えるケース。
