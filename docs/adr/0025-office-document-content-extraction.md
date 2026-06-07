@@ -351,6 +351,7 @@ operator override 不要で「ほぼすべての Office 文書」を取り込め
 - [ADR-0020: Full Local Content Retention](0020-full-local-content-retention.md) — 本文ローカル保持の根拠、provenance タグ (`origin` / `trust`) の運用
 - [ADR-0021: Encryption at Rest](0021-encryption-at-rest.md) — 抽出後 body は SQLCipher 暗号化対象 DB に書かれることで保存時保護
 - [ADR-0022: MCP Server Surface](0022-mcp-server-surface.md) — Office 本文も `recall.search` / `source.get` 経由で agent context に流れる際の policy-as-data (annotation) 規律を継承
+- [ADR-0037: Browser Read Layer via Playwright](0037-browser-read-layer-playwright.md) — Phase 21 web connector の rendered DOM → text 本文抽出が本 ADR §決定 (b) の 500K char cap + §決定 (c) の抽出失敗 fail-safe 規律を継承する (本文を持つ全 source が同じ cap / fail 規律に従う不変条件、ADR-0037 §決定 (d))
 - [Phase 11 Plan §1 確定済み事項 + §2 ADR 構成 + §3 Sub-issue F1](../phase-11-plan.md)
 - [Phase 11 epic #233 / Sub-issue F1 #234](https://github.com/ozzy-labs/opshub/issues/234)
 - [Phase 13 Plan §1 OQ3 / §2 改訂 ADR / §3 Sub-issue G1](../phase-13-plan.md) — Google Workspace 3 種 + Workspace export 経路 (本 ADR §決定 (d') / §決定 (j))

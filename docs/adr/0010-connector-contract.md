@@ -1,9 +1,9 @@
 # 0010. Connector Contract
 
-- Status: Accepted (revised 2026-05-31 for Phase 14 Sub-issue G1)
-- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外); 2026-05-31 (Phase 11 改訂: Teams 追加 + 本文抽出契約 + delta-link cursor + User Token principal); 2026-05-31 (Phase 13 改訂: Google Workspace 追加 + Drive `changes.list` cursor + TTL fallback + Workspace export 本文抽出契約 + Google Refresh Token principal = MS365 / Box pattern 明文化); 2026-05-31 (Phase 14 改訂: Gmail + Google Calendar 追加 + delta-cursor 型 connector 全般 への TTL fallback 一般化 + Outlook 流本文抽出契約を Gmail / Calendar に拡張)
+- Status: Accepted (revised 2026-06-07 for Phase 21 Sub-issue A)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外); 2026-05-31 (Phase 11 改訂: Teams 追加 + 本文抽出契約 + delta-link cursor + User Token principal); 2026-05-31 (Phase 13 改訂: Google Workspace 追加 + Drive `changes.list` cursor + TTL fallback + Workspace export 本文抽出契約 + Google Refresh Token principal = MS365 / Box pattern 明文化); 2026-05-31 (Phase 14 改訂: Gmail + Google Calendar 追加 + delta-cursor 型 connector 全般 への TTL fallback 一般化 + Outlook 流本文抽出契約を Gmail / Calendar に拡張); 2026-06-07 (Phase 21 改訂: web connector 追加 + delta API なし connector の fingerprint 変更検知契約を web に適用 + crawler 非該当 posture)
 - Deciders: ozzy
-- Related: [ADR-0036](0036-slack-sync-date-floor.md) — Slack sync の date floor (`[connectors.slack] sync_since` / per-channel `since`) は本 contract の cursor checkpoint の上に `oldest = max(cursor, floor)` で乗る (cursor authoritative、既存 sync 済み channel に無影響)
+- Related: [ADR-0036](0036-slack-sync-date-floor.md) — Slack sync の date floor (`[connectors.slack] sync_since` / per-channel `since`) は本 contract の cursor checkpoint の上に `oldest = max(cursor, floor)` で乗る (cursor authoritative、既存 sync 済み channel に無影響); [ADR-0037](0037-browser-read-layer-playwright.md) — Phase 21 で新設する web connector (Playwright browser read 層) は本 contract の Connector Protocol + 責務 1-6 + 禁止事項 1-7 をそのまま適用する (§Phase 21 改訂 (n)-(o))
 
 ## Context
 
@@ -38,7 +38,7 @@ Connector の **責務**:
 
 Connector の **不変条件** (epic #470 / issue #481 で追加):
 
-6. **`SourceObserved.body` は必ず非空文字列** — Phase 10 当時 Optional だった `body` は epic #470 (pre-userbase compat shim cleanup) で `str = Field(min_length=1)` に格上げされた (ADR-0020 §(d') 参照)。metadata-only / stat-only path (`box_drive` の `content_extraction=False` / Google Workspace `google_workspace_file` catch-all / MS365 OneDrive metadata / Box web-API events / GitHub notifications 等) は `body = summary` を emit することで契約を満たす。summary を持たない event 形は連続して `title` を fallback として使う (e.g. Slack の `channel_join` event)。`SourceObserved` 構築時に Pydantic `ValidationError` で fail-fast し、`NULL` write は projection 層でも `sources.body NOT NULL` 制約で拒否される (migration `0030_enforce_sources_body_not_null`)
+**不変条件 6. `SourceObserved.body` は必ず非空文字列** — Phase 10 当時 Optional だった `body` は epic #470 (pre-userbase compat shim cleanup) で `str = Field(min_length=1)` に格上げされた (ADR-0020 §(d') 参照)。metadata-only / stat-only path (`box_drive` の `content_extraction=False` / Google Workspace `google_workspace_file` catch-all / MS365 OneDrive metadata / Box web-API events / GitHub notifications 等) は `body = summary` を emit することで契約を満たす。summary を持たない event 形は連続して `title` を fallback として使う (e.g. Slack の `channel_join` event)。`SourceObserved` 構築時に Pydantic `ValidationError` で fail-fast し、`NULL` write は projection 層でも `sources.body NOT NULL` 制約で拒否される (migration `0030_enforce_sources_body_not_null`)
 
 Connector の **禁止事項**:
 
@@ -489,6 +489,50 @@ Phase 13 改訂 (h) で `connector:google_workspace:refresh_token` keyring slot 
 
 採用理由の根拠は ADR-0014 §Phase 7 Validation 節 (Phase 13 G1 で追加した google_workspace slot を Phase 14 G1 で scope 拡張) と全く同じため詳細は ADR-0014 を参照。本 ADR §Phase 14 改訂 (m) は Phase 13 改訂 (h) の MS365 / Box pattern 適用を **scope 拡張 + 3 connector 共有 + shared auth foundation 抽出** に延伸する確認にとどまる。
 
+## Phase 21 改訂 (Sub-issue A、2026-06-07)
+
+Phase 21 (epic #504) で **Playwright ベースの browser read 層** ([ADR-0037](0037-browser-read-layer-playwright.md)) を新設し、ブラウザレンダリングを要する Web ページの本文を取り込む **web connector** を導入するにあたり、本 ADR を改訂し以下 2 点を追加する (Phase 10 改訂節 §禁止事項 7 / Phase 11 改訂節 (a)-(d) / Phase 13 改訂節 (e)-(h) / Phase 14 改訂節 (i)-(m) は **保持**、本節は **加算改訂**)。
+
+### Phase 21 改訂 (n) — web 新コネクタを契約対象に追加 (crawler 非該当)
+
+Phase 21 Sub-issue C (#507) で **`connectors/web/` connector** を新設し、本 ADR の `Connector` Protocol + 責務 1-6 + 禁止事項 1-7 をそのまま適用する。[ADR-0037](0037-browser-read-layer-playwright.md) の Playwright browser core (Chromium / headless / 専用 user-data-dir) でページをレンダリングし、rendered DOM → text 抽出した本文を `source_type="web_page"` で `sources` projection に persist する。
+
+- **Protocol signature 変更なし** — Phase 3 で確定し Phase 7-14 で適合済の Connector Protocol を再利用 (本 ADR §Phase 11 改訂 (a) / §Phase 13 改訂 (e) / §Phase 14 改訂 (i) と同じ追加パターン)
+- **`external_id` = 正規化 URL** — `external_id` は取得対象 URL を正規化 (scheme 小文字化 / 末尾スラッシュ規約 / fragment 除去 等、正規化規約の詳細は 21-C で確定) した文字列をそのまま使う。SHA hash しない (grep / `opshub source show <id>` / 人間 debug を可能にするため、box_drive の rel_path 識別 [ADR-0019](0019-local-filesystem-backed-connector.md) §決定 (c) と同方針)
+- **summary = `<title>`** — ページの `<title>` を `SourceObserved.summary` に載せる (200 char cap、ADR-0005 互換)。`<title>` 不在時は正規化 URL を summary fallback とする (本 ADR §不変条件 6 の summary 不在時 title fallback と整合する形)
+- **本文 = rendered DOM → text、500K char cap / fail-safe** — 本文抽出は [ADR-0037](0037-browser-read-layer-playwright.md) §決定 (d) で pin した契約 (rendered DOM → text + 500K char cap [ADR-0025](0025-office-document-content-extraction.md) §決定 (b) 継承 + 抽出失敗 fail-safe [ADR-0025](0025-office-document-content-extraction.md) §決定 (c) 継承) に従う。抽出後本文を `SourceObserved.body` に載せ、空本文時 (レンダリング失敗 / 本文ゼロ) は `body = summary` fallback で本 ADR §不変条件 6 (body 非空) を満たす
+- **operator が明示登録した URL のみ取得 = crawler 非該当** — web connector は `[connectors.web] pages` に operator が明示列挙した URL のみを取得する。**リンク追跡 (取得したページ内の `<a href>` を辿る) / sitemap 巡回を行わない**。これは「外部 SaaS の全イベントを Task 化しない」(本 ADR §禁止事項 1) のと同根の能動性抑制であり、operator が観測対象を明示宣言する local-first posture ([ADR-0019](0019-local-filesystem-backed-connector.md) の operator 明示 root_path、Slack の operator 明示 channels と同型) を web にも適用する。crawler 化 (リンク追跡 / sitemap) は形 A (能動性なし) scope に抵触するため code path を実装しない
+- **本 ADR の禁止事項 1-7 すべて適用** — Task / Decision / Link 直接生成禁止 / projection 直接更新禁止 / Application Service 経由必須 / vendor 固有 event 名禁止 / write-back ban (§禁止事項 7) を web connector にも継承。**ブラウザ操作系 (`page.click` / `page.fill` / `page.set_input_files` / form submit) を connector に実装しない** ことで構造的に書き戻し経路を不在にする (§禁止事項 7 の web への自然延長、[ADR-0037](0037-browser-read-layer-playwright.md) §決定 (f) 操作系 defer と整合)。能動性禁止の延長として **crawler (リンク追跡 / sitemap)** も実装しない (上記)
+
+### Phase 21 改訂 (o) — delta API なし connector の fingerprint 変更検知契約 (ADR-0019 §決定 (d) pattern の web への適用)
+
+web connector は **delta API を持たない** (Web ページに「前回からの差分」を返す標準 API はない)。Phase 11-14 で導入した delta-cursor 型 connector の TTL fallback 契約 (§Phase 14 改訂 (j)) は web には適用できない。代わりに、[ADR-0019](0019-local-filesystem-backed-connector.md) §決定 (d) で box_drive / onedrive_drive (local-FS-backed、これも delta API なし) に適用した **`SourceObserved.fingerprint` 列ベースの変更検知 pattern** を web connector にも適用する。
+
+fingerprint 変更検知の流れ (web connector):
+
+```text
+[connectors.web] pages の各 URL について:
+  external metadata fetch (Playwright でページを開く → rendered DOM → text 抽出)
+  → fingerprint 計算 (抽出後本文の安定 hash、構成要素は 21-C で確定)
+  → diff detection (prior_fingerprints.get(normalized_url) との比較、ADR-0019 §決定 (d) pattern)
+    - 一致     → skip (SourceObserved 発火しない)
+    - 不一致 or 不在 → SourceObserved (body + fingerprint + provenance) を Application Service 経由で append
+```
+
+fingerprint 契約の不変条件:
+
+1. **`sources.fingerprint` 列 + `SourceObserved.fingerprint` field を再利用** — [ADR-0019](0019-local-filesystem-backed-connector.md) §決定 (d) で migration 0017 が追加した `sources.fingerprint TEXT NULL` 列と `SourceObserved.fingerprint: str | None = None` field をそのまま使う。web connector 専用の列 / event field を追加しない (schema 変更なし、backward-compat)
+2. **scanner in-memory 比較 pattern を踏襲** — sync 開始時に `SELECT external_id, fingerprint FROM sources WHERE connector_name = 'web'` で prior_fingerprints を一括取得し、各 URL の取得結果と in-memory 比較する ([ADR-0019](0019-local-filesystem-backed-connector.md) §決定 (d) の `BoxDriveScanner.scan()` 手順と同型)
+3. **fingerprint の構成要素は 21-C で確定** — box_drive は `f"{size}:{mtime_ns}"` (stat() のみ) だが、web は stat() 概念がないため抽出後本文 (rendered DOM → text) の安定 hash (例: 本文 text の SHA-256、あるいは 正規化後 text の hash) を採る。具体的な構成は 21-C (#507) で確定し本節に反映する。box_drive の「本文 read 禁止だから stat() のみ」制約 ([ADR-0019](0019-local-filesystem-backed-connector.md) §決定 (b)) は web には適用されない (web は本文取り込みが目的のため、本文 hash を取ってよい)
+4. **削除追跡なし** — `[connectors.web] pages` から URL が外された場合、box_drive の削除追跡なし ([ADR-0019](0019-local-filesystem-backed-connector.md) §決定 (e)) と同方針で `SourceDeleted` 系 event を発火しない。prior row は projection に stale row として残る (event-sourced append-only の自然な帰結)
+5. **false positive 受容** — 広告 / タイムスタンプ / CSRF token 等の動的要素で fingerprint が毎回変わり再 SourceObserved が発火し得る。「rendered text が変わった = 変更ありと観測」が agent 観点の semantics であり、box_drive の `touch` false positive 受容 ([ADR-0019](0019-local-filesystem-backed-connector.md) §決定 (d)) と同方針で受容する。動的ノイズの抑制 (本文正規化での noise 除去) が必要なら 21-C で fingerprint 構成側で扱う
+
+採用理由:
+
+- **delta API なし connector の変更検知 SSOT を踏襲** — box_drive / onedrive_drive (local-FS、delta API なし) で確立した `sources.fingerprint` 列ベース変更検知を web (Web API、delta API なし) にも適用することで、「delta API を持つ connector は cursor + TTL fallback (§改訂 (j))、delta API を持たない connector は fingerprint 列比較 (§改訂 (o))」という 2 系統が ADR-0010 内で明確に整理される
+- **schema 変更不要** — [ADR-0019](0019-local-filesystem-backed-connector.md) §決定 (d) で既に追加済の `sources.fingerprint` 列 / `SourceObserved.fingerprint` field を再利用するため、migration / event schema 変更なし
+- **event noise 抑制** — 毎回 SourceObserved を発火すると event log が膨らむため、fingerprint 一致時 skip で「本文が変わった URL のみ event 化」を成立させる ([ADR-0019](0019-local-filesystem-backed-connector.md) §決定 (d) と同根拠)
+
 ## 関連
 
 - [Principles 7 (Connector Contract)](../principles.md)
@@ -504,4 +548,5 @@ Phase 13 改訂 (h) で `connector:google_workspace:refresh_token` keyring slot 
 - [Phase 11 Plan §2 ADR 構成 + §3 Sub-issue F](../phase-11-plan.md)
 - [Phase 13 Plan §2 改訂 ADR + §3 Sub-issue G](../phase-13-plan.md) — Google Workspace コネクタ (本 ADR §Phase 13 改訂 (e)-(h))
 - [Phase 14 Plan §2 改訂 ADR + §3 Sub-issue G](../phase-14-plan.md) — Gmail + Google Calendar コネクタ (本 ADR §Phase 14 改訂 (i)-(m))
-- [ADR-0031: CLI Command Surface Organization](0031-cli-command-surface-organization.md) — connector の CLI dispatch surface (top-level group の組織方針 / noun-first / per-noun group) は ADR-0031 で確定。本 ADR の Connector Protocol + 責務 / 禁止事項 / 改訂 (a)-(m) は CLI 表面再編とは独立で **不変**
+- [ADR-0037: Browser Read Layer via Playwright](0037-browser-read-layer-playwright.md) — Phase 21 で新設する web connector の browser read 層 (Playwright / Chromium / rendered DOM → text)。本 ADR §Phase 21 改訂 (n)-(o) が web connector を契約対象に追加し、fingerprint 変更検知を web に適用する
+- [ADR-0031: CLI Command Surface Organization](0031-cli-command-surface-organization.md) — connector の CLI dispatch surface (top-level group の組織方針 / noun-first / per-noun group) は ADR-0031 で確定。本 ADR の Connector Protocol + 責務 / 禁止事項 / 改訂 (a)-(o) は CLI 表面再編とは独立で **不変**

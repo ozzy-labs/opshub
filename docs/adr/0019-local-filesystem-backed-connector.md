@@ -428,6 +428,7 @@ scan 開始時の `sources` projection 全 row と walk 結果を symmetric diff
 - [ADR-0014: SaaS Token Storage](0014-saas-token-storage.md) — box_drive は token を持たない (OS-level Box Drive 認証に依存) ため `core/secrets` / keyring 経路は使わない (Phase 7 4 connector との差分)
 - [ADR-0018: Slack Connector Token Principal](0018-slack-token-principal.md) — 直前 ADR、本 ADR の番号採番 (0019) の根拠
 - [ADR-0025: Office Document Content Extraction](0025-office-document-content-extraction.md) — 本 ADR と Phase 11 Sub-issue F1 で同時起票・改訂。§決定 (b') opt-in 例外節は ADR-0025 §決定 (g) と相互参照
+- [ADR-0037: Browser Read Layer via Playwright](0037-browser-read-layer-playwright.md) — Phase 21 web connector が本 ADR §決定 (d) の `sources.fingerprint` 列ベース変更検知 pattern を再利用する (delta API なし connector の変更検知 SSOT、ADR-0010 §Phase 21 改訂 (o))。web は本文取り込みが目的のため本 ADR §決定 (b) の `stat()` のみ制約は適用されず、抽出後本文 hash を fingerprint に使える
 - Phase 7 `box` connector — Web API 経路 (`source_type="box_event"`)、本 ADR の box_drive (`source_type="box_drive_file"`) と二重取り込み許容 (operator が独立に enable / disable 可能)
 - [Phase 9 Plan §1 確定済み事項 + §2.1 sub-issue A + §6 spike 不採用の根拠](../phase-9-plan.md)
 - [Phase 11 Plan §2 ADR 構成 + §3 Sub-issue F1 / F4-b](../phase-11-plan.md) — Phase 11 で onedrive_drive を追加し本 ADR §(j) パターン汎化節を導入
