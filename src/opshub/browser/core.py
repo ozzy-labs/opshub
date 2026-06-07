@@ -265,16 +265,18 @@ def fetch_page(
         fail-safe path catches it as a per-page skip.
     """
     # ``PlaywrightError`` / ``PlaywrightTimeoutError`` are imported here
-    # (deferred, ADR-0037 §決定 (g)) so the ``except`` clauses can name
-    # the concrete Playwright exception types without a module-level
-    # ``playwright`` import. The package-missing case is already handled
-    # by :func:`_launch_context` raising ``ConfigError`` before we reach
-    # the ``page.goto`` call, so import failure here is unreachable in
-    # practice — but we still gate it for type-checker completeness.
+    # (deferred, ADR-0037 §決定 (g)) so the ``except`` clauses below can
+    # name the concrete Playwright exception types without a module-level
+    # ``playwright`` import. This import runs *before* ``_launch_context``,
+    # so when the ``playwright`` package is absent entirely this is the
+    # block that converts the failure into the actionable ``ConfigError``
+    # (``_launch_context`` repeats the same guard for when it is called
+    # directly). The same message shape keeps the operator UX uniform
+    # regardless of which call site trips first.
     try:
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-    except ImportError as exc:  # pragma: no cover - guarded by _launch_context
+    except ImportError as exc:
         raise ConfigError(
             "browser support requires the 'browser' extra. Install it with "
             "'uv pip install opshub[browser]' (or 'uv sync --extra browser'), "
