@@ -130,6 +130,16 @@ def import_connector_modules() -> None:
 
     # Gmail (Phase 14)
     try:
-        import opshub.connectors.google_mail  # noqa: F401  # pyright: ignore[reportUnusedImport]
+        import opshub.connectors.google_mail  # pyright: ignore[reportUnusedImport]
+    except ImportError:
+        pass
+
+    # Web (Phase 21-C, ADR-0037) — Playwright browser-rendered Web pages.
+    # The ``[browser]`` extra (``playwright``) is the heavy dep; it is
+    # deferred inside the browser core (ADR-0037 §決定 (g)) so importing
+    # the connector package itself stays light and the ``except
+    # ImportError`` arm only trips if the package tree is partial.
+    try:
+        import opshub.connectors.web  # noqa: F401  # pyright: ignore[reportUnusedImport]
     except ImportError:
         pass

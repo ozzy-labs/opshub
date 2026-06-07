@@ -67,6 +67,7 @@ from opshub.cli.skills import skills_app
 from opshub.cli.slack import slack_app
 from opshub.cli.task import task_app
 from opshub.cli.teams import teams_app
+from opshub.cli.web import web_app
 from opshub.cli.workspace import workspace_app
 
 app = typer.Typer(
@@ -105,6 +106,8 @@ app.add_typer(google_mail_app)
 app.add_typer(google_calendar_app)
 app.add_typer(box_drive_app)
 app.add_typer(onedrive_drive_app)
+# Phase 21-C (ADR-0037): browser-rendered Web page connector.
+app.add_typer(web_app)
 app.add_typer(connectors_app)
 app.add_typer(embedder_app)
 app.add_typer(llm_app)
