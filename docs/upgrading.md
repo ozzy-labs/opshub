@@ -1123,10 +1123,32 @@ cursor with `opshub projections rebuild`.
   `conversations.replies` rate-limit handling, and recovery from the legacy
   cursor shape.
 
-## Pre-userbase compat shim cleanup: drop inline `exclude_globs`
+## Pre-userbase compat shim cleanup (epic #470)
 
-Epic [#470](https://github.com/ozzy-labs/opshub/issues/470) (ADR-0020 §(b)
-closeout) removes the Phase 9 / Phase 11 F4-b inline `exclude_globs` field
+Epic [#470](https://github.com/ozzy-labs/opshub/issues/470) is the
+pre-userbase compat shim sweep: under
+[ADR-0011 §設計判断のスタンス](adr/0011-ozzy-labs-ecosystem-adoption.md)
+(no installed user base → no deprecation period, no dual-read), the four
+shims accumulated through Phase 1-19 are removed in a single batch instead
+of being unwound incrementally. Each sub-issue is a self-contained
+`refactor!:` commit (`release-please` bumps the minor lane on the `0.x`
+line — see top of this document for the SemVer posture) and lands its own
+operator note. Operators who only ran defaults pre-#470 only need the
+operator action in §`sources.body NOT NULL`; the other three sub-issues
+either require no operator action or only a `opshub.toml` edit.
+
+The four sub-issues (in landing order) are:
+
+| Sub-issue | What it drops | Required operator action |
+|---|---|---|
+| [§Drop inline `exclude_globs`](#drop-inline-exclude_globs-pr-483--pr-484) | `BoxDriveConnectorSettings.exclude_globs` / `OneDriveDriveConnectorSettings.exclude_globs` Pydantic fields + `ExcludeRules.merged_with_paths` + `BoxDriveScanner._is_excluded` duplicate match | Required if you still use the inline TOML key — move patterns to `~/.config/opshub/excludes.yaml` `paths:` |
+| [§Drop `expand_graph` param + make `LinkService` required](#drop-expand_graph-param--make-linkservice-required-pr-485) | `expand_graph: bool = False` kwarg on `BriefingService.generate` / `ProposalService.generate` / `ProposalService.generate_reply_draft` + `link_service: LinkService = None` constructor default + CLI `--expand-graph` flag + MCP schema property | Not required for default callers; required for any script that explicitly passed `expand_graph=...` / `--expand-graph` |
+| [§Drop per-phase event union aliases](#drop-per-phase-event-union-aliases-pr-482) | `Phase2Event` / `Phase3Event` / `Phase4Event` / `Phase5Event` / `Phase6Event` / `Phase8Event` re-exports from `opshub.domain.events.__init__` | Not required (internal API only — `AllEvent` decoded every row already) |
+| [§`sources.body NOT NULL`](#sourcesbody-not-null-pr-486) | `SourceObserved.body: str \| None = None` → `str = Field(min_length=1)` + `sources.body` `nullable=True` → `nullable=False` + migration `0030_enforce_sources_body_not_null` | **Required** — drop DB, run `opshub init`, reset cursors, re-sync each enabled connector, rebuild embeddings + FTS |
+
+### Drop inline `exclude_globs` (PR [#483](https://github.com/ozzy-labs/opshub/pull/483) + PR [#484](https://github.com/ozzy-labs/opshub/pull/484))
+
+ADR-0020 §(b) closeout. Removes the Phase 9 / Phase 11 F4-b inline `exclude_globs` field
 from `BoxDriveConnectorSettings` and `OneDriveDriveConnectorSettings`. Path-based
 exclusion now has a single SSOT: the `paths:` selector inside
 `~/.config/opshub/excludes.yaml`
@@ -1185,7 +1207,7 @@ path. Patterns continue to use fnmatch / gitignore-style syntax matched
 against the POSIX-form `rel_path`; `**/` is treated as optional so a single
 pattern catches both nested and top-level files.
 
-### Why this shape
+#### Why this shape
 
 - `excludes.yaml` is the cross-connector SSOT for ingest exclusion
   (`channels` / `senders` / `repos` / `paths`); keeping path filtering inline
@@ -1201,7 +1223,7 @@ pattern catches both nested and top-level files.
   child is intentionally deferred to a follow-up issue; this epic only
   removes the two shims it had to remove.
 
-### Specifics
+#### Specifics
 
 - **No DB migration.** Cleanup is config / schema / docs surface only.
 - **No new extras.** Existing `[connectors-box-drive]` / `[connectors-onedrive-drive]`
@@ -1214,10 +1236,9 @@ pattern catches both nested and top-level files.
   was re-published with the "future cleanup" comment removed and the
   Implementation status flipped to `landed`.
 
-## Pre-userbase compat shim cleanup: drop `expand_graph` param + make LinkService required (sub-issue #472)
+### Drop `expand_graph` param + make `LinkService` required (PR [#485](https://github.com/ozzy-labs/opshub/pull/485))
 
-Epic [#470](https://github.com/ozzy-labs/opshub/issues/470)
-(ADR-0017 §決定 (f) closeout) drops the
+ADR-0017 §決定 (f) closeout. Drops the
 `expand_graph: bool = False` keyword from
 `BriefingService.generate` / `ProposalService.generate` /
 `ProposalService.generate_reply_draft` and promotes
@@ -1277,10 +1298,9 @@ Operator impact:
    landing; Phase 8 plan §2.4 D2 remains as a historical record of
    the opt-in shape that has now been retired.
 
-## Pre-userbase compat shim cleanup: drop per-phase event union aliases (sub-issue #480)
+### Drop per-phase event union aliases (PR [#482](https://github.com/ozzy-labs/opshub/pull/482))
 
-Epic [#470](https://github.com/ozzy-labs/opshub/issues/470)
-(ADR-0002 §Decision 5 closeout) deletes the 6 per-phase
+ADR-0002 §Decision 5 closeout. Deletes the 6 per-phase
 discriminated-union aliases — `Phase2Event` / `Phase3Event` /
 `Phase4Event` / `Phase5Event` / `Phase6Event` / `Phase8Event` (Phase 7
 was projection-only and never had a `Phase7Event`) — from
@@ -1307,7 +1327,7 @@ persistence layer (`SqlAlchemyEventStore._decode`) always reached for
 - **One ADR.** [ADR-0002 §Decision 5](adr/0002-event-sourced-architecture.md)
   records the `AllEvent`-only consolidation and the rationale for
   removing the per-phase aliases.
-## Pre-userbase compat shim cleanup: `sources.body NOT NULL` (sub-issue #481)
+### `sources.body NOT NULL` (PR [#486](https://github.com/ozzy-labs/opshub/pull/486))
 
 [ADR-0020 §(d')](adr/0020-full-local-content-retention.md) promotes
 `SourceObserved.body` from `str | None = None` to `str =

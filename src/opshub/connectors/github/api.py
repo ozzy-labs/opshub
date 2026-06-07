@@ -402,8 +402,11 @@ def _body_text(text: str | None) -> str | None:
 
     Unlike :func:`_first_line` this performs **no** truncation — ADR-0020
     Full Local Content Retention keeps the whole body. An empty / missing
-    body normalises to ``None`` so the projection stores ``NULL`` rather
-    than an empty string, keeping "has a body" queries unambiguous.
+    body normalises to ``None`` at the helper level; ``github/connector.py``
+    line 135 then resolves ``item.body or item.summary or item.title`` to
+    satisfy the post-#470 ``SourceObserved.body`` non-empty contract
+    (projection persists a non-empty string per
+    `ADR-0010 §不変条件 6 <../../docs/adr/0010-connector-contract.md>`_).
     """
     if not text or not text.strip():
         return None

@@ -1,7 +1,7 @@
 # 0017. Knowledge Graph
 
-- Status: Accepted (revised 2026-05-30 for Phase 10 Sub-issue E)
-- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §決定 (b) revision: `reply_draft_replies_to` / `referenced_in_reply_draft` link_type 追加)
+- Status: Accepted (revised 2026-06-07 for epic #470 — drop `expand_graph` opt-in flag)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §決定 (b) revision: `reply_draft_replies_to` / `referenced_in_reply_draft` link_type 追加); 2026-06-07 (epic #470 §決定 (f) revision: `--expand-graph` opt-in 撤廃 + graph 1-hop 拡張を無条件 default に統一)
 - Deciders: ozzy
 
 ## Context
@@ -174,7 +174,7 @@ Phase 8 MVP では **既存 event から link を derive する 4 経路 + manua
 1. **provenance query が即答可能になる** — `opshub graph trace <task-id>` で「この task は proposal P → briefing B → sources S1, S2 から作られた」の chain を 1 コマンドで取得できる。これまで event log を SQL で JOIN する必要があった作業が CLI 化される
 2. **既存 event payload の cross-entity reference が初めて活用される** — Phase 5 `source_refs` / Phase 6 `applied_entity_id` / Phase 6 `briefing_id` は event payload に既に存在していたが、materialise する projection が無かった。Phase 8 でこれらが links projection 経由で索引化される
 3. **Phase 3 `SourceReferenced` placeholder が closeout される** — 3 phase 越しに consumer の無い event だった `SourceReferenced` が `LinksProjector` で消費され、第一級の link 抽出経路として正式に運用に乗る
-4. **`--expand-graph` で Phase 5/6 を LLM stack 変更なしに拡張可能** — `BriefingService` / `ProposalService` の signature に `expand_graph: bool = False` を増やすだけで graph 1-hop 拡張 context が LLM prompt に乗る。Pluggable Embedder / LLMClient は一切変更しない
+4. **graph 1-hop 拡張は無条件 default として LLM stack 変更なしに Phase 5/6 を強化** — epic #470 で `expand_graph` opt-in flag を撤廃した結果、`BriefingService` / `ProposalService.generate` / `ProposalService.generate_reply_draft` は graph 1-hop 拡張を常時走らせて LLM prompt に拡張 context を載せる。Pluggable Embedder / LLMClient は一切変更しない (旧文 = Phase 8 D2 時点の opt-in flag 経路は §決定 (f) の epic #470 改訂で履歴情報として残置)
 5. **schema 単純** — 1 table + 2 index + 1 UNIQUE 制約で完結。migration / backup / replay の対象が増えない (per-link_type 別 table 案だと 5+ table)
 6. **idempotent rebuild が保証される** — 自動抽出 projector が新 event を発行しない pure derived state pattern + natural-key UPSERT で、`projections rebuild` で historical event を全部流しても links table が完全再構築される
 7. **event-sourced trace が保全される** — auto-extracted link は元 event の id を `source_event_id` 列で trace 可能、manual link は `LinkCreated` event を log に残す。hard delete でも `LinkDeleted` event で「いつ誰が delete したか」が events table に残る
@@ -183,8 +183,8 @@ Phase 8 MVP では **既存 event から link を derive する 4 経路 + manua
 
 1. **`links` projection は denormalized で write amplification がある** — 1 event が複数 link を派生する場合 (例: `BriefingGenerated.source_refs` が 5 entry なら 5 link row) があり、event log 量に比べて links table 量が膨らむ可能性
    - 緩和: Phase 8 E1 で operator-scale (1000 task / 100 briefing / 50 proposal) で links table 行数を実測する。問題が顕在化したら Phase 8.x で limit / pagination を `related` / `expand` に追加
-2. **`--expand-graph` 未指定時の cost / behavior は完全に Phase 5/6 と一致するが、指定時の cost 増は operator 自身が cost monitoring する必要がある** — graph 1-hop 拡張で source 数が最大 `original_hits × 3` まで増える (related の limit=3 設定時)
-   - 緩和: CLI help に「`--expand-graph` increases prompt token count by up to 3x neighbours per recall hit」と明記、operator が予算を把握しやすくする
+2. **graph 1-hop 拡張は無条件 baseline で、cost 増 (最大 `original_hits × 3` 個の neighbour entity 追加) は caller の `max_tokens` 設定で受け止める** — epic #470 で opt-in flag を廃止したため、cost monitoring は ADR-0015 §決定 (h) の `max_tokens` 経由の caller responsibility に統合される (`--no-expand-graph` opt-out 経路は提供しない、ADR-0011 pre-userbase スタンス)
+   - 緩和: `_GRAPH_EXPAND_PER_HIT_LIMIT = 3` で neighbour 数を bound、`max_tokens` で truncate される (ADR-0015 §決定 (h))。CLI help から `--expand-graph` 関連文言は撤去され、cost 制御は `--max-tokens` / `[brief] max_tokens` 経由の単一経路に集約
 3. **`link_type` enum を 5 種類で pin したことで Phase 8.x の追加には ADR 更新が必要** — 新しい auto-extraction 経路 (例: connector-side automatic SourceReferenced) を加えたいときに、新 link_type を enum に足す → 本 ADR を update する手続きが要る
    - 緩和: manual path は free-form 文字列を許容するので、operator は新しい link_type を運用上 trial 可能 (enum 外 warning 付き)。trial で価値が validate されたら enum に昇格させる 2 段階運用 (Phase 8.x で実施)
 4. **hard delete で「削除済 link の audit」は events table query が必要** — `links` projection には現在の graph しか残らないため、「過去存在したが現在は削除された link」を一覧するには events table の `LinkCreated` / `LinkDeleted` を JOIN する SQL を書く必要がある
@@ -203,7 +203,13 @@ Phase 8 sub-issue A-E の実装で本 ADR の決定 (a)-(h) は以下のとお�
 - **(e) Traversal depth limits + cycle detection** — 以下で pin:
   - `tests/unit/services/links/test_link_service_basic.py`: `related(entity)` の 1-hop outgoing / incoming / bidirectional 返却 + `link_types` filter、`trace(entity, depth=11)` が `ConfigError` を raise、`trace` の cycle 検出 (`visited` set による branch 終端 + 閉じる edge を path に含めて返却)
   - `tests/unit/services/links/test_link_service_expand.py`: `expand(entity, depth=6)` / `expand(entity, depth=-1)` が `ConfigError` を raise、A → B → A graph で `expand(A, depth=2)` が無限ループしないこと (visited set による cycle break)、bidirectional 拡張 + dedup-by-id、`find_link_id` lookup helper
-- **(f) `--expand-graph` flag default off** — `tests/unit/services/test_briefing_service.py::test_generate_with_expand_graph_false_does_not_call_link_service` と `test_proposal_service.py::test_generate_with_expand_graph_false_does_not_call_link_service` で `expand_graph=False` (default) 時に `LinkService.related` が呼ばれないことを Mock で pin。`expand_graph=True` 時に graph 拡張 entity が prompt に含まれることは `test_generate_with_expand_graph_true_expands_via_link_service` / `test_generate_with_expand_graph_true_dedupes_against_original_hits` / `test_generate_with_expand_graph_true_dedupes_across_recall_hits` で pin。`tests/integration/test_phase5_lifecycle.py` / `test_phase6_lifecycle.py` 等の Phase 5/6 既存 snapshot test が Phase 8 完了後も passing であることが backward-compat の追加 pin
+- **(f) Graph 1-hop 拡張は無条件 baseline (epic #470)** — `expand_graph` opt-in flag を撤廃した後、surviving test 群が以下の不変条件を pin する:
+  - `tests/unit/services/test_briefing_service.py:594 test_generate_expands_via_link_service` / `tests/unit/services/test_proposal_service.py:944 test_generate_expands_via_link_service` — `BriefingService.generate` / `ProposalService.generate` が `LinkService.related` を呼び、graph 拡張 entity が LLM prompt に追加されること (Mock で pin)
+  - `tests/unit/services/test_briefing_service.py:771 test_construct_without_link_service_raises_type_error` / `tests/unit/services/test_proposal_service.py:1090 test_construct_without_link_service_raises_type_error` — `BriefingService` / `ProposalService` 構築時に `link_service=None` を渡すと `TypeError` (constructor 必須化、dead-branch `ConfigError` 完全除去)
+  - `tests/unit/mcp/test_registry_policy.py:176 test_brief_and_propose_generate_drop_expand_graph_property` — MCP `briefing.generate` / `proposal.generate` tool schema から `expand_graph` property が落ち、`additionalProperties: false` の効果で agent host が `{"expand_graph": ...}` を渡すと schema validation で reject されること
+  - `tests/unit/cli/test_brief.py:409 test_brief_rejects_legacy_expand_graph_flag` / `tests/unit/cli/test_propose.py:407 test_generate_rejects_legacy_expand_graph_flag` — CLI `opshub brief --expand-graph` / `opshub propose generate --expand-graph` が Typer の unknown option として exit 2 で reject されること
+
+  `tests/integration/test_phase5_lifecycle.py` / `test_phase6_lifecycle.py` は epic #470 後の baseline (graph 拡張 default) に再 snapshot 済で、Phase 5/6 経路でも graph 1-hop 拡張が常時走ることが integration レベルで pin される (旧「`expand_graph=False` で graph 拡張なし」の test は #485 で削除済)
 - **(g) Connector-side automatic `SourceReferenced` 発行は Phase 8.x 持ち越し** — Phase 8 MVP の test には connector-side auto extraction の test を **追加しない** ことが pin (test の不在自体が決定の reflection)。Phase 8.x で別 ADR / 別 PR で追加
 - **(h) `LinkDeleted` = Hard delete** — `LinksProjector` が `LinkDeleted` event を消費後、`links` table に対応 row が **存在しないこと** を `tests/unit/projections/test_links_extractor.py::test_link_deleted_removes_row_by_id` で pin (SELECT で empty result を assert)。`links` table の schema に `deleted_at` column が存在しないことは `tests/unit/projections/test_links_skeleton.py` の column inspection test で pin
 
@@ -211,7 +217,7 @@ end-to-end の整合確認は以下 4 ファイルで pin した (Phase 8 E1 clo
 
 - `tests/integration/test_phase8_lifecycle.py` — `opshub task create` → `opshub embeddings rebuild` → `opshub brief` → `opshub propose generate --from-briefing` → `opshub propose apply` → `opshub projections rebuild` で 3 種類の自動 link (`referenced_in_briefing` / `generated_from_briefing` / `applied_to`) を materialise → `opshub graph trace` (incoming chain) + `opshub graph expand` (bidirectional chain) で chain reachability を確認
 - `tests/integration/test_phase8_manual_link_lifecycle.py` — manual `link add` → `link list` (`--from` / `--type` filter) → `link remove` (`--reason`) → 同 id への重複 `link remove` no-op の round-trip。projection 行と `link.created` / `link.deleted` event の 1:1 対応 + no-op delete 時も audit event が append されることを pin
-- `tests/integration/test_phase8_expand_graph_lifecycle.py` — task → source の manual `references` link を seed し、`--expand-graph` 未指定の brief / propose 経路には source body が含まれないこと、`--expand-graph` 指定で含まれること、graph-expanded source が dedup されること (= 1 回のみ出現) を LLM stub の captured prompt 経由で pin。brief / propose 経路を対称な 2 test で pin
+- `tests/integration/test_phase8_expand_graph_lifecycle.py` — task → source の manual `references` link を seed し、無条件 baseline (graph 拡張 default、epic #470 改訂後) の brief / propose 経路で source body が常に含まれること + graph-expanded source が dedup されること (= 1 回のみ出現) を LLM stub の captured prompt 経由で pin。brief / propose 経路を対称な 2 test で pin (旧「`--expand-graph` 指定/未指定の対比」shape は #485 で baseline 一本に collapse 済)
 - `tests/integration/test_phase8_rebuild_idempotency.py` — 6 種類の link-emitting event (4 自動抽出 + `LinkCreated` + `LinkDeleted`) を seed して `rebuild_all` で完全再構築、2 回 rebuild してもバイト一致 (`_stable_link_id` の決定性 + UPSERT 冪等性) を pin
 
 ## Known Limitations / Phase 8.x

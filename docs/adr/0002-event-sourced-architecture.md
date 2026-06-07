@@ -1,7 +1,7 @@
 # 0002. Event-Sourced Architecture
 
-- Status: Accepted
-- Date: 2026-05-16
+- Status: Accepted (revised 2026-06-07 for epic #470 — drop per-phase event union aliases)
+- Date: 2026-05-16 (initial); 2026-06-07 (epic #470 §Decision 5 closeout: `Phase2Event` / `Phase3Event` / `Phase4Event` / `Phase5Event` / `Phase6Event` / `Phase8Event` 別名を削除し flat `AllEvent` union に統合、`SqlAlchemyEventStore._decode` は元々 `AllEvent` だけを参照していたため persistence 経路は不変)
 - Deciders: ozzy
 
 ## Context

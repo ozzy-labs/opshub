@@ -221,8 +221,11 @@ MS Office mediatype 経由 (Docs → docx / Slides → pptx / Sheets → xlsx)
 
 非 native ファイル (Drive にアップロードされた PDF / 画像 / フォルダ等の
 catch-all `google_workspace_file`) は `files.export` が `403 fileNotExportable`
-で reject するため、`content_extraction = true` 設定下でも `body=None` の
-metadata-only で persist される (Phase 13 G4 #278 の wiring)。
+で reject するため、`content_extraction = true` 設定下でも catch-all path は
+`body = summary` (非空) で persist される (Phase 13 G4 #278 の wiring)。
+`SourceObserved.body` は epic #470 で必須化 (`min_length=1`、ADR-0020 §(d'))
+されており、metadata-only path でも mapper が `summary` を `body` に再利用
+することで projection は常に非空文字列を保持する。
 
 ### 定期実行
 

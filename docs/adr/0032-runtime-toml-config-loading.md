@@ -12,7 +12,7 @@ Phase 1-15 完了時点で `opshub init` は `$XDG_CONFIG_HOME/opshub/config.tom
 
 - [ADR-0010 Connector Contract](0010-connector-contract.md) §改訂 (c) — Microsoft Graph delta-link / Drive `changes.list` cursor 失効時の `fallback_window_days` は `opshub.toml` で operator が上書き可能と pin
 - [ADR-0012 Embedding Strategy](0012-embedding-strategy.md) §決定 §3 — `[embedding] backend` で `local` / `openai` / `voyage` / `disabled` を選択し、Phase 1 で `[embedding]` セクション parse 可能とすると pin
-- [ADR-0019 Local-FS-backed Connector](0019-local-filesystem-backed-connector.md) §決定 (g) — box_drive / onedrive_drive の `exclude_globs` は `[connectors.<name>] exclude_globs` で operator が上書き可能と pin
+- [ADR-0019 Local-FS-backed Connector](0019-local-filesystem-backed-connector.md) §決定 (g) — 現契約: path-based exclusion の SSOT は [ADR-0020 §(b)](0020-full-local-content-retention.md) の `~/.config/opshub/excludes.yaml` `paths:` selector (epic #470 で `[connectors.<name>] exclude_globs` inline は撤廃)。本 ADR の TOML loader は box_drive / onedrive_drive の `root_path` / `content_extraction` の operator override を引き続き担う
 - [ADR-0021 Encryption at Rest](0021-encryption-at-rest.md) §(b) — `[storage] encryption = true` で SQLCipher 暗号化を opt-in できると pin
 - [ADR-0025 Office Document Content Extraction](0025-office-document-content-extraction.md) §決定 (b)(e) — `[office] max_file_size_mb` / `max_extracted_chars` / `[office.excel] max_cells_per_sheet` / `max_cells_per_workbook` を operator が上書き可能と pin
 
@@ -127,7 +127,7 @@ TOML 構文エラー (TomlDecodeError) は actionable error message に wrap し
 
 - **[ADR-0010 Connector Contract](0010-connector-contract.md) §改訂 (c)** — Microsoft Graph delta-link / Drive `changes.list` cursor 失効時の `fallback_window_days` は本 ADR の TOML 読込経路で operator が override 可能となる。connector 本体契約 (Protocol / 責務 / 禁止事項) は不変
 - **[ADR-0012 Embedding Strategy](0012-embedding-strategy.md) §決定 §3** — `[embedding] backend` / `[embedding] model` / `[embedding] dimensions` / `[embedding.openai]` 等の section parse が本 ADR で実装される。Embedder / VectorStore Protocol (§決定 §1) は不変
-- **[ADR-0019 Local-FS-backed Connector](0019-local-filesystem-backed-connector.md) §決定 (g)** — box_drive / onedrive_drive の `[connectors.<name>] exclude_globs` / `root_path` / `content_extraction` 等の operator override が本 ADR で実装される。`open()` ban (§決定 (b)) / fingerprint 戦略 / identity 戦略は不変
+- **[ADR-0019 Local-FS-backed Connector](0019-local-filesystem-backed-connector.md) §決定 (g)** — box_drive / onedrive_drive の `[connectors.<name>] root_path` / `content_extraction` 等の operator override が本 ADR で実装される (epic #470 で inline `exclude_globs` は撤廃、path-based exclusion は ADR-0020 §(b) の `excludes.yaml` `paths:` selector が SSOT)。`open()` ban (§決定 (b)) / fingerprint 戦略 / identity 戦略は不変
 - **[ADR-0021 Encryption at Rest](0021-encryption-at-rest.md) §(b)** — `[storage] encryption = true` / `[storage] db_path` 等の operator override が本 ADR で実装される。SQLCipher 採用 (§(a)) / keyring key 名 / extras 隔離 (§(d)) は不変
 - **[ADR-0025 Office Document Content Extraction](0025-office-document-content-extraction.md) §決定 (b)(e)** — `[office] max_file_size_mb` / `max_extracted_chars` / `[office.excel] max_cells_per_sheet` / `max_cells_per_workbook` 等の operator override が本 ADR で実装される。markitdown 採用 (§決定 (a)) / source_type 分割 (§決定 (d)) / fail-safe (§決定 (c)) は不変
 
@@ -156,7 +156,7 @@ TOML 構文エラー (TomlDecodeError) は actionable error message に wrap し
 却下理由:
 
 - 既存 actionable error / setup docs / ADR-0010 §改訂 (c) / ADR-0012 §決定 §3 / ADR-0019 §決定 (g) / ADR-0021 §(b) / ADR-0025 §決定 (b)(e) を全部書き換える必要があり、影響範囲が広い (`#416` 本文の影響範囲リスト参照)
-- operator UX が悪化 — `opshub.toml` に書ける `[connectors.box_drive] exclude_globs = [...]` 相当を env で表現すると `OPSHUB_CONNECTORS__BOX_DRIVE__EXCLUDE_GLOBS='["..."]'` のような JSON 埋め込み string 形式になり、可読性 / diff 性が低い
+- operator UX が悪化 — `opshub.toml` に書ける `[connectors.box_drive] root_path = "/mnt/b"` / `[connectors.box_drive] content_extraction = true` 相当を env で表現すると `OPSHUB_CONNECTORS__BOX_DRIVE__ROOT_PATH=/mnt/b` / `OPSHUB_CONNECTORS__BOX_DRIVE__CONTENT_EXTRACTION=true` のような flat key 形式になり、複数 connector を切り替える運用で TOML section header の視認性 (どの section に何が入るか) を失う
 - ADR-0012 §決定 §3 の illustrative TOML block (`[embedding] backend = "local"`) と `~/.config/opshub/config.toml` 案内が無効化され、ADR 信頼性が低下する
 
 ### 3. 新規 YAML / JSON config フォーマット
@@ -195,7 +195,7 @@ TOML 構文エラー (TomlDecodeError) は actionable error message に wrap し
 
 - [ADR-0010 Connector Contract](0010-connector-contract.md) — §改訂 (c) の `fallback_window_days` operator override が本 ADR で実装可能化
 - [ADR-0012 Embedding Strategy](0012-embedding-strategy.md) — §決定 §3 の `[embedding]` section parse が本 ADR で実装可能化
-- [ADR-0019 Local-FS-backed Connector](0019-local-filesystem-backed-connector.md) — §決定 (g) の `exclude_globs` operator override が本 ADR で実装可能化
+- [ADR-0019 Local-FS-backed Connector](0019-local-filesystem-backed-connector.md) — §決定 (g) の `root_path` / `content_extraction` operator override が本 ADR で実装可能化 (epic #470 で inline `exclude_globs` 自体は撤廃済、path-based exclusion は ADR-0020 §(b) `excludes.yaml` `paths:` が SSOT)
 - [ADR-0021 Encryption at Rest](0021-encryption-at-rest.md) — §(b) の `[storage] encryption` operator override が本 ADR で実装可能化
 - [ADR-0025 Office Document Content Extraction](0025-office-document-content-extraction.md) — §決定 (b)(e) の `[office]` operator override が本 ADR で実装可能化
 - [Phase 18 Tracking Issue (epic)](https://github.com/ozzy-labs/opshub/issues/416) — 本 ADR は Phase 18 PR 1 (#417) の成果物。PR 2 (#418、実装) / PR 3 (#419、operator docs) と並列実行

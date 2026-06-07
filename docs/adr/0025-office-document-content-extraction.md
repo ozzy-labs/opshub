@@ -156,7 +156,7 @@ ADR-0019 (Local-FS-backed Connector) は §決定 (b) で box_drive scanner が 
 
 - **provenance**: `provenance_origin="external"` / `provenance_trust="untrusted"` を `SourceObserved` に付与 (Office 文書は外部由来テキストとして prompt injection 防御層に乗せる、ADR-0020 §(e))
 - **暗号化**: `sources.body` が SQLCipher 暗号化対象 DB に書かれることで、抽出された Office 本文も保存時暗号化される (ADR-0021 §(a))
-- **excludes**: ADR-0019 §決定 (g) の `exclude_globs` で機密 Office 文書を operator が事前除外可能 (例 `secrets/*.xlsx`)
+- **excludes**: shared `excludes.yaml` `paths:` selector ([ADR-0020 §(b)](0020-full-local-content-retention.md)、epic #470 で inline `exclude_globs` から移行) で機密 Office 文書を operator が事前除外可能 (例 `paths: ["**/secrets/**/*.xlsx"]`)
 
 採用理由:
 
