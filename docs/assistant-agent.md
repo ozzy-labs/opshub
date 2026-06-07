@@ -119,6 +119,16 @@ auto-apply 経路は構造的に存在しない (ADR-0016 §決定 (c))。`opshu
 - reply-draft / handoff-draft / announcement-draft は draft text を生成するだけで、SaaS への送信経路を持たない。ユーザーが手で SaaS に貼り付ける
 - 将来 SaaS 書き戻しが必要になっても、新 ADR + ADR-0004 revisit + ADR-0016 §決定 (c) 整合の 3 要件すべてを要求する (ADR-0010 §禁止事項 7 改訂は引き続き保持)
 
+### 5.4 cross-proposal の意味的重複は dedup されない
+
+ADR-0016 §決定 (d) の冪等契約は `(proposal_id, candidate_index)` 単位であり、**同一 proposal 内の同一 candidate の二重 apply** だけを止める (`tests/integration/test_phase6_propose_atomicity.py::test_apply_already_applied_candidate_reraises_no_duplicate_task` で pin)。proposal をまたいだ意味的重複には効かない。
+
+`ProposalService.generate` は呼び出しごとに新規 aggregate を採番し、同一 source に既存の open proposal があっても検索・警告・マージ・拒否を一切行わない。`TaskService.create_task` も毎回 fresh ULID を採番し title / body の重複検査をしない。`DuplicateService` (`embeddings.find_duplicates`) は operator 手動実行のオフライン検出ツールで、generate / apply 経路から呼ばれない (6.2 の write tool マトリクス / §6.2 末尾の注記参照)。
+
+帰結として、**同一 source から並行に generate された候補は、各セッションが HITL apply すると実質同一の task / decision が別 ULID で並立する**。これを止める構造的ガードは存在せず、**HITL レビューが重複検出の最終防波堤** (ADR-0016 §決定 (c)) となる — 重複候補は apply ゲートで人の目に触れるが、構造的にはブロックされない。
+
+generate 時の同一 source open-proposal warning など自動 dedup 対策は本フェーズのスコープ外で、follow-up [#501](https://github.com/ozzy-labs/opshub/issues/501) で将来検討する。調査の詳細は [#500](https://github.com/ozzy-labs/opshub/issues/500#issuecomment-4642014268) を参照。現状挙動 (cross-proposal で 2 task 並立) は `tests/integration/test_phase6_propose_atomicity.py::test_cross_proposal_duplicate_apply_mints_two_distinct_tasks` で pin している。
+
 ## 6. MCP tool 依存マップ
 
 14 skills × 18 MCP tools (read 13 + write 5) のマトリクス。各 skill が呼び出す MCP tool を列挙。✓ = primary 経路、(✓) = 補助経路 (Step 2 以降の optional 呼び出し)。

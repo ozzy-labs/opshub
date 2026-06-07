@@ -24,6 +24,12 @@ What this pins
   ``candidate_states[0]`` stays "applied".
 - **Already-applied candidate reject** → exit code 1, message
   "candidate 0 already applied", no ``ProposalRejected`` event.
+- **Cross-proposal duplicate (current intended behaviour pin)** → two
+  proposals generated independently from the same seeded source, each
+  applied once, mint two distinct tasks (different ULIDs). There is no
+  cross-proposal dedup: ADR-0016 §決定 (d) idempotency is scoped to
+  ``(proposal_id, candidate_index)`` and HITL review (ADR-0016 §決定
+  (c)) is the only line of defence. See #500 / #501.
 """
 
 from __future__ import annotations
@@ -231,13 +237,17 @@ def _invoke(args: list[str]) -> tuple[int, str, str]:
     return result.exit_code, result.stdout, result.stderr
 
 
-def _generate_proposal(monkeypatch: pytest.MonkeyPatch) -> str:
+def _generate_proposal(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    topic: str = "atomicity topic",
+) -> str:
     """Drive ``opshub propose generate`` with the success stub.
 
     Returns the proposal ULID parsed from the rendered markdown so the
     callers can chain apply / reject calls.
     """
-    code, generate_out, stderr = _invoke(["propose", "generate", "atomicity topic"])
+    code, generate_out, stderr = _invoke(["propose", "generate", topic])
     assert code == 0, stderr or generate_out
     proposal_id: str | None = None
     for line in generate_out.splitlines():
@@ -508,6 +518,93 @@ def test_reject_already_applied_candidate_fails_without_event(
             ).scalar_one()
         assert rejected_events == [], rejected_events
         assert list(states) == ["applied", "pending"]
+    finally:
+        engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# 6. Cross-proposal duplicate — current intended behaviour pin (#500)
+# ---------------------------------------------------------------------------
+
+
+def test_cross_proposal_duplicate_apply_mints_two_distinct_tasks(
+    isolated_env: _PathsDict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pin: same source → 2 proposals → 2 applies → 2 distinct tasks.
+
+    This pins the **current intended behaviour**, not a bug fix. There
+    is no cross-proposal semantic dedup in opshub today:
+
+    - ``ProposalService.generate`` mints a fresh aggregate on every call
+      and never inspects other open proposals for the same source.
+    - ADR-0016 §決定 (d) idempotency is keyed on
+      ``(proposal_id, candidate_index)`` — it stops a *single* candidate
+      from being applied twice (pinned by
+      :func:`test_apply_already_applied_candidate_reraises_no_duplicate_task`),
+      but says nothing across proposals.
+    - ``TaskService.create_task`` mints a fresh ULID with no title/body
+      dedup.
+
+    Consequence: two concurrent sessions that each
+    ``propose generate`` against the same source and then HITL-apply an
+    equivalent candidate create two near-identical tasks with distinct
+    ULIDs. HITL review (ADR-0016 §決定 (c)) is the only line of defence
+    against this — the duplicate is *visible* to the human at the apply
+    gate, but nothing blocks it structurally.
+
+    Automated mitigation (e.g. a same-source open-proposal warning at
+    generate time) is deliberately out of scope here and tracked in
+    follow-up #501. See the investigation on #500:
+    https://github.com/ozzy-labs/opshub/issues/500#issuecomment-4642014268
+
+    If a future change adds cross-proposal dedup, this test is expected
+    to fail and should be updated alongside #501 — that is the signal,
+    not a regression.
+    """
+    monkeypatch.setenv("OPSHUB_EMBEDDING__BACKEND", "local")
+    monkeypatch.setenv("OPSHUB_LLM__BACKEND", "anthropic")
+    _install_stub_embedder(monkeypatch)
+    # Both stubs return the same candidate list, modelling two sessions
+    # whose LLMs independently emit an equivalent task candidate from the
+    # same recalled source.
+    _install_stub_llm(monkeypatch, _StubLLMClient())
+
+    _seed_for_proposal(monkeypatch)
+
+    # Two independent generate calls over the same seeded source — no
+    # check on the existing open proposal is performed.
+    proposal_a = _generate_proposal(monkeypatch, topic="cross-proposal topic A")
+    proposal_b = _generate_proposal(monkeypatch, topic="cross-proposal topic B")
+    assert proposal_a != proposal_b, (proposal_a, proposal_b)
+
+    # Each session applies its own task candidate (index 0).
+    code, apply_a, stderr_a = _invoke(["propose", "apply", proposal_a, "0"])
+    assert code == 0, stderr_a or apply_a
+    code, apply_b, stderr_b = _invoke(["propose", "apply", proposal_b, "0"])
+    assert code == 0, stderr_b or apply_b
+
+    engine = create_engine_for_sqlite(isolated_env["db_path"])
+    try:
+        with engine.connect() as conn:
+            applied_events = conn.execute(
+                select(events_table).where(events_table.c.event_type == "proposal.applied")
+            ).all()
+            task_created = conn.execute(
+                select(events_table).where(events_table.c.event_type == "task.created")
+            ).all()
+        # One ProposalApplied per proposal, against distinct aggregates.
+        assert len(applied_events) == 2, applied_events
+        applied_aggregates = {row.aggregate_id for row in applied_events}
+        assert applied_aggregates == {proposal_a, proposal_b}, applied_aggregates
+
+        # Seed minted 1 task; each cross-proposal apply minted 1 more →
+        # 3 total. Crucially the two proposal-applied tasks are distinct
+        # ULIDs: nothing deduplicated the semantically equivalent
+        # candidates across the two proposals.
+        assert len(task_created) == 3, task_created
+        task_ids = {row.aggregate_id for row in task_created}
+        assert len(task_ids) == 3, task_ids
     finally:
         engine.dispose()
 
