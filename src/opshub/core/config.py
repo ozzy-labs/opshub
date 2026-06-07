@@ -1026,6 +1026,57 @@ class ConnectorSettings(BaseModel):
     google_mail: GoogleMailConnectorSettings = Field(default_factory=GoogleMailConnectorSettings)
 
 
+class BrowserSettings(BaseModel):
+    """Browser read-layer tuning (Phase 21-B, ADR-0037 §決定 (c)/(g)/(h)).
+
+    Configures the Playwright-backed browser core
+    (:mod:`opshub.browser.core`) that renders a Web page and extracts
+    its post-render DOM text. The section is intentionally separate from
+    :class:`ConnectorSettings` because the browser layer is shared
+    infrastructure: the Phase 21-C ``web`` connector and the Phase 21-D
+    MCP ``browser.fetch`` tool both drive it, so the knobs live at the
+    settings root (``[browser]`` / ``OPSHUB_BROWSER__*``) rather than
+    under any single connector's namespace.
+
+    ``headless`` (default ``True``, ADR-0037 §決定 (c)) runs Chromium
+    without a GUI so the layer works on CI / cron / headless servers out
+    of the box. Operators flip it to ``False`` only when debugging a
+    render locally.
+
+    ``channel`` selects a branded Chromium build (``"chrome"`` /
+    ``"chrome-beta"`` / ``"msedge"`` etc.) instead of the Playwright
+    bundled Chromium. ``None`` (the default) uses the bundled build that
+    ``playwright install chromium`` provisions — the documented operator
+    path (ADR-0037 §決定 (g)). Setting a channel lets an operator point
+    at a system browser they already manage; the browser core forwards
+    it verbatim to ``chromium.launch_persistent_context(channel=...)``.
+
+    ``timeout`` is the per-navigation ceiling in **milliseconds**
+    (Playwright's native unit for ``page.goto(timeout=...)`` /
+    ``set_default_timeout``). Defaults to 30 000 ms (30 s) — long enough
+    for a heavy SPA to settle, short enough that a hung page fails fast
+    into the ADR-0025-style fail-safe (ADR-0037 §決定 (d)) rather than
+    blocking a sync. ``0`` disables the timeout (Playwright convention);
+    discouraged because a wedged page would hang the whole sync.
+
+    ``cdp_endpoint`` opts into the ``connect_over_cdp`` escape hatch
+    (ADR-0037 §決定 (b)): when set (e.g.
+    ``"http://localhost:9222"``), the browser core attaches to an
+    operator-launched Chrome already listening on that
+    ``--remote-debugging-port`` instead of launching its own persistent
+    context. ``None`` (the default) takes the launch path with the
+    opshub-dedicated user-data-dir (ADR-0037 §決定 (c)). The endpoint is
+    reserved for the future authenticated-session story; Phase 21-B
+    wires the field + launch/attach branch so the contract is stable,
+    but the read path is identical for both.
+    """
+
+    headless: bool = True
+    channel: str | None = None
+    timeout: int = 30_000
+    cdp_endpoint: str | None = None
+
+
 class LLMSettings(BaseModel):
     """LLM backend selection (see ADR-0015 + ADR-0016 §決定 (h)).
 
@@ -1089,6 +1140,7 @@ class OpsHubSettings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     connectors: ConnectorSettings = Field(default_factory=ConnectorSettings)
     office: OfficeSettings = Field(default_factory=OfficeSettings)
+    browser: BrowserSettings = Field(default_factory=BrowserSettings)
 
     def __init__(self, **values: Any) -> None:
         """Construct settings; convert pydantic ValidationError to ConfigError.

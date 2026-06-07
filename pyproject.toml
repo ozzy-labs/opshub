@@ -136,6 +136,19 @@ connectors-google-workspace = ["httpx>=0.27"]
 # guard (``opshub --help`` ≤ 300ms) stays intact even when the extras are
 # installed. Opt in via ``uv sync --extra office``.
 office = ["markitdown[docx,xlsx,pptx]>=0.1"]
+# Browser read layer (Phase 21, ADR-0037). ``playwright`` drives a real
+# Chromium engine so JS-rendered pages land in ``sources.body``. The
+# Chromium binary itself is NOT a Python dependency — operators run
+# ``playwright install chromium`` once (ADR-0037 §決定 (g)); the absent
+# binary surfaces as a ``ConfigError``. Gated behind extras (ADR-0001
+# distribution constraint) so the core install stays SDK-free; the
+# ``playwright`` import is lazy inside
+# :func:`opshub.browser.core.fetch_page` so the M6 cold-start guard
+# (``opshub --help`` ≤ 300ms) stays intact even when the extras are
+# installed. The ``>=1.50`` lower bound is the modern stable floor
+# pinned by ADR-0037 §決定 (a); uv.lock resolves the current stable
+# (1.60.x as of Phase 21-B). Opt in via ``uv sync --extra browser``.
+browser = ["playwright>=1.50"]
 # SaaS token storage (Phase 3, ADR-0014). OS keychain backed (macOS Keychain /
 # Linux Secret Service / Windows Credential Locker). Connectors fetch their
 # PAT / OAuth tokens through ``opshub.core.secrets``.
@@ -272,3 +285,12 @@ reportMissingTypeStubs = "warning"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = ["--strict-markers", "--strict-config", "-ra"]
+# ``--strict-markers`` (above) rejects any unregistered marker, so the
+# Phase 21-B browser integration marker must be declared here. Tests
+# tagged ``@pytest.mark.browser`` drive a real Chromium (provisioned by
+# the CI ``playwright install chromium`` step) against a localhost
+# ``http.server`` fixture — they never reach the public network
+# (ADR-0037 §決定 (g) / epic #504 test plan).
+markers = [
+  "browser: integration tests that launch a real Chromium via Playwright (requires 'playwright install chromium')",
+]

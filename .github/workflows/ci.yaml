@@ -110,7 +110,32 @@ jobs:
         # against a mocked transport. Every Drive call is patched at the
         # ``httpx.Client`` / ``httpx.MockTransport`` boundary so no real
         # Google endpoint is reached in CI (Phase 13 plan §7.5).
-        run: uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra connectors-ms365 --extra connectors-box --extra connectors-teams --extra connectors-google-workspace --extra office --extra mcp --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama
+        #
+        # ``browser`` is included so Phase 21-B (#506) browser core unit
+        # tests (``tests/unit/browser/test_core.py``) can ``importorskip``
+        # ``playwright`` and exercise the launch / fetch / extract paths
+        # against a mocked Playwright API, and the ``browser``-marked
+        # integration smoke test
+        # (``tests/integration/test_browser_core.py``) can drive a real
+        # Chromium against a localhost ``http.server`` fixture. The
+        # ``playwright install chromium`` step below provisions the
+        # binary; the cold-start guard (``tests/integration/test_cold_start.py``)
+        # still asserts ``playwright`` is never imported on the
+        # ``opshub --help`` path because
+        # :func:`opshub.browser.core.fetch_page` uses a deferred
+        # ``import playwright`` inside the function body (ADR-0037 §決定 (g)).
+        run: uv sync --locked --extra dev --extra connectors-github --extra connectors-slack --extra connectors-ms365 --extra connectors-box --extra connectors-teams --extra connectors-google-workspace --extra office --extra mcp --extra vector --extra llm-anthropic --extra llm-openai --extra llm-ollama --extra browser
+
+      - name: Install Chromium for Playwright
+        # ADR-0037 §決定 (g): the Chromium binary is an operator step,
+        # not a Python dependency. ``--with-deps`` pulls the OS-level
+        # shared libraries Chromium needs on ubuntu-24.04 so the
+        # ``browser``-marked integration smoke test can launch headless
+        # Chromium. The browser binary is provisioned into Playwright's
+        # own cache (outside uv's venv), so it is not covered by the uv
+        # cache above — the step is cheap enough (single Chromium build)
+        # to run unconditionally.
+        run: uv run playwright install chromium --with-deps
 
       - name: Ruff (lint)
         run: uv run ruff check

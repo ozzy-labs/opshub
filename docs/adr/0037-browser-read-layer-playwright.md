@@ -50,7 +50,11 @@ Phase 21 (epic #504) で **ブラウザ読み取り層を新設**する。本 AD
 - ブラウザがページを **レンダリングし終えた後の DOM** からテキストを抽出して `SourceObserved.body` に載せる (= Playwright を採る価値 = JS 描画後の本文が取れる)。
 - **char cap = 500K chars** を [ADR-0025](0025-office-document-content-extraction.md) §決定 (b) (抽出後テキスト長上限) と **同じ規律** で適用する。500K chars 超過時は head-truncation + 末尾注記。cap 値・override key (`max_extracted_chars` 相当) は ADR-0025 の既定を継承する (browser 専用に別 default を切らない)。
 - 抽出失敗 (navigation error / timeout / レンダリング失敗) は [ADR-0025](0025-office-document-content-extraction.md) §決定 (c) の fail-safe 規律に準じ、`OpsHubError` 系に変換した上で、connector 経路では fail-safe (`ConnectorSyncFailed` 系 / per-page スキップ) として扱う。char cap・抽出失敗 fail-safe の二点で ADR-0025 規律を共有することで「本文を持つ全 source が同じ cap / 同じ fail 規律に従う」不変条件を保つ。
-- **抽出方法 (rendered DOM → text の具体手段)** は 21-B (#506) で確定する。候補は `page.inner_text("body")` (Playwright 標準、軽量) と `markitdown` への HTML 経路 (ADR-0025 の既存抽出層と統一)。21-B で実測比較して確定し、本 ADR §決定 (d) に反映する (本項は「rendered DOM → text + 500K cap + fail-safe」という契約のみを pin し、内部手段は 21-B に委ねる)。
+- **抽出方法 (rendered DOM → text の具体手段) = `page.inner_text("body")` に確定 (21-B #506 決定)**。候補は `page.inner_text("body")` (Playwright 標準、軽量) と `markitdown` への HTML 経路 (ADR-0025 の既存抽出層と統一) の 2 つだったが、21-B で前者を採る。根拠:
+  - `inner_text("body")` は **レンダリング後の DOM の可視テキスト** をそのまま返す = 「JS 描画後の本文が取れる」という Playwright 採用価値 (§決定 (a)) を直接実現する。`markitdown` 経路は `page.content()` で取った静的 HTML を再パースするため、レンダリング後 DOM ではなく **HTML 構造** を読むことになり、SPA / 動的描画の本文取り込みという動機 (§Context) を損なう。
+  - `markitdown` 経路は browser 層を `[office]` extras の重量級コンバータに結合させる。browser 層は `[office]` から独立した `[browser]` extras であるべき (依存境界の単純化)。
+  - cap / fail-safe 規律 (上 2 項) は手段に依らず共有するため、`inner_text` 採用後も「本文を持つ全 source が同じ cap / 同じ fail 規律に従う」不変条件は保たれる (`max_chars` head-truncation は `opshub.core.text_limits.truncate_with_marker` を ADR-0025 の Office 抽出と共用)。
+  - 実装: [`opshub.browser.core.fetch_page`](../../src/opshub/browser/core.py) が `page.goto(url, wait_until="load", timeout=...)` → `page.title()` + `page.inner_text("body")` → 500K cap の順で組み立てる。timeout / navigation error は `BrowserFetchError` (= `ConnectorFailedError` サブクラス) に変換し、21-C connector の既存 fail-safe 経路がそのまま per-page スキップとして扱える。
 
 ### (e) MCP posture: 「read tool = ローカル DB のみ」不変条件を維持、ネットワークに出る tool は write-category
 
