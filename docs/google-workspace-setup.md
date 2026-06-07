@@ -283,8 +283,12 @@ Publishing で Internal 公開する。
 ### `403 fileNotExportable` (content_extraction = true 時のみ)
 
 `google_workspace_file` (catch-all 非 native) は `files.export` 不可。
-これは想定挙動で、metadata-only で persist される。`SourceObserved.body`
-が `None` のままになるが、抽出失敗としてではなく Drive の制約として扱う。
+これは想定挙動で、metadata-only path で持ち、`SourceObserved.body` は
+mapper が `body = summary` を substitute して persist する
+(epic [#470](https://github.com/ozzy-labs/opshub/issues/470) で `sources.body` NOT NULL 化、
+[ADR-0020](adr/0020-full-local-content-retention.md) §(d')、
+[ADR-0010](adr/0010-connector-contract.md) §不変条件 6)。
+抽出失敗としてではなく Drive の制約として扱うため、
 WARNING log にも出ない (`google_workspace_file` は最初から export を試みない)。
 
 ### `400 invalidToken` / `404 startPageToken expired` / `410 Gone`

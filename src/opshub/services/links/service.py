@@ -45,7 +45,7 @@ SQLAlchemy primitives + :mod:`opshub.core.errors` +
 :mod:`opshub.projections.links`. No LLM / SDK / pydantic-heavy
 imports at top level — the service is registered through
 ``opshub.services.__init__`` and pulled in by other services as the
-graph expansion path (Phase 8 D2 ``--expand-graph``) materialises.
+graph expansion path (Phase 8 / epic #470 で常時実行) materialises.
 
 Engine binding pattern
 ----------------------

@@ -285,7 +285,9 @@ def _build_body(raw: RawGmailMessage) -> str | None:
     * **Labels stanza** is dropped entirely when the message carries
       no labels (rare in practice — every inbound message gets at
       least ``UNREAD`` / ``CATEGORY_*``).
-    * **Both empty** → ``None`` (the projection writes ``NULL``).
+    * **Both empty** → ``None`` at this helper layer (the helper
+      substitutes ``summary`` downstream per epic #470 / ADR-0010
+      §不変条件 6, so the projection writes a non-empty string).
       The summary still carries the snippet, so the recognition
       surface remains populated.
     * **Truncation** happens at :data:`MAX_GMAIL_BODY_CHARS` and is

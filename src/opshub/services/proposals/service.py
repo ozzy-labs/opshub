@@ -1073,7 +1073,7 @@ class ProposalService:
     ) -> tuple[list[tuple[str, str]], list[tuple[str, str, str]]]:
         """Walk the knowledge graph 1-hop from the reply target.
 
-        ADR-0017 §決定 (f) ``--expand-graph`` semantics reused for
+        ADR-0017 §決定 (f) graph 1-hop 拡張 semantics reused for
         reply-draft generation. Returns two parallel lists:
 
         * ``context_source_refs`` — ``(entity_type, entity_id)``
@@ -1236,7 +1236,7 @@ class ProposalService:
         atomicity contract).
 
         ``context_source_refs`` is the Phase 10 step E2 field carrying
-        ``--expand-graph`` neighbours injected as ``<context_source>``
+        graph 1-hop 拡張 neighbours injected as ``<context_source>``
         blocks during reply_draft generation (ADR-0017 §決定 (b) Phase
         10 改訂). Default ``None`` keeps the Phase 6 generate path
         byte-identical: the event payload's default-empty list is what
