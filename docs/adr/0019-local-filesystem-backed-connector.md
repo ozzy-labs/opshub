@@ -1,7 +1,7 @@
 # 0019. Local-filesystem-backed Connector (box_drive / onedrive_drive)
 
-- Status: Accepted (revised 2026-05-31 for Phase 11 Sub-issue F1)
-- Date: 2026-05-23 (initial, box_drive only); 2026-05-31 (Phase 11 改訂: `content_extraction` opt-in 例外節 + onedrive_drive 汎化、ADR-0025 同時起票)
+- Status: Accepted (revised 2026-06-07 for epic #470 — drop inline `exclude_globs`)
+- Date: 2026-05-23 (initial, box_drive only); 2026-05-31 (Phase 11 改訂: `content_extraction` opt-in 例外節 + onedrive_drive 汎化、ADR-0025 同時起票); 2026-06-07 (epic #470 改訂: §決定 (g) inline `exclude_globs` 撤廃 + path-based exclusion SSOT を [ADR-0020 §(b)](0020-full-local-content-retention.md) `excludes.yaml` `paths:` に集約)
 - Deciders: ozzy
 
 ## Context
@@ -171,34 +171,29 @@ Phase 9.x 候補:
 - Windows native は opshub 全体の POSIX-only 前提と整合 (Phase 9 だけ Windows 対応すると compat surface が肥大化)
 - `core/platform.py` の cold-start budget は `__future__` / `pathlib` / `sys` のみ import で M6 guard 順守 (`time opshub --help` ≤ 300ms 維持)
 
-### (g) Excludes は `opshub.toml` inline (`[connectors.box_drive] exclude_globs`)、共通 `excludes.yaml` 機構化は Phase 9.x
+### (g) Excludes は shared `excludes.yaml` `paths:` selector (epic #470 で SSOT 確定)
 
-box_drive scanner は `exclude_globs: list[str]` を `opshub.toml` の `[connectors.box_drive]` セクションから inline で受け取る。例:
+epic [#470](https://github.com/ozzy-labs/opshub/issues/470) closeout で path-based exclusion の SSOT は [ADR-0020 §(b)](0020-full-local-content-retention.md) の `~/.config/opshub/excludes.yaml` `paths:` selector に集約された。box_drive / onedrive_drive scanner は `core.excludes.ExcludeRules.excludes_path()` を value object として呼び、`rel_path` (POSIX-form、root_path 相対) を fnmatch / gitignore-style パターンと照合する (`**/` prefix は optional 扱いで top-level + nested 両方を 1 パターンで cover)。
 
-```toml
-[connectors.box_drive]
-enabled = true
-root_path = "/mnt/b"
-exclude_globs = [
-  ".DS_Store",
-  "Thumbs.db",
-  "**/node_modules/**",
-  "**/.git/**",
-  "**/secrets/**",
-]
+```yaml
+# ~/.config/opshub/excludes.yaml
+paths:
+  - "**/.DS_Store"
+  - "Thumbs.db"
+  - "**/node_modules/**"
+  - "**/.git/**"
+  - "**/secrets/**"
 ```
 
-ADR-0005 §決定で言及されている `~/.config/opshub/excludes.yaml` の共通 excludes 機構は Phase 9 では実装しない。Phase 9.x で全 connector 横断 (Phase 7 Box の event filtering / Phase 9 box_drive の path filtering / Phase 7 Slack / MS365 等) のリファクタとして統合する。
+`opshub.toml` の `[connectors.box_drive]` / `[connectors.onedrive_drive]` セクションは `model_config = ConfigDict(extra="forbid")` を持ち、旧 inline `exclude_globs = [...]` key を残した config は `ValidationError` で fail-fast する (silent "no path filter applied" 退化を防ぐ design)。
 
-採用理由:
+採用理由 (epic #470 closeout 時点):
 
-- Phase 9 MVP では 1 connector 分の excludes で十分。共通機構を先に作ると 4 既存 connector の filter logic も同期して移行する必要があり、scope が膨らむ
-- `opshub.toml` inline は operator が「box_drive の excludes はどこ?」と探すコストが低い (config が 1 ファイルに集約)
-- Phase 9.x で `~/.config/opshub/excludes.yaml` を導入する際は、`opshub.toml` inline を deprecated にせず両 sources を merge する経路で migration 可能 (ADR-0005 と整合)
+- **SSOT 集約**: `excludes.yaml` は 4 selector (`channels` / `senders` / `repos` / `paths`) を横断する cross-connector SSOT で、path filter だけ 2 connector の TOML inline に置く design は operator にとって「どこで除外するか」の audit point が複数になる
+- **重複 logic 撤廃**: `BoxDriveScanner._is_excluded` (Phase 9 当時の inline 用) と `ExcludeRules.excludes_path` (Phase 10 ADR-0020 §(b) で導入された共通 value object) は同等の match logic を持っていたため、value object 1 本に collapse して `src/opshub/core/excludes.py` に集約した
+- **dual-read 不要**: pre-userbase posture (ADR-0011) により inline → shared への migration period は不要。`extra="forbid"` で fail-fast にすることで「inline key を書いたが反映されない」silent failure を防ぐ
 
-Phase 18 改訂: `[connectors.<name>] exclude_globs` の TOML 読込経路は [ADR-0032](0032-runtime-toml-config-loading.md) で実装される。
-
-epic [#470](https://github.com/ozzy-labs/opshub/issues/470) closeout (pre-userbase compat shim cleanup): inline `[connectors.box_drive] exclude_globs` / `[connectors.onedrive_drive] exclude_globs` の 2 Pydantic field と dual-read merger (`ExcludeRules.merged_with_paths`) と `BoxDriveScanner._is_excluded` の重複 logic を一括撤廃し、path-based exclusion の SSOT を [ADR-0020 §(b)](0020-full-local-content-retention.md) `~/.config/opshub/excludes.yaml` `paths:` selector に集約した。両 settings model は `model_config = ConfigDict(extra="forbid")` を持ち、旧 inline key を残した `opshub.toml` は `ValidationError` で fail-fast する。本節 §(g) の「inline 配置」表現は historical context として残し、現行 SSOT は §(g) ではなく ADR-0020 §(b)。
+Phase 9 当時の inline shape (`[connectors.box_drive] exclude_globs = [...]`) は epic #470 で完全撤廃された。historical record として `docs/upgrading.md` §Pre-userbase compat shim cleanup (epic #470) §Drop inline `exclude_globs` に移行手順を残置する (operator action = patterns を `excludes.yaml` `paths:` に move + TOML inline key を削除)。Phase 18 改訂で言及した「`[connectors.<name>] exclude_globs` の TOML 読込経路は [ADR-0032](0032-runtime-toml-config-loading.md) で実装される」も同 epic #470 で TOML inline 自体が消えたため historical 注記となる (ADR-0032 §既存 ADR との関係 §決定 (g) 行も epic #470 改訂で `root_path` / `content_extraction` のみ列挙する形に更新済)。
 
 ### (h) Operator precondition (`mountvol B:` + `wsl --shutdown`) は opshub 範囲外、`docs/box-drive-setup.md` に外出し
 
@@ -262,7 +257,7 @@ box_drive (Phase 9) と onedrive_drive (Phase 11 F4-b) は以下の契約を共�
 | identity | `rel_path` (root_path 相対パス、grep 可能、rename = 旧停止+新発火 MVP 制限) | §(c) |
 | diff detection | `sources.fingerprint = f"{size}:{mtime_ns}"` + in-memory dict 比較 | §(d) |
 | 削除追跡 | なし (Phase 11.x で `--stale` flag 候補) | §(e) |
-| excludes | `opshub.toml` inline (`[connectors.<name>] exclude_globs`) | §(g) |
+| excludes | shared `excludes.yaml` `paths:` selector ([ADR-0020 §(b)](0020-full-local-content-retention.md)、epic #470 で inline 撤廃) | §(g) |
 | operator precondition | OS setup (mount / install) は opshub 範囲外、setup docs に外出し | §(h) |
 | watch mode | Phase 9 / 11 MVP では scan-only、filewatch backend は Phase 11.x+ 候補 | §(i) |
 
@@ -306,7 +301,7 @@ source_type は ADR-0025 §決定 (d) の 3 種 (`word_document` / `excel_spread
 
 - **rule of three の中間段** — 2 vendor 目で共通基底を抽出すると、3 vendor 目の quirks (Dropbox の smart sync placeholder semantics / Google Drive の My Drive vs Shared Drives 分岐 root / iCloud Drive の Documents-only visibility) で抽象が破壊的に変わるリスクが高い
 - **Phase 11 scope を絞る** — Sub-issue F4-b で onedrive_drive を box_drive と並列の `connectors/onedrive_drive/` package として実装し、共通基底抽出は Phase 11.x または Phase 12+ で 3 vendor 目と同時に実施する
-- **コード重複は許容** — 2 vendor の scanner / mapper / settings が rel_path 識別 / fingerprint 計算 / exclude_globs / `content_extraction` フックを各々持つことは MVP 段階で許容する (本節 §(j-1) の共通契約が pattern として明文化されている以上、重複は構造的破綻ではない)
+- **コード重複は許容** — 2 vendor の scanner / mapper / settings が rel_path 識別 / fingerprint 計算 / shared `excludes.yaml` `paths:` delegate / `content_extraction` フックを各々持つことは MVP 段階で許容する (本節 §(j-1) の共通契約が pattern として明文化されている以上、重複は構造的破綻ではない、epic #470 で path-based exclusion は ADR-0020 §(b) value object 1 本に collapse 済)
 - **Phase 11 plan §3 F4 で確認済** — Phase 11 plan §3-F4-b 「box_drive を踏襲」記述と整合
 
 採用理由:
@@ -349,7 +344,7 @@ source_type は ADR-0025 §決定 (d) の 3 種 (`word_document` / `excel_spread
 1. **`open()` 禁止 invariant の test pin** — Phase 9 B1 PR で `unittest.mock.patch("builtins.open", side_effect=AssertionError("forbidden"))` を scan 全 path に適用する test を追加。scanner が誤って本文 read を導入した瞬間 CI が落ちる構造的 guard
 2. **CldAPI non-hydration contract test** — `tests/integration/test_box_drive_no_hydration.py` を `OPSHUB_BOX_DRIVE_TEST_ROOT` env opt-in で配置 (CI default は skip、real env でのみ実行)。Phase 9 完了後も持続検証
 3. **`docs/box-drive-setup.md` で operator setup を集約** — WSL2 (`mountvol`) / macOS (Box Drive install) / Linux native (代替案) を 1 ファイルにまとめ、`root_path` 不存在時の actionable error から link
-4. **`exclude_globs` で機密 path を operator が opt-out** — Phase 7 で確立した excludes 慣行を `opshub.toml` inline で踏襲。`secrets/` 等を含む path を operator が事前除外可能
+4. **shared `excludes.yaml` `paths:` で機密 path を operator が opt-out** — Phase 7 で確立した excludes 慣行を [ADR-0020 §(b)](0020-full-local-content-retention.md) の共通 SSOT で踏襲 (epic #470 で inline `exclude_globs` を撤廃)。`secrets/` 等を含む path を operator が事前除外可能
 5. **`opshub.toml` `[connectors.box_drive] enabled = false` default** — Phase 7 全 connector と同パターン、operator が明示 opt-in しない限り sync 経路に乗らない
 
 ## Alternatives Considered
@@ -407,7 +402,12 @@ scan 開始時の `sources` projection 全 row と walk 結果を symmetric diff
 - **(d) Diff detection via `sources.fingerprint`** — A2 PR (#192) で migration 0017 が `sources.fingerprint TEXT NULL` 列を追加することを `tests/integration/test_phase9_migrations.py` で pin (upgrade / downgrade / 既存 row の NULL 残置 / 他 connector の backward-compat)。`SourceObserved.fingerprint` field 追加は `tests/unit/domain/test_events_source.py` で pin (schema_version=1 据え置き + backward-compat)。`SourcesProjection` projector が `fingerprint=None` で NULL 書き込みすることを `tests/unit/projections/test_sources.py` で pin。`BoxDriveScanner.scan()` が prior_fingerprints と比較して変更ありのみ yield することは B1 PR (#191) の `tests/unit/connectors/box_drive/test_scanner.py::test_scanner_skips_unchanged_files` で pin。C1 closeout PR の `tests/integration/test_phase9_lifecycle.py::test_box_drive_lifecycle_2_pass_sync` が `sources.fingerprint` 列が `f"{size}:{mtime_ns}"` の形で永続化され Pass 2 の修正 file で値が更新されることを e2e で pin
 - **(e) 削除追跡なし** — C1 closeout PR の `tests/integration/test_phase9_lifecycle.py::test_box_drive_lifecycle_2_pass_sync` で 2-pass scan の 2 pass 目で file 削除を再現し、削除された file について `SourceObserved` が再発火しないこと + `sources` projection に prior row が残ること + `SourceDeleted` 系 event が発行されないことを pin
 - **(f) `root_path` platform-aware default** — B1 PR (#191) で `tests/unit/core/test_platform.py` で `detect_platform()` が WSL2 / macOS / linux / unsupported を正しく返すこと (`/proc/sys/kernel/osrelease` mock + `sys.platform` mock)、`box_drive_default_root_path()` が WSL2=`/mnt/b` / macOS=`~/Box` 展開 / Linux native=None を返すことを pin。B2 PR (#193) の `tests/unit/connectors/box_drive/test_connector.py::test_connector_fails_fast_when_no_platform_default` が Linux native で `ConfigError` を raise することを pin
-- **(g) Excludes は `opshub.toml` inline** — B2 PR (#193) で `BoxDriveConnectorSettings.exclude_globs` field 定義を `tests/unit/core/test_config.py` で pin (env var override + default empty)。`BoxDriveScanner` が exclude_globs を適用することを B1 PR (#191) の `tests/unit/connectors/box_drive/test_scanner.py::test_scanner_applies_exclude_globs` で pin (top-level + nested + gitignore-style `**/` prefix)
+- **(g) Excludes は shared `excludes.yaml` `paths:` selector (epic #470 改訂後)** — 旧 `BoxDriveConnectorSettings.exclude_globs` field と inline 適用 logic は #483 / #484 で撤廃済。surviving test 群:
+  - `tests/unit/connectors/box_drive/test_scanner.py:396 test_scanner_delegates_path_match_to_exclude_rules` — `BoxDriveScanner` が `core.excludes.ExcludeRules.excludes_path()` value object に delegate していること (重複 `_is_excluded` logic が消えていること) を pin
+  - `tests/unit/core/test_config.py:88 test_box_drive_connector_settings_rejects_inline_exclude_globs` — `[connectors.box_drive] exclude_globs = [...]` を残した `opshub.toml` が `model_config = ConfigDict(extra="forbid")` 経由で `ValidationError` を raise すること (fail-fast)
+  - `tests/unit/core/test_config.py:104 test_onedrive_drive_connector_settings_rejects_inline_exclude_globs` — onedrive_drive 側でも同等の reject 経路を pin
+
+  patterns 自体の match logic (top-level + nested + gitignore-style `**/` prefix) は ADR-0020 §(b) `ExcludeRules.excludes_path()` 側で pin される
 - **(h) Operator precondition は opshub 範囲外** — C1 closeout PR で `docs/box-drive-setup.md` が新設され WSL2 (`mountvol` 手順 + qiita 記事 link) / macOS (Box Drive install) / Linux native (代替案 = WSL2 / VM 経由) の手順を集約。`root_path` 不存在時の `ConfigError` は B1 PR (#191) の `tests/unit/connectors/box_drive/test_scanner.py::test_scanner_raises_config_error_when_root_missing` で pin (ConfigError message が `docs/box-drive-setup.md` を指すこと)
 - **(i) Watch mode は Phase 9.x 持ち越し** — Phase 9 MVP の test には watch mode / inotify / FSEvents / daemon 関連の test を **追加しない** ことが pin (test の不在自体が決定の reflection)。Phase 9.x で別 ADR / 別 PR で追加
 

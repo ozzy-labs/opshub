@@ -161,8 +161,10 @@ opshub 側で token を持たない (ADR-0019 §決定 (a))。opshub から見�
   hydration を防ぐため。
 - **Office 抽出は opt-in** (`content_extraction = true` 時のみ markitdown
   経路で `.docx`/`.xlsx`/`.pptx` を open、ADR-0019 §決定 (b'))。size cap
-  (50 MB) / text cap (500K chars) / 失敗時 fail-safe (`body=None`) は
-  ADR-0025 §決定 (b)/(c) で pin。
+  (50 MB) / text cap (500K chars) / 失敗時 fail-safe (内部
+  `ExtractResult.body=None`、ただし mapper は `body = summary` fallback で
+  projection は非空文字列 persist、epic #470 で `sources.body` 必須化、
+  ADR-0020 §(d')) は ADR-0025 §決定 (b)/(c) で pin。
 - **rename / move は「旧 path の停止 + 新 path での発火」として観測**
   される (ADR-0019 §決定 (c))。同一 file の history が rename で分断
   される MVP 制限。
