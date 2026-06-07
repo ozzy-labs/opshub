@@ -16,7 +16,8 @@ pattern、Phase 14 改訂 (m) で scope 拡張)。Phase 11 で導入した Teams
 ADR-0010 内に並立する。
 
 Phase 13 で 8 つ目の connector として追加され (Web API 経路)、Phase 14 で
-Gmail + Calendar を加えて opshub 全体で 10 connector 体制になった。
+Gmail + Calendar を加えて opshub 全体で 10 connector 体制になった
+(その後 Phase 21 で Playwright browser read 層の `web` connector を加えて 11 connector 体制、[ADR-0037](adr/0037-browser-read-layer-playwright.md))。
 Phase 10 で確立した本文ローカル保持 ([ADR-0020](adr/0020-full-local-content-retention.md))
 
 + 暗号化 ([ADR-0021](adr/0021-encryption-at-rest.md)) と同じ規律で

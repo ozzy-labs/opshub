@@ -11,7 +11,7 @@ opshub は Phase 10 (アシスタントエージェント・プラットフォ�
 opshub 本体が提供するもの:
 
 1. **operational memory (①コア)** — events / projections / connectors / recall / propose / brief / graph
-2. **MCP サーバ (口)** — `opshub mcp serve` (stdio)。エージェント host が ①コアを叩く経路。Phase 12 H1 で `search` (FTS5) と `propose.apply` (HITL idempotent) と既存 4 read tools の physical column ベース時間フィルタを追加し、Phase 18-C で `slack.demand.list` (Slack mention / DM demand digest、ADR-0033) を追加して計 18 tools (read 13 + write 5) を公開
+2. **MCP サーバ (口)** — `opshub mcp serve` (stdio)。エージェント host が ①コアを叩く経路。Phase 12 H1 で `search` (FTS5) と `propose.apply` (HITL idempotent) と既存 4 read tools の physical column ベース時間フィルタを追加し、Phase 18-C で `slack.demand.list` (Slack mention / DM demand digest、ADR-0033) を、Phase 21-D で `browser.fetch` (ad-hoc な Web ページ render、ネットワークに出るため write-category / HITL、ADR-0037 §決定 (e) + ADR-0022 §決定 (g)) を追加して計 **19 tools (read 13 + write 6)** を公開
 3. **Agent Skills (手順書)** — SKILL.md 標準。本 doc が catalog する **14 Skill** (Phase 12 H2-H5 で 9 新規 + Phase 12 H1 で rename 2 を含む)。`docs/skills/<name>/SKILL.md` を opshub SSOT、配信機構は Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地)
 4. **skill security scan** — `tools/skill_scan.py` (4 カテゴリ + frontmatter 隠し命令検出)、`tests/unit/skills/test_skill_specs.py` が 14 skills 全てに対して per-skill MCP dispatch pin + scan を実行
 
@@ -131,7 +131,7 @@ generate 時の同一 source open-proposal warning など自動 dedup 対策は�
 
 ## 6. MCP tool 依存マップ
 
-14 skills × 18 MCP tools (read 13 + write 5) のマトリクス。各 skill が呼び出す MCP tool を列挙。✓ = primary 経路、(✓) = 補助経路 (Step 2 以降の optional 呼び出し)。
+14 skills × 19 MCP tools (read 13 + write 6) のマトリクス。各 skill が呼び出す MCP tool を列挙。✓ = primary 経路、(✓) = 補助経路 (Step 2 以降の optional 呼び出し)。`browser.fetch` (Phase 21-D、write-category) は 14 skills のいずれからも primary 経路として呼ばれない (操作系 Phase で `research` skill 組込みを再訪、ADR-0037 §Non-goals) ため §6.2 表の最終行で「呼ばれない」を明示する。
 
 ### 6.1 Read tools (13)
 
@@ -151,7 +151,7 @@ generate 時の同一 source open-proposal warning など自動 dedup 対策は�
 | `search` (FTS5、Phase 12 H1) |  |  |  |  | ✓ |  | ✓ |  |  |  |  |  | (✓) |  |
 | `slack.demand.list` (Phase 18-C) | ✓ | ✓ |  |  |  |  |  |  |  |  |  | (✓) |  |  |
 
-### 6.2 Write tools (5、HITL)
+### 6.2 Write tools (6、HITL)
 
 | MCP tool | personal-brief | next-actions | reply-draft | pr-review | find-document | meeting-prep | research | external-brief | decision-rationale | handoff-draft | announcement-draft | inbox-triage | source-extract | meeting-followup |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -160,8 +160,9 @@ generate 時の同一 source open-proposal warning など自動 dedup 対策は�
 | `connector.sync` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `propose.generate` |  |  | ✓ (`reply_to_source_id`) |  |  |  |  |  |  |  |  | ✓ (`mode=inbox_triage`) | ✓ (`mode=source_extract`) | ✓ (`mode=meeting_followup`) |
 | `propose.apply` (Phase 12 H1) |  |  | ✓ (HITL、idempotent) |  |  |  |  |  |  |  |  | ✓ (HITL) | ✓ (HITL) | ✓ (HITL) |
+| `browser.fetch` (Phase 21-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 
-`inbox.add` と `connector.sync` は 14 skills のいずれからも primary 経路として呼ばれない (host LLM の自律判断で呼ぶ余地は残す)。`embeddings.find_duplicates` も同様 (現状は CLI / operator が直接叩く用途)。
+`inbox.add` と `connector.sync` は 14 skills のいずれからも primary 経路として呼ばれない (host LLM の自律判断で呼ぶ余地は残す)。`embeddings.find_duplicates` も同様 (現状は CLI / operator が直接叩く用途)。`browser.fetch` (Phase 21-D、ADR-0037 §決定 (e)) も 14 skills のいずれからも呼ばれない — ad-hoc な Web ページ render は **ネットワークに egress する write-category tool** (HITL per call、`connector.sync` と同 bucket、`readOnlyHint=false` / `openWorldHint=true`) であり、durable な取り込みは Phase 21-C `web` connector の責務。`research` skill への組込みは操作系 (click / fill / submit) Phase とまとめて再訪する (ADR-0037 §Non-goals、14 skill 体制 / SKILL.md は Phase 21 で不変)。
 
 ### 6.3 Phase 11 / Phase 13 / Phase 14 source_type 列挙
 
@@ -225,6 +226,24 @@ Phase 20 ([ADR-0030](adr/0030-slack-thread-reply-ingestion.md) revised + landed�
 
 skill 側で source_type 別の分岐 logic を追加する必要はなく、`sources.body` ベースの既存経路がそのまま機能する (Gmail / Outlook の message 単位ingest と symmetric な構造を保つ、§6.3 参照)。
 
+### 6.7 `browser.fetch` (Phase 21-D、ad-hoc Web ページ read、write-category)
+
+Phase 21 ([epic #504](https://github.com/ozzy-labs/opshub/issues/504)、[ADR-0037](adr/0037-browser-read-layer-playwright.md)) で Playwright ベースの **browser read 層** を新設したのに合わせ、アシスタントが ad-hoc に Web ページを読む MCP tool `browser.fetch` を Phase 21-D ([#508](https://github.com/ozzy-labs/opshub/issues/508)、ADR-0022 §決定 (g)) で追加した。
+
+| 項目 | 内容 |
+|---|---|
+| category | **write** (`WriteCategory.BROWSER_FETCH`) — ネットワークに egress するため read tool ではない |
+| annotation | `readOnlyHint=false` / `destructiveHint=true` / `idempotentHint=false` / `openWorldHint=true` (`connector.sync` と同パターン) |
+| 入力 | `url` のみ (required、`http` / `https` のみ許容。`file` / `data` / `ftp` / `javascript` は handler 層で `OpsHubError` 拒否) |
+| 戻り値 | render 後の DOM text snippet (200 char truncate、read tool 群と同 cap) + `<title>` + `text_chars` (full 長) + `truncated` (browser core の 500K cap hit) + `persisted: false` |
+| persist | **なし** — durable な `SourceObserved` 取り込みは Phase 21-C `web` connector の責務。本 tool は event log / projection に何も書かない |
+| 依存 | `[browser]` extras + `playwright install chromium` (binary 不在時は `ConfigError` で install コマンドを誘導、ADR-0037 §決定 (g)) |
+| async 境界 | MCP の async handler が `asyncio.to_thread` 経由で sync browser core (`opshub.browser.core.fetch_page`) を呼ぶ (Playwright sync API は asyncio loop 内で直接呼べず raise する、ADR-0037 §決定 (h)) |
+
+**write 分類の根拠** = 「read tool = ローカル DB のみ参照」不変条件の維持 (ADR-0022 §決定 (g))。本 tool は data を返すだけで local state を変えないが、(1) 外部ネットワークに egress し remote 側の rate limit / audit log に痕跡を残す観測可能な副作用を持ち (`connector.sync` の write 分類と同論理)、(2) 取得した Web 本文が indirect prompt injection の運搬路になりうるため auto-approve せず host に人確認 (HITL per call) させる。read tool 群 (`recall.search` / `search` / `task.list` 等) は引き続きローカル SQLite のみを参照しネットワークに出ない (§6.1 表)。
+
+14 skills のいずれもこの tool を primary 経路として呼ばない (§6.2 表の最終行)。`research` skill への組込みは操作系 (click / fill / submit) Phase とまとめて再訪する (ADR-0037 §Non-goals)。セットアップは [`docs/mcp-setup.md`](mcp-setup.md) §3、トラブルシュート (chromium 未 install / headless 切替 / timeout) は [`docs/troubleshooting.md`](troubleshooting.md) §3.13 を参照。
+
 ## 7. できること / できないこと
 
 ### 7.1 できること
@@ -246,6 +265,9 @@ skill 側で source_type 別の分岐 logic を追加する必要はなく、`so
   - **Gmail 本文** (`gmail_message`、Gmail API v1 `users.messages.get(format=full)` 経由、text/plain 優先 → text/html 生保持、markitdown なし、添付 retain なし、`[Labels: ...]` prepend、message 単位 = thread 単位ではなく threadId は field 保持。[Google Workspace setup](google-workspace-setup.md) §Gmail 節参照)
   - **Google Calendar 本文** (`google_calendar`、Calendar API v3 `events.list(syncToken=...)` 経由、master event only + RRULE field 保持、override は別 record として emit + body に back-pointer、summary = `start_iso - end_iso (N attendees)`、attendee email list / 議題 / 会議室は body に追記。[Google Workspace setup](google-workspace-setup.md) §Calendar 節参照)
   - Gmail 添付 / Calendar 添付の本文抽出は Phase 15+ で markitdown 経路追加 (ADR-0025 拡張)
+- Phase 21 で追加された **ブラウザレンダリングを要する Web ページ本文**をアシスタントの素材として使う ([ADR-0037](adr/0037-browser-read-layer-playwright.md)、Playwright browser read 層):
+  - **Web ページ本文** (`web_page`、Phase 21-C `web` connector。operator が `[connectors.web] pages` に明示登録した URL のみ、headless Chromium で render 後の DOM text を抽出 → `sources.body` に persist。crawler ではない = リンク追跡 / sitemap 巡回なし、ADR-0010 §Phase 21 改訂 (n))。14 skills 全てが `recall.search` / `search` / `source.list` / `source.get` 経由で透過的に hit する
+  - **ad-hoc な Web ページ render** (`browser.fetch` MCP tool、Phase 21-D。durable 取り込みを伴わない 1 回限りの read。**ネットワークに egress する write-category tool** で HITL per call、§6.7 参照)。現状 14 skills のいずれからも primary 経路として呼ばれず、`research` skill 組込みは操作系 Phase で再訪する
 - Phase 12 で追加された **アシスタントらしいユースケース** に対応 (5 → 14 skills 拡張):
   - 「会議準備 / 会議後フォロー」(`meeting-prep` ↔ `meeting-followup`)
   - 「トピック横断調査」(`research`、recall + FTS5 + graph 拡張 + brief 統合)
@@ -258,6 +280,8 @@ skill 側で source_type 別の分岐 logic を追加する必要はなく、`so
 ### 7.2 できないこと (構造的な禁止)
 
 - **外部 SaaS への書き戻し** — Slack / Box / GitHub / MS365 / Teams に返信送信 / コメント投稿 / ファイル upload しない (ADR-0010 §禁止事項 7 + Phase 10 Sub E + Phase 11/12 H6 e2e test の経路非存在 pin)
+- **ブラウザ操作系 (click / fill / submit / form 送信)** — Phase 21 の browser read 層は **read 専用** (ページを開いて本文を取るだけ)。操作系は opshub 初の「外部への書き込み」であり、HITL 承認単位の設計 / Web ページ由来 prompt injection 対策 / ADR-0010 §禁止事項 7 (write-back 禁止) との整理という 3 前提が揃うまで実装しない (ADR-0037 §決定 (f) で後続 Phase に defer)。read 層は操作系 API (`page.click` / `page.fill` / `page.set_input_files` 等) を呼ぶ code path を持たないことで構造的に「操作経路の不在」を保証する
+- **Web crawler (リンク追跡 / sitemap 巡回)** — `web` connector は operator が `[connectors.web] pages` に明示登録した URL のみ取得し、取得したページ内の `<a href>` を辿らない (ADR-0010 §Phase 21 改訂 (n)、形 A 能動性抑制の自然延長)
 - **能動的な push / 通知** — 「3 時に reminder 送る」「inbox を 1 時間ごとにチェック」のような常駐 runtime は持たない (ADR-0004 §(a) 形A、Phase 12 でも継続)
 - **LLM 推論の opshub 内蔵** — opshub は推論ループを実行しない。LLM 呼び出し (Anthropic / OpenAI / Ollama) は `opshub propose` / `opshub brief` のようなコマンド経路でユーザーが明示的に起動したときのみ発生 (ADR-0015)
 - **auto-apply** — `opshub propose apply` も `propose.apply` MCP tool も必ず人が叩く (ADR-0016 §決定 (c))。`propose.apply` は idempotent (2 回目は `{ok:true, already_applied:true}`) だが、最初の apply は user 確認必須

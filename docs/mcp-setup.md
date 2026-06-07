@@ -77,7 +77,7 @@ opshub mcp tools -f json   # JSON form (matches the MCP annotations)
 
 The output reflects the policy-as-data registry in `src/opshub/mcp/_registry.py`. Read tools advertise `readOnlyHint=true`; write tools advertise `readOnlyHint=false` + `destructiveHint=true`. Hosts that honour the hints (Claude Code 等) will auto-approve reads and require human confirmation for writes (ADR-0022 §(c)).
 
-Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1 + Phase 18-C):
+Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1 + Phase 18-C + Phase 21-D = **19 tools, 13 read + 6 write**):
 
 | Kind  | Name                          | Purpose                                                          |
 | ----- | ----------------------------- | ---------------------------------------------------------------- |
@@ -99,6 +99,7 @@ Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1 + Phase 18-C
 | write | `connector.sync`              | Trigger a registered connector's sync                             |
 | write | `propose.generate`            | Generate next-action / reply-draft candidates (HITL apply)        |
 | write | `propose.apply`               | Apply a proposal candidate (HITL, idempotent, Phase 12 H1)        |
+| write | `browser.fetch`               | Render a Web page with headless Chromium, return extracted text + title (HITL, network egress, no persist, Phase 21-D, ADR-0037) |
 
 Step 1 widening (post Phase 10) added the 7 new read tools and the HITL write `propose.generate`. Phase 12 H1 (ADR-0022 改訂 §決定 (f)) added 4 new MCP tools / arguments:
 
@@ -110,6 +111,10 @@ Step 1 widening (post Phase 10) added the 7 new read tools and the HITL write `p
 Phase 18-C ([ADR-0033 §決定 (c)](adr/0033-slack-mention-demand-digest.md), `ReadCategory.SLACK_DEMAND_LIST`) added one new read tool:
 
 * **`slack.demand.list` (read, Phase 18-C)** — list rows from the Phase 18-B `slack_demand_digest` projection, optionally filtered by `types` (channel kinds `im` / `mpim` / `private` / `public`), `demand_kinds` (`mention` / `dm` / `mpim`), and `since_ts` (Slack epoch lower bound). Read-only over local SQLite — no Slack API round-trip; the projection consumes already-stored `SourceObserved` events. Order is fixed at `last_demand_desc` (newest first); the `order` argument is reserved for forward compatibility. Used by `next-actions` (priority signal), `personal-brief` (period summary), and `inbox-triage` (auxiliary priority).
+
+Phase 21-D ([ADR-0037 §決定 (e)](adr/0037-browser-read-layer-playwright.md) + [ADR-0022 §決定 (g)](adr/0022-mcp-server-surface.md), `WriteCategory.BROWSER_FETCH`) added one new **write** tool, bringing the surface to 19 tools (13 read + 6 write):
+
+* **`browser.fetch` (write / HITL, Phase 21-D)** — render an `http` / `https` `url` with headless Chromium (the Playwright browser read layer, [ADR-0037](adr/0037-browser-read-layer-playwright.md)) and return the extracted post-render DOM text (200-char snippet, secret-redacted) plus the page `<title>`, `text_chars` (full length), `truncated` (browser core's 500K cap hit) and `persisted: false`. **Classified write-category even though it returns data**: the call **egresses the public network**, which the "read tool = local SQLite only" invariant reserves for the same HITL bucket as `connector.sync` (`readOnlyHint=false` / `destructiveHint=true` / `openWorldHint=true`). Nothing is persisted — durable ingestion is the `web` connector's job (`opshub web sync`). Requires the `browser` extra plus a one-time `playwright install chromium`; a `ConfigError` names the install command when Chromium is missing. The async MCP handler bridges to the sync browser core via `asyncio.to_thread` (Playwright's sync API cannot run inside the asyncio loop, ADR-0037 §決定 (h)). No assistant skill calls it as a primary path yet (the `research`-skill wiring is deferred to the operations phase, ADR-0037 §Non-goals).
 
 Phase 12 H1 also unified the original 5 skills (`personal-brief`, `next-actions`, `reply-draft`, `pr-review`, `find-document`) on the MCP surface — they call MCP tools directly instead of falling back to the CLI shell. Phase 12 H2-H5 added 9 new skills on top (see `docs/assistant-agent.md` for the 14-skill catalog).
 

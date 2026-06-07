@@ -210,6 +210,7 @@ opshub google_workspace auth set            # Phase 14: Google OAuth paste-code,
 opshub google_workspace sync                # Phase 13: Drive API v3 changes.list cursor + invalidated-token fallback (Workspace export → markitdown when content_extraction = true)
 opshub google_mail sync                     # Phase 14: Gmail API v1 users.history.list delta + 7-day TTL fallback (message unit, Outlook-symmetric body extraction)
 opshub google_calendar sync                 # Phase 14: Calendar API v3 events.list(syncToken=...) + 410 GONE fallback (master event only + override separate record, MS365 Calendar-symmetric)
+opshub web sync                             # Phase 21: render [connectors.web] pages with headless Chromium, persist web_page sources (no auth; run 'playwright install chromium' once; SHA-256 fingerprint change detection — ADR-0037)
 opshub connectors                                 # show registered connectors
 
 # Workspace + projections
@@ -308,6 +309,7 @@ guarantees.
 | `connectors-teams` | Microsoft Teams connector (Phase 11, msal + httpx) | Small |
 | `connectors-google-workspace` | Google Workspace connector (Phase 13, httpx). Pair with `[office]` extras to enable `content_extraction = true` and Workspace export → markitdown body retention for `google_doc` / `google_slides` / `google_sheets` | Small |
 | `office` | Office document content extraction (Phase 11, ADR-0025). Pulls `markitdown` with the `[docx,xlsx,pptx]` sub-extras (i.e. `mammoth` / `openpyxl` / `python-pptx`) so only the three Office sub-formats opshub supports are installed | Small |
+| `browser` | Playwright browser read layer (Phase 21, ADR-0037). Pulls `playwright>=1.50` for the `web` connector + the MCP `browser.fetch` tool. Run `playwright install chromium` once after installing (Chromium binary is not bundled; an absent binary fails with a `ConfigError` naming the install command) | Small (the Chromium binary is fetched separately) |
 | `secrets` | OS keyring backend | Small |
 | `encryption` | SQLCipher-backed at-rest encryption (Phase 10, ADR-0021) | Small |
 | `mcp` | MCP server SDK for `opshub mcp serve` (Phase 10, ADR-0022) | Small |
