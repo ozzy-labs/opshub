@@ -107,6 +107,165 @@ def test_item_enqueued_allows_null_source_ref(engine: Engine) -> None:
     assert row["source_ref"] is None
 
 
+# ---- ItemEnqueued idempotency (issue #522) --------------------------------
+
+
+def test_item_enqueued_dedups_by_source_ref(engine: Engine) -> None:
+    """Re-observing the same source_ref keeps a single row (first wins).
+
+    ``SourceService.observe`` mints a fresh ULID per re-observation, so
+    the second :class:`ItemEnqueued` carries a different ``aggregate_id``
+    but the same ``source_ref``. ``ON CONFLICT(source_ref) DO NOTHING``
+    must drop it rather than inserting a duplicate inbox row.
+    """
+    projection = InboxProjection()
+    t0 = datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(hours=1)
+    first = ItemEnqueued(
+        aggregate_id=new_ulid(),
+        occurred_at=t0,
+        recorded_at=t0,
+        actor="test",
+        summary="first observation",
+        source_ref="github:owner/repo#42",
+    )
+    second = ItemEnqueued(
+        aggregate_id=new_ulid(),
+        occurred_at=t1,
+        recorded_at=t1,
+        actor="test",
+        summary="second observation (edited title)",
+        source_ref="github:owner/repo#42",
+    )
+
+    with engine.begin() as conn:
+        projection.apply(conn, first)
+        projection.apply(conn, second)
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(inbox_items_table)).mappings().all()
+    assert len(rows) == 1, "re-observation must not duplicate the inbox row"
+    row = rows[0]
+    # First-observation wins: the surviving row keeps the first event's
+    # id / summary / timestamps; the second observation is a no-op.
+    assert row["id"] == first.aggregate_id
+    assert row["summary"] == "first observation"
+    assert row["created_at"] == _expected_storage(t0)
+    assert row["updated_at"] == _expected_storage(t0)
+
+
+def test_re_observe_after_triage_does_not_reopen(engine: Engine) -> None:
+    """A re-observation must not re-open an already-triaged source.
+
+    Once an item is triaged, ``DO NOTHING`` leaves the resolved row
+    untouched on the next observation — a resolved source stays
+    resolved (issue #522 default).
+    """
+    projection = InboxProjection()
+    t0 = datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(minutes=2)
+    t2 = t0 + timedelta(hours=1)
+    item_id = new_ulid()
+    enqueued = ItemEnqueued(
+        aggregate_id=item_id,
+        occurred_at=t0,
+        recorded_at=t0,
+        actor="test",
+        summary="to triage",
+        source_ref="slack:C123:p1",
+    )
+    triaged = ItemTriaged(
+        aggregate_id=item_id,
+        occurred_at=t1,
+        recorded_at=t1,
+        actor="test",
+        disposition="to_task",
+        target_id=new_ulid(),
+    )
+    # A later re-observation of the same source: new ULID, same source_ref.
+    re_observed = ItemEnqueued(
+        aggregate_id=new_ulid(),
+        occurred_at=t2,
+        recorded_at=t2,
+        actor="test",
+        summary="re-observed after triage",
+        source_ref="slack:C123:p1",
+    )
+
+    with engine.begin() as conn:
+        projection.apply(conn, enqueued)
+        projection.apply(conn, triaged)
+        projection.apply(conn, re_observed)
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(inbox_items_table)).mappings().all()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["id"] == item_id
+    assert row["state"] == "triaged_to_task", "re-observation must not re-open"
+    assert row["summary"] == "to triage"
+
+
+def test_null_source_ref_rows_are_not_deduped(engine: Engine) -> None:
+    """Multiple ``source_ref IS NULL`` rows insert unconditionally.
+
+    The partial unique index excludes NULL source_refs, so manual /
+    source-less enqueues keep one-row-per-event semantics.
+    """
+    projection = InboxProjection()
+    t0 = datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC)
+
+    with engine.begin() as conn:
+        for i in range(3):
+            event = ItemEnqueued(
+                aggregate_id=new_ulid(),
+                occurred_at=t0 + timedelta(minutes=i),
+                recorded_at=t0 + timedelta(minutes=i),
+                actor="test",
+                summary=f"manual capture {i}",
+            )
+            projection.apply(conn, event)
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(inbox_items_table)).all()
+    assert len(rows) == 3, "NULL source_ref rows must not be deduped"
+
+
+def test_dedup_is_deterministic_across_replay(engine: Engine) -> None:
+    """Replaying the same event stream twice yields the identical row.
+
+    Pins rebuild determinism: ``reset`` + replay reproduces the single
+    first-wins row regardless of how many duplicate observations exist.
+    """
+    projection = InboxProjection()
+    t0 = datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC)
+    stream = [
+        ItemEnqueued(
+            aggregate_id=new_ulid(),
+            occurred_at=t0 + timedelta(minutes=i),
+            recorded_at=t0 + timedelta(minutes=i),
+            actor="test",
+            summary=f"observation {i}",
+            source_ref="web:https://example.com/x",
+        )
+        for i in range(4)
+    ]
+
+    def _replay() -> list[dict[str, object]]:
+        with engine.begin() as conn:
+            projection.reset(conn)
+            for event in stream:
+                projection.apply(conn, event)
+        with engine.connect() as conn:
+            return [dict(r) for r in conn.execute(select(inbox_items_table)).mappings().all()]
+
+    first_pass = _replay()
+    second_pass = _replay()
+    assert len(first_pass) == 1
+    assert first_pass == second_pass
+    assert first_pass[0]["id"] == stream[0].aggregate_id
+
+
 # ---- ItemTriaged → to_task / decision / discard ---------------------------
 
 
