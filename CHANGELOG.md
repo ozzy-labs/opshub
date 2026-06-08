@@ -5,6 +5,22 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1](https://github.com/ozzy-labs/opshub/compare/v0.5.0...v0.5.1) (2026-06-08)
+
+
+### Added
+
+* **cli:** add opshub slack cursor show/reset/backfill + Phase 22 closeout (Phase 22-E, epic [#516](https://github.com/ozzy-labs/opshub/issues/516)) ([#528](https://github.com/ozzy-labs/opshub/issues/528)) ([79b7bec](https://github.com/ozzy-labs/opshub/commit/79b7bec247cf97f60a4a450650508fec4746963f))
+* **connectors:** add backfill (low-water) axis to Slack cursor schema (Phase 22-B, epic [#516](https://github.com/ozzy-labs/opshub/issues/516)) ([#525](https://github.com/ozzy-labs/opshub/issues/525)) ([737b478](https://github.com/ozzy-labs/opshub/commit/737b4780379604c0c40d2c8aabb48e65e48a0ac6))
+* **connectors:** add bounded-window (latest) fetch to SlackFetcher (Phase 22-C, epic [#516](https://github.com/ozzy-labs/opshub/issues/516)) ([#526](https://github.com/ozzy-labs/opshub/issues/526)) ([4d36c02](https://github.com/ozzy-labs/opshub/commit/4d36c02345922f9a50aa1586c3f41b71c406b8ed))
+* **connectors:** auto gap-backfill on Slack floor lowering (Phase 22-D, epic [#516](https://github.com/ozzy-labs/opshub/issues/516)) ([#527](https://github.com/ozzy-labs/opshub/issues/527)) ([c240f84](https://github.com/ozzy-labs/opshub/commit/c240f84b0de79bc9d0bc059bff2496de764e7394))
+* **inbox:** dedup ItemEnqueued by source_ref (idempotent re-observation) ([#529](https://github.com/ozzy-labs/opshub/issues/529)) ([847aa8b](https://github.com/ozzy-labs/opshub/commit/847aa8bb760c00eaef7972de703f13fa1568b0c5))
+
+
+### Documentation
+
+* ADR-0038 Slack sync gap backfill + correct broken rebuild workaround (Phase 22-A, epic [#516](https://github.com/ozzy-labs/opshub/issues/516)) ([#523](https://github.com/ozzy-labs/opshub/issues/523)) ([4dd60db](https://github.com/ozzy-labs/opshub/commit/4dd60dbe53374b0203bde6d074f12e33bdb4ad84))
+
 ## [0.5.0](https://github.com/ozzy-labs/opshub/compare/v0.4.1...v0.5.0) (2026-06-07)
 
 
