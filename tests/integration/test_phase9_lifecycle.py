@@ -369,5 +369,12 @@ def test_box_drive_lifecycle_2_pass_sync(
     expected_d_fp = f"{len('new file')}:{mtime_d_pass2}"
     assert d_row_pass2["fingerprint"] == expected_d_fp, d_row_pass2
 
-    # Inbox: 3 (Pass 1) + 2 (Pass 2) = 5 total enqueues.
-    assert _row_count(db_path, "inbox_items") == 5
+    # Inbox dedups on source_ref (issue #522). Pass 1 enqueues 3 rows
+    # (a.txt, sub/b.md, c.txt). Pass 2 re-observes ``a.txt`` (modified
+    # fingerprint) and adds ``d.md``: the ``a.txt`` re-observation shares
+    # ``source_ref`` with Pass 1 so ON CONFLICT(source_ref) DO NOTHING
+    # drops it, while ``d.md`` is a fresh source_ref. So Pass 2 adds only
+    # 1 inbox row → 3 + 1 = 4. (The issue #522 default: a fingerprint-
+    # driven re-observation does NOT re-surface an item in the inbox; a
+    # "re-triage this edited file" workflow would be a separate signal.)
+    assert _row_count(db_path, "inbox_items") == 4

@@ -121,6 +121,52 @@ def test_events_table_columns(tmp_path: Path) -> None:
         engine.dispose()
 
 
+def test_inbox_items_source_ref_partial_unique_index(tmp_path: Path) -> None:
+    """Migration 0031 enforces "one inbox row per non-NULL source_ref".
+
+    Two rows with the same ``source_ref`` must violate the partial unique
+    index ``uq_inbox_items_source_ref`` (issue #522); rows with
+    ``source_ref IS NULL`` are exempt and may repeat freely.
+    """
+    db_path = tmp_path / "inbox_source_ref.sqlite"
+    cfg = _make_alembic_config(db_path)
+    command.upgrade(cfg, "head")
+
+    engine = create_engine_for_sqlite(db_path)
+
+    def _insert(item_id: str, source_ref: str | None) -> None:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO inbox_items "
+                    "(id, summary, source_ref, state, created_at, updated_at) "
+                    "VALUES (:id, :summary, :source_ref, 'pending', :ts, :ts)"
+                ),
+                {
+                    "id": item_id,
+                    "summary": "row",
+                    "source_ref": source_ref,
+                    "ts": datetime.now(UTC),
+                },
+            )
+
+    try:
+        index_names = {ix["name"] for ix in inspect(engine).get_indexes("inbox_items")}
+        assert "uq_inbox_items_source_ref" in index_names
+
+        # First non-NULL source_ref inserts fine.
+        _insert("01H000000000000000000000A", "github:owner/repo#1")
+        # Second row with the same source_ref violates the partial unique index.
+        with pytest.raises(IntegrityError):
+            _insert("01H000000000000000000000B", "github:owner/repo#1")
+
+        # NULL source_ref rows are exempt — multiple are allowed.
+        _insert("01H000000000000000000000C", None)
+        _insert("01H000000000000000000000D", None)
+    finally:
+        engine.dispose()
+
+
 def test_embeddings_unique_constraint(tmp_path: Path) -> None:
     """Inserting two rows with the same (entity, model) tuple raises IntegrityError.
 

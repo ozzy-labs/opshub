@@ -1254,8 +1254,8 @@ practice, all 6 graph-aware assistant skill SSOTs
 source-extract,research,external-brief}/SKILL.md`) explicitly
 passed `expand_graph: true`, and `cli/_wiring.py` always supplied
 a `LinkService` — the `expand_graph=True + link_service=None`
-`ConfigError` dead-branch never fired in production. Sub-issue
-#472 drops the entire opt-in surface:
+`ConfigError` dead-branch never fired in production.
+Sub-issue #472 drops the entire opt-in surface:
 
 - **Service `generate` / `generate_reply_draft`** no longer accept
   an `expand_graph: bool` keyword; graph 1-hop expansion runs
@@ -1327,6 +1327,7 @@ persistence layer (`SqlAlchemyEventStore._decode`) always reached for
 - **One ADR.** [ADR-0002 §Decision 5](adr/0002-event-sourced-architecture.md)
   records the `AllEvent`-only consolidation and the rationale for
   removing the per-phase aliases.
+
 ### `sources.body NOT NULL` (PR [#486](https://github.com/ozzy-labs/opshub/pull/486))
 
 [ADR-0020 §(d')](adr/0020-full-local-content-retention.md) promotes
@@ -1510,6 +1511,30 @@ No assistant skill calls `browser.fetch` as a primary path yet; the `research`-s
 - **New config sections** `[browser]` (shared) and `[connectors.web]` (web connector). Both opt-in; absent config means the layer never runs.
 - **MCP surface 18 → 19 tools = 13 read + 6 write** (the new write tool `browser.fetch`).
 - **CI** runs the `browser` integration tests (`@pytest.mark.browser`) against a localhost `http.server` fixture with a real Chromium provisioned by `playwright install chromium` — no external network egress from CI (epic #504 test plan).
+
+## Inbox idempotency (issue #522): one inbox row per `source_ref`
+
+The `inbox` projection now **deduplicates `ItemEnqueued` by `source_ref`**. `SourceService.observe` appends a fresh `ItemEnqueued` event (new ULID) on *every* re-observation of an external item (ADR-0002 §"every observation is a new event"); previously each event inserted a new inbox row, so a cursor rewind / reset / backfill (epic #516) or a fingerprint-driven re-observation (`box_drive` / `web`) could multiply inbox rows for one source — the issue #339 cascade, re-instantiated.
+
+### Behavioural change (all connectors)
+
+A re-observed or edited source **no longer re-surfaces in the inbox**. The reducer now does `INSERT ... ON CONFLICT(source_ref) DO NOTHING` against a new partial unique index `uq_inbox_items_source_ref` (`WHERE source_ref IS NOT NULL`):
+
+- **First-observation wins.** The first inbox row for a `source_ref` survives; later observations are dropped. Because `iter_all` replays in `(recorded_at, id)` order, the surviving row is deterministic across rebuilds.
+- **Triaged items stay resolved.** Re-observing a source whose inbox item was already triaged (`to_task` / `decision` / `discard`) does **not** re-open it. A "re-triage this edited source" workflow, if ever wanted, is a separate signal — not a side effect of dedup.
+- **`source_ref IS NULL` is exempt.** Manual / source-less enqueues (`opshub inbox add` etc.) carry no natural key, fall outside the partial index, and keep their historical one-row-per-event behaviour.
+
+### Migration `0031_add_inbox_items_source_ref_unique_index`
+
+`opshub db migrate` creates the partial unique index. A pre-existing database may already hold duplicate `source_ref` rows minted before this revision; the migration **deletes the duplicates first**, keeping the smallest `id` per `source_ref` (ULID-monotonic ≈ first observation) so the index can be created.
+
+The kept row is a best-effort proxy. For the canonical `(recorded_at, id)` first-wins row, follow up with:
+
+```bash
+opshub projections rebuild
+```
+
+The event log is untouched (every historic `ItemEnqueued` is preserved); the rebuild replays through the new `DO NOTHING` reducer to land the deterministic result. `downgrade` drops the index only — deleted duplicate rows are not restored (rebuild re-materialises them).
 
 ## Phase 22: Slack sync gap backfill (floor 引き下げ時の自動取り直し)
 

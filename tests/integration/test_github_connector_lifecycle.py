@@ -234,9 +234,10 @@ def test_second_sync_with_same_data_re_emits_observations_but_sources_dedupe(
     Per ADR-0002 every observation is a *new* event in the log; the
     ``sources`` projection collapses them on the
     ``(connector_name, external_id)`` UNIQUE constraint so the row count
-    stays put. Each observation also emits an :class:`ItemEnqueued`,
-    and the inbox projection has no dedup yet (deferred to Phase 3.x /
-    Phase 4) — so inbox row count grows linearly with sync runs.
+    stays put. Each observation also emits an :class:`ItemEnqueued`, and
+    the inbox projection now collapses those on ``source_ref`` (issue
+    #522) via ``ON CONFLICT(source_ref) DO NOTHING`` — so the inbox row
+    count stays put across re-syncs too, symmetric with ``sources``.
     """
     from opshub.cli._wiring import build_source_service
 
@@ -276,10 +277,11 @@ def test_second_sync_with_same_data_re_emits_observations_but_sources_dedupe(
         assert _row_count(engine, "events") == 12
         # Sources upserts on (connector_name, external_id) → still 3.
         assert _row_count(engine, "sources") == 3
-        # Inbox has no dedup yet: every observation enqueues a fresh
-        # row. This is the documented Phase 3 behaviour — inbox-side
-        # dedup is intentionally deferred (see module docstring).
-        assert _row_count(engine, "inbox_items") == 6
+        # Inbox dedups on source_ref (issue #522): the second sync's
+        # re-observations hit ON CONFLICT(source_ref) DO NOTHING, so the
+        # three first-observation rows survive — one per source, not per
+        # observation. Symmetric with the sources upsert above.
+        assert _row_count(engine, "inbox_items") == 3
     finally:
         engine.dispose()
 
