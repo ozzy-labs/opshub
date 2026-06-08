@@ -587,6 +587,75 @@ class SlackConnector:
         new_cursor_value = _dump_cursors(cursors)
         return SyncResult(observed_count=observed_count, new_cursor=new_cursor_value)
 
+    def backfill_channel(
+        self,
+        context: ConnectorContext,
+        *,
+        channel_id: str,
+        since_ts: str,
+        until_ts: str,
+    ) -> SyncResult:
+        """Explicitly backfill one channel's ``(since_ts, until_ts]`` window.
+
+        Phase 22-E ([ADR-0038](docs/adr/0038-slack-sync-gap-backfill.md)
+        §(f)): the manual counterpart to the automatic Phase 0 gap pass,
+        driven by ``opshub slack cursor backfill``. Unlike :meth:`sync`
+        this does **not** run a forward pass or thread polling — it fetches
+        exactly the operator-specified window via the Phase 22-C bounded
+        fetch (``oldest=since_ts, latest=until_ts``), observes each message
+        through the shared :func:`_ingest_yield` path, and advances the
+        channel's ``backfill`` low-water mark down to ``since_ts``.
+
+        The primary use is the pre-feature channel rescue: an operator who
+        synced a channel before the gap-backfill feature landed (so its
+        low-water is unrecorded) supplies the old floor as ``until_ts`` and
+        the desired new floor as ``since_ts`` to pull exactly the missing
+        window — disjoint from the already-covered region, so no inbox
+        inflation.
+
+        The caller (the CLI) owns the cursor bracket: it passes the current
+        cursor as ``context.cursor_value`` and persists
+        :attr:`SyncResult.new_cursor` via ``cursor_set`` after this returns.
+        ``channels`` / ``threads`` axes advance via ``_ingest_yield`` exactly
+        as in :meth:`sync` (the forward high-water never regresses thanks to
+        the :func:`_max_ts` guard; gap parents seed the threads axis for the
+        next sync's polling).
+        """
+        from opshub.core.excludes import load_excludes
+
+        auth = SlackAuth()
+        fetcher = SlackFetcher(auth, channels=[channel_id])
+        excludes = load_excludes()
+
+        cursors = _load_cursors(context.cursor_value)
+        channel_cursors = cursors["channels"]
+        thread_cursors = cursors["threads"]
+        backfill_cursors = cursors["backfill"]
+
+        observed_count = 0
+        for ch, raw_message, new_cursor in fetcher.fetch_messages(
+            cursor_per_channel={channel_id: since_ts},
+            latest_per_channel={channel_id: until_ts},
+            excludes=excludes,
+        ):
+            if _ingest_yield(
+                ch,
+                raw_message,
+                new_cursor,
+                channel_cursors=channel_cursors,
+                thread_cursors=thread_cursors,
+                excludes=excludes,
+                source_service=context.source_service,
+            ):
+                observed_count += 1
+
+        # Advance the low-water mark down to the backfilled floor. As with
+        # the auto gap pass, this is done only after the fetch drains so a
+        # crash leaves the prior low-water and a re-run re-attempts the
+        # whole window.
+        backfill_cursors[channel_id] = since_ts
+        return SyncResult(observed_count=observed_count, new_cursor=_dump_cursors(cursors))
+
     def _resolve_slack_settings(self) -> SlackConnectorSettings:
         """Return the resolved ``[connectors.slack]`` settings sub-model.
 

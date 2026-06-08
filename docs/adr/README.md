@@ -111,7 +111,7 @@ NNNN-kebab-case-title.md
 | 0035 | [Slack Sort Axis Consolidation (`--sort` 軸統合 / `--activity` 廃止)](0035-slack-sort-axis-consolidation.md) | Accepted |
 | 0036 | [Slack Sync Date Floor (`sync_since` + per-channel `since`)](0036-slack-sync-date-floor.md) | Accepted (§Consequences revised by ADR-0038 — rebuild は cursor を reset しない) |
 | 0037 | [Browser Read Layer via Playwright](0037-browser-read-layer-playwright.md) | Accepted |
-| 0038 | [Slack Sync Gap Backfill (low-water-mark 軸 + bounded fetch)](0038-slack-sync-gap-backfill.md) | Accepted |
+| 0038 | [Slack Sync Gap Backfill (low-water-mark 軸 + bounded fetch)](0038-slack-sync-gap-backfill.md) | Accepted + Landed (Phase 22) |
 
 ## Open Questions
 

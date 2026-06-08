@@ -46,6 +46,13 @@ slack_mentions_app = typer.Typer(
 )
 slack_app.add_typer(slack_mentions_app)
 
+slack_cursor_app = typer.Typer(
+    name="cursor",
+    help="Inspect / reset / backfill the Slack resume cursor (Phase 22-E, ADR-0038).",
+    no_args_is_help=True,
+)
+slack_app.add_typer(slack_cursor_app)
+
 
 @slack_app.command("sync")
 def slack_sync(
@@ -409,3 +416,132 @@ def slack_mentions_list(
 
     if rendered:
         typer.echo(rendered)
+
+
+@slack_cursor_app.command("show")
+def slack_cursor_show(
+    output_format: str = typer.Option(
+        "table",
+        "--format",
+        help="Output format: table | json. Default 'table'.",
+    ),
+) -> None:
+    """Pretty-print the Slack compound resume cursor (channels / backfill / threads).
+
+    Read-only view of the ``connector_cursors`` row for ``slack`` (Phase
+    22-E, :doc:`ADR-0038 </adr/0038-slack-sync-gap-backfill>`). Exits 1 on a
+    legacy / corrupt cursor (same ``ConfigError`` the sync path raises).
+    """
+    from opshub.cli._slack_cursor import parse_show_format, render_cursor_show
+    from opshub.core.errors import ConfigError
+
+    fmt = parse_show_format(output_format)
+    try:
+        typer.echo(render_cursor_show(output_format=fmt))
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+
+@slack_cursor_app.command("reset")
+def slack_cursor_reset(
+    channels: str | None = typer.Option(
+        None,
+        "--channel",
+        help="Channel id(s) to reset, comma-separated (e.g. C1,C2). Omit with --all.",
+    ),
+    reset_all: bool = typer.Option(
+        False,
+        "--all",
+        help="Reset the cursor for every channel (full cold-start on next sync).",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the interactive confirmation (for non-interactive use).",
+    ),
+) -> None:
+    """Drop cursor entries so the selected channels cold-start on the next sync.
+
+    The **working** cursor reset (Phase 22-E, ADR-0038 §(f)) — unlike
+    ``opshub projections rebuild``, which replays ``ConnectorSyncCompleted``
+    and restores the same cursor. ⚠️ A reset channel re-fetches from its
+    floor on the next sync, re-observing the previously-covered window
+    (bounded inbox duplication until #522 lands); prefer ``opshub slack
+    cursor backfill`` for a surgical, non-overlapping catch-up.
+
+    Exit codes: 0 (reset / cancelled), 2 (neither --channel nor --all, or
+    both).
+    """
+    from opshub.cli._slack_cursor import run_cursor_reset
+
+    selected = [c.strip() for c in (channels or "").split(",") if c.strip()]
+    if reset_all and selected:
+        raise typer.BadParameter("--all is mutually exclusive with --channel.")
+    if not reset_all and not selected:
+        raise typer.BadParameter("specify --channel <id> (repeatable) or --all.")
+
+    scope = "every channel" if reset_all else f"{len(selected)} channel(s): {', '.join(selected)}"
+    if not yes:
+        confirmed = typer.confirm(
+            f"Reset the Slack cursor for {scope}? They will re-fetch from "
+            "their floor on the next sync (may re-observe already-ingested "
+            "messages).",
+        )
+        if not confirmed:
+            typer.echo("aborted; cursor unchanged.")
+            return
+
+    removed, _ = run_cursor_reset(channels=selected, reset_all=reset_all)
+    typer.echo(f"reset slack cursor: {removed} channel entr(y/ies) removed.")
+
+
+@slack_cursor_app.command("backfill")
+def slack_cursor_backfill(
+    channel: str = typer.Option(
+        ...,
+        "--channel",
+        help="Channel id to backfill.",
+    ),
+    since: str = typer.Option(
+        ...,
+        "--since",
+        help="New (older) floor: relative '30d' / '4w' or ISO date '2026-01-01'.",
+    ),
+    until: str | None = typer.Option(
+        None,
+        "--until",
+        help=(
+            "Upper bound of the backfill window (exclusive of the forward "
+            "set). Defaults to the channel's recorded low-water mark; "
+            "required for a pre-feature channel with no recorded low-water "
+            "(pass the floor it was last synced from)."
+        ),
+    ),
+) -> None:
+    """Fetch an explicit ``(since, until]`` window for one channel.
+
+    The manual counterpart to the automatic gap-backfill (Phase 22-E,
+    ADR-0038 §(f)) and the primary rescue for pre-feature channels: it
+    fetches exactly the operator-specified window — disjoint from the
+    already-covered region, so no inbox inflation — and advances the
+    channel's low-water mark.
+
+    Exit codes: 0 (backfilled), 1 (config error: no token / SDK extras
+    missing / no recorded low-water without --until / since >= until /
+    runtime API failure), 2 (bad --since / --until value).
+    """
+    from opshub.cli._slack_cursor import run_cursor_backfill
+    from opshub.core.errors import ConfigError, ConnectorFailedError, ValidationError
+
+    try:
+        observed = run_cursor_backfill(channel_id=channel, since=since, until=until)
+    except ValidationError as exc:
+        # parse_since rejects a malformed --since / --until value.
+        raise typer.BadParameter(str(exc)) from exc
+    except (ConfigError, ConnectorFailedError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"backfilled slack channel {channel}: {observed} message(s) observed.")
