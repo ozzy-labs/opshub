@@ -226,6 +226,7 @@ class SlackFetcher:
         self,
         *,
         cursor_per_channel: dict[str, str | None],
+        latest_per_channel: dict[str, str | None] | None = None,
         max_per_channel: int = 100,
         excludes: ExcludeRules | None = None,
     ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
@@ -239,6 +240,20 @@ class SlackFetcher:
             ``conversations.history`` call). Pass ``None`` (or omit
             the channel id) to fetch the most recent
             ``max_per_channel`` messages on first sync.
+        latest_per_channel:
+            Optional per-channel **upper** ts bound (Phase 22-C,
+            [ADR-0038](docs/adr/0038-slack-sync-gap-backfill.md) §(c)).
+            When set for a channel, ``conversations.history`` is called
+            with ``latest=<bound>`` so only messages at-or-below that ts
+            are fetched. This drives the gap-backfill pass: the connector
+            (22-D) runs a second ``fetch_messages`` over the channels
+            whose floor was lowered, with ``cursor_per_channel={ch:
+            floor_new}`` and ``latest_per_channel={ch: low_water}``, to
+            fetch the newly-uncovered window ``(floor_new, low_water]``
+            without re-touching the forward set ``(low_water, now]``.
+            ``None`` (the default) preserves the forward-only Phase 7/20
+            behaviour (no upper bound). See :meth:`_call_history` for the
+            ``inclusive`` semantics on the bounded call.
         max_per_channel:
             Page size passed to the Slack API. Tier-2 Slack methods
             (``conversations.history``) allow up to ~1000 per page,
@@ -306,6 +321,7 @@ class SlackFetcher:
 
         for channel_id in self._channels:
             oldest = cursor_per_channel.get(channel_id)
+            latest = latest_per_channel.get(channel_id) if latest_per_channel is not None else None
             try:
                 channel_name = self._resolve_channel_name(client, channel_id)
                 yield from self._iter_channel(
@@ -313,6 +329,7 @@ class SlackFetcher:
                     channel_id=channel_id,
                     channel_name=channel_name,
                     oldest=oldest,
+                    latest=latest,
                     limit=max_per_channel,
                     excludes=excludes,
                 )
@@ -362,6 +379,7 @@ class SlackFetcher:
         channel_id: str,
         channel_name: str,
         oldest: str | None,
+        latest: str | None = None,
         limit: int,
         excludes: ExcludeRules | None = None,
     ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
@@ -403,6 +421,7 @@ class SlackFetcher:
                 client=client,
                 channel_id=channel_id,
                 oldest=oldest,
+                latest=latest,
                 limit=limit,
                 cursor=page_cursor,
             )
@@ -657,6 +676,7 @@ class SlackFetcher:
         oldest: str | None,
         limit: int,
         cursor: str | None,
+        latest: str | None = None,
     ) -> dict[str, Any]:
         """Call ``conversations.history`` with 429 backoff per phase-7-plan §1 #8.
 
@@ -678,12 +698,30 @@ class SlackFetcher:
         }
         if oldest is not None:
             kwargs["oldest"] = oldest
-            # Without ``inclusive=False`` Slack would re-yield the
-            # message at ``oldest`` (the boundary message) on every
-            # resume, breaking idempotency. The mapper would then
-            # re-emit a SourceObserved for an event we already
-            # committed last run.
-            kwargs["inclusive"] = False
+        if latest is not None:
+            kwargs["latest"] = latest
+        if oldest is not None or latest is not None:
+            # Slack's ``inclusive`` is a SINGLE boolean covering both the
+            # ``oldest`` and ``latest`` bounds (the API has no per-bound
+            # flag). We choose it by call kind:
+            #
+            # * Forward sync (``oldest`` set, ``latest`` is None) →
+            #   ``inclusive=False``. ``oldest`` is the last *observed real
+            #   message* ts; without exclusion Slack would re-yield it on
+            #   every resume, breaking idempotency (the mapper would
+            #   re-emit a SourceObserved we already committed).
+            # * Gap backfill (``latest`` set, Phase 22-C/D) →
+            #   ``inclusive=True``. Both bounds are *synthetic date
+            #   floors* (``floor_new`` / ``low_water``) that practically
+            #   never coincide with a real message ts, so including them
+            #   is safe and makes the backfill window
+            #   ``[floor_new, low_water]`` disjoint from the forward set
+            #   ``(low_water, now]`` — the forward cold-start used
+            #   ``oldest=low_water, inclusive=False`` so it never fetched
+            #   ``ts == low_water``. ADR-0038 §(c) (the half-open interval
+            #   there is an idealisation; Slack's single ``inclusive``
+            #   makes this the faithful realisation).
+            kwargs["inclusive"] = latest is not None
         if cursor is not None:
             kwargs["cursor"] = cursor
 

@@ -49,8 +49,8 @@ Phase 20-B ([ADR-0030](0030-slack-thread-reply-ingestion.md)) の 2 軸 compound
 
 ### (c) 境界の inclusive 仕様 (off-by-one を pin)
 
-- forward は既存どおり `oldest=floor, inclusive=False` で `(floor, now]` を被覆する。よって cold-start 後の low-water = `floor` (その ts 自体は**含まない**)。
-- gap backfill は `conversations.history(oldest=floor_new, inclusive=False, latest=low_water, inclusive=True)` で **`(floor_new, low_water]`** を取得する。これにより forward 集合 `(low_water, now]` と **contiguous かつ disjoint** になる (union = `(floor_new, now]`)。
+- forward は既存どおり `oldest=cursor, inclusive=False` で進む。cold-start では `oldest=floor, inclusive=False` なので被覆は `(floor, now]`、よって low-water = `floor` (その ts 自体は**含まない**)。
+- gap backfill は `conversations.history(oldest=floor_new, latest=low_water, inclusive=True)` で **`[floor_new, low_water]`** を取得する。**注意: Slack の `inclusive` は oldest / latest 両境界に効く単一 boolean** であり per-bound flag は無い。backfill では `inclusive=True` を採る — `floor_new` / `low_water` はいずれも**合成 date floor** であり実メッセージ ts とほぼ一致しないため両境界を含めても実害がなく、forward cold-start が `oldest=low_water, inclusive=False` で `ts == low_water` を取得していない以上、backfill `[floor_new, low_water]` と forward `(low_water, now]` は **disjoint かつ contiguous** になる (union = `[floor_new, now]`)。連鎖 backfill が共有境界 `floor_new` で 1 メッセージだけ重複し得るが、合成 ts のため実際にはまず起きず、起きても `sources` upsert 冪等 + #522 で無害化される。
 - backfill 完了後、`backfill[ch] = floor_new` に後退させる。
 
 ### (d) low-water ライフサイクル
