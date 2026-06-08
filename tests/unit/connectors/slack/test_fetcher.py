@@ -575,6 +575,139 @@ def test_fetch_messages_no_cursor_skips_oldest_kwarg(
     assert "inclusive" not in call_kwargs
 
 
+# ----- fetch_messages: bounded window (Phase 22-C, ADR-0038 §(c)) --------
+
+
+def test_fetch_messages_bounded_window_passes_oldest_latest_and_inclusive_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gap backfill: ``oldest`` + ``latest`` set → both bounds + ``inclusive=True``.
+
+    Phase 22-C drives the gap-backfill pass by passing
+    ``latest_per_channel``. When a channel has both a resume bound
+    (``oldest = floor_new``) and an upper bound (``latest = low_water``),
+    ``conversations.history`` must receive both ts kwargs and
+    ``inclusive=True`` — Slack's single ``inclusive`` boolean covers both
+    bounds, and the synthetic date floors make boundary inclusion safe
+    while keeping the window disjoint from the forward set (ADR-0038 §(c)).
+    """
+    client = _build_client(history=[_history_response([])])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    list(
+        fetcher.fetch_messages(
+            cursor_per_channel={"C1": "1700000000.000000"},
+            latest_per_channel={"C1": "1700000050.000000"},
+        )
+    )
+
+    call_kwargs = client.conversations_history.call_args.kwargs
+    assert call_kwargs["oldest"] == "1700000000.000000"
+    assert call_kwargs["latest"] == "1700000050.000000"
+    # Backfill includes both (synthetic) bounds — distinct from the
+    # forward ``inclusive=False``.
+    assert call_kwargs["inclusive"] is True
+
+
+def test_fetch_messages_latest_only_sets_inclusive_true_without_oldest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``latest`` with no ``oldest`` → ``latest`` + ``inclusive=True``, no ``oldest``.
+
+    Covers the cold-start-with-floor-already-epoch edge of the backfill
+    pass: the upper bound alone still flips ``inclusive`` to True and
+    must not synthesise an ``oldest`` kwarg.
+    """
+    client = _build_client(history=[_history_response([])])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    list(
+        fetcher.fetch_messages(
+            cursor_per_channel={},
+            latest_per_channel={"C1": "1700000050.000000"},
+        )
+    )
+
+    call_kwargs = client.conversations_history.call_args.kwargs
+    assert call_kwargs["latest"] == "1700000050.000000"
+    assert call_kwargs["inclusive"] is True
+    assert "oldest" not in call_kwargs
+
+
+def test_fetch_messages_forward_omits_latest_kwarg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forward sync (no ``latest_per_channel`` entry) → no ``latest`` kwarg.
+
+    A channel absent from ``latest_per_channel`` (or ``latest_per_channel
+    is None``) keeps the Phase 7/20 forward behaviour: ``oldest`` set,
+    ``inclusive=False``, and crucially **no** ``latest`` bound so the sync
+    walks up to the channel head.
+    """
+    client = _build_client(history=[_history_response([])])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    # ``latest_per_channel`` provided but without an entry for C1 → no bound.
+    list(
+        fetcher.fetch_messages(
+            cursor_per_channel={"C1": "1700000000.000000"},
+            latest_per_channel={"C-other": "1700000050.000000"},
+        )
+    )
+
+    call_kwargs = client.conversations_history.call_args.kwargs
+    assert call_kwargs["oldest"] == "1700000000.000000"
+    assert call_kwargs["inclusive"] is False
+    assert "latest" not in call_kwargs
+
+
+def test_fetch_messages_bounded_window_still_fetches_thread_replies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A parent fetched inside a bounded window still triggers reply fetch.
+
+    The gap-backfill pass must fetch a gap parent's full thread (those
+    replies were never observed because the parent was below the forward
+    window). The ``latest`` bound only caps the ``conversations.history``
+    page; ``_iter_thread_replies`` is unchanged and still fires on the
+    ``latest_reply`` signal — so a parent yielded under a bounded window
+    yields its replies too.
+    """
+    parent = _parent_with_latest_reply(
+        ts="1700000010.000100",
+        text="gap-parent",
+        latest_reply="1700000020.000200",
+    )
+    reply = _reply_message(
+        ts="1700000015.000150",
+        thread_ts="1700000010.000100",
+        text="gap-reply",
+    )
+    client = _build_client(history=[_history_response([parent])])
+    client.conversations_replies.return_value = _replies_response([parent, reply])
+    _patch_webclient(monkeypatch, client)
+
+    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    results = list(
+        fetcher.fetch_messages(
+            cursor_per_channel={"C1": "1700000005.000000"},
+            latest_per_channel={"C1": "1700000050.000000"},
+        )
+    )
+
+    # Parent + reply both yielded despite the bounded history call.
+    assert [r[1].text for r in results] == ["gap-parent", "gap-reply"]
+    # The history page was bounded (inclusive backfill window)...
+    hist_kwargs = client.conversations_history.call_args.kwargs
+    assert hist_kwargs["latest"] == "1700000050.000000"
+    assert hist_kwargs["inclusive"] is True
+    # ...but the replies fetch for the gap parent still fired.
+    assert client.conversations_replies.call_count == 1
+
+
 # ----- rate limiting ----------------------------------------------------
 
 
