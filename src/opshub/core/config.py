@@ -414,6 +414,18 @@ class SlackConnectorSettings(BaseModel):
     #: the spelling ``docs/troubleshooting.md`` §3.12 promised
     #: operators ahead of the validator catching up.
     thread_activity_window: timedelta | None = SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW
+    #: Phase 22-D ([ADR-0038](../../docs/adr/0038-slack-sync-gap-backfill.md)):
+    #: when ``True`` (default), lowering the date floor (``sync_since`` /
+    #: per-channel ``since``) on a channel synced *after* the gap-backfill
+    #: feature landed triggers an automatic one-time backfill of the
+    #: newly-uncovered window ``(floor_new, low_water]`` on the next sync
+    #: (disjoint from the forward set, so no inbox inflation). Set ``False``
+    #: (or pass ``--no-backfill``) to suppress the auto-backfill — the
+    #: floor still bounds the forward fetch, but the past is not re-fetched
+    #: until re-enabled or ``opshub slack cursor backfill`` is run
+    #: explicitly. pre-feature channels never auto-backfill regardless
+    #: (their historical floor is unrecoverable, ADR-0038 §(e)).
+    backfill_on_floor_lower: bool = True
 
     @field_validator("channels", mode="before")
     @classmethod

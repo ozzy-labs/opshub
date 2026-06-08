@@ -689,6 +689,45 @@ def test_cli_flag_overrides_thread_activity_window(
         os.environ.pop("OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW", None)
 
 
+def test_cli_no_backfill_flag_sets_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``opshub slack sync --no-backfill`` sets the backfill-disable env var.
+
+    Phase 22-D (ADR-0038): the flag is a thin process-local shim around
+    ``OPSHUB_CONNECTORS__SLACK__BACKFILL_ON_FLOOR_LOWER`` (mirrors the
+    ``--thread-activity-window`` env-var path), so the connector picks up
+    ``backfill_on_floor_lower=false`` on the next ``OpsHubSettings``
+    construction. Absent the flag, no env var is set (default ``True``).
+    """
+    import os
+
+    from typer.testing import CliRunner
+
+    from opshub.cli.app import app
+
+    captured: dict[str, str | None] = {}
+
+    def _fake_run(name: str) -> None:
+        del name
+        captured["env_value"] = os.environ.get("OPSHUB_CONNECTORS__SLACK__BACKFILL_ON_FLOOR_LOWER")
+
+    monkeypatch.setattr("opshub.cli.slack.run_connector_sync", _fake_run, raising=False)
+    monkeypatch.setattr("opshub.cli._connector_common.run_connector_sync", _fake_run)
+
+    runner = CliRunner()
+    try:
+        # Without the flag → env var untouched (default behaviour).
+        result = runner.invoke(app, ["slack", "sync"])
+        assert result.exit_code == 0, result.stdout
+        assert captured["env_value"] is None
+
+        # With the flag → env var set to "false".
+        result = runner.invoke(app, ["slack", "sync", "--no-backfill"])
+        assert result.exit_code == 0, result.stdout
+        assert captured["env_value"] == "false"
+    finally:
+        os.environ.pop("OPSHUB_CONNECTORS__SLACK__BACKFILL_ON_FLOOR_LOWER", None)
+
+
 def test_polling_phase_treats_null_last_reply_as_in_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
