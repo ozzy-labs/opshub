@@ -334,6 +334,7 @@ def test_polling_phase_fetches_thread_replies_for_in_window_cursor(
     prior_cursor = _dump_cursors(
         {
             "channels": {"C1": "1700000010.000100"},
+            "backfill": {},
             "threads": {"C1:1700000010.000100": recent_last_reply_ts},
         }
     )
@@ -384,6 +385,7 @@ def test_polling_phase_skips_out_of_window_threads(
     prior_cursor = _dump_cursors(
         {
             "channels": {"C1": "1700000010.000100"},
+            "backfill": {},
             "threads": {cold_key: cold_ts},
         }
     )
@@ -535,6 +537,7 @@ def test_polling_phase_advances_threads_cursor_monotonically(
     prior_cursor = _dump_cursors(
         {
             "channels": {"C1": "1700000010.000100"},
+            "backfill": {},
             "threads": {"C1:1700000010.000100": ts_prior},
         }
     )
@@ -576,6 +579,7 @@ def test_polling_phase_skipped_for_thread_in_excluded_channel(
         prior_cursor = _dump_cursors(
             {
                 "channels": {"C1": "1700000010.000100"},
+                "backfill": {},
                 "threads": {"C1:1700000010.000100": recent_ts},
             }
         )
@@ -620,6 +624,7 @@ def test_thread_activity_window_overrides_default_via_settings(
     prior_cursor = _dump_cursors(
         {
             "channels": {"C1": "1700000010.000100"},
+            "backfill": {},
             "threads": {"C1:1700000010.000100": fortnight_ts},
         }
     )
@@ -700,6 +705,7 @@ def test_polling_phase_treats_null_last_reply_as_in_window(
     prior_cursor = _dump_cursors(
         {
             "channels": {"C1": "1700000010.000100"},
+            "backfill": {},
             "threads": {"C1:1700000010.000100": None},
         }
     )
@@ -813,6 +819,7 @@ def test_polling_phase_preserves_all_threads_when_window_disabled(
     prior_cursor = _dump_cursors(
         {
             "channels": {"C1": "1700000010.000100"},
+            "backfill": {},
             "threads": {cold_key: cold_ts},
         }
     )

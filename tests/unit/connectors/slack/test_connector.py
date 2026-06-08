@@ -276,10 +276,12 @@ def test_load_cursors_none_returns_empty_compound() -> None:
     20-C) "no thread to poll" (empty ``threads`` axis).
     """
     state = _load_cursors(None)
-    assert state == {"channels": {}, "threads": {}}
-    # Both axes must be present and mutable for the sync path to
-    # mutate ``channels`` in-place without raising KeyError.
+    assert state == {"channels": {}, "backfill": {}, "threads": {}}
+    # All three axes must be present and mutable for the sync path to
+    # mutate them in-place without raising KeyError (Phase 22-B added the
+    # ``backfill`` low-water axis, ADR-0038 §(a)).
     assert "channels" in state
+    assert "backfill" in state
     assert "threads" in state
 
 
@@ -295,6 +297,9 @@ def test_load_cursors_round_trips_compound_schema() -> None:
         "channels": {
             "C1": "1700000001.000100",
             "C2": "1700000002.000200",
+        },
+        "backfill": {
+            "C1": "1699990000.000000",
         },
         "threads": {
             "C1:1700000000.000000": "1700000003.000300",
@@ -312,17 +317,19 @@ def test_load_cursors_accepts_empty_axes() -> None:
     workspace whose first sync drained zero channels still emits an
     empty ``channels`` axis — also valid.
     """
-    # Empty channels, populated threads (hypothetical mid-state).
-    state_a = _load_cursors('{"channels":{},"threads":{"C1:t1":"ts-1"}}')
-    assert state_a == {"channels": {}, "threads": {"C1:t1": "ts-1"}}
+    # Empty channels, populated threads (hypothetical mid-state). The
+    # input omits ``backfill`` (pre-Phase-22 shape) — tolerated and
+    # defaulted to empty (ADR-0038 §(g)).
+    state_a = _load_cursors('{"channels":{}, "backfill": {},"threads":{"C1:t1":"ts-1"}}')
+    assert state_a == {"channels": {}, "backfill": {}, "threads": {"C1:t1": "ts-1"}}
 
     # Populated channels, empty threads (the Phase 20-B steady state).
-    state_b = _load_cursors('{"channels":{"C1":"ts-1"},"threads":{}}')
-    assert state_b == {"channels": {"C1": "ts-1"}, "threads": {}}
+    state_b = _load_cursors('{"channels":{"C1":"ts-1"}, "backfill": {},"threads":{}}')
+    assert state_b == {"channels": {"C1": "ts-1"}, "backfill": {}, "threads": {}}
 
     # Both empty (first sync, zero observed).
-    state_c = _load_cursors('{"channels":{},"threads":{}}')
-    assert state_c == {"channels": {}, "threads": {}}
+    state_c = _load_cursors('{"channels":{}, "backfill": {},"threads":{}}')
+    assert state_c == {"channels": {}, "backfill": {}, "threads": {}}
 
 
 def test_load_cursors_accepts_null_values_per_axis() -> None:
@@ -336,6 +343,7 @@ def test_load_cursors_accepts_null_values_per_axis() -> None:
     """
     original: SlackCursorState = {
         "channels": {"C1": "1700000001.000100", "C-empty": None},
+        "backfill": {"C1": "1699990000.000000", "C-empty": None},
         "threads": {"C1:1700000000.000000": None},
     }
     assert _load_cursors(_dump_cursors(original)) == original
@@ -432,15 +440,56 @@ def test_load_cursors_rejects_non_object_axis() -> None:
     with pytest.raises(ConfigError, match="'channels' axis must be a JSON object"):
         _load_cursors('{"channels":["C1"],"threads":{}}')
     with pytest.raises(ConfigError, match="'threads' axis must be a JSON object"):
-        _load_cursors('{"channels":{},"threads":"oops"}')
+        _load_cursors('{"channels":{}, "backfill": {},"threads":"oops"}')
 
 
 def test_load_cursors_rejects_non_string_values_per_axis() -> None:
     """Values must be ``str | None``; int / bool reject as hand-edit accident."""
     with pytest.raises(ConfigError, match="'channels' axis values must be"):
-        _load_cursors('{"channels":{"C1":42},"threads":{}}')
+        _load_cursors('{"channels":{"C1":42}, "backfill": {},"threads":{}}')
     with pytest.raises(ConfigError, match="'threads' axis values must be"):
-        _load_cursors('{"channels":{},"threads":{"C1:t1":true}}')
+        _load_cursors('{"channels":{}, "backfill": {},"threads":{"C1:t1":true}}')
+
+
+def test_load_cursors_tolerates_missing_backfill_axis() -> None:
+    """Phase 22-B: a pre-Phase-22 cursor (no ``backfill`` axis) is accepted.
+
+    The ``backfill`` low-water axis ([ADR-0038](
+    https://github.com/ozzy-labs/opshub/issues/516) §(a)) is **additive**:
+    a 2-axis cursor persisted before Phase 22 lacks it. Unlike the
+    pre-20-B flat dict, a missing ``backfill`` key is unambiguous, and
+    ``opshub projections rebuild`` does NOT reset the cursor (ADR-0038
+    §Context), so a ConfigError migration prompt would be a dead-end.
+    We default the absent axis to empty rather than raising.
+    """
+    state = _load_cursors('{"channels":{"C1":"ts-1"}, "backfill": {},"threads":{"C1:t1":"ts-r1"}}')
+    assert state == {
+        "channels": {"C1": "ts-1"},
+        "backfill": {},
+        "threads": {"C1:t1": "ts-r1"},
+    }
+
+
+def test_load_cursors_round_trips_backfill_axis() -> None:
+    """A populated ``backfill`` axis survives ``_dump → _load`` (incl. null)."""
+    original: SlackCursorState = {
+        "channels": {"C1": "1700000001.000100"},
+        "backfill": {"C1": "1699990000.000000", "C-cold": None},
+        "threads": {},
+    }
+    assert _load_cursors(_dump_cursors(original)) == original
+
+
+def test_load_cursors_rejects_non_object_backfill_axis() -> None:
+    """The ``backfill`` axis, when present, must be a JSON object."""
+    with pytest.raises(ConfigError, match="'backfill' axis must be a JSON object"):
+        _load_cursors('{"channels":{},"threads":{},"backfill":["C1"]}')
+
+
+def test_load_cursors_rejects_non_string_backfill_values() -> None:
+    """``backfill`` axis values must be ``str | None`` (reject int / bool)."""
+    with pytest.raises(ConfigError, match="'backfill' axis values must be"):
+        _load_cursors('{"channels":{},"threads":{},"backfill":{"C1":42}}')
 
 
 def test_max_ts_returns_candidate_when_prior_is_none() -> None:
@@ -537,10 +586,12 @@ def test_dump_cursors_is_deterministic() -> None:
     """
     a: SlackCursorState = {
         "channels": {"C2": "ts-2", "C1": "ts-1"},
+        "backfill": {"C2": "ts-b2", "C1": "ts-b1"},
         "threads": {"C2:t2": "ts-r2", "C1:t1": "ts-r1"},
     }
     b: SlackCursorState = {
         "channels": {"C1": "ts-1", "C2": "ts-2"},
+        "backfill": {"C1": "ts-b1", "C2": "ts-b2"},
         "threads": {"C1:t1": "ts-r1", "C2:t2": "ts-r2"},
     }
     assert _dump_cursors(a) == _dump_cursors(b)
@@ -556,9 +607,14 @@ def test_dump_cursors_emits_sorted_top_level_axes() -> None:
     """
     state: SlackCursorState = {
         "channels": {"C1": "ts-1"},
+        "backfill": {"C1": "ts-b1"},
         "threads": {"C1:t1": "ts-r1"},
     }
-    assert _dump_cursors(state) == ('{"channels":{"C1":"ts-1"},"threads":{"C1:t1":"ts-r1"}}')
+    # ``sort_keys=True`` orders top-level axes alphabetically:
+    # backfill < channels < threads.
+    assert _dump_cursors(state) == (
+        '{"backfill":{"C1":"ts-b1"},"channels":{"C1":"ts-1"},"threads":{"C1:t1":"ts-r1"}}'
+    )
 
 
 def test_dump_cursors_emits_empty_compound_envelope() -> None:
@@ -569,7 +625,9 @@ def test_dump_cursors_emits_empty_compound_envelope() -> None:
     (and the ``connector_cursors`` row advances out of the legacy /
     NULL state on the first successful sync).
     """
-    assert _dump_cursors({"channels": {}, "threads": {}}) == ('{"channels":{},"threads":{}}')
+    assert _dump_cursors({"channels": {}, "backfill": {}, "threads": {}}) == (
+        '{"backfill":{},"channels":{},"threads":{}}'
+    )
 
 
 def test_max_ts_works_on_threads_axis_keys() -> None:
@@ -673,6 +731,7 @@ def test_sync_observes_each_yielded_message(monkeypatch: pytest.MonkeyPatch) -> 
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
         "channels": {"C1": "1700000002.000200"},
+        "backfill": {},
         "threads": {},
     }
 
@@ -694,6 +753,7 @@ def test_sync_resumes_from_persisted_cursor(monkeypatch: pytest.MonkeyPatch) -> 
     prior_cursor = _dump_cursors(
         {
             "channels": {"C1": "1700000001.000100", "C2": None},
+            "backfill": {},
             "threads": {},
         }
     )
@@ -759,6 +819,7 @@ def test_sync_persists_max_ts_when_yield_order_regresses(
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
         "channels": {"C1": "1700000002.000200"},
+        "backfill": {},
         "threads": {},
     }
 
@@ -782,6 +843,7 @@ def test_sync_advances_cursor_per_channel(monkeypatch: pytest.MonkeyPatch) -> No
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
         "channels": {"C1": "ts-c1-new", "C2": "ts-c2-new"},
+        "backfill": {},
         "threads": {},
     }
 
@@ -822,7 +884,7 @@ def test_sync_floor_is_inert_when_cursor_is_newer(
     _, captured = _patch_fetcher(monkeypatch, yields=[])
 
     prior = _dump_cursors(
-        {"channels": {"C1": "1700000000.000000"}, "threads": {}}
+        {"channels": {"C1": "1700000000.000000"}, "backfill": {}, "threads": {}}
     )  # year 2023 ≫ floor 2000
     SlackConnector().sync(_context(_RecordingSourceService(), cursor_value=prior))
 
@@ -961,6 +1023,7 @@ def test_sync_skips_excluded_channel_but_advances_cursor(
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
         "channels": {"C1": "ts-1", "C-secret": "ts-2"},
+        "backfill": {},
         "threads": {},
     }
 
@@ -993,6 +1056,7 @@ def test_sync_skips_excluded_sender_but_advances_cursor(
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
         "channels": {"C1": "ts-human"},
+        "backfill": {},
         "threads": {},
     }
 
@@ -1008,7 +1072,7 @@ def test_sync_with_no_yields_preserves_cursor(monkeypatch: pytest.MonkeyPatch) -
     _patch_auth(monkeypatch)
     _patch_fetcher(monkeypatch, yields=[])
 
-    prior_cursor = _dump_cursors({"channels": {"C1": "ts-old"}, "threads": {}})
+    prior_cursor = _dump_cursors({"channels": {"C1": "ts-old"}, "backfill": {}, "threads": {}})
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=prior_cursor))
 
@@ -1122,6 +1186,7 @@ def test_sync_checkpoints_partial_cursor_on_mid_iteration_failure(
     # would have been missing entirely).
     assert _load_cursors(call["value"]) == {
         "channels": {"C1": "1700000002.000200"},
+        "backfill": {},
         "threads": {},
     }
 
@@ -1205,6 +1270,7 @@ def test_sync_no_checkpoint_when_failure_yields_only_excluded_messages(
     assert call["sync_started"] is True
     assert _load_cursors(call["value"]) == {
         "channels": {"C-secret": "1700000001.000100"},
+        "backfill": {},
         "threads": {},
     }
 
@@ -1243,6 +1309,7 @@ def test_sync_no_checkpoint_on_normal_completion(
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
         "channels": {"C1": "1700000001.000100"},
+        "backfill": {},
         "threads": {},
     }
 
@@ -1278,6 +1345,7 @@ def test_sync_checkpoints_partial_progress_on_keyboard_interrupt(
     call = service.cursor_set_calls[0]
     assert _load_cursors(call["value"]) == {
         "channels": {"C1": "1700000001.000100"},
+        "backfill": {},
         "threads": {},
     }
 
@@ -1312,7 +1380,9 @@ def test_sync_checkpoint_preserves_prior_cursor_for_unprocessed_channels(
         error=ConnectorFailedError("Slack fetch failed for channel B: rate_limited"),
     )
 
-    prior_cursor = _dump_cursors({"channels": {"A": "ts-a-prior", "B": None}, "threads": {}})
+    prior_cursor = _dump_cursors(
+        {"channels": {"A": "ts-a-prior", "B": None}, "backfill": {}, "threads": {}}
+    )
     service = _RecordingSourceService()
     with pytest.raises(ConnectorFailedError):
         SlackConnector().sync(_context(service, cursor_value=prior_cursor))
@@ -1325,6 +1395,7 @@ def test_sync_checkpoint_preserves_prior_cursor_for_unprocessed_channels(
     call = service.cursor_set_calls[0]
     assert _load_cursors(call["value"]) == {
         "channels": {"A": "ts-a-prior", "B": "ts-b-new"},
+        "backfill": {},
         "threads": {},
     }
 

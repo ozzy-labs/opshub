@@ -1397,6 +1397,7 @@ def test_slack_sync_persists_compound_cursor_with_channels_monotonic(
         parsed_first = json.loads(cursor_after_first)
         assert parsed_first == {
             "channels": {"C1": "1700000002.000200"},
+            "backfill": {},
             "threads": {},
         }
 

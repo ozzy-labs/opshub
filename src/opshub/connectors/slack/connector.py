@@ -11,30 +11,35 @@ its conventions exactly so a future "common sync orchestrator" refactor
 Sync semantics
 --------------
 
-The persisted resume cursor is a **compound** JSON object with two
-axes (Phase 20-B, [ADR-0030 §(d) revised, epic #465](
-https://github.com/ozzy-labs/opshub/issues/465)):
+The persisted resume cursor is a **compound** JSON object (Phase 20-B,
+[ADR-0030 §(d) revised, epic #465](https://github.com/ozzy-labs/opshub/issues/465);
+``backfill`` axis added Phase 22-B, [ADR-0038](docs/adr/0038-slack-sync-gap-backfill.md)):
 
 .. code-block:: json
 
    {
      "channels": {"<channel_id>": "<max_ts>"},
+     "backfill": {"<channel_id>": "<low_water_ts>"},
      "threads": {"<channel_id>:<thread_ts>": "<last_reply_ts>"}
    }
 
-The ``channels`` axis carries the per-channel resume cursor that drives
-``conversations.history`` (Phase 7 semantics, unchanged). The
-``threads`` axis carries the per-thread resume cursor for
-``conversations.replies(oldest=last_reply_ts)`` increments — the late
-thread reply polling path established in Phase 20-C. Phase 20-B
-establishes the schema only; the ``threads`` dict is always written
-empty by this code (20-C populates it). Round-trip:
+The ``channels`` axis carries the per-channel forward high-water cursor
+that drives ``conversations.history`` (Phase 7 semantics, unchanged).
+The ``backfill`` axis carries the per-channel low-water mark (the oldest
+ts boundary fetched down to) — Phase 22-B establishes the schema only;
+the gap-backfill lifecycle lands in 22-D, so this axis is always written
+empty by the current code. The ``threads`` axis carries the per-thread
+resume cursor for ``conversations.replies(oldest=last_reply_ts)``
+increments — the late thread reply polling path established in Phase
+20-C. Round-trip:
 
 1. ``context.cursor_value`` is the JSON string we wrote on the previous
    sync (or ``None`` for first-sync).
 2. :func:`_load_cursors` parses it into the
-   ``{"channels": dict, "threads": dict}`` compound shape. ``None``
-   yields the empty compound (both dicts empty).
+   ``{"channels": dict, "backfill": dict, "threads": dict}`` compound
+   shape (a pre-Phase-22 cursor lacking the ``backfill`` axis is
+   tolerated and defaulted to empty — ADR-0038 §(g)). ``None`` yields
+   the empty compound (all dicts empty).
 3. The ``channels`` axis is handed to the fetcher via
    ``cursor_per_channel=`` (the fetcher signature is unchanged in
    Phase 20-B). As the fetcher yields
@@ -186,8 +191,18 @@ class SlackCursorState(TypedDict):
     keeps a single row per connector (no schema migration on
     ``connector_cursors`` itself):
 
-    * ``channels``: ``{channel_id: max_ts}`` — drives
-      ``conversations.history`` resume (Phase 7 semantics, unchanged).
+    * ``channels``: ``{channel_id: max_ts}`` — the per-channel forward
+      **high-water** mark. Drives ``conversations.history`` resume
+      (Phase 7 semantics, unchanged).
+    * ``backfill``: ``{channel_id: low_water_ts}`` — the per-channel
+      **low-water** mark added in Phase 22 ([ADR-0038](
+      https://github.com/ozzy-labs/opshub/issues/516)). Records "the
+      oldest ts boundary this channel has been fetched down to" so a
+      later floor lowering can fetch only the newly-uncovered gap
+      ``(floor_new, low_water]`` (disjoint from the forward set). Phase
+      22-B establishes the schema only; the low-water lifecycle +
+      gap-backfill pass land in 22-D, so this axis is always written
+      empty by the current code.
     * ``threads``: ``{f"{channel_id}:{thread_ts}": last_reply_ts}`` —
       drives the per-thread ``conversations.replies(oldest=...)``
       increment path established in Phase 20-C. Phase 20-B writes this
@@ -198,6 +213,7 @@ class SlackCursorState(TypedDict):
     """
 
     channels: dict[str, str | None]
+    backfill: dict[str, str | None]
     threads: dict[str, str | None]
 
 
@@ -604,7 +620,18 @@ def _load_cursors(cursor_value: str | None) -> SlackCursorState:
         )
     channels_axis = _coerce_axis(parsed_dict["channels"], axis_name="channels")
     threads_axis = _coerce_axis(parsed_dict["threads"], axis_name="threads")
-    return SlackCursorState(channels=channels_axis, threads=threads_axis)
+    # Phase 22-B ([ADR-0038](docs/adr/0038-slack-sync-gap-backfill.md) §(a)
+    # §(g)): the ``backfill`` axis (per-channel low-water mark) is
+    # **additive**. A cursor persisted before Phase 22 lacks it, so we
+    # tolerate the absence (default empty) rather than raising — unlike
+    # the pre-20-B flat dict, a missing ``backfill`` key is unambiguous,
+    # and a ConfigError that pointed at ``opshub projections rebuild``
+    # would be a dead-end because rebuild does NOT reset the cursor
+    # (it replays ``ConnectorSyncCompleted`` and restores the same value,
+    # ADR-0038 §Context). ``channels`` / ``threads`` remain required (their
+    # absence still trips the pre-20-B legacy detection above).
+    backfill_axis = _coerce_axis(parsed_dict.get("backfill", {}), axis_name="backfill")
+    return SlackCursorState(channels=channels_axis, backfill=backfill_axis, threads=threads_axis)
 
 
 def _empty_state() -> SlackCursorState:
@@ -616,7 +643,7 @@ def _empty_state() -> SlackCursorState:
     :func:`_load_cursors` (``cursor_value is None`` branch) and from
     tests that need to construct a baseline first-sync state.
     """
-    return SlackCursorState(channels={}, threads={})
+    return SlackCursorState(channels={}, backfill={}, threads={})
 
 
 def _coerce_axis(raw: Any, *, axis_name: str) -> dict[str, str | None]:
