@@ -65,6 +65,21 @@ def slack_sync(
             "OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW."
         ),
     ),
+    no_backfill: bool = typer.Option(
+        False,
+        "--no-backfill",
+        help=(
+            "Suppress the automatic gap-backfill on floor lowering "
+            "(Phase 22-D, ADR-0038). By default, lowering the date "
+            "floor (sync_since / per-channel since) on a channel synced "
+            "after the feature landed triggers a one-time backfill of "
+            "the newly-uncovered window on the next sync. This flag "
+            "disables that for this run only (the floor still bounds the "
+            "forward fetch). Persisted override: [connectors.slack] "
+            "backfill_on_floor_lower=false or "
+            "OPSHUB_CONNECTORS__SLACK__BACKFILL_ON_FLOOR_LOWER."
+        ),
+    ),
 ) -> None:
     """Incremental sync from the Slack Web API.
 
@@ -98,6 +113,13 @@ def slack_sync(
         # ``opshub`` calls. Persistent overrides live in
         # ``opshub.toml`` / the operator's exported env var.
         os.environ["OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW"] = thread_activity_window
+
+    if no_backfill:
+        # Same process-local env-var shim as ``--thread-activity-window``
+        # (Phase 22-D, ADR-0038). Only set on the truthy path so the
+        # absence of the flag leaves the config-file / exported-env value
+        # untouched (default ``True``).
+        os.environ["OPSHUB_CONNECTORS__SLACK__BACKFILL_ON_FLOOR_LOWER"] = "false"
 
     run_connector_sync("slack")
 

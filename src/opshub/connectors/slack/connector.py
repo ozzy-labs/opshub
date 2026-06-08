@@ -173,10 +173,20 @@ if TYPE_CHECKING:
     from datetime import timedelta
 
     from opshub.connectors.context import ConnectorContext
+    from opshub.connectors.slack.fetcher import RawSlackMessage
     from opshub.core.config import SlackChannelSpec, SlackConnectorSettings
+    from opshub.core.excludes import ExcludeRules
 
 
 __all__ = ["SlackConnector", "SlackCursorState"]
+
+#: Slack ``ts`` sentinel meaning "covered down to the beginning of channel
+#: history" (Phase 22-D, [ADR-0038](docs/adr/0038-slack-sync-gap-backfill.md)
+#: §(d)). Used as the per-channel ``backfill`` low-water mark when a
+#: channel is (or was) synced with no date floor — the cold-start fetched
+#: everything, so there is nothing older to backfill. ``since_to_ts`` renders
+#: the Unix epoch as exactly this string (``f"{0.0:.6f}"``).
+_EPOCH_TS = "0.000000"
 
 
 # pyright/mypy: ``timedelta`` is imported under ``TYPE_CHECKING`` for the
@@ -323,6 +333,51 @@ class SlackConnector:
             floor = floors.get(channel_id)
             if floor is not None:
                 resume[channel_id] = _max_ts(channel_cursors.get(channel_id), floor)
+        # Phase 22-D (ADR-0038): per-channel low-water lifecycle. The
+        # ``backfill`` axis records the oldest ts each channel has been
+        # fetched down to (the invariant: ``(backfill[ch], channels[ch]]``
+        # is fully covered). We snapshot before the lifecycle loop mutates
+        # it so the partial-progress checkpoint can detect changes.
+        backfill_cursors = cursors["backfill"]
+        backfill_at_entry: dict[str, str | None] = dict(backfill_cursors)
+        backfill_enabled = slack_settings.backfill_on_floor_lower
+        # ``gap_targets[ch] = target_low`` for channels whose floor was
+        # lowered below the recorded low-water mark — the Phase 0 pass
+        # (below) fetches the newly-uncovered window for each.
+        gap_targets: dict[str, str] = {}
+        for channel_id in channels:
+            floor = floors.get(channel_id)
+            if channel_id not in channel_cursors:
+                # Cold-start. A *floored* cold-start resumes from
+                # ``oldest = floor`` and so ends up covered down to the
+                # floor regardless of how far the forward pass gets this
+                # run — record that low-water so a later floor reduction
+                # can detect the gap. A *no-floor* cold-start covers the
+                # whole history; we leave the ``backfill`` axis absent
+                # (an absent entry ≡ epoch low-water = "fully backfilled",
+                # nothing older to ever backfill).
+                if floor is not None:
+                    backfill_cursors[channel_id] = floor
+                continue
+            if channel_id not in backfill_cursors:
+                # An already-synced channel with no recorded low-water:
+                # either a pre-Phase-22 channel (historical floor
+                # unrecoverable) or one whose floor was added after an
+                # earlier no-floor sync (already covers more than any
+                # floor). Either way we do NOT auto-backfill (ADR-0038
+                # §(e)) and leave the axis absent; a one-off catch-up uses
+                # ``opshub slack cursor backfill``.
+                continue
+            # Post-feature steady state with a recorded low-water: detect a
+            # *lowered* (or removed) floor. ``target_low`` is the new floor
+            # ts, or the epoch sentinel when the floor was removed (the
+            # operator now wants the full history, so the gap spans down to
+            # the beginning). Relative floors walk forward so they never
+            # trip this; only an explicit reduction / removal does.
+            low_water = backfill_cursors[channel_id]
+            target_low = floor if floor is not None else _EPOCH_TS
+            if backfill_enabled and low_water is not None and _ts_lt(target_low, low_water):
+                gap_targets[channel_id] = target_low
         # Phase 20-C: snapshot the threads axis at entry so the
         # partial-progress checkpoint below can tell "thread cursor
         # advanced" from "no thread polling yet". The activity-window
@@ -334,73 +389,73 @@ class SlackConnector:
         observed_count = 0
         completed_normally = False
         try:
+            # Phase 0: gap backfill (Phase 22-D, ADR-0038 §(d)). For each
+            # channel whose floor was lowered below its recorded low-water
+            # mark, fetch the newly-uncovered window ``(target_low,
+            # low_water]`` — disjoint from the forward set ``(low_water,
+            # now]`` so no already-observed message is re-ingested (no
+            # inbox inflation). Run before the forward pass so the threads
+            # axis it seeds is visible to the Phase 2 polling path below.
+            if gap_targets:
+                # The upper bound is the *current* (pre-update) low-water
+                # mark; capture it before advancing ``backfill`` after the
+                # pass drains.
+                gap_oldest: dict[str, str | None] = dict(gap_targets)
+                gap_latest: dict[str, str | None] = {
+                    channel_id: backfill_cursors[channel_id] for channel_id in gap_targets
+                }
+                context.logger.warning(
+                    f"slack connector: date floor lowered for {len(gap_targets)} "
+                    f"channel(s); backfilling the newly-uncovered window "
+                    f"(one-time catch-up). channels={sorted(gap_targets)}"
+                )
+                gap_fetcher = SlackFetcher(auth, channels=list(gap_targets))
+                for channel_id, raw_message, new_cursor in gap_fetcher.fetch_messages(
+                    cursor_per_channel=gap_oldest,
+                    latest_per_channel=gap_latest,
+                    excludes=excludes,
+                ):
+                    if _ingest_yield(
+                        channel_id,
+                        raw_message,
+                        new_cursor,
+                        channel_cursors=channel_cursors,
+                        thread_cursors=thread_cursors,
+                        excludes=excludes,
+                        source_service=context.source_service,
+                    ):
+                        observed_count += 1
+                # Gap fully drained → advance the low-water mark down to the
+                # new floor. Done only after the loop completes so a mid-gap
+                # crash leaves ``backfill`` at the prior low-water and the
+                # next sync re-attempts the whole window (resume-safe; the
+                # re-observed overlap is bounded, idempotent on ``sources``,
+                # and healed on inbox by #522).
+                for channel_id in gap_targets:
+                    backfill_cursors[channel_id] = gap_targets[channel_id]
+
             # Phase 1: ``conversations.history`` (top-level + initial
             # thread snapshot). Phase 20-A wired the initial snapshot
             # into the fetcher's yield stream; the connector's only
             # extra job here is to populate the threads axis so the
             # Phase 2 polling path (below) knows which threads to
-            # poll on the *next* sync.
+            # poll on the *next* sync. The per-yield bookkeeping (cursor
+            # advance, threads axis, excludes, observe) is shared with the
+            # Phase 0 gap pass via :func:`_ingest_yield`.
             for channel_id, raw_message, new_cursor in fetcher.fetch_messages(
                 cursor_per_channel=resume,
                 excludes=excludes,
             ):
-                # Defense-in-depth: never let the persisted cursor regress.
-                # The fetcher (post-#339 fix) yields ts-ascending across
-                # pages so ``new_cursor`` is naturally monotonic, but a
-                # future fetcher bug that yields an older ts after a
-                # newer one would otherwise rewind the projection cursor
-                # and cause every subsequent sync to re-ingest the gap
-                # (the regression-cascade documented in issue #339).
-                channel_cursors[channel_id] = _max_ts(channel_cursors.get(channel_id), new_cursor)
-                # Phase 20-C: maintain the threads axis as Phase 1
-                # yields parents and reply snapshots. A parent with
-                # replies (``thread_ts == ts``) initialises the
-                # threads cursor at ``latest_reply`` so the polling
-                # phase doesn't re-fetch the snapshot Phase 20-A
-                # already yielded. A reply (``thread_ts != ts``)
-                # advances the threads cursor to ``max(prior, reply.ts)``
-                # so a partial-progress crash mid-snapshot still
-                # resumes from the last yielded reply.
-                if raw_message.thread_ts is not None:
-                    thread_key = _thread_cursor_key(channel_id, raw_message.thread_ts)
-                    if raw_message.thread_ts == raw_message.ts:
-                        # Parent with replies. Initialise the threads
-                        # cursor at the parent's ``latest_reply`` — Slack
-                        # populates it whenever ``reply_count > 0`` and
-                        # Phase 20-A's ``_iter_thread_replies`` already
-                        # yielded every reply up to that point. Falling
-                        # back to the parent ``ts`` (when ``latest_reply``
-                        # is absent — defensive) is harmless because the
-                        # polling phase passes ``oldest`` server-side so
-                        # a low init value just costs one extra
-                        # round-trip on the next sync.
-                        latest_reply_raw = raw_message.raw.get("latest_reply")
-                        latest_reply_ts = (
-                            str(latest_reply_raw)
-                            if latest_reply_raw is not None
-                            else raw_message.ts
-                        )
-                        thread_cursors[thread_key] = _max_ts(
-                            thread_cursors.get(thread_key), latest_reply_ts
-                        )
-                    else:
-                        # Reply yielded via Phase 20-A's initial
-                        # snapshot — advance threads cursor monotonically.
-                        thread_cursors[thread_key] = _max_ts(
-                            thread_cursors.get(thread_key), raw_message.ts
-                        )
-                if excludes.excludes_channel(raw_message.channel_id) or excludes.excludes_sender(
-                    raw_message.user_id
+                if _ingest_yield(
+                    channel_id,
+                    raw_message,
+                    new_cursor,
+                    channel_cursors=channel_cursors,
+                    thread_cursors=thread_cursors,
+                    excludes=excludes,
+                    source_service=context.source_service,
                 ):
-                    continue
-                kwargs = map_message(raw_message)
-                # ``source_service`` is typed as ``Any`` on
-                # :class:`ConnectorContext` (the framework predates the
-                # Phase 3 ``SourceService`` rename); the keyword-only
-                # ``observe`` signature catches argument drift at runtime
-                # via TypeError.
-                context.source_service.observe(**kwargs)
-                observed_count += 1
+                    observed_count += 1
 
             # Phase 2: late-reply polling (Phase 20-C). For every
             # thread the connector knows about that's still inside
@@ -498,7 +553,9 @@ class SlackConnector:
             # quiet: the CLI's terminal ``ConnectorSyncCompleted``
             # event already pins the same cursor for the success case.
             if not completed_normally and (
-                channel_cursors != channels_at_entry or thread_cursors != threads_at_entry
+                channel_cursors != channels_at_entry
+                or thread_cursors != threads_at_entry
+                or backfill_cursors != backfill_at_entry
             ):
                 # ``context.source_service`` is the CLI's
                 # ``_ProgressSourceProxy`` (or the raw ``SourceService``
@@ -745,6 +802,75 @@ def _max_ts(prior: str | None, candidate: str | None) -> str | None:
         return candidate if float(candidate) >= float(prior) else prior
     except (TypeError, ValueError):
         return candidate
+
+
+def _ts_lt(candidate: str, bound: str) -> bool:
+    """Return ``True`` iff Slack ts ``candidate`` is strictly older than ``bound``.
+
+    Phase 22-D ([ADR-0038](docs/adr/0038-slack-sync-gap-backfill.md) §(d)):
+    used to detect a *lowered* floor (``target_low < low_water``) that
+    should trigger a gap backfill. A non-numeric operand (Slack contract
+    violation) falls through to ``False`` (treat as "not lower") so a
+    malformed ts can never trigger an unbounded historical re-fetch — the
+    conservative direction, mirroring :func:`_max_ts`'s defensive arm.
+    """
+    try:
+        return float(candidate) < float(bound)
+    except (TypeError, ValueError):
+        return False
+
+
+def _ingest_yield(
+    channel_id: str,
+    raw_message: RawSlackMessage,
+    new_cursor: str | None,
+    *,
+    channel_cursors: dict[str, str | None],
+    thread_cursors: dict[str, str | None],
+    excludes: ExcludeRules,
+    source_service: Any,
+) -> bool:
+    """Apply one fetcher yield: advance cursors + threads axis, then observe.
+
+    Shared by the Phase 1 forward loop and the Phase 0 gap-backfill loop
+    (Phase 22-D) so both paths advance the ``channels`` / ``threads`` axes
+    and apply the exclude filter identically. Returns ``True`` iff the
+    message was observed (``False`` when dropped by ``excludes``), so the
+    caller can maintain ``observed_count``.
+
+    The ``channels`` axis advance is guarded by :func:`_max_ts`, so a gap
+    yield (whose ``new_cursor`` is an *older* parent ts than the forward
+    high-water) never rewinds the persisted cursor — the gap-backfill pass
+    extends the low-water mark via the ``backfill`` axis, never the
+    forward ``channels`` axis (ADR-0038 §(b)).
+    """
+    channel_cursors[channel_id] = _max_ts(channel_cursors.get(channel_id), new_cursor)
+    # Maintain the threads axis exactly as the Phase 1 forward loop does:
+    # a parent with replies (``thread_ts == ts``) seeds the threads cursor
+    # at ``latest_reply``; a reply (``thread_ts != ts``) advances it to
+    # ``max(prior, reply.ts)``. For gap parents this registers the thread
+    # for the Phase 2 late-reply polling path (their replies were never
+    # observed because the parent was below the forward window).
+    if raw_message.thread_ts is not None:
+        thread_key = _thread_cursor_key(channel_id, raw_message.thread_ts)
+        if raw_message.thread_ts == raw_message.ts:
+            latest_reply_raw = raw_message.raw.get("latest_reply")
+            latest_reply_ts = (
+                str(latest_reply_raw) if latest_reply_raw is not None else raw_message.ts
+            )
+            thread_cursors[thread_key] = _max_ts(thread_cursors.get(thread_key), latest_reply_ts)
+        else:
+            thread_cursors[thread_key] = _max_ts(thread_cursors.get(thread_key), raw_message.ts)
+    if excludes.excludes_channel(raw_message.channel_id) or excludes.excludes_sender(
+        raw_message.user_id
+    ):
+        return False
+    # ``source_service`` is typed as ``Any`` on :class:`ConnectorContext`
+    # (the framework predates the Phase 3 ``SourceService`` rename); the
+    # keyword-only ``observe`` signature catches argument drift at runtime
+    # via TypeError.
+    source_service.observe(**map_message(raw_message))
+    return True
 
 
 def _thread_cursor_key(channel_id: str, thread_ts: str) -> str:

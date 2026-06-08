@@ -46,8 +46,8 @@ from opshub.connectors.slack.connector import (
 )
 from opshub.connectors.slack.fetcher import RawSlackMessage
 from opshub.core.config import SlackChannelSpec
-from opshub.core.errors import ConfigError
-from opshub.core.time import parse_since, since_to_ts
+from opshub.core.errors import ConfigError, ConnectorFailedError
+from opshub.core.time import now_utc, parse_since, since_to_ts
 
 # ---------------------------------------------------------------------- helpers
 
@@ -156,6 +156,7 @@ def _patch_settings(
     channels: list[str | Any],
     sync_since: str | None = None,
     thread_activity_window: timedelta | None = None,
+    backfill_on_floor_lower: bool = True,
 ) -> None:
     """Patch :class:`OpsHubSettings` so ``_resolve_slack_settings`` returns ``channels``.
 
@@ -188,6 +189,9 @@ def _patch_settings(
         if thread_activity_window is not None
         else SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW
     )
+    # Phase 22-D: a real bool (not a MagicMock attribute, which is
+    # truthy) so the gap-backfill toggle behaves deterministically.
+    fake_settings.connectors.slack.backfill_on_floor_lower = backfill_on_floor_lower
     monkeypatch.setattr(
         "opshub.core.config.OpsHubSettings",
         lambda: fake_settings,
@@ -1428,3 +1432,376 @@ def test_slack_subpackage_registers_connector() -> None:
 
     names = {c.name for c in discover_connectors()}
     assert "slack" in names
+
+
+# ----- sync: gap backfill (Phase 22-D, ADR-0038) ------------------------
+
+
+def _patch_fetcher_with_gap(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    forward_yields: list[tuple[str, RawSlackMessage, str | None]] | None = None,
+    gap_yields: Iterator[tuple[str, RawSlackMessage, str | None]]
+    | list[tuple[str, RawSlackMessage, str | None]]
+    | None = None,
+) -> tuple[MagicMock, dict[str, dict[str, Any] | None]]:
+    """Patch :class:`SlackFetcher` routing forward vs gap ``fetch_messages`` calls.
+
+    The connector (Phase 22-D) constructs two fetchers — the forward one
+    (no ``latest_per_channel``) and the gap one (``latest_per_channel``
+    set). ``MagicMock`` hands back the same ``return_value`` for both, so
+    we route inside the ``fetch_messages`` side-effect on the presence of
+    ``latest_per_channel``: a bounded call is the gap pass, an unbounded
+    call is the forward pass. Each returns a **fresh** iterator (the gap
+    pass drains before the forward pass, so a single shared iterator would
+    starve the second consumer). ``fetch_thread_replies`` is a no-op so the
+    Phase 2 polling path doesn't interfere with these backfill-focused
+    assertions.
+    """
+    forward = list(forward_yields or [])
+    captured: dict[str, dict[str, Any] | None] = {"forward": None, "gap": None}
+    fake_cls = MagicMock()
+
+    def _fetch_messages(
+        *,
+        cursor_per_channel: dict[str, str | None],
+        latest_per_channel: dict[str, str | None] | None = None,
+        max_per_channel: int = 100,
+        excludes: Any = None,
+    ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
+        del max_per_channel, excludes
+        if latest_per_channel is not None:
+            captured["gap"] = {
+                "cursor_per_channel": dict(cursor_per_channel),
+                "latest_per_channel": dict(latest_per_channel),
+            }
+            # ``gap_yields`` may be a generator (for the crash test) — pass
+            # it through verbatim so its side effects (raising) fire as the
+            # connector iterates.
+            if gap_yields is None:
+                return iter(())
+            if isinstance(gap_yields, list):
+                return iter(list(gap_yields))
+            return gap_yields
+        captured["forward"] = {"cursor_per_channel": dict(cursor_per_channel)}
+        return iter(list(forward))
+
+    def _no_replies(**_kw: Any) -> Iterator[RawSlackMessage]:
+        # Phase 2 polling is a no-op for these backfill-focused tests.
+        return iter(())
+
+    fake_cls.return_value.fetch_messages.side_effect = _fetch_messages
+    fake_cls.return_value.fetch_thread_replies.side_effect = _no_replies
+    monkeypatch.setattr("opshub.connectors.slack.connector.SlackFetcher", fake_cls)
+    return fake_cls, captured
+
+
+def test_sync_lowered_floor_triggers_gap_backfill(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lowering an absolute floor below the recorded low-water → gap backfill.
+
+    A post-feature channel (``channels`` + ``backfill`` both recorded)
+    whose ``sync_since`` is lowered fetches only the newly-uncovered
+    window ``(floor_new, low_water]`` — disjoint from the forward set —
+    and advances the low-water mark down to the new floor (ADR-0038 §(d)).
+    """
+    _patch_settings(monkeypatch, channels=["C1"], sync_since="2026-01-01")
+    _patch_auth(monkeypatch)
+
+    floor_ts = since_to_ts(parse_since("2026-01-01"))
+    gap_ts = since_to_ts(parse_since("2026-02-01"))
+    low_water = since_to_ts(parse_since("2026-03-01"))
+    high_water = since_to_ts(parse_since("2026-06-01"))
+
+    gap_msg = _raw_message(channel_id="C1", ts=gap_ts, text="gap-msg")
+    _, captured = _patch_fetcher_with_gap(
+        monkeypatch,
+        forward_yields=[],  # no new messages at the head this run
+        gap_yields=[("C1", gap_msg, gap_ts)],
+    )
+
+    prior = _dump_cursors(
+        {
+            "channels": {"C1": high_water},
+            "backfill": {"C1": low_water},
+            "threads": {},
+        }
+    )
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=prior))
+
+    # The gap pass fetched exactly the (floor_new, low_water] window.
+    assert captured["gap"] == {
+        "cursor_per_channel": {"C1": floor_ts},
+        "latest_per_channel": {"C1": low_water},
+    }
+    # The gap message was observed (and nothing else — the forward set is
+    # not re-fetched, so no inbox inflation on the already-covered region).
+    assert [c["external_id"] for c in service.calls] == [f"C1:{gap_ts}"]
+    parsed = _load_cursors(result.new_cursor)
+    # Low-water advanced down to the new floor; high-water unchanged (the
+    # older gap ts never rewinds the forward cursor).
+    assert parsed["backfill"] == {"C1": floor_ts}
+    assert parsed["channels"]["C1"] == high_water
+
+
+def test_sync_relative_floor_does_not_trigger_gap_backfill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A relative floor walks forward, so it never falls below the low-water.
+
+    ``sync_since = "90d"`` evaluated at sync time is *newer* than a
+    low-water mark recorded a year ago, so ``target_low >= low_water`` and
+    no gap fires — the load-bearing guard against a relative floor
+    spuriously re-fetching history on every run (ADR-0038 §(d)).
+    """
+    _patch_settings(monkeypatch, channels=["C1"], sync_since="90d")
+    _patch_auth(monkeypatch)
+
+    low_water = since_to_ts(now_utc() - timedelta(days=365))
+    high_water = since_to_ts(now_utc() - timedelta(days=1))
+    _, captured = _patch_fetcher_with_gap(monkeypatch, forward_yields=[])
+
+    prior = _dump_cursors(
+        {
+            "channels": {"C1": high_water},
+            "backfill": {"C1": low_water},
+            "threads": {},
+        }
+    )
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=prior))
+
+    # No gap pass at all.
+    assert captured["gap"] is None
+    assert service.calls == []
+    # Low-water unchanged.
+    parsed = _load_cursors(result.new_cursor)
+    assert parsed["backfill"] == {"C1": low_water}
+
+
+def test_sync_gap_backfill_suppressed_when_toggle_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``backfill_on_floor_lower=False`` suppresses the gap pass.
+
+    The lowered floor still bounds the forward fetch, but the past is not
+    re-fetched (ADR-0038 §透明性 / `--no-backfill`).
+    """
+    _patch_settings(
+        monkeypatch,
+        channels=["C1"],
+        sync_since="2026-01-01",
+        backfill_on_floor_lower=False,
+    )
+    _patch_auth(monkeypatch)
+
+    low_water = since_to_ts(parse_since("2026-03-01"))
+    high_water = since_to_ts(parse_since("2026-06-01"))
+    _, captured = _patch_fetcher_with_gap(monkeypatch, forward_yields=[])
+
+    prior = _dump_cursors(
+        {
+            "channels": {"C1": high_water},
+            "backfill": {"C1": low_water},
+            "threads": {},
+        }
+    )
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=prior))
+
+    assert captured["gap"] is None
+    assert service.calls == []
+    # Low-water is left where it was (no backfill performed).
+    parsed = _load_cursors(result.new_cursor)
+    assert parsed["backfill"] == {"C1": low_water}
+
+
+def test_sync_pre_feature_channel_does_not_auto_backfill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A channel synced before Phase 22 (no ``backfill`` entry) never auto-backfills.
+
+    Its historical floor is unrecoverable, so even with a floor set the
+    connector leaves the ``backfill`` axis absent and fires no gap pass
+    (ADR-0038 §(e)). The operator uses ``opshub slack cursor backfill``.
+    """
+    _patch_settings(monkeypatch, channels=["C1"], sync_since="2026-01-01")
+    _patch_auth(monkeypatch)
+    _, captured = _patch_fetcher_with_gap(monkeypatch, forward_yields=[])
+
+    # Pre-feature cursor: ``channels`` present, ``backfill`` axis absent
+    # entirely (the connector tolerates the missing axis, Phase 22-B).
+    prior = '{"channels":{"C1":"1800000000.000000"},"threads":{}}'
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=prior))
+
+    assert captured["gap"] is None
+    assert service.calls == []
+    # The axis stays absent (≡ epoch low-water, no auto-backfill).
+    parsed = _load_cursors(result.new_cursor)
+    assert parsed["backfill"] == {}
+
+
+def test_sync_floored_cold_start_records_low_water(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A floored cold-start records ``backfill[ch] = floor`` (no gap pass).
+
+    The forward pass resumes from ``oldest = floor`` so the channel is
+    covered down to the floor; recording the low-water lets a *later*
+    floor reduction detect the gap (ADR-0038 §(d)).
+    """
+    _patch_settings(monkeypatch, channels=["C1"], sync_since="2026-01-01")
+    _patch_auth(monkeypatch)
+
+    floor_ts = since_to_ts(parse_since("2026-01-01"))
+    head_msg = _raw_message(channel_id="C1", ts=since_to_ts(parse_since("2026-05-01")))
+    _, captured = _patch_fetcher_with_gap(
+        monkeypatch,
+        forward_yields=[("C1", head_msg, head_msg.ts)],
+    )
+
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=None))
+
+    # Cold-start → no gap pass, but the low-water is recorded at the floor.
+    assert captured["gap"] is None
+    parsed = _load_cursors(result.new_cursor)
+    assert parsed["backfill"] == {"C1": floor_ts}
+    assert parsed["channels"]["C1"] == head_msg.ts
+
+
+def test_sync_no_floor_cold_start_leaves_backfill_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A no-floor cold-start leaves the ``backfill`` axis empty (≡ epoch).
+
+    Nothing older than the channel head exists to backfill, so we do not
+    materialise a spurious epoch entry (ADR-0038 §(d)).
+    """
+    _patch_settings(monkeypatch, channels=["C1"])  # no sync_since
+    _patch_auth(monkeypatch)
+    head_msg = _raw_message(channel_id="C1", ts="1700000005.000000")
+    _, captured = _patch_fetcher_with_gap(
+        monkeypatch,
+        forward_yields=[("C1", head_msg, head_msg.ts)],
+    )
+
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=None))
+
+    assert captured["gap"] is None
+    parsed = _load_cursors(result.new_cursor)
+    assert parsed["backfill"] == {}
+
+
+def test_sync_gap_parent_seeds_threads_axis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A parent fetched in the gap pass seeds the ``threads`` axis.
+
+    Gap parents' replies were never observed (the parent was below the
+    forward window), so registering the thread lets the Phase 2 polling
+    path pick up their replies on subsequent syncs (ADR-0038 §thread).
+    The threads-axis bookkeeping is shared with the forward path via
+    ``_ingest_yield``.
+    """
+    _patch_settings(monkeypatch, channels=["C1"], sync_since="2026-01-01")
+    _patch_auth(monkeypatch)
+
+    low_water = since_to_ts(parse_since("2026-03-01"))
+    high_water = since_to_ts(parse_since("2026-06-01"))
+    # A gap parent (thread_ts == ts) with a *recent* latest_reply so the
+    # Phase 2 prune keeps it in-window.
+    parent_ts = since_to_ts(parse_since("2026-02-01"))
+    latest_reply_ts = since_to_ts(now_utc() - timedelta(days=1))
+    gap_parent = RawSlackMessage(
+        channel_id="C1",
+        channel_name="general",
+        ts=parent_ts,
+        text="gap-parent",
+        user_id="U1",
+        user_display_name="alice",
+        permalink="https://acme.slack.com/archives/C1/p1",
+        raw={"latest_reply": latest_reply_ts},
+        thread_ts=parent_ts,
+    )
+    _patch_fetcher_with_gap(
+        monkeypatch,
+        forward_yields=[],
+        gap_yields=[("C1", gap_parent, parent_ts)],
+    )
+
+    prior = _dump_cursors(
+        {"channels": {"C1": high_water}, "backfill": {"C1": low_water}, "threads": {}}
+    )
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=prior))
+
+    parsed = _load_cursors(result.new_cursor)
+    # The gap parent registered its thread at ``latest_reply``.
+    assert parsed["threads"] == {f"C1:{parent_ts}": latest_reply_ts}
+
+
+def test_sync_mid_gap_crash_does_not_advance_low_water(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A crash mid-gap leaves the low-water unchanged (whole window re-attempted).
+
+    The low-water mark advances to the new floor only **after** the gap
+    pass drains fully. A mid-gap exception keeps ``backfill`` at the prior
+    low-water, so the next sync re-attempts the whole ``(floor_new,
+    low_water]`` window (resume-safe; the bounded re-observe is healed on
+    inbox by #522). Here the gap yields a thread *reply* first so the
+    threads axis advances — which makes the issue #339 partial-progress
+    checkpoint fire, letting us assert that it persists the threads
+    progress while explicitly **not** advancing the low-water (ADR-0038
+    §(d)).
+    """
+    _patch_settings(monkeypatch, channels=["C1"], sync_since="2026-01-01")
+    _patch_auth(monkeypatch)
+
+    low_water = since_to_ts(parse_since("2026-03-01"))
+    high_water = since_to_ts(parse_since("2026-06-01"))
+    parent_ts = since_to_ts(parse_since("2026-02-01"))
+    reply_ts = since_to_ts(parse_since("2026-02-15"))
+    # A gap *reply* (thread_ts != ts): its yield advances the threads axis
+    # (so the checkpoint fires) but never the channels high-water (the
+    # reply's cursor anchor is the parent ts, below the forward cursor).
+    gap_reply = RawSlackMessage(
+        channel_id="C1",
+        channel_name="general",
+        ts=reply_ts,
+        text="gap-reply",
+        user_id="U1",
+        user_display_name="alice",
+        permalink="https://acme.slack.com/archives/C1/p2",
+        raw={},
+        thread_ts=parent_ts,
+    )
+
+    def _crashing_gap() -> Iterator[tuple[str, RawSlackMessage, str | None]]:
+        # Reply yields under the parent's cursor anchor (Phase 20-A
+        # semantics), then the fetcher raises mid-window.
+        yield ("C1", gap_reply, parent_ts)
+        raise ConnectorFailedError("Slack fetch failed for channel C1: rate_limited")
+
+    _patch_fetcher_with_gap(monkeypatch, forward_yields=[], gap_yields=_crashing_gap())
+
+    prior = _dump_cursors(
+        {"channels": {"C1": high_water}, "backfill": {"C1": low_water}, "threads": {}}
+    )
+    service = _RecordingSourceService()
+    with pytest.raises(ConnectorFailedError):
+        SlackConnector().sync(_context(service, cursor_value=prior))
+
+    # The gap reply was observed before the crash.
+    assert [c["external_id"] for c in service.calls] == [f"C1:{reply_ts}"]
+    # The partial-progress checkpoint fired (threads axis advanced).
+    assert len(service.cursor_set_calls) == 1
+    checkpoint = service.cursor_set_calls[0]
+    assert checkpoint["sync_started"] is True
+    parsed = _load_cursors(checkpoint["value"])
+    # Threads progress is checkpointed...
+    assert parsed["threads"] == {f"C1:{parent_ts}": reply_ts}
+    # ...but the low-water is NOT advanced (the gap did not fully drain) —
+    # the next sync re-attempts (floor_new, low_water].
+    assert parsed["backfill"] == {"C1": low_water}

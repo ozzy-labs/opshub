@@ -662,6 +662,24 @@ def test_slack_duplicate_channel_ids_rejected() -> None:
         SlackConnectorSettings.model_validate({"channels": ["C1", "C1"]})
 
 
+def test_slack_backfill_on_floor_lower_defaults_true() -> None:
+    """Phase 22-D (ADR-0038): auto gap-backfill is opt-out, default on."""
+    assert SlackConnectorSettings().backfill_on_floor_lower is True
+
+
+def test_slack_backfill_on_floor_lower_can_be_disabled() -> None:
+    """``backfill_on_floor_lower=false`` suppresses the auto gap-backfill."""
+    assert SlackConnectorSettings(backfill_on_floor_lower=False).backfill_on_floor_lower is False
+    # The env-var path (the ``--no-backfill`` CLI shim target) coerces the
+    # string ``"false"`` to the bool ``False`` like any pydantic bool field.
+    assert (
+        SlackConnectorSettings.model_validate(
+            {"backfill_on_floor_lower": "false"}
+        ).backfill_on_floor_lower
+        is False
+    )
+
+
 def test_slack_channels_env_override_json_table_form(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -55,15 +55,20 @@ Phase 20-B ([ADR-0030](0030-slack-thread-reply-ingestion.md)) の 2 軸 compound
 
 ### (d) low-water ライフサイクル
 
-- **cold-start** (`channels[ch]` 不在): forward 完了後 `backfill[ch] = floor_new`。floor 未設定 (full-history) の cold-start は全量取得するため `backfill[ch] = "0.000000"` (epoch sentinel = 「先頭まで被覆済み」)。
-- **毎 sync**: `floor_new` を解決し、`floor_new < backfill[ch]` のとき gap `(floor_new, backfill[ch]]` を bounded fetch して ingest、`backfill[ch] = floor_new` に後退。`floor_new >= backfill[ch]` なら no-op。
-- **相対 floor (`90d`)** は sync 実行ごとに ts が**前進**する ([ADR-0036](0036-slack-sync-date-floor.md) §(f)) ため `floor_new < backfill[ch]` にならず、**gap backfill は発火しない**。**絶対 floor の引き下げ / `sync_since` の縮小** (例 `7d` → `30d`、ISO 日付を過去へ) のときだけ 1 度発火し、追いついたら止まる。
+**`backfill` 軸は floor を設定した channel についてのみ materialise する。** 軸の **欠損 (absent) は epoch low-water (「先頭まで被覆済み = backfill 不要」) と等価**とし、no-floor channel には spurious な epoch entry を書かない (cursor を簡潔に保つ + 既存テストの非破壊)。
+
+- **cold-start** (`channels[ch]` 不在):
+  - floor **あり**: forward は `oldest = floor` から再開するので channel は floor まで被覆される。`backfill[ch] = floor` を記録し、後の floor 引き下げで gap を検知できるようにする。
+  - floor **なし** (full-history): 全量取得するので backfill すべき過去はない → 軸は**書かない (absent = epoch)**。
+- **既 sync 済みだが low-water 未記録** (`channels[ch]` あり・`backfill[ch]` 不在): pre-Phase-22 channel か、no-floor sync の後に floor を足した channel。いずれも過去の被覆範囲が不明 (または既に floor 以上を被覆済み) なので **auto gap backfill はしない** (軸 absent のまま)。救済は §(f) の明示コマンド。
+- **毎 sync (low-water 記録済み)**: `target_low` (= floor、floor 撤去時は epoch) を解決し、`target_low < backfill[ch]` のとき gap `(target_low, backfill[ch]]` を bounded fetch して ingest、`backfill[ch] = target_low` に後退。`target_low >= backfill[ch]` なら no-op。
+- **相対 floor (`90d`)** は sync 実行ごとに ts が**前進**する ([ADR-0036](0036-slack-sync-date-floor.md) §(f)) ため `target_low < backfill[ch]` にならず、**gap backfill は発火しない**。**絶対 floor の引き下げ / `sync_since` の縮小 / floor の撤去** のときだけ 1 度発火し、追いついたら止まる。
 
 ### (e) pre-feature channel の扱い (正直な限界)
 
-`channels[ch]` あり・`backfill[ch]` 不在の channel (本機能着地より前に sync 済み) は、過去にどの floor で cold-start したかを **復元できない**。よって `backfill[ch] = "0.000000"` (epoch = 「全量取得済みとみなす」inflation-safe な保守側既定) を遅延初期化し、**auto gap backfill はしない**。
+§(d) のとおり、`channels[ch]` あり・`backfill[ch]` 不在の channel (本機能着地より前に sync 済み) は過去にどの floor で cold-start したかを **復元できない**ため、`backfill` 軸を absent のまま (= epoch 等価、inflation-safe) とし **auto gap backfill はしない**。
 
-帰結として §Context の発端シナリオ (feature 着地前に `7d` で sync 済み → `30d` に下げる) は **自動では解決しない**。pre-feature channel の救済は §(f) の明示コマンドで行う。
+帰結として §Context の発端シナリオ (feature 着地前に `7d` で sync 済み → `30d` に下げる) は **自動では解決しない**。pre-feature channel の救済は §(f) の明示コマンド (`opshub slack cursor backfill`) で行う。
 
 ### (f) operability: `opshub slack cursor` サブコマンド
 
