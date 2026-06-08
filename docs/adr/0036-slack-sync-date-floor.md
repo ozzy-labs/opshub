@@ -83,6 +83,11 @@ ts であり authoritative)。帰結:
 floor は `oldest` (= 何を fetch するか) のみを動かし、persist する cursor
 (= 観測した message の ts) は従来どおり `_max_ts(cursor, yielded)` で進める。
 
+> **【Phase 22 / [ADR-0038](0038-slack-sync-gap-backfill.md) で精緻化】** 本節の「cursor authoritative」は
+> **forward (前進方向) 限定**の不変条件である。過去方向 (backfill) は ADR-0038 が新設する `backfill` 軸
+> (per-channel low-water-mark) が担い、floor 引き下げ時に既取得区間と disjoint な gap だけを取得する。
+> forward cursor (`channels` 軸) は ADR-0038 でも決して後退しない。
+
 ### (h) thread replies
 
 `conversations.replies` で取る子返信は親 ts で取得範囲が決まる
@@ -103,9 +108,15 @@ sync_since` / `channels[].since` ラベル付きの `ConfigError` に wrap す�
   既存環境には無影響な opt-in (cursor が authoritative)。`channels` が additive なため
   既存 config / `conversations --format=toml` 出力 / 既存テストは無改修。
 - **代償 / 限界**:
-  - **floor を後から下げても過去は遡って backfill されない** (cursor が authoritative)。
-    古い履歴を取り直すには cursor reset / `opshub projections rebuild` が必要。floor は
+  - **floor を後から下げても過去は遡って backfill されない** (cursor が authoritative)。floor は
     「これ以降のみ取る」下限であり遡及取得トリガではない、という非対称性を持つ。
+    - **【是正 (Phase 22 / [ADR-0038](0038-slack-sync-gap-backfill.md))】** 本 ADR は当初「古い履歴を取り直すには
+      `opshub projections rebuild` で cursor をリセットする」と案内していたが、これは**事実誤認**である。
+      rebuild は event log を保持したまま `connector_cursors` projection を流し直すが、`ConnectorSyncCompleted`
+      を replay して cursor を**同じ最新値に復元する**ため、cursor はリセットされず再 backfill も起きない
+      (`src/opshub/projections/connector_cursors.py`、[ADR-0002](0002-event-sourced-architecture.md))。floor 引き下げ時の
+      過去取り直しは Phase 22 ([ADR-0038](0038-slack-sync-gap-backfill.md)) の **自動 gap backfill** (low-water-mark 軸) と
+      明示コマンド `opshub slack cursor backfill` が担う。
   - 相対指定 (`"90d"`) は sync 実行時点基準で評価されるため、絶対下限が必要なら
     ISO 日付を使う。
   - table 形式を env で渡す場合 `OPSHUB_CONNECTORS__SLACK__CHANNELS` は JSON 文字列

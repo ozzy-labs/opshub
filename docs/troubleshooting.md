@@ -260,7 +260,8 @@ floor 関連の挙動でよくある質問:
 
 - **floor を設定したのに既存の古いメッセージが消えない**: 正常。floor は「これ以降のみ取得する」下限であり、既に sync 済みのメッセージを削除しない。
 - **floor を有効にしたのに再取得が走らない / 既存 channel に効かない**: 正常。per-channel cursor が authoritative (`oldest = max(cursor, floor)`) なので、cursor が floor より新しい既存 channel では floor は inert になる。floor が効くのは初回 sync・新規追加 channel・cursor が floor より古い場合のみ。
-- **floor を下げた (例 `90d` → `365d`) のに古い履歴が戻ってこない**: 仕様。floor を下げても遡及 backfill はしない (cursor が authoritative)。古い履歴を取り直すには `opshub projections rebuild` で Slack cursor をリセットしてから sync する。
+- **floor を下げた (例 `90d` → `365d`) のに古い履歴が戻ってこない**: Phase 22 ([ADR-0038](adr/0038-slack-sync-gap-backfill.md)) で **自動 gap backfill** が入った。**feature 着地後に sync された channel** は、floor を下げると次回 `opshub slack sync` が「新たに広がった窓だけ」を自動取得して追いつく (既取得区間には触れない)。**feature 着地より前に sync 済みの channel** は過去 floor を復元できないため auto backfill されない → `opshub slack cursor backfill --channel <id> --since <new> [--until <old>]` で明示的に取り直す。
+  - ⚠️ **`opshub projections rebuild` は Slack cursor をリセットしない** (旧版の本ドキュメントの誤記)。rebuild は event log を保持したまま projection を流し直すが、`connector_cursors` は `ConnectorSyncCompleted` を replay して cursor を**同じ最新値に復元する**ため、再 backfill は起きない。過去取り直しは上記 `opshub slack cursor backfill` を使う。
 - **相対指定 `"90d"` の起点がいつなのか分からない**: sync 実行時点基準で毎回再評価される。絶対的な下限が必要なら ISO 日付 (`"2026-01-01"`) を使う。
 
 **`--since` の値**:
@@ -495,15 +496,9 @@ thread_activity_window = "60d"   # 直近 60 日に reply のあった thread �
 
 **cold thread reactivation の limitation**:
 
-`thread_activity_window` を経過した thread の `threads` 軸 entry は Phase 2 happy path 完了時に prune される (mid-iteration crash は resume-safe のため prune しない)。窓経過後に投稿された late reply は本経路では追従しない (`channels` 軸は親 ts を超えないため Phase 1 でも再取得されない)。再取得が必要なケース:
+`thread_activity_window` を経過した thread の `threads` 軸 entry は Phase 2 happy path 完了時に prune される (mid-iteration crash は resume-safe のため prune しない)。窓経過後に投稿された late reply は本経路では追従しない (`channels` 軸は親 ts を超えないため Phase 1 でも再取得されない)。
 
-```bash
-opshub projections rebuild
-# Slack の compound cursor がリセットされ、次回 sync で全 channel + thread が cold-start で取り直される。
-# WARNING: 大規模 workspace では rate limit budget と sync 時間が顕著に増える。`sync_since` で範囲を絞ってから rebuild するのが現実的。
-```
-
-将来オプションとして `opshub slack sync --include-cold-threads` のような opt-in flag を残しているが、本 Phase では実装しない (ADR-0030 §(d) `## 採用しなかった代替` の追加項目候補)。
+⚠️ **再取得手段の訂正**: 旧版の本ドキュメントは「`opshub projections rebuild` で compound cursor をリセットして取り直す」と案内していたが、これは**誤り**。rebuild は event log を保持したまま projection を流し直し、`connector_cursors` は `ConnectorSyncCompleted` を replay して cursor を**同じ最新値に復元する**ため、cursor はリセットされず cold-start 取り直しには使えない ([ADR-0038](adr/0038-slack-sync-gap-backfill.md) §Context、[ADR-0002](adr/0002-event-sourced-architecture.md))。実際に機能する cursor リセットは Phase 22-E で導入する `opshub slack cursor reset --channel <id>` ([ADR-0038](adr/0038-slack-sync-gap-backfill.md) §(f))。それまでは cold thread reactivation の正規手段はない (ADR-0030 §(d) の意図された limitation)。将来オプションとして `opshub slack sync --include-cold-threads` のような opt-in flag も候補に残している (ADR-0030 §採用しなかった代替)。
 
 **`conversations.replies` の rate limit (429)**:
 
