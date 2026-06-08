@@ -1510,3 +1510,40 @@ No assistant skill calls `browser.fetch` as a primary path yet; the `research`-s
 - **New config sections** `[browser]` (shared) and `[connectors.web]` (web connector). Both opt-in; absent config means the layer never runs.
 - **MCP surface 18 → 19 tools = 13 read + 6 write** (the new write tool `browser.fetch`).
 - **CI** runs the `browser` integration tests (`@pytest.mark.browser`) against a localhost `http.server` fixture with a real Chromium provisioned by `playwright install chromium` — no external network egress from CI (epic #504 test plan).
+
+## Phase 22: Slack sync gap backfill (floor 引き下げ時の自動取り直し)
+
+[ADR-0038](adr/0038-slack-sync-gap-backfill.md)（epic [#516](https://github.com/ozzy-labs/opshub/issues/516)）で、`opshub slack sync` の date floor ([ADR-0036](adr/0036-slack-sync-date-floor.md)) を**引き下げたとき、新たに広がった過去区間だけを自動で取り直す** gap backfill を追加した。
+
+### 何が変わったか
+
+- **`[connectors.slack] sync_since`（または per-channel `since`）を下げると、次回 sync が `(新floor, 旧low-water]` の窓だけを取得**して追いつく。forward の既取得区間には触れないので inbox は膨張しない。これは **feature 着地後に sync された channel** で自動的に効く。
+- compound cursor が 2 軸 → **3 軸**に拡張された: `{"channels": ..., "backfill": ..., "threads": ...}`。新しい `backfill` 軸が per-channel の low-water mark（取得済み最古 ts 境界）を保持する。**旧 2 軸 cursor は無改修で読める**（`backfill` 欠損は空として許容）。
+- **相対 floor (`"90d"`) は誤発火しない**（sync ごとに ts が前進するため）。発火するのは**絶対 floor の引き下げ / `sync_since` の縮小 / floor の撤去**のときだけ。
+
+### 重要: `opshub projections rebuild` は cursor をリセットしない
+
+旧ドキュメント（ADR-0036 §Consequences 等）は「古い履歴を取り直すには `opshub projections rebuild`」と案内していたが、これは**誤りだった**。rebuild は event log を保持したまま projection を流し直し、`connector_cursors` は `ConnectorSyncCompleted` を replay して cursor を**同じ最新値に復元する**ため、cursor はリセットされず再 backfill も起きない。Phase 22 で正しい手段を提供した（下記）。
+
+### 新コマンド `opshub slack cursor`
+
+```bash
+opshub slack cursor show                                   # 現在の 3 軸 cursor を pretty-print (--format=json も可)
+opshub slack cursor reset --channel C1,C2                  # 指定 channel を cold-start 化 (working reset; --all で全 channel)
+opshub slack cursor backfill --channel C1 --since 30d      # (since, low-water] を取り直し (low-water 既知なら --until 省略可)
+opshub slack cursor backfill --channel C1 --since 2026-01-01 --until 2026-03-01  # 明示窓
+```
+
+- **`reset`** は破壊的（cold-start 再取得で既取得分を再観測し得る）。確認プロンプトあり（`--yes` で skip）。
+- **`backfill`** はサージカル（指定窓だけ取得、overlap なし）。**pre-feature channel（本機能着地より前に sync 済み = `backfill` 軸に low-water 未記録）の救済主経路**。pre-feature channel は過去 floor が復元不能なため auto backfill されず、`--until` に当時の floor を明示して取り直す。
+
+### per-invocation opt-out
+
+- `[connectors.slack] backfill_on_floor_lower = false`（default `true`）で auto backfill を恒久無効化。
+- `opshub slack sync --no-backfill` で当該 run だけ抑止（floor は forward fetch の bound としては効く）。
+
+### Phase 22 specifics
+
+- **No DB migration.** cursor schema 拡張は `connector_cursors.cursor_value`（TEXT）内の JSON で完結（additive、新 column / event なし）。
+- **MCP surface 不変**（19 tools）。skill catalog 不変（14、`test_skills_install_only_writes_14_assistant_skills` green）。
+- **関連**: inbox `ItemEnqueued` の `source_ref` 冪等化（[#522](https://github.com/ozzy-labs/opshub/issues/522)、旧 #339 class）は hardening dependency として別 issue 化。着地すれば `reset` / pre-feature 経路の残留 overlap も無害化される。
