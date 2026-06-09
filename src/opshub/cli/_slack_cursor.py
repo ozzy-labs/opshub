@@ -1,9 +1,11 @@
 """``opshub slack cursor`` subcommand implementations (Phase 22-E, ADR-0038).
 
-Operator-facing cursor inspection / surgery for the Slack connector's
-compound resume cursor (``channels`` / ``backfill`` / ``threads`` axes):
+Recovery / low-level cursor surgery (the *mutation* verbs) for the Slack
+connector's compound resume cursor (``channels`` / ``backfill`` / ``threads``
+axes). Read-only **inspection** lives on ``opshub slack status`` (Phase 23-F,
+#536) — including ``status --verbose`` for the raw 3-axis dump that the old
+``cursor show`` printed:
 
-* ``show`` — pretty-print the current cursor (read-only).
 * ``reset`` — drop selected channels' cursor entries so they cold-start
   on the next sync. The **working** replacement for the long-documented
   (but non-functional) ``opshub projections rebuild`` reset path —
@@ -14,61 +16,20 @@ compound resume cursor (``channels`` / ``backfill`` / ``threads`` axes):
   pre-feature channels whose historical low-water is unrecorded
   (ADR-0038 §(e) §(f)).
 
-Module-level imports are restricted to ``__future__`` / stdlib / typer so
-``opshub --help`` cold start stays under the ADR-0001 budget; heavy
-imports (wiring, connector, config) happen inside the functions.
+Module-level imports are restricted to ``__future__`` so ``opshub --help``
+cold start stays under the ADR-0001 budget; heavy imports (wiring, connector,
+config) happen inside the functions.
 """
 
 from __future__ import annotations
 
-import json
-from typing import Any
-
-import typer
-
 #: The connector key the cursor lives under in ``connector_cursors``.
 _CONNECTOR = "slack"
-
-#: Output formats accepted by ``opshub slack cursor show``.
-SHOW_FORMAT_CHOICES = ("table", "json")
 
 
 def _empty_compound() -> dict[str, dict[str, str | None]]:
     """Return the empty 3-axis compound shape (no cursor persisted yet)."""
     return {"channels": {}, "backfill": {}, "threads": {}}
-
-
-def render_cursor_show(*, output_format: str) -> str:
-    """Render the current Slack compound cursor for ``cursor show``.
-
-    Reads ``connector_cursors`` via the source service and parses it with
-    the connector's own ``_load_cursors`` (so a legacy / hand-edited
-    cursor surfaces the same :class:`ConfigError` the sync path would).
-    ``json`` emits the parsed compound; ``table`` emits one ``axis`` block
-    per line with sorted entries.
-    """
-    from opshub.cli._wiring import build_source_service
-    from opshub.connectors.slack.connector import (
-        _load_cursors,  # pyright: ignore[reportPrivateUsage]
-    )
-
-    source = build_source_service(actor="cli:slack-cursor")
-    raw = source.cursor_get(_CONNECTOR)
-    state: dict[str, Any] = _empty_compound() if raw is None else dict(_load_cursors(raw))
-
-    if output_format == "json":
-        return json.dumps(state, indent=2, sort_keys=True)
-
-    lines: list[str] = []
-    for axis in ("channels", "backfill", "threads"):
-        entries: dict[str, str | None] = state[axis]
-        lines.append(f"[{axis}] ({len(entries)} entr{'y' if len(entries) == 1 else 'ies'})")
-        for key in sorted(entries):
-            lines.append(f"  {key} = {entries[key]}")
-    if raw is None:
-        lines.append("")
-        lines.append("(no cursor persisted yet — slack has not been synced)")
-    return "\n".join(lines)
 
 
 def run_cursor_reset(*, channels: list[str] | None, reset_all: bool) -> tuple[int, str]:
@@ -195,13 +156,3 @@ def run_cursor_backfill(*, channel_id: str, since: str, until: str | None) -> in
     )
     source.cursor_set(_CONNECTOR, result.new_cursor, sync_started=False)
     return result.observed_count
-
-
-def parse_show_format(value: str) -> str:
-    """Validate the ``--format`` value for ``cursor show`` (raises on miss)."""
-    if value not in SHOW_FORMAT_CHOICES:
-        raise typer.BadParameter(
-            f"unknown --format value {value!r}; choose one of {', '.join(SHOW_FORMAT_CHOICES)}",
-            param_hint="--format",
-        )
-    return value

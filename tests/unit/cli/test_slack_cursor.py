@@ -46,46 +46,9 @@ def _patch_source(monkeypatch: pytest.MonkeyPatch, source: _FakeSource) -> None:
     monkeypatch.setattr("opshub.cli._wiring.build_source_service", lambda actor="x": source)
 
 
-# ----- show --------------------------------------------------------------
-
-
-def test_cursor_show_json_renders_three_axes(monkeypatch: pytest.MonkeyPatch) -> None:
-    from opshub.cli._slack_cursor import render_cursor_show
-
-    source = _FakeSource(
-        '{"backfill":{"C1":"100.000000"},"channels":{"C1":"200.000000"},"threads":{}}'
-    )
-    _patch_source(monkeypatch, source)
-
-    import json
-
-    out = json.loads(render_cursor_show(output_format="json"))
-    assert out == {
-        "channels": {"C1": "200.000000"},
-        "backfill": {"C1": "100.000000"},
-        "threads": {},
-    }
-
-
-def test_cursor_show_table_lists_axes(monkeypatch: pytest.MonkeyPatch) -> None:
-    from opshub.cli._slack_cursor import render_cursor_show
-
-    source = _FakeSource('{"channels":{"C1":"200.000000"},"backfill":{},"threads":{}}')
-    _patch_source(monkeypatch, source)
-
-    out = render_cursor_show(output_format="table")
-    assert "[channels]" in out
-    assert "[backfill]" in out
-    assert "[threads]" in out
-    assert "C1 = 200.000000" in out
-
-
-def test_cursor_show_no_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
-    from opshub.cli._slack_cursor import render_cursor_show
-
-    _patch_source(monkeypatch, _FakeSource(None))
-    out = render_cursor_show(output_format="table")
-    assert "no cursor persisted yet" in out
+# ----- show (promoted to ``opshub slack status``, Phase 23-F #536) -------
+# The read-only cursor view moved to ``opshub slack status`` (raw 3-axis dump
+# behind ``status --verbose``); see ``tests/unit/cli/test_slack_status.py``.
 
 
 # ----- reset -------------------------------------------------------------
