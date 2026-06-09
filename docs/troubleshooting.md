@@ -630,6 +630,21 @@ cdp_endpoint = "http://localhost:9222"
 - [docs/upgrading.md §Phase 21](upgrading.md) — `[browser]` / `[connectors.web]` config + extras + `playwright install chromium` 手順
 - Phase 21 実装 PR: 21-A [#510](https://github.com/ozzy-labs/opshub/pull/510) / 21-B [#511](https://github.com/ozzy-labs/opshub/pull/511) / 21-C [#513](https://github.com/ozzy-labs/opshub/pull/513) / 21-D [#512](https://github.com/ozzy-labs/opshub/pull/512)
 
+### 3.14 `opshub slack sync` が `team_id` mismatch の `ConfigError` で落ちる (Phase 23-H / [#538](https://github.com/ozzy-labs/opshub/issues/538))
+
+opshub は **1 install = 1 Slack workspace** を前提とする ([ADR-0039](adr/0039-slack-single-workspace-non-goal.md))。cursor は初回 sync で workspace の `team_id` を bind し、以降の sync は **fetch 前に** 保存された token が今どの workspace に解決するかを照合する。
+
+```text
+Error: Slack cursor is bound to workspace team_id 'T-AAA' but the stored token
+now resolves to 'T-BBB'. opshub supports one Slack workspace per install
+(ADR-0039: single-workspace is an explicit non-goal). ...
+```
+
+- **別 workspace の token を誤って貼った** → 元の workspace の token に戻す。
+- **意図的に workspace を切り替えたい** → `opshub slack cursor reset --all` で bind を解除してから `opshub slack sync`。**旧 workspace の取り込み済み source は残る**ため手動 purge が必要 (unsupported path)。複数 workspace を同時に扱うことは非対応 (ADR-0039)。
+- **live と bound の見方**: `opshub slack auth test` は token が**今**属する workspace (live)、`opshub slack status` は cursor が **bind 済みの** workspace (bound) を表示する。両者の食い違いが次回 sync で止まる状態。
+- mismatch は **fetch 前**に検出されるため、別 workspace のメッセージが DB に入ることはない (`external_id` の workspace-wide 一意性は保たれる)。
+
 ## 4. セキュリティ注意書き
 
 `-v` / `-vv` / `--debug` / `--log-file` を使うときに operator が知っておくこと:

@@ -280,6 +280,15 @@ asserts a continuous covered range (the cursor cannot prove one).
   access is keyed on the id and Slack does not guarantee name stability.
 - **Cold threads past `thread_activity_window`** (default 30d) stop
   being polled for late replies (Phase 20-C, intended limitation).
+- **One opshub install = one Slack workspace** ([ADR-0039](adr/0039-slack-single-workspace-non-goal.md),
+  Phase 23-H). Multi-workspace is an explicit non-goal. The first sync binds
+  the workspace `team_id` into the cursor; swapping the stored token to a
+  *different* workspace makes the next `opshub slack sync` fail loud with a
+  `ConfigError` (rather than silently mixing two workspaces). To switch
+  workspaces on purpose: `opshub slack cursor reset --all`, then
+  `opshub slack sync`. The previous workspace's already-ingested messages
+  remain in the store and must be purged manually — an unsupported path.
+  `opshub slack status` shows the bound workspace.
 
 ## Troubleshooting
 

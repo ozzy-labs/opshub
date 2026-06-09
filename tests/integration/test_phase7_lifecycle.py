@@ -487,6 +487,14 @@ def phase7_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     # Slack: OAuth token via env override (User Token per ADR-0018), single channel id.
     monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_TOKEN", "xoxp-test")
     monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '["C1"]')
+    # Phase 23-H (#538, ADR-0039): stub auth.test (the single-workspace bind
+    # guard resolves team_id before any fetch) so the lifecycle stays hermetic.
+    from opshub.connectors.slack.auth import SlackAuth
+
+    def _stub_slack_test_token(_self: SlackAuth) -> dict[str, str]:
+        return {"team": "t", "team_id": "T-int", "user": "u", "user_id": "U1", "principal": "user"}
+
+    monkeypatch.setattr(SlackAuth, "test_token", _stub_slack_test_token)
     # MS365: client id is the only mandatory bootstrapping setting.
     monkeypatch.setenv("OPSHUB_CONNECTORS__MS365__CLIENT_ID", "test-client-id")
     # Embedding + LLM: opt into the stub-backed local backends so the

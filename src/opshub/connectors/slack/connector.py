@@ -225,6 +225,16 @@ class SlackCursorState(TypedDict):
     channels: dict[str, str | None]
     backfill: dict[str, str | None]
     threads: dict[str, str | None]
+    # Phase 23-H ([#538](https://github.com/ozzy-labs/opshub/issues/538),
+    # ADR-0039): the Slack workspace ``team_id`` this cursor is bound to.
+    # ``None`` = not yet bound (first sync, or a legacy pre-23-H cursor).
+    # The sync hot path binds it on the first non-empty sync and rejects a
+    # later token swap to a different workspace (single-workspace is an
+    # explicit non-goal — one opshub install = one Slack workspace). This is
+    # a *scalar* axis (unlike the three dict axes above); callers that
+    # iterate the dict axes must enumerate them explicitly, not via
+    # ``.values()`` / ``for axis in cursors``.
+    team_id: str | None
 
 
 class SlackConnector:
@@ -297,6 +307,16 @@ class SlackConnector:
         excludes = load_excludes()
 
         cursors = _load_cursors(context.cursor_value)
+        # Phase 23-H ([#538](https://github.com/ozzy-labs/opshub/issues/538),
+        # ADR-0039): single-workspace bind guard. opshub treats
+        # single-workspace as an explicit non-goal (one install = one Slack
+        # workspace). Resolve the live workspace ``team_id`` and reconcile it
+        # with the one this cursor is bound to **before any fetch**, so a
+        # token swapped to a *different* workspace can never let a foreign
+        # workspace's messages into the cursor / ``external_id`` namespace
+        # (the silent-corruption pathology epic #530 targets). On first sync
+        # (or after ``cursor reset --all``) ``team_id`` is unbound → bind it.
+        _bind_or_check_workspace(cursors, auth=auth, logger=context.logger)
         # Phase 20-B: the fetcher signature still takes
         # ``cursor_per_channel=`` (a flat ``dict[str, str | None]``) so
         # 20-A and 20-B can land independently. We hand it the
@@ -773,7 +793,18 @@ def _load_cursors(cursor_value: str | None) -> SlackCursorState:
     # ADR-0038 §Context). ``channels`` / ``threads`` remain required (their
     # absence still trips the pre-20-B legacy detection above).
     backfill_axis = _coerce_axis(parsed_dict.get("backfill", {}), axis_name="backfill")
-    return SlackCursorState(channels=channels_axis, backfill=backfill_axis, threads=threads_axis)
+    # Phase 23-H ([#538](https://github.com/ozzy-labs/opshub/issues/538),
+    # ADR-0039): the workspace ``team_id`` bind axis is **additive** and
+    # **scalar** (not a dict axis, so it is parsed explicitly here rather
+    # than via ``_coerce_axis``). A legacy pre-23-H cursor lacks it → ``None``
+    # (= unbound; the next sync binds it, forward-compatible). A non-string
+    # value (hand-edit) is tolerated as ``None`` rather than raised — the
+    # bind guard simply re-binds on the next sync, which is harmless.
+    team_id_raw = parsed_dict.get("team_id")
+    team_id = team_id_raw if isinstance(team_id_raw, str) and team_id_raw else None
+    return SlackCursorState(
+        channels=channels_axis, backfill=backfill_axis, threads=threads_axis, team_id=team_id
+    )
 
 
 def _empty_state() -> SlackCursorState:
@@ -785,7 +816,7 @@ def _empty_state() -> SlackCursorState:
     :func:`_load_cursors` (``cursor_value is None`` branch) and from
     tests that need to construct a baseline first-sync state.
     """
-    return SlackCursorState(channels={}, backfill={}, threads={})
+    return SlackCursorState(channels={}, backfill={}, threads={}, team_id=None)
 
 
 def _coerce_axis(raw: Any, *, axis_name: str) -> dict[str, str | None]:
@@ -1075,3 +1106,55 @@ def _dump_cursors(cursors: SlackCursorState) -> str:
     connectors).
     """
     return json.dumps(cursors, sort_keys=True, separators=(",", ":"))
+
+
+def _bind_or_check_workspace(
+    cursors: SlackCursorState,
+    *,
+    auth: SlackAuth,
+    logger: Any,
+) -> None:
+    """Bind / verify the single-workspace ``team_id`` invariant (Phase 23-H, ADR-0039).
+
+    opshub supports one Slack workspace per install. The cursor records the
+    workspace ``team_id`` it was first synced against; this guard resolves the
+    live workspace (via ``auth.test``) and:
+
+    * **unbound** (first sync / after ``cursor reset --all``) → bind it
+      (mutates ``cursors["team_id"]`` in place; the caller persists it).
+    * **bound, same team** → no-op (steady state).
+    * **bound, different team** → :class:`ConfigError`. A token swapped to
+      another workspace would otherwise silently mix two workspaces' messages
+      into one cursor + ``external_id`` namespace (exit 0 "success" — the
+      silent-failure pathology epic #530 targets). Because this runs **before
+      any fetch**, the foreign workspace's data never enters the DB, so the
+      ``external_id = "{channel_id}:{ts}"`` workspace-wide-uniqueness premise
+      (``mapper.py``) is never broken (ADR-0039 §Decision 2).
+
+    An ``auth.test`` that returns no ``team_id`` (abnormal) does **not** bind
+    (binding ``""`` would make every later sync mismatch); it warns and lets
+    the sync proceed. Enterprise Grid User Tokens report a stable home
+    ``team_id`` so the guard does not false-positive (ADR-0039 §Decision 5).
+    """
+    current_team = auth.test_token().get("team_id", "")
+    if not current_team:
+        logger.warning(
+            "slack connector: auth.test returned no team_id; skipping the "
+            "single-workspace bind guard for this sync (ADR-0039)."
+        )
+        return
+    bound_team = cursors["team_id"]
+    if bound_team is None:
+        cursors["team_id"] = current_team
+        return
+    if bound_team != current_team:
+        raise ConfigError(
+            f"Slack cursor is bound to workspace team_id {bound_team!r} but the "
+            f"stored token now resolves to {current_team!r}. opshub supports one "
+            "Slack workspace per install (ADR-0039: single-workspace is an "
+            "explicit non-goal). If you pasted the wrong token, restore the "
+            "original. To intentionally switch workspaces, run `opshub slack "
+            "cursor reset --all` first (the previous workspace's ingested "
+            "messages remain and must be purged manually — an unsupported "
+            "path). Multi-workspace support is out of scope (ADR-0039)."
+        )

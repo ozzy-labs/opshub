@@ -111,6 +111,9 @@ def render_status(*, output_format: str, verbose: bool) -> str:
     source = build_source_service(actor="cli:slack-status")
     raw = source.cursor_get(_CONNECTOR)
     state: dict[str, dict[str, str | None]]
+    # Phase 23-H (#538, ADR-0039): the workspace this cursor is bound to.
+    # ``None`` = unbound (never synced, or after ``cursor reset --all``).
+    bound_team: str | None = None
     if raw is None:
         state = {"channels": {}, "backfill": {}, "threads": {}}
     else:
@@ -120,19 +123,27 @@ def render_status(*, output_format: str, verbose: bool) -> str:
             "backfill": dict(loaded["backfill"]),
             "threads": dict(loaded["threads"]),
         }
+        bound_team = loaded["team_id"]
 
     if verbose:
-        return _render_verbose(state, raw_present=raw is not None, output_format=output_format)
+        return _render_verbose(
+            state, raw_present=raw is not None, output_format=output_format, bound_team=bound_team
+        )
 
     rows, pending = _build_rows(state)
 
     if output_format == "json":
         return json.dumps(
-            {"channels": rows, "pending_backfill": pending, "synced": raw is not None},
+            {
+                "channels": rows,
+                "pending_backfill": pending,
+                "synced": raw is not None,
+                "bound_team_id": bound_team,
+            },
             indent=2,
             sort_keys=True,
         )
-    return _render_table(rows, pending, raw_present=raw is not None)
+    return _render_table(rows, pending, raw_present=raw is not None, bound_team=bound_team)
 
 
 def _build_rows(
@@ -195,9 +206,19 @@ def _render_table(
     pending: list[dict[str, Any]],
     *,
     raw_present: bool,
+    bound_team: str | None = None,
 ) -> str:
     """Render the human ``status`` view (the daily operator face)."""
-    lines: list[str] = [f"Slack 取得状況 ({len(rows)} channel)"]
+    # Phase 23-H (#538, ADR-0039): the bound workspace. Complements `auth
+    # test` (which shows the *live* workspace the token resolves to now): a
+    # mismatch between the two is exactly what the next sync's bind guard
+    # rejects, so surfacing both makes that failure diagnosable.
+    bound_text = (
+        f"bound workspace: team_id={bound_team}"
+        if bound_team is not None
+        else "bound workspace: 未取得 (次回 sync で bind — ADR-0039)"
+    )
+    lines: list[str] = [f"Slack 取得状況 ({len(rows)} channel) — {bound_text}"]
     if not rows:
         lines.append("")
         lines.append("(configured channels なし — [connectors.slack] channels が空)")
@@ -241,12 +262,13 @@ def _render_verbose(
     *,
     raw_present: bool,
     output_format: str,
+    bound_team: str | None = None,
 ) -> str:
     """Render the raw 3-axis cursor dump (the former ``cursor show`` content)."""
     if output_format == "json":
-        return json.dumps(state, indent=2, sort_keys=True)
+        return json.dumps({**state, "team_id": bound_team}, indent=2, sort_keys=True)
 
-    lines: list[str] = []
+    lines: list[str] = [f"[team_id] {bound_team if bound_team is not None else '(unbound)'}"]
     for axis in ("channels", "backfill", "threads"):
         entries: dict[str, str | None] = state[axis]
         lines.append(f"[{axis}] ({len(entries)} entr{'y' if len(entries) == 1 else 'ies'})")
