@@ -494,7 +494,13 @@ def slack_cursor_reset(
             return
 
     removed, _ = run_cursor_reset(channels=selected, reset_all=reset_all)
-    typer.echo(f"reset slack cursor: {removed} channel entr(y/ies) removed.")
+    # ``--all`` hard-drops without parsing the prior cursor (so it can
+    # recover a pre-Phase-20-B flat-dict, #531); ``run_cursor_reset``
+    # returns -1 to signal "count unknown" on that path.
+    if removed < 0:
+        typer.echo("reset slack cursor: all channel entries cleared.")
+    else:
+        typer.echo(f"reset slack cursor: {removed} channel entr(y/ies) removed.")
 
 
 @slack_cursor_app.command("backfill")
