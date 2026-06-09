@@ -199,8 +199,9 @@ def test_box_drive_sync_persists_prefix_when_scan_raises(
     once per yielded file (one UoW each), so the two prefix yields
     land durably before the iterator raises. The CLI driver in
     :mod:`opshub.cli._connector_common` catches the exception, records a
-    sanitised ``ConnectorSyncFailed`` event with
-    ``type(exc).__name__`` only, and exits 1.
+    ``ConnectorSyncFailed`` event with ``type(exc).__name__`` only
+    (event log stays type-name-only), surfaces the sanitised message
+    body on stderr (Phase 23-B / #532), and exits 1.
 
     This is the box_drive analogue of
     :func:`test_box_partial_success_persists_prefix` in the Phase 7
@@ -223,12 +224,13 @@ def test_box_drive_sync_persists_prefix_when_scan_raises(
     runner = CliRunner()
     result = runner.invoke(app, ["box_drive", "sync"])
 
-    # CLI surface: failure path → exit 1, sanitised type name surfaces.
+    # CLI surface: failure path → exit 1; type name + sanitised message
+    # body surface on the default stderr trail (Phase 23-B / #532).
     assert result.exit_code == 1
     combined = (result.stdout or "") + (result.stderr or "")
-    assert "RuntimeError" in combined
-    # Sanitisation: raw message must not leak through.
-    assert "simulated mid-scan failure" not in combined
+    assert "sync failed: RuntimeError: " in combined
+    # The (secret-free) message body is now part of the default trail.
+    assert "simulated mid-scan failure" in combined
 
     # On-disk state:
     # - 2 prefix files durably committed (per-file UoW).

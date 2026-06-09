@@ -43,15 +43,17 @@ CLI フラグを渡せない文脈 (`mcp serve` を subprocess として起動�
 
 Phase 17 (ADR-0031) で旧 `opshub connector sync <name>` は per-noun group (`opshub slack sync` / `opshub github sync` / etc.) に再編済 (`docs/upgrading.md` §Phase 17)。
 
-デフォルトの失敗表示は `ConnectorSyncFailed` event に **例外型名だけ** を残す (R3 不変条件、ADR-0014 / ADR-0022 由来)。`sync failed: <Type>` の 1 行サマリは **stderr** に、event log の `error_message` は型名のみで、例外メッセージは出さない。成功時の `synced <name>: N item(s) observed` は従来通り **stdout** なので、結果を pipe で受け取るスクリプトは影響を受けない (`opshub <connector> sync > out.txt 2> err.txt` のように分けると挙動が明快)。
+デフォルトの失敗表示は `sync failed: <Type>: <sanitised-msg>` の 1 行サマリを **stderr** に出す (Phase 23-B [#532] でサニタイズ済み本文をデフォルトに昇格。それ以前は本文が `--debug` 限定だった)。scope catalogue URL / `run opshub slack auth set` などの回復手順を connector 側が本文に書いているため、デフォルトでも actionable な情報が手に入る。`ConnectorSyncFailed` event の `error_message` は引き続き **例外型名だけ** を残す (R3 不変条件、ADR-0014 / ADR-0022 由来) ので、event log の token surface は広がらない。成功時の `synced <name>: N item(s) observed` は従来通り **stdout** なので、結果を pipe で受け取るスクリプトは影響を受けない (`opshub <connector> sync > out.txt 2> err.txt` のように分けると挙動が明快)。`sync failed:` prefix は維持されるので grep スクリプトは引き続き機能する。
 
-原因調査には `--debug` を付けて再実行する:
+stderr 本文はすべて `sanitise_error_message` を通してから出力されるため、`sk-` / `ghp_` / `xox*-` / JWT / `Bearer` 等のトークン形状はデフォルト・`--debug` どちらの verbosity でも marker に置換される (ADR-0027 R4)。ログを社内チャットや issue に貼っても安全。
+
+traceback まで見たい場合は `--debug` を付けて再実行する:
 
 ```bash
 opshub --debug github sync
 ```
 
-`--debug` 時のみ、サニタイズ済みの例外メッセージと traceback が **stderr** に追加表示される。デフォルトの `sync failed: <Type>` stderr サマリ・event log の `error_message` 自体は変わらない (R3 cont'd) — `--debug` が増やすのは追加の stderr 行 (例外メッセージ + サニタイズ済み traceback) だけ。トークン形状はすべて marker に置換されてから出力されるため、ログを社内チャットや issue に貼っても安全。
+`--debug` 時のみ、サニタイズ済みの traceback が **stderr** に追加表示される。デフォルトの `sync failed: <Type>: <sanitised-msg>` stderr サマリ・event log の `error_message` 自体は変わらない (R3 cont'd) — `--debug` が増やすのはサニタイズ済み traceback だけ。
 
 cron 経由など、フラグを渡せない場合は環境変数で:
 
