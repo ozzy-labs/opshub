@@ -262,7 +262,7 @@ floor 関連の挙動でよくある質問:
 
 - **floor を設定したのに既存の古いメッセージが消えない**: 正常。floor は「これ以降のみ取得する」下限であり、既に sync 済みのメッセージを削除しない。
 - **floor を有効にしたのに再取得が走らない / 既存 channel に効かない**: 正常。per-channel cursor が authoritative (`oldest = max(cursor, floor)`) なので、cursor が floor より新しい既存 channel では floor は inert になる。floor が効くのは初回 sync・新規追加 channel・cursor が floor より古い場合のみ。
-- **floor を下げた (例 `90d` → `365d`) のに古い履歴が戻ってこない**: Phase 22 ([ADR-0038](adr/0038-slack-sync-gap-backfill.md)) で **自動 gap backfill** が入った。**feature 着地後に sync された channel** は、floor を下げると次回 `opshub slack sync` が「新たに広がった窓だけ」を自動取得して追いつく (既取得区間には触れない)。**feature 着地より前に sync 済みの channel** は過去 floor を復元できないため auto backfill されない → `opshub slack cursor backfill --channel <id> --since <new> [--until <old>]` で明示的に取り直す。
+- **floor を下げた (例 `90d` → `365d`) のに古い履歴が戻ってこない**: Phase 22 ([ADR-0038](adr/0038-slack-sync-gap-backfill.md)) で **自動 gap backfill** が入った。**feature 着地後に sync された channel** は、floor を下げると次回 `opshub slack sync` が「新たに広がった窓だけ」を自動取得して追いつく (既取得区間には触れない)。**feature 着地より前に sync 済みの channel** は過去 floor を復元できないため auto backfill されない → `opshub slack cursor backfill --channel <id> --since <new> [--until <old>]` で明示的に取り直す。`--until` は取得実績があれば省略可 (Phase 23-F-2、[#536](https://github.com/ozzy-labs/opshub/issues/536): その channel の最古取得 ts を CLI が逆引きして既定値にする)。
   - ⚠️ **`opshub projections rebuild` は Slack cursor をリセットしない** (旧版の本ドキュメントの誤記)。rebuild は event log を保持したまま projection を流し直すが、`connector_cursors` は `ConnectorSyncCompleted` を replay して cursor を**同じ最新値に復元する**ため、再 backfill は起きない。過去取り直しは上記 `opshub slack cursor backfill` を使う。
 - **相対指定 `"90d"` の起点がいつなのか分からない**: sync 実行時点基準で毎回再評価される。絶対的な下限が必要なら ISO 日付 (`"2026-01-01"`) を使う。
 

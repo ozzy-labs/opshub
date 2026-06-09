@@ -16,12 +16,14 @@ axes). Read-only **inspection** lives on ``opshub slack status`` (Phase 23-F,
   pre-feature channels whose historical low-water is unrecorded
   (ADR-0038 §(e) §(f)).
 
-Module-level imports are restricted to ``__future__`` so ``opshub --help``
-cold start stays under the ADR-0001 budget; heavy imports (wiring, connector,
-config) happen inside the functions.
+Module-level imports are restricted to ``__future__`` / stdlib typing so
+``opshub --help`` cold start stays under the ADR-0001 budget; heavy imports
+(wiring, connector, config, projection) happen inside the functions.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 #: The connector key the cursor lives under in ``connector_cursors``.
 _CONNECTOR = "slack"
@@ -104,9 +106,13 @@ def run_cursor_backfill(*, channel_id: str, since: str, until: str | None) -> in
 
     Resolves ``since`` / ``until`` through the shared ``parse_since`` grammar
     (relative ``"30d"`` or ISO date). ``until`` defaults to the channel's
-    recorded low-water mark; when there is none (a pre-feature channel),
-    the operator must pass ``--until`` explicitly (their old floor). Drives
-    :meth:`SlackConnector.backfill_channel` and persists the advanced cursor.
+    recorded low-water mark; for a pre-feature channel with no recorded
+    low-water it defaults to the **oldest already-ingested message ts** for
+    the channel (Phase 23-F-2, #536) — the natural upper bound, since history
+    below the oldest ingested message is the unfetched window. Only when the
+    channel has no ingested messages at all does the operator have to pass
+    ``--until`` explicitly. Drives :meth:`SlackConnector.backfill_channel` and
+    persists the advanced cursor.
     """
     from opshub.cli._wiring import build_source_service
     from opshub.connectors.context import ConnectorContext
@@ -128,13 +134,34 @@ def run_cursor_backfill(*, channel_id: str, since: str, until: str | None) -> in
         until_ts = since_to_ts(parse_since(until, field="--until"))
     else:
         recorded = state["backfill"].get(channel_id)
-        if recorded is None:
-            raise ConfigError(
-                f"no recorded low-water mark for channel {channel_id!r}; pass "
-                "--until explicitly (the floor the channel was last synced "
-                "from) so the backfill window is bounded. See ADR-0038 §(f)."
+        if recorded is not None:
+            until_ts = recorded
+        else:
+            # Phase 23-F-2 (#536): pre-feature channel with no recorded
+            # low-water. Default --until to the oldest already-ingested message
+            # ts for this channel (the natural upper bound — history older than
+            # it is the unfetched window). Only error when nothing is ingested.
+            from opshub.cli._wiring import build_engine
+
+            inferred = _oldest_observed_ts(build_engine, channel_id=channel_id)
+            if inferred is None:
+                raise ConfigError(
+                    f"no recorded low-water mark for channel {channel_id!r} and no "
+                    "ingested messages to infer one; pass --until explicitly (the "
+                    "floor the channel was last synced from). See ADR-0038 §(f)."
+                )
+            until_ts = inferred
+            import typer
+
+            from opshub.cli._slack_status import (
+                _ts_to_date,  # pyright: ignore[reportPrivateUsage]
             )
-        until_ts = recorded
+
+            typer.echo(
+                f"notice: --until defaulted to the oldest ingested message ts for "
+                f"{channel_id} ({_ts_to_date(inferred)}); pass --until to override.",
+                err=True,
+            )
 
     if float(since_ts) >= float(until_ts):
         raise ConfigError(
@@ -156,3 +183,46 @@ def run_cursor_backfill(*, channel_id: str, since: str, until: str | None) -> in
     )
     source.cursor_set(_CONNECTOR, result.new_cursor, sync_started=False)
     return result.observed_count
+
+
+def _oldest_observed_ts(engine_factory: Any, *, channel_id: str) -> str | None:
+    """Return the oldest ingested Slack message ts for ``channel_id``, or ``None``.
+
+    Slack sources carry ``external_id = "{channel_id}:{ts}"`` (the message's
+    natural key, see ``connectors/slack/mapper.py``), so the oldest ingested ts
+    is the numeric ``min`` over the ts suffix of the channel's ``sources`` rows.
+    Used to default ``cursor backfill --until`` for a pre-feature channel
+    (Phase 23-F-2, #536) **without reaching into the connector** — the
+    connector stays decoupled from the projection; this CLI/query layer owns
+    the lookup. Returns ``None`` when the channel has no ingested rows.
+    """
+    from sqlalchemy import select
+
+    from opshub.projections.sources import sources_table
+
+    engine = engine_factory()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(sources_table.c.external_id).where(
+                    sources_table.c.connector_name == _CONNECTOR,
+                    sources_table.c.external_id.like(f"{channel_id}:%"),
+                )
+            ).all()
+    finally:
+        engine.dispose()
+
+    oldest: float | None = None
+    oldest_raw: str | None = None
+    for (external_id,) in rows:
+        _, _, suffix = str(external_id).partition(":")
+        if not suffix:
+            continue
+        try:
+            value = float(suffix)
+        except ValueError:
+            continue
+        if oldest is None or value < oldest:
+            oldest = value
+            oldest_raw = suffix
+    return oldest_raw
