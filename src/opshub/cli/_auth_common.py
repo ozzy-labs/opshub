@@ -129,6 +129,7 @@ def run_auth_test(
     label: str,
     verifier: Callable[[], dict[str, str]],
     next_action: str | None = None,
+    post_render: Callable[[dict[str, str]], list[str]] | None = None,
 ) -> None:
     """Drive a connector's ``test_token`` verifier and render the result.
 
@@ -153,6 +154,13 @@ def run_auth_test(
     conversations --format=toml``). It is stderr-only so the stdout
     key/value block stays byte-identical for scripts that parse it; the
     failure path is untouched (the error already points the way).
+    Connectors that pass ``None`` (the default) are entirely unchanged.
+
+    ``post_render`` (Phase 23-I, #539) optionally appends connector-specific
+    lines to **stdout** after the key/value block, computed from the verified
+    ``result`` dict (e.g. Slack's per-feature scope-readiness ``features:``
+    block, ADR-0040). It runs on the success path only and is part of the
+    command's primary value, so unlike ``next_action`` it goes to stdout.
     Connectors that pass ``None`` (the default) are entirely unchanged.
 
     Empty values render as ``(none)`` (operator readability beats
@@ -180,5 +188,8 @@ def run_auth_test(
     for k, v in result.items():
         display = v if v else "(none)"
         typer.echo(f"{k:<{key_width}}  {display}")
+    if post_render is not None:
+        for line in post_render(result):
+            typer.echo(line)
     if next_action is not None:
         typer.echo(f"next: {next_action}", err=True)

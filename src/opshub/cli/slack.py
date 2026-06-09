@@ -256,6 +256,22 @@ def slack_auth_set(
     )
 
 
+def _slack_features_block(result: dict[str, str]) -> list[str]:
+    """Render the ``features:`` scope-readiness block for ``slack auth test``.
+
+    Phase 23-I (#539, ADR-0040): a per-feature ``READY`` / ``MISSING`` / ``N/A``
+    verdict derived purely from the token's granted ``scopes`` + ``principal``
+    (no extra API call — both come from the ``test_token()`` response already
+    rendered above). A capability model: it reports scope readiness only, with
+    a one-line membership footnote (a granted scope does not imply the token
+    can read a given channel — that is a separate ``not_in_channel`` layer).
+    """
+    from opshub.connectors.slack.scopes import render_features_block
+
+    body = render_features_block(result.get("scopes", ""), result.get("principal", "user"))
+    return ["", "features:", *body]
+
+
 @slack_auth_app.command("test")
 def slack_auth_test() -> None:
     """Verify the stored Slack token via the ``auth.test`` Web API endpoint.
@@ -266,6 +282,11 @@ def slack_auth_test() -> None:
     OAuth scopes Slack granted the token (from the ``x-oauth-scopes``
     response header, byte-symmetric with ``opshub github auth test``);
     ``(none)`` when Slack reports no scopes header.
+
+    Phase 23-I (#539, ADR-0040): a ``features:`` block follows the field
+    list, mapping each ingestion feature (public / private / DM / group-DM
+    sync + the engagement axis) to a scope-readiness verdict so an operator
+    sees what a token *can do* — and what scope to add — in one call.
     """
     from opshub.cli._auth_common import run_auth_test
     from opshub.connectors.slack.auth import SlackAuth
@@ -277,6 +298,7 @@ def slack_auth_test() -> None:
             "opshub slack conversations --format=toml  "
             "# discover channel ids → paste the block into opshub.toml"
         ),
+        post_render=_slack_features_block,
     )
 
 

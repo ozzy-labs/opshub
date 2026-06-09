@@ -123,6 +123,51 @@ scopes** (Phase 23-C, #533) so you can confirm the scopes you intended
 were actually approved. A missing scope here is the usual cause of an
 empty `opshub slack conversations` result.
 
+### Feature readiness (`features:` block)
+
+Below the field list, `auth test` prints a **`features:`** block (Phase
+23-I, #539, [ADR-0040](adr/0040-slack-feature-scope-ssot-and-readiness.md))
+that maps each ingestion feature to a scope-readiness verdict, so you see
+what the token *can do* — and what scope to add — in one call:
+
+```text
+features:
+  public channel sync: READY
+  private channel sync: MISSING groups:history
+  DM sync: MISSING im:history
+  group-DM (mpim) sync: MISSING mpim:history
+  engagement axis (--sort=last_self_post): READY
+  note: READY = scope granted; it does not guarantee channel membership …
+```
+
+The feature → scope correspondence (the single source of truth lives in
+`src/opshub/connectors/slack/scopes.py`):
+
+| feature | required scope | recommended | note |
+|---|---|---|---|
+| public channel sync | `channels:history` | `users:read` (author names) | any token |
+| private channel sync | `groups:history` | `users:read` | any token |
+| DM sync | `im:history` | `users:read` | any token |
+| group-DM (mpim) sync | `mpim:history` | `users:read` | any token |
+| engagement axis (`--sort=last_self_post`) | `search:read` | — | **User Token only** |
+
+Reading the verdicts:
+
+- **READY** — the required scope is granted. `READY (degraded: +users:read …)`
+  means it works but author display names won't resolve until you add the
+  recommended scope.
+- **MISSING `<scope>`** — add `<scope>` (re-install the app after changing
+  scopes) to enable the feature.
+- **N/A (User Token only)** — a Bot Token can never hold `search:read`
+  ([ADR-0034](adr/0034-slack-engagement-axis.md)); switch to a User Token to
+  use the engagement axis. It is `N/A`, not `MISSING`, because no scope you
+  can add to the Bot Token fixes it.
+- **READY is a scope verdict, not a membership guarantee.** A channel you have
+  not joined (or, on a Bot Token, not `/invite`'d) still returns
+  `not_in_channel` even when every scope is `READY` — see Troubleshooting
+  §3.15. Thread-reply ingestion and the mention/DM demand digest need no
+  scope beyond the history scopes above (ADR-0033).
+
 ## 6. Discover channel ids
 
 ```bash
