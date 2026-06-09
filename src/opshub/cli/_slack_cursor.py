@@ -83,6 +83,20 @@ def run_cursor_reset(*, channels: list[str] | None, reset_all: bool) -> tuple[in
     listed channel id is removed from the ``channels`` and ``backfill``
     axes, plus any ``threads`` entry whose ``"{channel_id}:{thread_ts}"``
     key belongs to it.
+
+    The ``reset_all`` path is **``_load_cursors``-free** on purpose: it
+    overwrites the whole cursor with the empty compound, so parsing the
+    prior value is pointless — and a pre-Phase-20-B flat-dict (or any
+    hand-edited shape ``_load_cursors`` would reject) cannot be the source
+    of a ``ConfigError`` here. This is the working recovery path
+    ([#531](https://github.com/ozzy-labs/opshub/issues/531)) the flat-dict
+    sync error points at: persisting the empty compound through
+    ``cursor_set`` records a ``ConnectorSyncCompleted`` whose
+    ``cursor_value`` is the empty compound, so even ``opshub projections
+    rebuild`` (which replays that event) restores the empty compound rather
+    than regenerating the flat dict. The selective per-channel path still
+    parses (it has to know which entries to trim); a flat-dict cursor has
+    no selectable structure, so its only escape hatch is ``--all``.
     """
     from opshub.cli._wiring import build_source_service
     from opshub.connectors.slack.connector import (
@@ -96,21 +110,28 @@ def run_cursor_reset(*, channels: list[str] | None, reset_all: bool) -> tuple[in
     if raw is None:
         return 0, _dump_cursors(_empty_state())
 
-    state = _load_cursors(raw)
     if reset_all:
-        removed = len(state["channels"])
-        state = _empty_state()
-    else:
-        targets = set(channels or [])
-        removed = 0
-        for channel_id in targets:
-            if channel_id in state["channels"]:
-                del state["channels"][channel_id]
-                removed += 1
-            state["backfill"].pop(channel_id, None)
-            # Drop the channel's thread entries ("{channel_id}:{thread_ts}").
-            for key in [k for k in state["threads"] if k.split(":", 1)[0] == channel_id]:
-                del state["threads"][key]
+        # Hard-drop: never call ``_load_cursors`` here. ``-1`` signals
+        # "count unknown" (we did not parse the prior cursor), which the
+        # CLI renders as "all" rather than a concrete entry count.
+        empty = _dump_cursors(_empty_state())
+        source.cursor_set(_CONNECTOR, empty, sync_started=False)
+        return -1, empty
+
+    # Selective per-channel trim. Must parse to know which entries to drop;
+    # a flat-dict cursor (no selectable structure) is unreachable here
+    # because the sync error steers flat-dict recovery to ``--all`` above.
+    state = _load_cursors(raw)
+    targets = set(channels or [])
+    removed = 0
+    for channel_id in targets:
+        if channel_id in state["channels"]:
+            del state["channels"][channel_id]
+            removed += 1
+        state["backfill"].pop(channel_id, None)
+        # Drop the channel's thread entries ("{channel_id}:{thread_ts}").
+        for key in [k for k in state["threads"] if k.split(":", 1)[0] == channel_id]:
+            del state["threads"][key]
 
     new_value = _dump_cursors(state)
     source.cursor_set(_CONNECTOR, new_value, sync_started=False)

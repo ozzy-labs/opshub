@@ -371,20 +371,24 @@ def test_load_cursors_rejects_non_dict_root() -> None:
 
 
 def test_load_cursors_rejects_legacy_flat_dict_schema() -> None:
-    """Pre-20-B flat shape (``{channel_id: ts}``) → ConfigError with rebuild prompt.
+    """Pre-20-B flat shape (``{channel_id: ts}``) → ConfigError with reset prompt.
 
     Phase 20-B is a hard schema flip ([epic #465](
     https://github.com/ozzy-labs/opshub/issues/465)): the pre-20-B
     flat ``{channel_id: ts}`` shape is rejected with a migration
-    prompt pointing at ``opshub projections rebuild``. opshub is
-    pre-userbase so we do not silently coerce — coercion would lose
+    prompt. Phase 23-A ([#531](
+    https://github.com/ozzy-labs/opshub/issues/531)) re-pointed the
+    prompt at ``opshub slack cursor reset --all`` (the working recovery)
+    — the older ``opshub projections rebuild`` prompt was a dead-end for
+    the flat dict (rebuild replays the flat-dict event payload). opshub
+    is pre-userbase so we do not silently coerce — coercion would lose
     the operator-facing migration moment and would also be subtly
     wrong (the legacy ``ts`` was the per-channel max including
     thread replies *that were never observed*, so a 1:1 lift into the
     new ``channels`` axis breaks Phase 20-C's increment semantics).
     """
     legacy = '{"C1":"1700000001.000100","C2":"1700000002.000200"}'
-    with pytest.raises(ConfigError, match="opshub projections rebuild"):
+    with pytest.raises(ConfigError, match="opshub slack cursor reset --all"):
         _load_cursors(legacy)
 
 
@@ -402,17 +406,19 @@ def test_load_cursors_rejects_legacy_message_mentions_pre_phase_20b() -> None:
 
 
 def test_load_cursors_legacy_message_matches_canonical_doc_text() -> None:
-    """Reject text matches the canonical doc string (Phase 20-E audit).
+    """Reject text matches the canonical doc string (Phase 20-E / 23-A audit).
 
     ``docs/troubleshooting.md`` §3.12 and ``docs/upgrading.md`` §Phase 20
     each render the error string verbatim as the "typical error" the
     operator will grep against. Phase 20-E
     ([#478](https://github.com/ozzy-labs/opshub/issues/478)) aligned the
-    implementation to the documented spelling — both files are the SSOT
-    for the message ("doc is canonical"); this test pins both the
-    individual fragments and the underlying operator surface
-    (``opshub projections rebuild``) so a future paraphrase has to
-    update the docs first.
+    implementation to the documented spelling; Phase 23-A
+    ([#531](https://github.com/ozzy-labs/opshub/issues/531)) re-pointed
+    the recovery command at ``opshub slack cursor reset --all`` (the old
+    ``opshub projections rebuild`` prompt was a dead-end for the flat
+    dict). Both files are the SSOT for the message ("doc is canonical");
+    this test pins both the individual fragments and the underlying
+    operator surface so a future paraphrase has to update the docs first.
     """
     legacy = '{"C1":"ts-1"}'
     with pytest.raises(ConfigError) as excinfo:
@@ -420,22 +426,31 @@ def test_load_cursors_legacy_message_matches_canonical_doc_text() -> None:
     message = str(excinfo.value)
     # Fragments lifted directly from the doc surface.
     assert "Slack cursor envelope is pre-Phase-20-B (flat dict)." in message
-    assert "`opshub projections rebuild`" in message
-    assert '{"channels": ..., "threads": ...} compound schema' in message
+    assert "`opshub slack cursor reset --all`" in message
+    # The dead-end command must NOT be the steered recovery (Phase 23-A).
+    assert "opshub projections rebuild" not in message
+    assert '{"channels": ..., "threads": ...} ' in message
+    assert "compound schema" in message
     assert "opshub is pre-userbase and ships no silent migration" in message
     # ADR cross-reference so operators can grep ADR-0030 from the error.
     assert "ADR-0030" in message
 
 
 def test_load_cursors_rejects_missing_channels_axis() -> None:
-    """Compound schema requires the ``channels`` axis — drop → ConfigError."""
-    with pytest.raises(ConfigError, match="opshub projections rebuild"):
+    """Compound schema requires the ``channels`` axis — drop → ConfigError.
+
+    A cursor missing ``channels`` (or ``threads``) trips the same
+    legacy-shape branch as the pre-20-B flat dict, so the recovery prompt
+    is the working ``opshub slack cursor reset --all`` (Phase 23-A #531),
+    not the dead-end ``opshub projections rebuild``.
+    """
+    with pytest.raises(ConfigError, match="opshub slack cursor reset --all"):
         _load_cursors('{"threads":{}}')
 
 
 def test_load_cursors_rejects_missing_threads_axis() -> None:
     """Compound schema requires the ``threads`` axis — drop → ConfigError."""
-    with pytest.raises(ConfigError, match="opshub projections rebuild"):
+    with pytest.raises(ConfigError, match="opshub slack cursor reset --all"):
         _load_cursors('{"channels":{}}')
 
 

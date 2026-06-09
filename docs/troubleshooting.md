@@ -517,24 +517,27 @@ retry policy は `opshub.connectors.slack._retry.retry_on_rate_limit` helper を
 Phase 20-B で `connector_cursors.cursor_value` を 2 軸 compound envelope (`{"channels": {...}, "threads": {...}}`) に張り替えた (ADR-0030 §不変条件 #4)。Pre-Phase-20-B な flat-dict を持つ DB で `opshub slack sync` を回すと **`ConfigError` で reject** され、次のメッセージが exit 1 で出る:
 
 ```text
-Error: Slack cursor envelope is pre-Phase-20-B (flat dict). Run `opshub projections rebuild`
-to migrate to the {"channels": ..., "threads": ...} compound schema. opshub is pre-userbase
-and ships no silent migration (per ADR-0030 §不変条件 #4).
+Error: Slack cursor envelope is pre-Phase-20-B (flat dict). Run `opshub slack cursor reset --all`
+to drop it and cold-start on the {"channels": ..., "threads": ...} compound schema. opshub is
+pre-userbase and ships no silent migration (per ADR-0030 §不変条件 #4).
 ```
+
+⚠️ **rebuild は使えない** (Phase 23-A、[#531](https://github.com/ozzy-labs/opshub/issues/531) で訂正): 旧版は `opshub projections rebuild` を案内していたが、これは flat-dict に対して **dead-end** だった。rebuild は `connector_cursors` を `ConnectorSyncCompleted` の replay で再構築するが、その event payload 自体が flat-dict なので、replay しても flat-dict に戻り **同じ `ConfigError` が再発する**。同様に `opshub slack cursor reset --channel` / `opshub slack cursor backfill` も内部で flat-dict を parse しようとして同じ error で落ちる。
 
 復旧手順:
 
 ```bash
-opshub projections rebuild
-# 既存 event を全 projection に流し直す。connector_cursors も含めて再構築される。
-opshub slack sync     # 通常通り起動。新 compound envelope で cursor が persist される。
+opshub slack cursor reset --all   # cursor を parse せず空 compound で hard-drop。
+                                  # 同時に空 compound の ConnectorSyncCompleted を記録するため、
+                                  # この後 projections rebuild を回しても flat-dict には戻らない。
+opshub slack sync                 # 全 channel が floor から cold-start で再取得される。
 ```
 
-`channels` 軸の最大 ts は migration で正しく再計算されるため、過去 ingest 分が再取得されることはない (event store 上の `SourceObserved.raw["ts"]` から projection で max を取り直す)。`threads` 軸は次回 sync の Phase 1 で seed され直す。
+`reset --all` は cursor 全体を破棄するため、`channels` 軸の最大 ts も失われる → 次回 sync は各 channel の floor (`sync_since` / per-channel `since`、未設定なら全件) から **cold-start で再取得** する (既取得分を再観測し得る点に注意、bounded inbox duplication は #522 で解消予定)。flat-dict は 1:1 lift できない (legacy の ts は未観測の thread reply を含む per-channel max で、`channels` 軸へそのまま移すと Phase 20-C の replies-fetch が壊れる) ため auto-lift せず、cold-start を採る (ADR-0030 §不変条件 #4 の silent migration 禁止を維持)。
 
 **典型エラー**:
 
-- `Error: Slack cursor envelope is pre-Phase-20-B (flat dict). Run \`opshub projections rebuild\` ...` (exit 1) → 上記「旧形状 cursor からの recovery」手順
+- `Error: Slack cursor envelope is pre-Phase-20-B (flat dict). Run \`opshub slack cursor reset --all\` ...` (exit 1) → 上記「旧形状 cursor からの recovery」手順
 - `Error: Slack conversations.replies failed: thread_not_found (channel=C..., thread_ts=...)` (exit 1) → 親 thread が削除された / Slack Connect / channel から自身が外れた等。ADR-0030 §Decision (b) では `conversations.replies` のエラーは fail-fast (skip しない) のため、structural な失敗は operator のリカバリ手段なし
 - `Error: Slack conversations.replies failed: missing_scope (needed: 'channels:history' / 'groups:history' / 'im:history' / 'mpim:history')` (exit 1) → `conversations.replies` は channel type と同じ `*:history` scope を要求する ([ADR-0018](adr/0018-slack-token-principal.md) §Decision (7))。Slack App OAuth scope を追加し再認可、`opshub slack auth set` でトークンを更新する
 
