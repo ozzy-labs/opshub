@@ -5,6 +5,27 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0](https://github.com/ozzy-labs/opshub/compare/v0.5.1...v0.6.0) (2026-06-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **slack:** orthogonalize conversations sort axis (drop implicit engagement) ([#537](https://github.com/ozzy-labs/opshub/issues/537)) (#548)
+
+### Added
+
+* **slack:** feature→scope SSOT + auth-test readiness block ([#539](https://github.com/ozzy-labs/opshub/issues/539)) ([#551](https://github.com/ozzy-labs/opshub/issues/551)) ([7b9254a](https://github.com/ozzy-labs/opshub/commit/7b9254afcf7366b7ba03e81290684f517ab3026d))
+* **slack:** infer `cursor backfill --until` from oldest ingested ts ([#536](https://github.com/ozzy-labs/opshub/issues/536)) ([#547](https://github.com/ozzy-labs/opshub/issues/547)) ([7965e3b](https://github.com/ozzy-labs/opshub/commit/7965e3b6d88061562202c0a0050e6f226883ea19))
+* **slack:** orthogonalize conversations sort axis (drop implicit engagement) ([#537](https://github.com/ozzy-labs/opshub/issues/537)) ([#548](https://github.com/ozzy-labs/opshub/issues/548)) ([3509ae3](https://github.com/ozzy-labs/opshub/commit/3509ae3c641032fe940ed9308dd137a3d78a53eb))
+* **slack:** pin single-workspace non-goal + team_id bind guard ([#538](https://github.com/ozzy-labs/opshub/issues/538)) ([#550](https://github.com/ozzy-labs/opshub/issues/550)) ([b44dd0e](https://github.com/ozzy-labs/opshub/commit/b44dd0e58a14156467d03f5bebce8246bdc97c27))
+* **slack:** surface granted OAuth scopes in `opshub slack auth test` ([#533](https://github.com/ozzy-labs/opshub/issues/533)) ([#540](https://github.com/ozzy-labs/opshub/issues/540)) ([0261f26](https://github.com/ozzy-labs/opshub/commit/0261f2632c7bec42f18038f132429233612ea3b8))
+
+
+### Fixed
+
+* **projections:** stop slack demand digest false positives ([#534](https://github.com/ozzy-labs/opshub/issues/534)) ([#544](https://github.com/ozzy-labs/opshub/issues/544)) ([e102758](https://github.com/ozzy-labs/opshub/commit/e102758e305c5658be843ced3473846d3ab9e4b9))
+* **slack:** point flat-dict cursor error at working reset --all, not dead-end rebuild ([#531](https://github.com/ozzy-labs/opshub/issues/531)) ([#543](https://github.com/ozzy-labs/opshub/issues/543)) ([ac9f3fc](https://github.com/ozzy-labs/opshub/commit/ac9f3fcc6c9270bc6b3f738a865c35bfd8fcf027))
+
 ## [0.5.1](https://github.com/ozzy-labs/opshub/compare/v0.5.0...v0.5.1) (2026-06-08)
 
 
