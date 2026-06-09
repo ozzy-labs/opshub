@@ -165,8 +165,11 @@ def slack_auth_test() -> None:
     """Verify the stored Slack token via the ``auth.test`` Web API endpoint.
 
     Renders ``connector: slack`` + ``status: ok`` + the team / user /
-    principal fields on success; exits 1 with ``status: failed`` on
-    :class:`~opshub.core.errors.ConfigError`.
+    principal / scopes fields on success; exits 1 with ``status: failed``
+    on :class:`~opshub.core.errors.ConfigError`. ``scopes`` lists the
+    OAuth scopes Slack granted the token (from the ``x-oauth-scopes``
+    response header, byte-symmetric with ``opshub github auth test``);
+    ``(none)`` when Slack reports no scopes header.
     """
     from opshub.cli._auth_common import run_auth_test
     from opshub.connectors.slack.auth import SlackAuth

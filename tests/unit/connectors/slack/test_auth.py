@@ -27,6 +27,12 @@ principal updated in Phase 7.x per ADR-0018).
    Slack's auth.test response. This makes the principal observable to
    callers without inspecting the token prefix manually (ADR-0018
    surface contract).
+7. :meth:`SlackAuth.test_token` returns a ``scopes`` field — the
+   comma-separated OAuth scopes Slack granted the token, lifted from
+   the ``x-oauth-scopes`` response header (case-insensitively). This is
+   byte-symmetric with the GitHub connector's ``auth test`` surface and
+   lets operators verify history scopes BEFORE a ``missing_scope`` sync
+   failure (#533). Absent header → empty string → CLI ``(none)``.
 
 The :mod:`slack_sdk` extras (``[connectors-slack]``) may not be
 installed in every environment, so the file-level
@@ -177,6 +183,31 @@ def test_env_var_override(monkeypatch: pytest.MonkeyPatch) -> None:
 # ----- test_token() API verification ------------------------------------
 
 
+class _FakeSlackResponse(dict[str, Any]):
+    """A ``slack_sdk.web.SlackResponse`` stand-in for unit tests.
+
+    The real :class:`~slack_sdk.web.slack_response.SlackResponse` is both
+    dict-like (``response.get("ok")`` etc.) **and** carries the raw HTTP
+    response headers under a ``.headers`` attribute. ``SlackAuth.test_token``
+    reads the granted scopes from ``x-oauth-scopes`` in that ``.headers``
+    dict, so the test double must reproduce both surfaces — a plain dict
+    (as the older tests used) has no ``headers`` attribute and would only
+    exercise the header-absent degrade path.
+    """
+
+    def __init__(
+        self,
+        body: dict[str, Any],
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(body)
+        # Mirror the SDK contract: ``.headers`` is always present (the
+        # SDK sets it in ``__init__``), defaulting to an empty dict when
+        # the caller does not pin specific headers.
+        self.headers: dict[str, str] = headers if headers is not None else {}
+
+
 def test_test_token_returns_user_principal_when_bot_id_absent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -191,14 +222,17 @@ def test_test_token_returns_user_principal_when_bot_id_absent(
     import slack_sdk
 
     mock_client = MagicMock()
-    mock_client.auth_test.return_value = {
-        "ok": True,
-        "team": "Acme",
-        "team_id": "T1",
-        "user": "alice",
-        "user_id": "U1",
-        # bot_id intentionally absent → User Token
-    }
+    mock_client.auth_test.return_value = _FakeSlackResponse(
+        {
+            "ok": True,
+            "team": "Acme",
+            "team_id": "T1",
+            "user": "alice",
+            "user_id": "U1",
+            # bot_id intentionally absent → User Token
+        },
+        headers={"x-oauth-scopes": "channels:history,channels:read,users:read"},
+    )
     mock_webclient_cls = MagicMock(return_value=mock_client)
     monkeypatch.setattr(slack_sdk, "WebClient", mock_webclient_cls)
 
@@ -211,6 +245,9 @@ def test_test_token_returns_user_principal_when_bot_id_absent(
         "user": "alice",
         "user_id": "U1",
         "principal": "user",
+        # Granted scopes are lifted from the x-oauth-scopes header so
+        # operators can verify history scopes BEFORE sync (#533).
+        "scopes": "channels:history,channels:read,users:read",
     }
     # The WebClient was constructed with the resolved token — pin the
     # call shape so a future refactor that drops the token argument
@@ -230,14 +267,17 @@ def test_test_token_returns_bot_principal_when_bot_id_present(
     import slack_sdk
 
     mock_client = MagicMock()
-    mock_client.auth_test.return_value = {
-        "ok": True,
-        "team": "Acme",
-        "team_id": "T1",
-        "user": "opshub-bot",
-        "user_id": "U1",
-        "bot_id": "B1",
-    }
+    mock_client.auth_test.return_value = _FakeSlackResponse(
+        {
+            "ok": True,
+            "team": "Acme",
+            "team_id": "T1",
+            "user": "opshub-bot",
+            "user_id": "U1",
+            "bot_id": "B1",
+        },
+        headers={"x-oauth-scopes": "channels:history,channels:read"},
+    )
     monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=mock_client))
 
     auth = SlackAuth(token="xoxb-test")
@@ -246,6 +286,7 @@ def test_test_token_returns_bot_principal_when_bot_id_present(
     assert result["principal"] == "bot"
     assert result["team"] == "Acme"
     assert result["user_id"] == "U1"
+    assert result["scopes"] == "channels:history,channels:read"
 
 
 def test_test_token_classifies_empty_bot_id_as_bot(
@@ -277,6 +318,75 @@ def test_test_token_classifies_empty_bot_id_as_bot(
     result = auth.test_token()
 
     assert result["principal"] == "bot"
+    # This mock is a *plain dict* (no ``.headers`` attribute), which
+    # exercises the degrade path: when the response object cannot surface
+    # headers at all, ``scopes`` is the empty string (CLI → ``(none)``).
+    assert result["scopes"] == ""
+
+
+def test_test_token_extracts_scopes_case_insensitively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Granted scopes are read from the ``x-oauth-scopes`` header
+    regardless of its casing.
+
+    ``slack_sdk`` builds its headers dict from ``http.client.HTTPMessage``
+    keys, which preserve the casing the server / HTTP version sent
+    (HTTP/2 lower-cases header names; HTTP/1.1 intermediaries may
+    title-case them). A naive exact-case lookup would silently drop the
+    scopes on one transport but not the other — pin the case-insensitive
+    contract so a future refactor to ``headers["x-oauth-scopes"]`` is
+    caught."""
+    import slack_sdk
+
+    mock_client = MagicMock()
+    mock_client.auth_test.return_value = _FakeSlackResponse(
+        {
+            "ok": True,
+            "team": "Acme",
+            "team_id": "T1",
+            "user": "alice",
+            "user_id": "U1",
+        },
+        # Title-cased header (HTTP/1.1 style) — must still be found.
+        headers={"X-OAuth-Scopes": "search:read, files:read"},
+    )
+    monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=mock_client))
+
+    auth = SlackAuth(token="xoxp-test")
+    result = auth.test_token()
+
+    # Surrounding whitespace is stripped (the header value is rendered
+    # verbatim to the operator), but inner formatting is preserved.
+    assert result["scopes"] == "search:read, files:read"
+
+
+def test_test_token_scopes_empty_when_header_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the ``x-oauth-scopes`` header is missing entirely, ``scopes``
+    degrades to the empty string (the CLI renders it as ``(none)``,
+    byte-symmetric with the GitHub connector's fine-grained-PAT
+    degrade)."""
+    import slack_sdk
+
+    mock_client = MagicMock()
+    mock_client.auth_test.return_value = _FakeSlackResponse(
+        {
+            "ok": True,
+            "team": "Acme",
+            "team_id": "T1",
+            "user": "alice",
+            "user_id": "U1",
+        },
+        headers={"content-type": "application/json"},  # no scopes header
+    )
+    monkeypatch.setattr(slack_sdk, "WebClient", MagicMock(return_value=mock_client))
+
+    auth = SlackAuth(token="xoxp-test")
+    result = auth.test_token()
+
+    assert result["scopes"] == ""
 
 
 def test_test_token_raises_when_invalid_auth(monkeypatch: pytest.MonkeyPatch) -> None:
