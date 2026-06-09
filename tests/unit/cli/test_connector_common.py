@@ -15,11 +15,13 @@ Invariants pinned here (carried over from the legacy tests):
 2. ``_ProgressSourceProxy`` advances the reporter once per successful
    ``observe`` and zero times for non-observe attribute access /
    raising observes.
-3. ``OPSHUB_DEBUG`` default → only the type-name summary on stderr,
-   no message body, no traceback, ``record_sync_failure(error_message=<TypeName>)``.
-4. ``OPSHUB_DEBUG=1`` → sanitised exception message + sanitised
-   traceback appear on stderr; the event-log row's
-   ``error_message`` stays ``<TypeName>`` (never widens).
+3. ``OPSHUB_DEBUG`` default → the ``sync failed: <Type>: <sanitised-msg>``
+   summary (sanitised message body **promoted to default** by Phase
+   23-B / #532) on stderr, no traceback,
+   ``record_sync_failure(error_message=<TypeName>)``.
+4. ``OPSHUB_DEBUG=1`` → the sanitised traceback additionally appears on
+   stderr; the event-log row's ``error_message`` stays ``<TypeName>``
+   (never widens).
 5. Every known token shape (``sk-`` / ``ghp_`` / ``github_pat_`` /
    ``xox*-`` / ``AKIA`` / ``AIza`` / ``Bearer …`` / JWT) is rewritten
    to its marker form before any byte hits stderr.
@@ -221,14 +223,22 @@ def test_progress_proxy_does_not_count_failed_observe() -> None:
 
 
 # ============================================================================
-# R3 — default regression: type name only, no message, no traceback
+# R3 — default failure: sanitised message body (Phase 23-B / #532), no traceback
 # ============================================================================
 
 
 class TestDefaultRegressionR3:
-    """``OPSHUB_DEBUG`` unset / falsy → no message body, no traceback."""
+    """``OPSHUB_DEBUG`` unset / falsy → sanitised body, no traceback.
 
-    def test_default_failure_prints_type_name_only(
+    Phase 23-B (#532) promotes the previously debug-only sanitised
+    message body to the default failure trail so the operator who hits
+    a sync error (scope / token / rate-limit) sees the actionable
+    recovery text without re-running under ``OPSHUB_DEBUG=1``. The raw
+    secret is still scrubbed (sanitised) and the traceback stays gated
+    behind debug.
+    """
+
+    def test_default_failure_prints_sanitised_message_body(
         self,
         monkeypatch: pytest.MonkeyPatch,
         _recording_source: _RecordingSource,
@@ -240,10 +250,80 @@ class TestDefaultRegressionR3:
         result = CliRunner().invoke(app, ["github", "sync"])
 
         assert result.exit_code == 1
-        assert "sync failed: RuntimeError" in result.stderr
-        assert secret_message not in result.stderr
-        assert "sk-***" not in result.stderr
+        # Body promoted to default: type name + sanitised actionable text.
+        assert "sync failed: RuntimeError: " in result.stderr
+        assert "401 sk=" in result.stderr
+        # ... but the raw secret is still scrubbed to its marker.
+        assert FAKE_SK_KEY not in result.stderr
+        assert "sk-***" in result.stderr
+        # Traceback stays gated behind OPSHUB_DEBUG=1.
         assert "Traceback" not in result.stderr
+
+    def test_default_failure_with_actionable_body_surfaces_recovery_text(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        _recording_source: _RecordingSource,
+    ) -> None:
+        """A token-free actionable message reaches stderr verbatim by default."""
+        monkeypatch.delenv("OPSHUB_DEBUG", raising=False)
+        actionable = "missing_scope: run `opshub slack auth set` to grant search:read"
+        register_connector(_FailingConnector("github", RuntimeError(actionable)))
+
+        result = CliRunner().invoke(app, ["github", "sync"])
+
+        assert result.exit_code == 1
+        assert f"sync failed: RuntimeError: {actionable}" in result.stderr
+        assert "Traceback" not in result.stderr
+
+    @pytest.mark.parametrize(
+        ("exception_message", "raw_token", "marker"),
+        [
+            (f"401 token={FAKE_SK_KEY}", FAKE_SK_KEY, "sk-***"),
+            (f"403 token={FAKE_GHP_KEY}", FAKE_GHP_KEY, "ghp_***"),
+            (f"401 token={FAKE_GITHUB_PAT}", FAKE_GITHUB_PAT, "github_pat_***"),
+            (f"401 slack={FAKE_SLACK_BOT_TOKEN}", FAKE_SLACK_BOT_TOKEN, "xoxb"),
+            (f"403 aws={FAKE_AWS_ACCESS_KEY}", FAKE_AWS_ACCESS_KEY, "AKIA***"),
+            (f"403 google={FAKE_GOOGLE_API_KEY}", FAKE_GOOGLE_API_KEY, "AIza***"),
+            (f"401 id_token={FAKE_JWT}", FAKE_JWT, "[JWT REDACTED]"),
+            (f"403 header: {FAKE_BEARER_HEADER}", FAKE_BEARER_TAIL, "Bearer ***"),
+        ],
+        ids=[
+            "sk_key",
+            "ghp_key",
+            "github_pat",
+            "slack_xoxb",
+            "aws_access_key",
+            "google_api_key",
+            "jwt",
+            "bearer_header",
+        ],
+    )
+    def test_default_failure_redacts_every_known_token_shape(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        _recording_source: _RecordingSource,
+        exception_message: str,
+        raw_token: str,
+        marker: str,
+    ) -> None:
+        """ADR-0027: secret redaction holds at default verbosity, not just debug.
+
+        Phase 23-B promotes the message body to the default trail, so
+        the per-token-shape redaction guard that previously only ran
+        under ``OPSHUB_DEBUG=1`` must hold here too.
+        """
+        monkeypatch.delenv("OPSHUB_DEBUG", raising=False)
+        register_connector(_FailingConnector("github", RuntimeError(exception_message)))
+
+        result = CliRunner().invoke(app, ["github", "sync"])
+
+        assert result.exit_code == 1
+        assert raw_token not in result.stderr, (
+            f"raw token {raw_token!r} leaked into default stderr:\n{result.stderr}"
+        )
+        assert marker in result.stderr, (
+            f"expected marker {marker!r} missing from default stderr:\n{result.stderr}"
+        )
 
     def test_default_failure_event_log_has_type_name_only(
         self,
@@ -407,9 +487,14 @@ class TestDebugOptInR2R4:
 
         result = CliRunner().invoke(app, ["github", "sync"])
 
-        assert "sk-***" not in result.stderr
+        # Falsy debug only gates the traceback; the sanitised message
+        # body is now part of the default trail (Phase 23-B / #532).
         assert "Traceback" not in result.stderr
-        assert "sync failed: RuntimeError" in result.stderr
+        assert "sync failed: RuntimeError: " in result.stderr
+        # The redaction marker is present (body is sanitised) and the
+        # raw secret never leaks regardless of verbosity.
+        assert "sk-***" in result.stderr
+        assert FAKE_SK_KEY not in result.stderr
 
 
 # ============================================================================

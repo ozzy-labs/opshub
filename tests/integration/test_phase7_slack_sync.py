@@ -1227,12 +1227,12 @@ def test_slack_sync_truncates_long_message_text(
 # ---------------------------------------------------------------------- Phase 20-B cursor schema
 
 
-def test_slack_sync_rejects_legacy_cursor_with_rebuild_prompt(
+def test_slack_sync_rejects_legacy_cursor_with_reset_prompt(
     isolated_env: _PathsDict,
     monkeypatch: pytest.MonkeyPatch,
     slack_env: None,
 ) -> None:
-    """Phase 20-B: a pre-20-B legacy cursor row → ConfigError + rebuild prompt + exit 1.
+    """Phase 20-B/23-A: a pre-20-B legacy cursor row → ConfigError + reset prompt + exit 1.
 
     The pre-20-B cursor schema was a flat ``{<channel_id>: <ts>}``
     dict. Phase 20-B ([epic #465](
@@ -1240,8 +1240,11 @@ def test_slack_sync_rejects_legacy_cursor_with_rebuild_prompt(
     flip to a compound ``{"channels": {...}, "threads": {...}}``
     envelope. opshub is pre-userbase (``AGENTS.md``
     §"設計判断のスタンス") so we do not silently coerce: the legacy
-    shape is rejected with a :class:`ConfigError` whose message
-    points at ``opshub projections rebuild``.
+    shape is rejected with a :class:`ConfigError`. Phase 23-A
+    ([#531](https://github.com/ozzy-labs/opshub/issues/531)) re-pointed
+    the prompt at ``opshub slack cursor reset --all`` — the working
+    recovery — because the old ``opshub projections rebuild`` prompt
+    was a dead-end (rebuild replays the flat-dict event payload).
 
     We exercise the rejection via the public CLI because the
     legacy-cursor case only fires when the connector's
@@ -1304,10 +1307,10 @@ def test_slack_sync_rejects_legacy_cursor_with_rebuild_prompt(
     assert "ConfigError" in result.stderr
 
     # The error message bubbled to ConnectorSyncFailed must carry the
-    # rebuild prompt (so an operator inspecting the failure event can
+    # recovery prompt (so an operator inspecting the failure event can
     # recover without grepping the source). The CLI driver sanitises
     # the event payload to the **type name only** by design (R3 / ADR-0027),
-    # so the rebuild prompt only reaches the operator via stderr in
+    # so the reset prompt only reaches the operator via stderr in
     # ``--debug`` mode. Pin the type-name sanitisation here so we do
     # not accidentally start leaking the legacy cursor value in the
     # event log.

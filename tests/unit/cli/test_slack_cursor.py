@@ -131,8 +131,62 @@ def test_cursor_reset_all_clears_everything(monkeypatch: pytest.MonkeyPatch) -> 
 
     removed, new_value = run_cursor_reset(channels=None, reset_all=True)
 
-    assert removed == 1
+    # Phase 23-A (#531): the ``--all`` path hard-drops without parsing the
+    # prior cursor, so it returns -1 ("count unknown") rather than a
+    # concrete entry count.
+    assert removed == -1
     assert _load_cursors(new_value) == {"channels": {}, "backfill": {}, "threads": {}}
+
+
+def test_cursor_reset_all_recovers_pre_20b_flat_dict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``reset --all`` recovers a pre-Phase-20-B flat-dict cursor (#531).
+
+    The flat dict (``{<channel_id>: <ts>}``) cannot be parsed by
+    ``_load_cursors`` — it raises ``ConfigError``. The ``--all`` path must
+    NOT call ``_load_cursors`` (it overwrites the whole cursor anyway), so
+    it is the working escape hatch the sync error now steers operators to.
+    Persisting the empty compound through ``cursor_set`` also records a
+    ``ConnectorSyncCompleted`` whose payload is the empty compound, so a
+    later ``opshub projections rebuild`` replays the empty compound rather
+    than regenerating the flat dict.
+    """
+    from opshub.cli._slack_cursor import run_cursor_reset
+    from opshub.connectors.slack.connector import (
+        _load_cursors,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    # The legacy flat-dict shape — no ``channels`` / ``threads`` wrapper.
+    source = _FakeSource('{"C1":"1700000001.000100","C2":"1700000002.000200"}')
+    _patch_source(monkeypatch, source)
+
+    # Must not raise (a regression that re-introduced ``_load_cursors`` on
+    # this path would raise ConfigError here, the dead-end #531 fixes).
+    removed, new_value = run_cursor_reset(channels=None, reset_all=True)
+
+    assert removed == -1
+    assert _load_cursors(new_value) == {"channels": {}, "backfill": {}, "threads": {}}
+    # The persisted replacement is the empty compound (rebuild-safe).
+    assert source.cursor_set_calls[-1]["value"] == new_value
+    assert source.cursor_set_calls[-1]["sync_started"] is False
+
+
+def test_cli_reset_all_reports_cleared_for_flat_dict(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End-to-end: ``opshub slack cursor reset --all -y`` exits 0 on a flat dict.
+
+    Drives the CLI surface (not just ``run_cursor_reset``) so the -1 →
+    "all channel entries cleared" rendering is pinned and a flat-dict
+    cursor does not surface a ConfigError at the CLI boundary (#531).
+    """
+    from typer.testing import CliRunner
+
+    from opshub.cli.app import app
+
+    source = _FakeSource('{"C1":"1700000001.000100"}')
+    _patch_source(monkeypatch, source)
+
+    result = CliRunner().invoke(app, ["slack", "cursor", "reset", "--all", "-y"])
+    assert result.exit_code == 0, result.stdout
+    assert "all channel entries cleared" in result.stdout
 
 
 def test_cursor_reset_no_cursor_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:

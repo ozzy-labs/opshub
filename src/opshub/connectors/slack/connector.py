@@ -689,11 +689,14 @@ def _load_cursors(cursor_value: str | None) -> SlackCursorState:
     The pre-20-B legacy shape (``{"<channel_id>": "<ts>"}`` at the
     top level — a flat per-channel dict with no ``channels`` / ``threads``
     wrapper) is **rejected** with a migration-prompt :class:`ConfigError`
-    pointing at ``opshub projections rebuild``. opshub is pre-userbase
-    (``AGENTS.md`` §"設計判断のスタンス"), so we do not silently
-    coerce the legacy shape — coercion would lose the chance to surface
-    the schema flip to the operator and would also be ambiguous (the
-    legacy shape and a freshly-rebuilt empty compound look identical
+    pointing at ``opshub slack cursor reset --all`` (Phase 23-A, [#531](
+    https://github.com/ozzy-labs/opshub/issues/531); the older prompt
+    named ``opshub projections rebuild``, which is a dead-end for the
+    flat dict because rebuild replays the flat-dict event payload). opshub
+    is pre-userbase (``AGENTS.md`` §"設計判断のスタンス"), so we do not
+    silently coerce the legacy shape — coercion would lose the chance to
+    surface the schema flip to the operator and would also be ambiguous
+    (the legacy shape and a freshly-rebuilt empty compound look identical
     only when there are no channels).
     """
     if cursor_value is None:
@@ -737,12 +740,25 @@ def _load_cursors(cursor_value: str | None) -> SlackCursorState:
         # grep-based discovery. Aligning the literal here keeps the
         # doc + code messages diff-free (doc is canonical; opshub is
         # pre-userbase and ships no silent migration).
+        #
+        # Phase 23-A ([#531](https://github.com/ozzy-labs/opshub/issues/531)):
+        # this message previously pointed at ``opshub projections rebuild``,
+        # which is a **dead-end** for the flat-dict shape — rebuild replays
+        # the ``ConnectorSyncCompleted`` event whose payload IS the flat
+        # dict, restoring it verbatim, so the same error recurs. The working
+        # recovery is ``opshub slack cursor reset --all``, which hard-drops
+        # the cursor without parsing the prior value and persists an empty
+        # compound (so rebuild then replays the empty compound). We do NOT
+        # silently auto-lift the flat dict: ADR-0030 §不変条件 #4 bans silent
+        # migration, and the legacy ``ts`` was the per-channel max including
+        # never-observed thread replies (a 1:1 lift would be subtly wrong for
+        # the Phase 20-C replies-fetch path).
         raise ConfigError(
             "Slack cursor envelope is pre-Phase-20-B (flat dict). "
-            "Run `opshub projections rebuild` to migrate to the "
-            '{"channels": ..., "threads": ...} compound schema. '
-            "opshub is pre-userbase and ships no silent migration "
-            "(per ADR-0030 §不変条件 #4)."
+            "Run `opshub slack cursor reset --all` to drop it and "
+            'cold-start on the {"channels": ..., "threads": ...} '
+            "compound schema. opshub is pre-userbase and ships no "
+            "silent migration (per ADR-0030 §不変条件 #4)."
         )
     channels_axis = _coerce_axis(parsed_dict["channels"], axis_name="channels")
     threads_axis = _coerce_axis(parsed_dict["threads"], axis_name="threads")

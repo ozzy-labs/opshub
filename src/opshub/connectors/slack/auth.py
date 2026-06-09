@@ -117,11 +117,23 @@ class SlackAuth:
         """Call Slack's ``auth.test`` API to verify token validity.
 
         Returns a dict containing the ``team`` / ``team_id`` / ``user`` /
-        ``user_id`` / ``principal`` fields. ``principal`` is ``"bot"``
-        when Slack's ``auth.test`` response includes a ``bot_id``
-        (Bot Token), otherwise ``"user"`` (User Token). This makes the
-        principal observable to callers without inspecting the token
-        prefix manually, supporting the ADR-0018 surface contract.
+        ``user_id`` / ``principal`` / ``scopes`` fields. ``principal`` is
+        ``"bot"`` when Slack's ``auth.test`` response includes a
+        ``bot_id`` (Bot Token), otherwise ``"user"`` (User Token). This
+        makes the principal observable to callers without inspecting the
+        token prefix manually, supporting the ADR-0018 surface contract.
+
+        ``scopes`` is the comma-separated list of OAuth scopes Slack
+        granted the token, lifted from the ``x-oauth-scopes`` response
+        header (Slack returns granted scopes there for every Web API
+        call). This is byte-symmetric with the GitHub connector's
+        ``auth test`` surface (``X-OAuth-Scopes`` → ``scopes``,
+        :mod:`opshub.connectors.github.auth`) and lets operators verify
+        a token carries the history / read scopes ``sync`` needs *before*
+        hitting a ``missing_scope`` error mid-sync. When Slack omits the
+        header (or the SDK does not surface it) ``scopes`` is the empty
+        string, which the CLI renders as ``(none)`` — the same degrade
+        path GitHub takes for fine-grained PATs.
 
         Raises :class:`~opshub.core.errors.ConfigError` if the SDK is
         missing, the API call errors out, or Slack returns
@@ -184,4 +196,38 @@ class SlackAuth:
             "user": str(response.get("user", "")),
             "user_id": str(response.get("user_id", "")),
             "principal": principal,
+            "scopes": _granted_scopes(response),
         }
+
+
+def _granted_scopes(response: Any) -> str:
+    """Lift the granted OAuth scopes from a Slack ``auth.test`` response.
+
+    Slack returns the token's granted scopes in the ``x-oauth-scopes``
+    response header for every Web API call (mirroring GitHub's
+    ``X-OAuth-Scopes`` header). :class:`slack_sdk.web.SlackResponse`
+    exposes those raw headers via a ``.headers`` dict.
+
+    The lookup is **case-insensitive**: ``slack_sdk`` builds the headers
+    dict from ``http.client.HTTPMessage`` keys, which preserve whatever
+    casing the server / HTTP version sent (HTTP/2 lower-cases header
+    names; HTTP/1.1 proxies may title-case them). Matching on a
+    case-folded key keeps the extraction robust across transports.
+
+    Returns the header value stripped of surrounding whitespace, or the
+    empty string when the header is absent or the response object has no
+    ``headers`` attribute (e.g. a future SDK shape). An empty string is
+    rendered as ``(none)`` by the CLI — the same degrade GitHub uses for
+    fine-grained PATs that omit the scopes header.
+    """
+    headers: Any = getattr(response, "headers", None)
+    if not headers:
+        return ""
+    try:
+        items = headers.items()
+    except AttributeError:
+        return ""
+    for key, value in items:
+        if str(key).lower() == "x-oauth-scopes":
+            return str(value or "").strip()
+    return ""
