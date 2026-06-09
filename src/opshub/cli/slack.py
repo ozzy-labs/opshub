@@ -322,41 +322,39 @@ def slack_conversations(
         help=(
             "Use conversations.list (workspace-wide) instead of "
             "users.conversations (joined-only). conversations.list does "
-            "not return DM/MPIM rows. Incompatible with the engagement "
-            "axis (--sort=last_self_post or --sort=name combined with "
-            "--since), which only indexes self-member channels."
+            "not return DM/MPIM rows. Incompatible with --sort=last_self_post "
+            "(the engagement axis), which only indexes self-member channels."
         ),
     ),
     since: str | None = typer.Option(
         None,
         "--since",
         help=(
-            "Filter by recent activity. Accepts a relative duration "
-            "(e.g. 7d, 2w) or an ISO date (e.g. 2026-05-01). The probe "
-            "axis is selected by --sort (ADR-0035 §(c) §(d)): "
-            "--sort=last_self_post (engagement axis, requires "
-            "search:read on a User Token) runs one search.messages "
-            "call ahead of the listing; --sort=last_activity (any-"
-            "author axis) runs one conversations.history?limit=1 per "
-            "row (requires *:history for the requested --types); "
-            "--sort=name combined with --since takes the engagement "
-            "axis as its implicit default. With --sort=last_self_post "
-            "or --sort=last_activity but no --since, an implicit 90-"
-            "day cutoff is applied (notice on stderr)."
+            "Filter by recent activity on the ts of the axis selected by "
+            "--sort. Accepts a relative duration (e.g. 7d, 2w) or an ISO "
+            "date (e.g. 2026-05-01). Requires an activity --sort: "
+            "--sort=last_self_post (engagement axis, requires search:read "
+            "on a User Token) or --sort=last_activity (any-author axis, "
+            "requires *:history for the requested --types). --since with "
+            "the default --sort=name is rejected (name has no activity ts "
+            "to filter by). With an activity --sort but no --since, an "
+            "implicit 90-day cutoff is applied (notice on stderr + stamped "
+            "into the output)."
         ),
     ),
     sort: str = typer.Option(
         "name",
         "--sort",
         help=(
-            "Sort key (ADR-0035 §(c)): "
-            "'name' (default) = display_name within type bucket; "
+            "Sort key + activity axis (ADR-0035 §(c)): "
+            "'name' (default) = display_name within type bucket, no "
+            "activity probe; "
             "'last_self_post' = engagement-axis ts descending "
             "(requires search:read User Token); "
             "'last_activity' = any-author-axis ts descending "
-            "(requires *:history per --types). With --sort=name and "
-            "--since the engagement axis still runs as the implicit "
-            "default for the ts filter / column."
+            "(requires *:history per --types). The axis is selected only "
+            "by --sort; --since filters on the chosen axis's ts (Phase "
+            "23-G #537: --sort=name + --since is rejected)."
         ),
     ),
 ) -> None:
@@ -408,23 +406,36 @@ def slack_conversations(
             param_hint="--sort",
         )
 
+    # Phase 23-G (#537): --since is a pure filter on the ts of the axis
+    # selected by --sort; it never selects an axis on its own. --sort=name
+    # carries no activity ts, so name + --since is rejected (the former
+    # implicit engagement default, ADR-0035 §(d), was removed so --since
+    # never covertly switches API / token / scope).
+    if sort == "name" and since is not None:
+        typer.echo(
+            "Error: --sort=name has no activity timestamp, so --since cannot "
+            "filter by it. Pick an activity axis: --sort=last_self_post --since "
+            "(channels you posted in; needs a search:read User Token) or "
+            "--sort=last_activity --since (any-author activity; needs *:history).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
     # --all is incompatible with the engagement axis (ADR-0034 §(h),
     # ADR-0035 §(f) §組合せ拒否マトリクス). search.messages only
     # indexes messages the principal could see, so asking for
     # "workspace-wide channels where I posted" is logically the same
     # as the joined-only listing; silently trimming the result set
-    # would hide the contradiction. The engagement axis fires on both
-    # the explicit ``--sort=last_self_post`` path and the implicit
-    # ``--sort=name`` + ``--since`` default (ADR-0035 §(d)); reject
-    # both combinations. ``--sort=last_activity`` is workspace-wide
-    # safe (per-row history call needs no self-membership).
-    engagement_axis_requested = sort == "last_self_post" or (sort == "name" and since is not None)
+    # would hide the contradiction. Phase 23-G (#537): the engagement axis
+    # is now only ``--sort=last_self_post`` (the name+since implicit branch
+    # was removed). ``--sort=last_activity`` is workspace-wide safe (per-row
+    # history call needs no self-membership).
+    engagement_axis_requested = sort == "last_self_post"
     if all_conversations and engagement_axis_requested:
         typer.echo(
-            "Error: --all is incompatible with engagement-axis sort "
-            "(--sort=last_self_post or --sort=name + --since; "
-            "search.messages indexes only self-member channels); "
-            "use --sort=last_activity for workspace-wide activity.",
+            "Error: --all is incompatible with --sort=last_self_post "
+            "(engagement axis; search.messages indexes only self-member "
+            "channels); use --sort=last_activity for workspace-wide activity.",
             err=True,
         )
         raise typer.Exit(code=1)

@@ -193,9 +193,10 @@ opshub github auth set                      # store GitHub PAT in OS keychain
 opshub github sync                          # incremental sync (OPSHUB_CONNECTOR_GITHUB_REPO=owner/repo)
 opshub slack auth set             # store Slack OAuth token in OS keychain (User Token preferred, Bot Token also accepted — ADR-0018; full walkthrough: docs/slack-setup.md)
 opshub slack conversations                                    # complete paste-ready [connectors.slack] block / name order (default; ADR-0035, #535)
-opshub slack conversations --since 30d                        # name order + your last-post date (engagement-axis implicit, requires search:read User Token; ADR-0035 §(d))
-opshub slack conversations --sort=last_self_post              # descending by your last post (implicit --since 90d cutoff + stderr notice; ADR-0035 §(e))
+opshub slack conversations --sort=last_self_post --since 30d  # channels you posted in within 30d (engagement axis; requires search:read User Token; #537)
+opshub slack conversations --sort=last_self_post              # descending by your last post (implicit --since 90d cutoff, stamped in output + stderr notice; ADR-0035 §(e))
 opshub slack conversations --sort=last_activity --since 30d   # descending by any-author last activity within 30 days
+#  note: --since needs an activity --sort; `conversations --since 30d` alone (name sort) is rejected (Phase 23-G #537)
 opshub slack conversations --format=table                     # pre-19-D default rendering (eyeball / script use; ADR-0035 §(a))
 opshub slack sync                           # incremental sync ([connectors.slack] channels; sync_since date floor — ADR-0036)
 opshub slack status                         # sync status: 3-axis cursor in human terms (daily view; --verbose for raw — #536)
