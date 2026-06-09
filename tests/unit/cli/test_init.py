@@ -334,3 +334,34 @@ def test_init_writes_config_toml_and_it_takes_effect(
     settings_after_edit = OpsHubSettings()
     assert settings_after_edit.connectors.box_drive.enabled is True
     assert settings_after_edit.connectors.box_drive.max_depth == 8
+
+
+def test_starter_config_has_disabled_slack_section(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Phase 23-E (#535): the starter ships a real disabled Slack section.
+
+    Previously every Slack line was commented out, so enabling the
+    connector meant uncommenting. The starter now carries a live
+    ``[connectors.slack]`` table with ``enabled = false`` + an empty
+    ``channels`` array, so the operator flips one boolean and pastes the
+    discovered ids — no uncommenting. This pins that the section parses
+    and lands as the disabled-but-present state.
+    """
+    _isolate_env(monkeypatch, tmp_path)
+    _patch_install_command(monkeypatch)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["init", "--no-install-skills"])
+    assert result.exit_code == 0, result.stdout
+
+    # The constant carries a non-commented section header + flag.
+    assert "[connectors.slack]" in STARTER_CONFIG_TOML
+    assert "\nenabled = false" in STARTER_CONFIG_TOML
+    assert "docs/slack-setup.md" in STARTER_CONFIG_TOML
+
+    from opshub.core.config import OpsHubSettings
+
+    settings = OpsHubSettings()
+    assert settings.connectors.slack.enabled is False
+    assert settings.connectors.slack.channels == []

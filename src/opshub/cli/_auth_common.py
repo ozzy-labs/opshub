@@ -44,6 +44,7 @@ def set_token_credential(
     label: str,
     keyring_key: str,
     token: str | None,
+    next_action: str | None = None,
 ) -> None:
     """Write ``token`` (or prompted input) to the keyring under ``keyring_key``.
 
@@ -57,6 +58,13 @@ def set_token_credential(
     * Otherwise → strip surrounding whitespace and write to the
       keyring; print ``stored token for connector '<label>'`` on
       stdout (byte-identical to the old surface).
+
+    ``next_action`` (Phase 23-E, #535) optionally appends a ``next:
+    <hint>`` line on **stderr** after the success message so the
+    operator sees the obvious follow-up step (e.g. ``opshub slack auth
+    test``) without leaving the terminal. It is stderr-only so the
+    stdout success line stays byte-identical for scripts that parse it;
+    connectors that pass ``None`` (the default) are entirely unchanged.
 
     Lazy-imports :func:`opshub.core.secrets.set_secret` so the
     cold-start path is unaffected when the operator never touches
@@ -76,6 +84,8 @@ def set_token_credential(
 
     set_secret(keyring_key, stripped)
     typer.echo(f"stored token for connector {label!r}")
+    if next_action is not None:
+        typer.echo(f"next: {next_action}", err=True)
 
 
 # --------------------------------------------------------------------- #
@@ -118,6 +128,7 @@ def run_auth_test(
     *,
     label: str,
     verifier: Callable[[], dict[str, str]],
+    next_action: str | None = None,
 ) -> None:
     """Drive a connector's ``test_token`` verifier and render the result.
 
@@ -135,6 +146,14 @@ def run_auth_test(
       column-aligned ``<key>  <value>`` lines, all on stdout.
     * On :class:`ConfigError`: ``connector: <label>`` + ``status:
       failed`` + ``error:     <message>``, all on stderr; exit 1.
+
+    ``next_action`` (Phase 23-E, #535) optionally appends a ``next:
+    <hint>`` line on **stderr** after a *successful* verification so the
+    operator sees the obvious follow-up step (e.g. ``opshub slack
+    conversations --format=toml``). It is stderr-only so the stdout
+    key/value block stays byte-identical for scripts that parse it; the
+    failure path is untouched (the error already points the way).
+    Connectors that pass ``None`` (the default) are entirely unchanged.
 
     Empty values render as ``(none)`` (operator readability beats
     strict round-trip fidelity here).
@@ -161,3 +180,5 @@ def run_auth_test(
     for k, v in result.items():
         display = v if v else "(none)"
         typer.echo(f"{k:<{key_width}}  {display}")
+    if next_action is not None:
+        typer.echo(f"next: {next_action}", err=True)

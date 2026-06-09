@@ -128,7 +128,96 @@ def slack_sync(
         # untouched (default ``True``).
         os.environ["OPSHUB_CONNECTORS__SLACK__BACKFILL_ON_FLOOR_LOWER"] = "false"
 
+    # Phase 23-E (#535): surface a *visible* stderr notice when the sync
+    # is a configured no-op (connector disabled, or no channels picked).
+    # The connector's structured-log warning is invisible on a TTY, so a
+    # sync that "succeeds" with 0 items looks like a working setup. The
+    # notice is emitted before the run so it appears even when the
+    # connector exits cleanly, and is suppressed by ``-q`` / ``--quiet``.
+    is_noop = _emit_slack_sync_notice()
+
     run_connector_sync("slack")
+
+    # On a properly-configured sync, close the setup loop with the
+    # obvious follow-up (search / ask the assistant). Skipped on the
+    # no-op path (the notice above already told the operator what to fix)
+    # and under ``-q`` / ``--quiet``.
+    if not is_noop and _notice_level_allows():
+        typer.echo(
+            "next: query the ingested messages with `opshub search <term>` "
+            'or ask your assistant (e.g. "今日のまとめ").',
+            err=True,
+        )
+
+
+def _notice_level_allows() -> bool:
+    """Return whether INFO-tier stderr notices should print.
+
+    ``-q`` / ``--quiet`` raises the root logger to WARNING (see
+    :mod:`opshub.core.logging`); the Phase 23-E (#535) setup notices are
+    INFO-tier guidance, so they stay silent once the operator asked for
+    quiet output.
+    """
+    import logging
+
+    return logging.getLogger().getEffectiveLevel() <= logging.INFO
+
+
+def _emit_slack_sync_notice() -> bool:
+    """Print a visible stderr notice when the Slack sync would be a no-op.
+
+    Returns ``True`` when the sync is a *genuine* no-op (empty channels →
+    the connector short-circuits to 0 items, see
+    :meth:`SlackConnector.sync`), so the caller can skip the post-sync
+    "next" hint. Returns ``False`` otherwise.
+
+    Two configured states (issue #535 §problem 2) otherwise produce a
+    quiet 0-item exit-0 that looks like success on a TTY, with only a
+    structured log warning the operator never sees:
+
+    * ``channels`` empty — the connector short-circuits to 0 items. This
+      is the genuine no-op (``is_noop`` → ``True``).
+    * ``[connectors.slack] enabled = false`` — the ``enabled`` flag is
+      *informational* for the CLI (the driver runs the connector
+      regardless; the flag is reserved for the future scheduler /
+      autopilot, see the connector module docstring). So a disabled
+      connector with channels still syncs — we surface a heads-up that
+      the flag is off (a common "why is it still running?" surprise) but
+      do **not** claim 0 items and do **not** mark it a no-op.
+
+    Each notice is a plain-text ``notice:`` line naming the *reason* (not
+    an exception type name) plus the concrete fix and a docs pointer,
+    gated on the effective log level so ``-q`` / ``--quiet`` suppresses
+    it. The empty-channels return value is independent of the log level,
+    so the post-sync-hint suppression is not coupled to verbosity.
+    """
+    from opshub.core.config import OpsHubSettings
+
+    slack = OpsHubSettings().connectors.slack
+    quiet_ok = _notice_level_allows()
+
+    if not slack.channels:
+        if quiet_ok:
+            typer.echo(
+                "notice: [connectors.slack] channels is empty — sync will observe 0 "
+                "items. Run `opshub slack conversations --format=toml` to discover "
+                "ids and paste the block into opshub.toml. See docs/slack-setup.md.",
+                err=True,
+            )
+        return True
+
+    if not slack.enabled and quiet_ok:
+        # Channels are configured, so the driver will actually sync (the
+        # flag is informational, not a kill-switch). Surface the off-state
+        # without claiming a no-op.
+        typer.echo(
+            "notice: [connectors.slack] enabled = false (the flag is "
+            "informational — sync still runs). Set enabled = true in "
+            "opshub.toml to mark the connector active. See docs/slack-setup.md.",
+            err=True,
+        )
+
+    return False
 
 
 @slack_auth_app.command("set")
@@ -157,6 +246,7 @@ def slack_auth_set(
         label="slack",
         keyring_key=SLACK_TOKEN_SECRET_KEY,
         token=token,
+        next_action="opshub slack auth test  # verify the token + see granted scopes",
     )
 
 
@@ -174,7 +264,14 @@ def slack_auth_test() -> None:
     from opshub.cli._auth_common import run_auth_test
     from opshub.connectors.slack.auth import SlackAuth
 
-    run_auth_test(label="slack", verifier=SlackAuth().test_token)
+    run_auth_test(
+        label="slack",
+        verifier=SlackAuth().test_token,
+        next_action=(
+            "opshub slack conversations --format=toml  "
+            "# discover channel ids → paste the block into opshub.toml"
+        ),
+    )
 
 
 @slack_app.command("conversations")

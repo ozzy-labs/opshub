@@ -706,3 +706,38 @@ def test_slack_channels_env_override_json_string_array(
 
     assert [c.id for c in settings.connectors.slack.channels] == ["C1"]
     assert settings.connectors.slack.channels[0].since is None
+
+
+def test_slack_channels_env_override_comma_separated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Phase 23-E (#535): the env override accepts a bare comma list.
+
+    ``NoDecode`` stops pydantic-settings from JSON-forcing the env value,
+    so the natural ``C1,C2`` form is the primary input — no JSON quoting.
+    """
+    _isolate_xdg(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", "C1,C2,C3")
+
+    settings = OpsHubSettings()
+
+    assert [c.id for c in settings.connectors.slack.channels] == ["C1", "C2", "C3"]
+    assert all(c.since is None for c in settings.connectors.slack.channels)
+
+
+def test_slack_channels_env_comma_form_trims_whitespace_and_empties(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Spaces around commas and a trailing comma do not synthesise blank ids."""
+    _isolate_xdg(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", " C1 , C2 ,,")
+
+    settings = OpsHubSettings()
+
+    assert [c.id for c in settings.connectors.slack.channels] == ["C1", "C2"]
+
+
+def test_slack_channels_comma_string_via_model_validate() -> None:
+    """A bare comma string is accepted by the field validator directly too."""
+    settings = SlackConnectorSettings.model_validate({"channels": "C1,C2"})
+    assert [c.id for c in settings.channels] == ["C1", "C2"]

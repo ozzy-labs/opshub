@@ -56,19 +56,22 @@ STARTER_CONFIG_TOML = """\
 [embedding]
 backend = "disabled"
 
-# Slack connector (opt-in). Store the OAuth token with `opshub slack auth set`,
-# then enable + list channels. `opshub slack conversations --format=toml` prints
-# a ready-to-paste `channels = [...]` snippet. Phase 20 (ADR-0036) adds an
-# optional date floor so `opshub slack sync` skips messages older than the floor:
-#   [connectors.slack]
-#   enabled = true
-#   channels = ["C0123ABC"]        # bare ids (legacy form) still work
-#   sync_since = "90d"             # global floor: relative "90d"/"4w" or ISO "2026-01-01"
-#                                  # omit for full-history backfill (default)
-#   # ...or the table form for per-channel overrides:
-#   # [[connectors.slack.channels]]
-#   # id = "C0123ABC"
-#   # since = "all"                # opt this channel back into full backfill
+# Slack connector. Disabled out of the box — flip `enabled` to true after you
+# store the OAuth token and pick channels. Full walkthrough: docs/slack-setup.md.
+#   1. opshub slack auth set                       # store the xoxp- token (keyring)
+#   2. opshub slack auth test                       # verify token + granted scopes
+#   3. opshub slack conversations --format=toml     # discover ids → paste the block here
+#   4. set enabled = true, then run `opshub slack sync`
+[connectors.slack]
+enabled = false                  # flip to true once channels are populated
+channels = []                    # e.g. ["C0123ABC", "C0456DEF"] — ids, not #names
+                                 # (paste the `opshub slack conversations --format=toml` block here)
+# sync_since = "90d"             # optional date floor: relative "90d"/"4w" or ISO "2026-01-01";
+                                 # omit for full-history backfill (default)
+# Per-channel date-floor overrides use the table form instead of the bare-id array:
+#   [[connectors.slack.channels]]
+#   id = "C0123ABC"
+#   since = "all"                # opt this one channel back into full backfill
 """
 
 

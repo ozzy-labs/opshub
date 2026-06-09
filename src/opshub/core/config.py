@@ -29,11 +29,16 @@ import re
 import tomllib
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic import ValidationError as PydanticValidationError
-from pydantic_settings import BaseSettings, SettingsConfigDict, TomlConfigSettingsSource
+from pydantic_settings import (
+    BaseSettings,
+    NoDecode,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
 from pydantic_settings.sources import PydanticBaseSettingsSource
 
 from opshub.core.errors import ConfigError, ValidationError
@@ -393,7 +398,18 @@ class SlackConnectorSettings(BaseModel):
     """
 
     enabled: bool = False
-    channels: list[SlackChannelSpec] = Field(default_factory=_empty_channel_list)
+    #: ``NoDecode`` (Phase 23-E, #535) tells pydantic-settings *not* to
+    #: JSON-decode the ``OPSHUB_CONNECTORS__SLACK__CHANNELS`` env value
+    #: before it reaches :meth:`_coerce_channel_ids`. Without it, a
+    #: complex-typed (``list[...]``) field forces every env override to
+    #: be a JSON document — so the natural ``OPSHUB_CONNECTORS__SLACK__CHANNELS=C1,C2``
+    #: would raise ``SettingsError`` before any validator ran. With
+    #: ``NoDecode`` the raw string lands in the validator, which accepts
+    #: a comma-separated list as the primary form (and still parses a
+    #: JSON document for backward compatibility / per-channel ``since``).
+    channels: Annotated[list[SlackChannelSpec], NoDecode] = Field(
+        default_factory=_empty_channel_list
+    )
     sync_since: str | None = None
     #: Phase 20-C (ADR-0030 §(d) revised): activity window for the late-reply
     #: polling phase. Threads whose ``last_reply_ts`` falls outside this
@@ -430,15 +446,36 @@ class SlackConnectorSettings(BaseModel):
     @field_validator("channels", mode="before")
     @classmethod
     def _coerce_channel_ids(cls, value: Any) -> Any:
-        """Accept a bare id string per entry, normalising to ``{"id": ...}``.
+        """Normalise the ``channels`` input into a list of ``{"id": ...}`` dicts.
 
-        Keeps the historical ``channels = ["C0123ABC", "C0456DEF"]``
-        string-array form (and the ``opshub slack conversations
-        --format=toml`` paste snippet, which emits exactly that shape)
-        valid alongside the new ``[[connectors.slack.channels]]`` table
-        form (ADR-0036 §(b)). Non-list / already-dict entries pass
-        through for pydantic to validate / reject normally.
+        Three input shapes are accepted (Phase 23-E, #535 broadens the
+        env form):
+
+        * **list** — the TOML / init-arg form. A bare id string entry is
+          normalised to ``{"id": "C..."}`` so the historical
+          ``channels = ["C0123ABC", "C0456DEF"]`` string-array (and the
+          ``opshub slack conversations --format=toml`` paste snippet,
+          which emits exactly that shape) stay valid alongside the
+          ``[[connectors.slack.channels]]`` table form (ADR-0036 §(b)).
+        * **comma-separated string** — the primary env override form,
+          e.g. ``OPSHUB_CONNECTORS__SLACK__CHANNELS=C0123ABC,C0456DEF``.
+          Whitespace is trimmed and empty segments are dropped so a
+          trailing comma / spaces-around-commas do not synthesise blank
+          ids. This is the documented headless/CI path now that
+          :class:`NoDecode` stops pydantic-settings from JSON-forcing the
+          env value.
+        * **JSON document string** — a leading ``[`` / ``{`` routes the
+          string through :func:`json.loads` first, preserving the
+          historical JSON-array env form
+          (``OPSHUB_CONNECTORS__SLACK__CHANNELS='[{"id":"C1","since":"30d"}]'``)
+          so per-channel ``since`` overrides remain expressible from the
+          environment.
+
+        Already-dict entries pass through for pydantic to validate /
+        reject normally.
         """
+        if isinstance(value, str):
+            value = cls._parse_channels_string(value)
         if isinstance(value, list):
             # ``cast`` narrows pyright's ``isinstance(Any, list)`` widen to
             # ``list[Unknown]``; mypy treats it as redundant (Any → list[Any])
@@ -449,6 +486,23 @@ class SlackConnectorSettings(BaseModel):
             )
             return [{"id": item} if isinstance(item, str) else item for item in items]
         return value
+
+    @staticmethod
+    def _parse_channels_string(value: str) -> Any:
+        """Parse a ``channels`` env string into a list (comma form / JSON form).
+
+        A leading ``[`` or ``{`` (after trimming) is treated as a JSON
+        document and decoded with :func:`json.loads`; anything else is
+        split on commas with surrounding whitespace stripped and empty
+        segments discarded. Returns the parsed value for the list branch
+        of :meth:`_coerce_channel_ids` to normalise.
+        """
+        import json
+
+        stripped = value.strip()
+        if stripped.startswith(("[", "{")):
+            return json.loads(stripped)
+        return [segment.strip() for segment in value.split(",") if segment.strip()]
 
     @field_validator("sync_since")
     @classmethod

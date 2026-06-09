@@ -34,6 +34,20 @@ def test_slack_auth_set_with_token_flag_stores_to_keyring(
     assert get_secret(SLACK_TOKEN_SECRET_KEY) == "xoxp-test"
 
 
+def test_slack_auth_set_emits_next_action_hint(
+    in_memory_keyring: InMemoryKeyring,
+) -> None:
+    """Phase 23-E (#535): ``auth set`` points at ``auth test`` on stderr."""
+    runner = CliRunner()
+    result = runner.invoke(app, ["slack", "auth", "set", "--token", "xoxp-test"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "next:" in result.stderr
+    assert "opshub slack auth test" in result.stderr
+    # The hint is stderr-only so the stdout success line stays parseable.
+    assert "next:" not in result.stdout
+
+
 def test_slack_auth_set_with_stdin_prompt(
     in_memory_keyring: InMemoryKeyring,
 ) -> None:
@@ -140,6 +154,32 @@ def test_slack_auth_test_success(monkeypatch: pytest.MonkeyPatch) -> None:
     # (#533, byte-symmetric with ``opshub github auth test``).
     assert "scopes" in result.stdout
     assert "channels:history,channels:read,users:read" in result.stdout
+    # Phase 23-E (#535): a successful test points at the discovery step.
+    assert "next:" in result.stderr
+    assert "opshub slack conversations --format=toml" in result.stderr
+
+
+def test_slack_auth_test_failure_does_not_emit_next_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The next-action hint is for the *success* path only (#535)."""
+    import opshub.connectors.slack.auth as slack_auth
+    from opshub.core.errors import ConfigError
+
+    class _FakeSlackAuth:
+        def __init__(self) -> None:
+            pass
+
+        def test_token(self) -> dict[str, str]:
+            raise ConfigError("Slack auth.test returned non-ok: invalid_auth")
+
+    monkeypatch.setattr(slack_auth, "SlackAuth", _FakeSlackAuth)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["slack", "auth", "test"])
+
+    assert result.exit_code == 1
+    assert "next:" not in result.stderr
 
 
 def test_slack_auth_test_failure_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -25,10 +25,12 @@ Output formats
   channels, the peer name for DMs, and a comma-joined participant
   list (capped at :data:`_MPIM_PARTICIPANT_DISPLAY_LIMIT` with a
   ``+N`` suffix) for MPIMs.
-* ``toml``: emits a ``channels = [...]`` snippet ready to paste into
-  ``opshub.toml`` under ``[connectors.slack]``. Each id is annotated
-  with a comment carrying the conversation type and a human-readable
-  label.
+* ``toml``: emits a complete, paste-ready ``[connectors.slack]`` block
+  — the table header, ``enabled = true``, and the ``channels`` array —
+  so the output drops straight into ``opshub.toml`` and ``opshub slack
+  sync`` runs with no further editing (Phase 23-E, #535). Each id is
+  annotated with a comment carrying the conversation type and a
+  human-readable label.
 * ``json``: a JSON array of objects matching
   ``SlackConversation.__dataclass_fields__`` 1:1 (id / type / name /
   display_name / is_private / is_archived / purpose / participants).
@@ -352,6 +354,17 @@ def run_conversations_command(
     if rendered:
         typer.echo(rendered)
 
+    # Next-action hint (Phase 23-E, #535): the toml block is the paste
+    # target, so point the operator at the obvious follow-up. Emitted on
+    # stderr (after the stdout block) only when there is something to
+    # paste, so it never pollutes a piped ``--format=toml`` capture or a
+    # ``--format=json`` machine-read path.
+    if output_format == "toml" and sorted_rows:
+        typer.echo(
+            "next: paste the block above into opshub.toml, then run `opshub slack sync`",
+            err=True,
+        )
+
 
 def render_conversations(
     rows: Iterable[SlackConversation],
@@ -566,21 +579,31 @@ def _render_toml(
     *,
     engagement_probe: bool = False,
 ) -> str:
-    """Render conversations as a TOML ``channels = [...]`` snippet.
+    """Render conversations as a complete, paste-ready ``[connectors.slack]`` block.
+
+    Phase 23-E (#535): the output is a self-contained section — the
+    ``[connectors.slack]`` table header, ``enabled = true``, and the
+    ``channels`` array — so an operator can paste it straight into
+    ``opshub.toml`` and run ``opshub slack sync`` with no further
+    editing. The previous form emitted a *bare* ``channels = [...]``
+    array; pasting that without an enclosing section dropped a top-level
+    array into whatever table preceded it (or none), silently breaking
+    the config. Emitting the header + ``enabled`` flag closes that trap.
 
     Each id sits inside string quotes followed by a comment that names
     the conversation type and a human-readable label so reviewers can
-    spot DMs / MPIMs / archived entries at a glance before pasting
-    into ``opshub.toml``. The activity flag label depends on the probe
-    axis: ``"last post YYYY-MM-DD"`` for the engagement axis
-    (matches the table header label), ``"last YYYY-MM-DD"`` for the
-    any-author axis (preserves the #374 wording).
+    spot DMs / MPIMs / archived entries at a glance before pasting. The
+    activity flag label depends on the probe axis: ``"last post
+    YYYY-MM-DD"`` for the engagement axis (matches the table header
+    label), ``"last YYYY-MM-DD"`` for the any-author axis (preserves the
+    #374 wording).
     """
+    section = ["[connectors.slack]", "enabled = true"]
     header = f"# Slack conversations ({len(rows)})"
     if not rows:
-        return f"{header}\nchannels = []"
+        return "\n".join([*section, header, "channels = []"])
     label_prefix = "last post" if engagement_probe else "last"
-    lines = [header, "channels = ["]
+    lines = [*section, header, "channels = ["]
     for row in rows:
         flags: list[str] = [row.type]
         if row.is_archived:
