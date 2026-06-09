@@ -277,3 +277,41 @@ def test_cli_cursor_show_removed() -> None:
     # `cursor show` was promoted to `slack status`; the subcommand is gone.
     result = CliRunner().invoke(app, ["slack", "cursor", "show"])
     assert result.exit_code != 0
+
+
+# ----- Phase 23-H bound-workspace display (#538, ADR-0039) ---------------
+
+
+def test_status_shows_bound_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = _FakeSource(
+        f'{{"channels":{{"C1":"{_ts("2026-06-09")}"}},"backfill":{{}},'
+        f'"threads":{{}},"team_id":"T-WS1"}}'
+    )
+    _patch_source(monkeypatch, source)
+    _patch_config(monkeypatch, channels=["C1"])
+    _patch_no_names(monkeypatch)
+
+    out = _render()
+    assert "bound workspace: team_id=T-WS1" in out
+
+
+def test_status_unbound_workspace_when_no_team_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = _FakeSource(
+        f'{{"channels":{{"C1":"{_ts("2026-06-09")}"}},"backfill":{{}},"threads":{{}}}}'
+    )
+    _patch_source(monkeypatch, source)
+    _patch_config(monkeypatch, channels=["C1"])
+    _patch_no_names(monkeypatch)
+
+    out = _render()
+    assert "bound workspace: 未取得" in out
+
+
+def test_status_verbose_shows_team_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = _FakeSource(
+        '{"channels":{"C1":"200.000000"},"backfill":{},"threads":{},"team_id":"T-WS1"}'
+    )
+    _patch_source(monkeypatch, source)
+
+    out = _render(verbose=True)
+    assert "[team_id] T-WS1" in out

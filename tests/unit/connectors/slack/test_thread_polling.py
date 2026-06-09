@@ -179,6 +179,16 @@ def _patch_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch :class:`SlackAuth` so construction never reads the keyring."""
     fake_auth_cls = MagicMock()
     fake_auth_cls.return_value.token = "xoxb-fake"
+    # Phase 23-H (#538, ADR-0039): the sync hot path calls ``auth.test_token``
+    # for the single-workspace bind guard; return a stable identity so the
+    # guard binds ``T-test`` and the sync proceeds.
+    fake_auth_cls.return_value.test_token.return_value = {
+        "team": "t",
+        "team_id": "T-test",
+        "user": "u",
+        "user_id": "U1",
+        "principal": "bot",
+    }
     monkeypatch.setattr(
         "opshub.connectors.slack.connector.SlackAuth",
         fake_auth_cls,
@@ -335,6 +345,7 @@ def test_polling_phase_fetches_thread_replies_for_in_window_cursor(
 
     prior_cursor = _dump_cursors(
         {
+            "team_id": None,
             "channels": {"C1": "1700000010.000100"},
             "backfill": {},
             "threads": {"C1:1700000010.000100": recent_last_reply_ts},
@@ -386,6 +397,7 @@ def test_polling_phase_skips_out_of_window_threads(
     cold_key = "C1:1700000010.000100"
     prior_cursor = _dump_cursors(
         {
+            "team_id": None,
             "channels": {"C1": "1700000010.000100"},
             "backfill": {},
             "threads": {cold_key: cold_ts},
@@ -538,6 +550,7 @@ def test_polling_phase_advances_threads_cursor_monotonically(
 
     prior_cursor = _dump_cursors(
         {
+            "team_id": None,
             "channels": {"C1": "1700000010.000100"},
             "backfill": {},
             "threads": {"C1:1700000010.000100": ts_prior},
@@ -580,6 +593,7 @@ def test_polling_phase_skipped_for_thread_in_excluded_channel(
         recent_ts = since_to_ts(now_utc() - timedelta(days=1))
         prior_cursor = _dump_cursors(
             {
+                "team_id": None,
                 "channels": {"C1": "1700000010.000100"},
                 "backfill": {},
                 "threads": {"C1:1700000010.000100": recent_ts},
@@ -625,6 +639,7 @@ def test_thread_activity_window_overrides_default_via_settings(
     fortnight_ts = since_to_ts(now_utc() - timedelta(days=14))
     prior_cursor = _dump_cursors(
         {
+            "team_id": None,
             "channels": {"C1": "1700000010.000100"},
             "backfill": {},
             "threads": {"C1:1700000010.000100": fortnight_ts},
@@ -745,6 +760,7 @@ def test_polling_phase_treats_null_last_reply_as_in_window(
 
     prior_cursor = _dump_cursors(
         {
+            "team_id": None,
             "channels": {"C1": "1700000010.000100"},
             "backfill": {},
             "threads": {"C1:1700000010.000100": None},
@@ -859,6 +875,7 @@ def test_polling_phase_preserves_all_threads_when_window_disabled(
     cold_key = "C1:1700000010.000100"
     prior_cursor = _dump_cursors(
         {
+            "team_id": None,
             "channels": {"C1": "1700000010.000100"},
             "backfill": {},
             "threads": {cold_key: cold_ts},

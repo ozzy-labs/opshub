@@ -200,7 +200,7 @@ def _patch_settings(
     )
 
 
-def _patch_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+def _patch_auth(monkeypatch: pytest.MonkeyPatch, *, team_id: str = "T-test") -> None:
     """Patch :class:`SlackAuth` so construction never reads the keyring.
 
     The connector instantiates :class:`SlackAuth` inside :meth:`sync`;
@@ -210,6 +210,18 @@ def _patch_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     fake_auth_cls = MagicMock()
     fake_auth_cls.return_value.token = "xoxb-fake"
+    # Phase 23-H (#538, ADR-0039): the sync hot path calls ``auth.test_token``
+    # to resolve the workspace ``team_id`` for the single-workspace bind guard.
+    # Return a stable identity so the guard binds ``team_id`` and the sync
+    # proceeds; guard tests pass a different / empty ``team_id`` to exercise
+    # the mismatch / abnormal paths.
+    fake_auth_cls.return_value.test_token.return_value = {
+        "team": "t",
+        "team_id": team_id,
+        "user": "u",
+        "user_id": "U1",
+        "principal": "bot",
+    }
     monkeypatch.setattr(
         "opshub.connectors.slack.connector.SlackAuth",
         fake_auth_cls,
@@ -282,7 +294,7 @@ def test_load_cursors_none_returns_empty_compound() -> None:
     20-C) "no thread to poll" (empty ``threads`` axis).
     """
     state = _load_cursors(None)
-    assert state == {"channels": {}, "backfill": {}, "threads": {}}
+    assert state == {"channels": {}, "backfill": {}, "threads": {}, "team_id": None}
     # All three axes must be present and mutable for the sync path to
     # mutate them in-place without raising KeyError (Phase 22-B added the
     # ``backfill`` low-water axis, ADR-0038 §(a)).
@@ -310,6 +322,7 @@ def test_load_cursors_round_trips_compound_schema() -> None:
         "threads": {
             "C1:1700000000.000000": "1700000003.000300",
         },
+        "team_id": "T1",
     }
     serialised = _dump_cursors(original)
     assert _load_cursors(serialised) == original
@@ -327,15 +340,20 @@ def test_load_cursors_accepts_empty_axes() -> None:
     # input omits ``backfill`` (pre-Phase-22 shape) — tolerated and
     # defaulted to empty (ADR-0038 §(g)).
     state_a = _load_cursors('{"channels":{}, "backfill": {},"threads":{"C1:t1":"ts-1"}}')
-    assert state_a == {"channels": {}, "backfill": {}, "threads": {"C1:t1": "ts-1"}}
+    assert state_a == {
+        "channels": {},
+        "backfill": {},
+        "threads": {"C1:t1": "ts-1"},
+        "team_id": None,
+    }
 
     # Populated channels, empty threads (the Phase 20-B steady state).
     state_b = _load_cursors('{"channels":{"C1":"ts-1"}, "backfill": {},"threads":{}}')
-    assert state_b == {"channels": {"C1": "ts-1"}, "backfill": {}, "threads": {}}
+    assert state_b == {"channels": {"C1": "ts-1"}, "backfill": {}, "threads": {}, "team_id": None}
 
     # Both empty (first sync, zero observed).
     state_c = _load_cursors('{"channels":{}, "backfill": {},"threads":{}}')
-    assert state_c == {"channels": {}, "backfill": {}, "threads": {}}
+    assert state_c == {"channels": {}, "backfill": {}, "threads": {}, "team_id": None}
 
 
 def test_load_cursors_accepts_null_values_per_axis() -> None:
@@ -351,6 +369,7 @@ def test_load_cursors_accepts_null_values_per_axis() -> None:
         "channels": {"C1": "1700000001.000100", "C-empty": None},
         "backfill": {"C1": "1699990000.000000", "C-empty": None},
         "threads": {"C1:1700000000.000000": None},
+        "team_id": "T1",
     }
     assert _load_cursors(_dump_cursors(original)) == original
 
@@ -488,6 +507,7 @@ def test_load_cursors_tolerates_missing_backfill_axis() -> None:
         "channels": {"C1": "ts-1"},
         "backfill": {},
         "threads": {"C1:t1": "ts-r1"},
+        "team_id": None,
     }
 
 
@@ -497,6 +517,7 @@ def test_load_cursors_round_trips_backfill_axis() -> None:
         "channels": {"C1": "1700000001.000100"},
         "backfill": {"C1": "1699990000.000000", "C-cold": None},
         "threads": {},
+        "team_id": "T1",
     }
     assert _load_cursors(_dump_cursors(original)) == original
 
@@ -606,11 +627,13 @@ def test_dump_cursors_is_deterministic() -> None:
     ``threads``) and per-axis (``C1`` before ``C2``) ordering.
     """
     a: SlackCursorState = {
+        "team_id": None,
         "channels": {"C2": "ts-2", "C1": "ts-1"},
         "backfill": {"C2": "ts-b2", "C1": "ts-b1"},
         "threads": {"C2:t2": "ts-r2", "C1:t1": "ts-r1"},
     }
     b: SlackCursorState = {
+        "team_id": None,
         "channels": {"C1": "ts-1", "C2": "ts-2"},
         "backfill": {"C1": "ts-b1", "C2": "ts-b2"},
         "threads": {"C1:t1": "ts-r1", "C2:t2": "ts-r2"},
@@ -627,14 +650,16 @@ def test_dump_cursors_emits_sorted_top_level_axes() -> None:
     silently invalidate textual diffs across runs.
     """
     state: SlackCursorState = {
+        "team_id": None,
         "channels": {"C1": "ts-1"},
         "backfill": {"C1": "ts-b1"},
         "threads": {"C1:t1": "ts-r1"},
     }
-    # ``sort_keys=True`` orders top-level axes alphabetically:
-    # backfill < channels < threads.
+    # ``sort_keys=True`` orders top-level keys alphabetically:
+    # backfill < channels < team_id < threads (Phase 23-H #538 adds team_id).
     assert _dump_cursors(state) == (
-        '{"backfill":{"C1":"ts-b1"},"channels":{"C1":"ts-1"},"threads":{"C1:t1":"ts-r1"}}'
+        '{"backfill":{"C1":"ts-b1"},"channels":{"C1":"ts-1"},"team_id":null,'
+        '"threads":{"C1:t1":"ts-r1"}}'
     )
 
 
@@ -646,8 +671,8 @@ def test_dump_cursors_emits_empty_compound_envelope() -> None:
     (and the ``connector_cursors`` row advances out of the legacy /
     NULL state on the first successful sync).
     """
-    assert _dump_cursors({"channels": {}, "backfill": {}, "threads": {}}) == (
-        '{"backfill":{},"channels":{},"threads":{}}'
+    assert _dump_cursors({"team_id": None, "channels": {}, "backfill": {}, "threads": {}}) == (
+        '{"backfill":{},"channels":{},"team_id":null,"threads":{}}'
     )
 
 
@@ -751,6 +776,7 @@ def test_sync_observes_each_yielded_message(monkeypatch: pytest.MonkeyPatch) -> 
     # New cursor encodes the latest ts per channel under the compound schema.
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
+        "team_id": "T-test",
         "channels": {"C1": "1700000002.000200"},
         "backfill": {},
         "threads": {},
@@ -776,6 +802,9 @@ def test_sync_resumes_from_persisted_cursor(monkeypatch: pytest.MonkeyPatch) -> 
             "channels": {"C1": "1700000001.000100", "C2": None},
             "backfill": {},
             "threads": {},
+            # Already bound (matches _patch_auth) so the Phase 23-H guard is a
+            # no-op and the no-yields sync preserves the cursor byte-for-byte.
+            "team_id": "T-test",
         }
     )
     service = _RecordingSourceService()
@@ -839,6 +868,7 @@ def test_sync_persists_max_ts_when_yield_order_regresses(
     # envelope.
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
+        "team_id": "T-test",
         "channels": {"C1": "1700000002.000200"},
         "backfill": {},
         "threads": {},
@@ -863,6 +893,7 @@ def test_sync_advances_cursor_per_channel(monkeypatch: pytest.MonkeyPatch) -> No
     assert result.observed_count == 2
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
+        "team_id": "T-test",
         "channels": {"C1": "ts-c1-new", "C2": "ts-c2-new"},
         "backfill": {},
         "threads": {},
@@ -905,7 +936,7 @@ def test_sync_floor_is_inert_when_cursor_is_newer(
     _, captured = _patch_fetcher(monkeypatch, yields=[])
 
     prior = _dump_cursors(
-        {"channels": {"C1": "1700000000.000000"}, "backfill": {}, "threads": {}}
+        {"team_id": None, "channels": {"C1": "1700000000.000000"}, "backfill": {}, "threads": {}}
     )  # year 2023 ≫ floor 2000
     SlackConnector().sync(_context(_RecordingSourceService(), cursor_value=prior))
 
@@ -1043,6 +1074,7 @@ def test_sync_skips_excluded_channel_but_advances_cursor(
     # Both channels' cursors advance (skip-but-advance contract).
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
+        "team_id": "T-test",
         "channels": {"C1": "ts-1", "C-secret": "ts-2"},
         "backfill": {},
         "threads": {},
@@ -1076,6 +1108,7 @@ def test_sync_skips_excluded_sender_but_advances_cursor(
     assert service.calls[0]["external_id"] == "C1:ts-human"
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
+        "team_id": "T-test",
         "channels": {"C1": "ts-human"},
         "backfill": {},
         "threads": {},
@@ -1093,7 +1126,12 @@ def test_sync_with_no_yields_preserves_cursor(monkeypatch: pytest.MonkeyPatch) -
     _patch_auth(monkeypatch)
     _patch_fetcher(monkeypatch, yields=[])
 
-    prior_cursor = _dump_cursors({"channels": {"C1": "ts-old"}, "backfill": {}, "threads": {}})
+    # Already bound to this workspace (team_id="T-test", matching _patch_auth),
+    # so the Phase 23-H guard is a no-op and the no-yields sync preserves the
+    # cursor byte-for-byte.
+    prior_cursor = _dump_cursors(
+        {"channels": {"C1": "ts-old"}, "backfill": {}, "threads": {}, "team_id": "T-test"}
+    )
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=prior_cursor))
 
@@ -1206,6 +1244,7 @@ def test_sync_checkpoints_partial_cursor_on_mid_iteration_failure(
     # axis advanced, threads axis preserved empty — pre-fix this
     # would have been missing entirely).
     assert _load_cursors(call["value"]) == {
+        "team_id": "T-test",
         "channels": {"C1": "1700000002.000200"},
         "backfill": {},
         "threads": {},
@@ -1290,6 +1329,7 @@ def test_sync_no_checkpoint_when_failure_yields_only_excluded_messages(
     call = service.cursor_set_calls[0]
     assert call["sync_started"] is True
     assert _load_cursors(call["value"]) == {
+        "team_id": "T-test",
         "channels": {"C-secret": "1700000001.000100"},
         "backfill": {},
         "threads": {},
@@ -1329,6 +1369,7 @@ def test_sync_no_checkpoint_on_normal_completion(
     assert result.observed_count == 1
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
+        "team_id": "T-test",
         "channels": {"C1": "1700000001.000100"},
         "backfill": {},
         "threads": {},
@@ -1365,6 +1406,7 @@ def test_sync_checkpoints_partial_progress_on_keyboard_interrupt(
     assert len(service.cursor_set_calls) == 1
     call = service.cursor_set_calls[0]
     assert _load_cursors(call["value"]) == {
+        "team_id": "T-test",
         "channels": {"C1": "1700000001.000100"},
         "backfill": {},
         "threads": {},
@@ -1402,7 +1444,7 @@ def test_sync_checkpoint_preserves_prior_cursor_for_unprocessed_channels(
     )
 
     prior_cursor = _dump_cursors(
-        {"channels": {"A": "ts-a-prior", "B": None}, "backfill": {}, "threads": {}}
+        {"team_id": None, "channels": {"A": "ts-a-prior", "B": None}, "backfill": {}, "threads": {}}
     )
     service = _RecordingSourceService()
     with pytest.raises(ConnectorFailedError):
@@ -1415,6 +1457,7 @@ def test_sync_checkpoint_preserves_prior_cursor_for_unprocessed_channels(
     assert len(service.cursor_set_calls) == 1
     call = service.cursor_set_calls[0]
     assert _load_cursors(call["value"]) == {
+        "team_id": "T-test",
         "channels": {"A": "ts-a-prior", "B": "ts-b-new"},
         "backfill": {},
         "threads": {},
@@ -1538,6 +1581,7 @@ def test_sync_lowered_floor_triggers_gap_backfill(monkeypatch: pytest.MonkeyPatc
 
     prior = _dump_cursors(
         {
+            "team_id": None,
             "channels": {"C1": high_water},
             "backfill": {"C1": low_water},
             "threads": {},
@@ -1580,6 +1624,7 @@ def test_sync_relative_floor_does_not_trigger_gap_backfill(
 
     prior = _dump_cursors(
         {
+            "team_id": None,
             "channels": {"C1": high_water},
             "backfill": {"C1": low_water},
             "threads": {},
@@ -1618,6 +1663,7 @@ def test_sync_gap_backfill_suppressed_when_toggle_off(
 
     prior = _dump_cursors(
         {
+            "team_id": None,
             "channels": {"C1": high_water},
             "backfill": {"C1": low_water},
             "threads": {},
@@ -1748,7 +1794,12 @@ def test_sync_gap_parent_seeds_threads_axis(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
     prior = _dump_cursors(
-        {"channels": {"C1": high_water}, "backfill": {"C1": low_water}, "threads": {}}
+        {
+            "team_id": None,
+            "channels": {"C1": high_water},
+            "backfill": {"C1": low_water},
+            "threads": {},
+        }
     )
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=prior))
@@ -1804,7 +1855,12 @@ def test_sync_mid_gap_crash_does_not_advance_low_water(
     _patch_fetcher_with_gap(monkeypatch, forward_yields=[], gap_yields=_crashing_gap())
 
     prior = _dump_cursors(
-        {"channels": {"C1": high_water}, "backfill": {"C1": low_water}, "threads": {}}
+        {
+            "team_id": None,
+            "channels": {"C1": high_water},
+            "backfill": {"C1": low_water},
+            "threads": {},
+        }
     )
     service = _RecordingSourceService()
     with pytest.raises(ConnectorFailedError):
@@ -1822,3 +1878,102 @@ def test_sync_mid_gap_crash_does_not_advance_low_water(
     # ...but the low-water is NOT advanced (the gap did not fully drain) —
     # the next sync re-attempts (floor_new, low_water].
     assert parsed["backfill"] == {"C1": low_water}
+
+
+# ----- Phase 23-H single-workspace bind guard (#538, ADR-0039) -----------
+
+
+def test_sync_binds_team_id_on_first_sync(monkeypatch: pytest.MonkeyPatch) -> None:
+    """First sync (unbound cursor) binds the live workspace team_id."""
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch, team_id="T-WS1")
+    _patch_fetcher(
+        monkeypatch, yields=[("C1", _raw_message(channel_id="C1", ts="1.0", text="x"), "1.0")]
+    )
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=None))
+
+    assert result.new_cursor is not None
+    assert _load_cursors(result.new_cursor)["team_id"] == "T-WS1"
+
+
+def test_sync_passes_when_team_id_matches(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second sync against the same workspace passes the guard (no-op bind)."""
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch, team_id="T-WS1")
+    _patch_fetcher(monkeypatch, yields=[])
+    prior = _dump_cursors(
+        {"channels": {"C1": "1.0"}, "backfill": {}, "threads": {}, "team_id": "T-WS1"}
+    )
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=prior))
+
+    assert result.observed_count == 0
+    assert result.new_cursor is not None
+    assert _load_cursors(result.new_cursor)["team_id"] == "T-WS1"
+
+
+def test_sync_rejects_team_id_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A token swapped to a different workspace is rejected before any fetch."""
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch, team_id="T-OTHER")
+    _patch_fetcher(
+        monkeypatch, yields=[("C1", _raw_message(channel_id="C1", ts="1.0", text="x"), "1.0")]
+    )
+    prior = _dump_cursors(
+        {"channels": {"C1": "1.0"}, "backfill": {}, "threads": {}, "team_id": "T-WS1"}
+    )
+    service = _RecordingSourceService()
+    with pytest.raises(ConfigError, match="cursor reset --all"):
+        SlackConnector().sync(_context(service, cursor_value=prior))
+
+    # The guard runs before any fetch → no foreign-workspace message was
+    # observed (the load-bearing reason external_id stays workspace-wide-unique).
+    assert service.calls == []
+
+
+def test_sync_rebinds_after_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """After ``cursor reset --all`` (team_id None) the next sync re-binds."""
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch, team_id="T-WS2")
+    _patch_fetcher(
+        monkeypatch, yields=[("C1", _raw_message(channel_id="C1", ts="1.0", text="x"), "1.0")]
+    )
+    prior = _dump_cursors({"channels": {}, "backfill": {}, "threads": {}, "team_id": None})
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=prior))
+
+    assert result.new_cursor is not None
+    assert _load_cursors(result.new_cursor)["team_id"] == "T-WS2"
+
+
+def test_sync_legacy_cursor_without_team_id_binds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pre-23-H compound cursor (no team_id key) parses to None then binds."""
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch, team_id="T-WS1")
+    _patch_fetcher(
+        monkeypatch, yields=[("C1", _raw_message(channel_id="C1", ts="1.0", text="x"), "1.0")]
+    )
+    prior = '{"channels":{"C1":"0.5"},"backfill":{},"threads":{}}'
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=prior))
+
+    assert result.new_cursor is not None
+    assert _load_cursors(result.new_cursor)["team_id"] == "T-WS1"
+
+
+def test_sync_empty_team_id_does_not_bind(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``auth.test`` returning no team_id warns and does not bind (no ConfigError)."""
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch, team_id="")
+    _patch_fetcher(
+        monkeypatch, yields=[("C1", _raw_message(channel_id="C1", ts="1.0", text="x"), "1.0")]
+    )
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=None))
+
+    # Sync proceeds (no raise); team_id stays unbound (binding "" would make
+    # every later sync mismatch).
+    assert result.observed_count == 1
+    assert result.new_cursor is not None
+    assert _load_cursors(result.new_cursor)["team_id"] is None

@@ -29,11 +29,6 @@ from typing import Any
 _CONNECTOR = "slack"
 
 
-def _empty_compound() -> dict[str, dict[str, str | None]]:
-    """Return the empty 3-axis compound shape (no cursor persisted yet)."""
-    return {"channels": {}, "backfill": {}, "threads": {}}
-
-
 def run_cursor_reset(*, channels: list[str] | None, reset_all: bool) -> tuple[int, str]:
     """Drop cursor entries for ``channels`` (or all) and persist the result.
 
@@ -118,6 +113,7 @@ def run_cursor_backfill(*, channel_id: str, since: str, until: str | None) -> in
     from opshub.connectors.context import ConnectorContext
     from opshub.connectors.slack.connector import (
         SlackConnector,
+        _empty_state,  # pyright: ignore[reportPrivateUsage]
         _load_cursors,  # pyright: ignore[reportPrivateUsage]
     )
     from opshub.core.errors import ConfigError
@@ -128,7 +124,7 @@ def run_cursor_backfill(*, channel_id: str, since: str, until: str | None) -> in
 
     source = build_source_service(actor="cli:slack-cursor-backfill")
     prior = source.cursor_get(_CONNECTOR)
-    state = _load_cursors(prior) if prior is not None else _empty_compound()
+    state = _load_cursors(prior) if prior is not None else _empty_state()
 
     if until is not None:
         until_ts = since_to_ts(parse_since(until, field="--until"))

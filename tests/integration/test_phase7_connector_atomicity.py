@@ -192,6 +192,16 @@ def _install_slack_fetcher(
 def slack_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_TOKEN", "xoxp-test")
     monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '["C1"]')
+    # Phase 23-H (#538, ADR-0039): stub the workspace-resolving auth.test the
+    # single-workspace bind guard calls before any fetch, so the hermetic test
+    # does not hit the network (the guard binds T-int; the failure / partial
+    # paths the tests assert happen later, inside the stubbed fetcher).
+    from opshub.connectors.slack.auth import SlackAuth
+
+    def _stub_test_token(_self: SlackAuth) -> dict[str, str]:
+        return {"team": "t", "team_id": "T-int", "user": "u", "user_id": "U1", "principal": "user"}
+
+    monkeypatch.setattr(SlackAuth, "test_token", _stub_test_token)
     yield
 
 

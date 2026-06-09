@@ -171,6 +171,22 @@ def slack_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """
     monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_TOKEN", "xoxp-test")
     monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '["C1"]')
+    # Phase 23-H (#538, ADR-0039): the sync hot path resolves the workspace
+    # ``team_id`` via ``auth.test`` for the single-workspace bind guard. Stub
+    # it so the hermetic test does not hit the network; the guard binds
+    # ``T-int`` on the first sync (cursors carry it from then on).
+    from opshub.connectors.slack.auth import SlackAuth
+
+    def _stub_test_token(_self: SlackAuth) -> dict[str, str]:
+        return {
+            "team": "t",
+            "team_id": "T-int",
+            "user": "u",
+            "user_id": "U1",
+            "principal": "user",
+        }
+
+    monkeypatch.setattr(SlackAuth, "test_token", _stub_test_token)
     yield
 
 
@@ -1402,6 +1418,9 @@ def test_slack_sync_persists_compound_cursor_with_channels_monotonic(
             "channels": {"C1": "1700000002.000200"},
             "backfill": {},
             "threads": {},
+            # Phase 23-H (#538, ADR-0039): the first sync binds the workspace
+            # team_id (the slack_env stub reports T-int) and persists it.
+            "team_id": "T-int",
         }
 
         # Second sync with no new yields: cursor is byte-identical

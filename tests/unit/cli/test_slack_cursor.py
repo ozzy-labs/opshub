@@ -98,7 +98,12 @@ def test_cursor_reset_all_clears_everything(monkeypatch: pytest.MonkeyPatch) -> 
     # prior cursor, so it returns -1 ("count unknown") rather than a
     # concrete entry count.
     assert removed == -1
-    assert _load_cursors(new_value) == {"channels": {}, "backfill": {}, "threads": {}}
+    assert _load_cursors(new_value) == {
+        "channels": {},
+        "backfill": {},
+        "threads": {},
+        "team_id": None,
+    }
 
 
 def test_cursor_reset_all_recovers_pre_20b_flat_dict(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -127,7 +132,12 @@ def test_cursor_reset_all_recovers_pre_20b_flat_dict(monkeypatch: pytest.MonkeyP
     removed, new_value = run_cursor_reset(channels=None, reset_all=True)
 
     assert removed == -1
-    assert _load_cursors(new_value) == {"channels": {}, "backfill": {}, "threads": {}}
+    assert _load_cursors(new_value) == {
+        "channels": {},
+        "backfill": {},
+        "threads": {},
+        "team_id": None,
+    }
     # The persisted replacement is the empty compound (rebuild-safe).
     assert source.cursor_set_calls[-1]["value"] == new_value
     assert source.cursor_set_calls[-1]["sync_started"] is False
@@ -366,3 +376,24 @@ def test_cli_reset_requires_channel_or_all(monkeypatch: pytest.MonkeyPatch) -> N
 
     result = CliRunner().invoke(app, ["slack", "cursor", "reset"])
     assert result.exit_code == 2
+
+
+def test_cursor_reset_channel_preserves_team_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Per-channel reset (Phase 23-H, #538) does NOT unbind the workspace team_id."""
+    from opshub.cli._slack_cursor import run_cursor_reset
+    from opshub.connectors.slack.connector import (
+        _load_cursors,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    source = _FakeSource(
+        '{"channels":{"C1":"200.000000","C2":"300.000000"},'
+        '"backfill":{},"threads":{},"team_id":"T-WS1"}'
+    )
+    _patch_source(monkeypatch, source)
+
+    _removed, new_value = run_cursor_reset(channels=["C1"], reset_all=False)
+
+    state = _load_cursors(new_value)
+    # team_id survives a per-channel reset (only --all cold-starts the bind).
+    assert state["team_id"] == "T-WS1"
+    assert state["channels"] == {"C2": "300.000000"}
