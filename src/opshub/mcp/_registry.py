@@ -880,13 +880,15 @@ def build_tool_specs(
             title="List Slack demand digest rows",
             description=(
                 "List ``slack_demand_digest`` rows materialised from Slack"
-                " ``<@self>`` mentions and DM/MPIM activity (ADR-0033). Filterable"
-                " by ``types`` (channel kind), ``demand_kinds`` (mention / dm /"
-                " mpim), and ``since_ts`` (Slack epoch lower bound on the last"
-                " demand). Order is fixed at ``last_demand_desc`` (newest first)."
-                " Read-only over local SQLite — no Slack API round-trip; the"
-                " digest is rebuilt from already-stored ``SourceObserved`` events"
-                " by the Phase 18-B projection."
+                " ``<@self>`` mentions and DM activity (ADR-0033). Filterable"
+                " by ``types`` (channel kind), ``demand_kinds`` (mention / dm),"
+                " and ``since_ts`` (Slack epoch lower bound on the last demand)."
+                " Rows the operator themselves last authored are excluded"
+                " (Phase 23-D / issue #534). Each row carries ``last_demand_at``"
+                " (ISO 8601 UTC). Order is fixed at ``last_demand_desc`` (newest"
+                " first). Read-only over local SQLite — no Slack API round-trip;"
+                " the digest is rebuilt from already-stored ``SourceObserved``"
+                " events by the projection."
             ),
             input_schema={
                 "type": "object",
@@ -908,12 +910,12 @@ def build_tool_specs(
                         "type": "array",
                         "items": {
                             "type": "string",
-                            "enum": ["mention", "dm", "mpim"],
+                            "enum": ["mention", "dm"],
                         },
                         "description": (
                             "Restrict to these demand signal kinds. Maps 1:1 to"
                             " ``slack_demand_digest.demand_kind``. Defaults to"
-                            " all three when omitted."
+                            " both when omitted."
                         ),
                         "uniqueItems": True,
                     },

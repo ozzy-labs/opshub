@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -54,6 +54,25 @@ __all__ = [
     "build_source_list_handler",
     "build_task_list_handler",
 ]
+
+
+def _slack_ts_to_iso(ts: object) -> str | None:
+    """Render a Slack epoch float as an ISO 8601 UTC string.
+
+    Phase 23-D (issue #534). The ``slack_demand_digest`` projection
+    stores ``last_demand_ts`` as a Slack-format Unix epoch float
+    (``1700000000.123456``); the MCP surface normalises it to
+    ``"2026-06-09T12:34:56.123456+00:00"`` so every read tool speaks the
+    same timestamp dialect. Returns ``None`` for a missing / unparseable
+    value (defence-in-depth — the column is ``NOT NULL`` so this should
+    not fire in practice).
+    """
+    if not isinstance(ts, (int, float)):
+        return None
+    try:
+        return datetime.fromtimestamp(float(ts), tz=UTC).isoformat()
+    except (ValueError, OverflowError, OSError):
+        return None
 
 
 def _parse_iso(value: object) -> datetime | None:
@@ -783,8 +802,9 @@ def build_slack_demand_list_handler(engine: Engine) -> ToolHandler:
       ``private`` / ``public``). Defaults to all four. Maps 1:1 to
       ``slack_demand_digest.channel_type``.
     * ``demand_kinds`` — list of ``DEMAND_KINDS`` (``mention`` /
-      ``dm`` / ``mpim``). Defaults to all three. Maps 1:1 to
-      ``slack_demand_digest.demand_kind``.
+      ``dm``). Defaults to both. Maps 1:1 to
+      ``slack_demand_digest.demand_kind``. (Phase 23-D dropped the dead
+      ``mpim`` value — issue #534.)
     * ``since_ts`` — Slack epoch float lower bound on
       ``last_demand_ts`` (rows strictly older are excluded).
     * ``limit`` — ADR-0022 §(d) page cap; default 50.
@@ -799,12 +819,20 @@ def build_slack_demand_list_handler(engine: Engine) -> ToolHandler:
     ``{"items": [SlackDemandItem, ...], "total": N, "truncated":
     bool, "next_offset": int | null}`` where ``SlackDemandItem``
     mirrors the projection columns (``channel_id`` / ``channel_type``
-    / ``channel_name`` / ``demand_kind`` / ``last_demand_ts`` /
+    / ``channel_name`` / ``demand_kind`` / ``last_demand_at`` /
     ``last_demand_user_id`` / ``last_demand_excerpt`` /
     ``last_demand_permalink`` / ``last_source_id``). ``total`` is the
     item count in the response page (not the full table size); the
     pagination hint pair signals whether more rows exist behind the
     cap.
+
+    Phase 23-D (issue #534) emits ``last_demand_at`` as an ISO 8601
+    UTC string (``"2026-06-09T12:34:56+00:00"``) instead of the raw
+    Slack epoch float ``last_demand_ts`` so every read tool speaks the
+    same timestamp dialect (``task.list`` / ``decision.list`` / ... all
+    ``.isoformat()``). The ``since_ts`` *filter* argument stays a Slack
+    epoch float because that is the value the projection stores and
+    compares against; only the rendered output is ISO.
     """
 
     async def handler(arguments: Mapping[str, Any]) -> str:
@@ -886,7 +914,13 @@ def build_slack_demand_list_handler(engine: Engine) -> ToolHandler:
                 "channel_type": row.channel_type,
                 "channel_name": row.channel_name,
                 "demand_kind": row.demand_kind,
-                "last_demand_ts": row.last_demand_ts,
+                # Phase 23-D (issue #534): emit an ISO 8601 UTC string so
+                # the timestamp dialect matches every other read tool
+                # (``task.list`` / ``decision.list`` / ... all
+                # ``.isoformat()``). The projection stores the raw Slack
+                # epoch float; converting at the boundary keeps the
+                # high-water upsert math in epoch space.
+                "last_demand_at": _slack_ts_to_iso(row.last_demand_ts),
                 "last_demand_user_id": row.last_demand_user_id,
                 # Truncate excerpts to the standard MCP snippet cap so
                 # a long Slack body cannot blow the agent context

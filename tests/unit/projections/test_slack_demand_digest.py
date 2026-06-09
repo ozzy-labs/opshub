@@ -92,8 +92,16 @@ def _slack_observed(
     permalink: str = "https://example.slack.com/archives/C/p1",
     occurred_at: datetime | None = None,
     aggregate_id: str | None = None,
+    author_id: str | None = _OTHER_USER_ID,
 ) -> SourceObserved:
-    """Build a :class:`SourceObserved` mimicking a Phase 7 Slack mapper output."""
+    """Build a :class:`SourceObserved` mimicking a Phase 7 Slack mapper output.
+
+    ``author_id`` defaults to :data:`_OTHER_USER_ID` so fixtures model a
+    peer-authored message (the common demand case); pass
+    ``author_id=_SELF_USER_ID`` to model a self-authored message and
+    exercise the Phase 23-D suppression path, or ``author_id=None`` for a
+    bot / system / historic (pre-Phase-23) event.
+    """
     if occurred_at is None:
         occurred_at = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
     if aggregate_id is None:
@@ -117,6 +125,7 @@ def _slack_observed(
         body=resolved_body,
         provenance_origin="external",
         provenance_trust="untrusted",
+        author_id=author_id,
     )
 
 
@@ -148,6 +157,9 @@ def test_mention_in_public_channel_inserts_mention_row(engine: Engine) -> None:
     assert row["last_demand_excerpt"] == "hey <@U_SELF> can you take a look?"
     assert row["last_demand_permalink"] == "https://example.slack.com/archives/C/p1"
     assert row["last_source_id"] == event.aggregate_id
+    # Phase 23-D (issue #534): the peer's author id is now recorded
+    # (it used to be hard-coded NULL).
+    assert row["last_demand_user_id"] == _OTHER_USER_ID
 
 
 def test_mention_for_other_user_does_not_insert_row(engine: Engine) -> None:
@@ -267,6 +279,149 @@ def test_dm_path_works_without_self_user_id(
     with engine.connect() as conn:
         row = conn.execute(select(slack_demand_digest_table)).mappings().one()
     assert row["demand_kind"] == "dm"
+
+
+# ---- self-authored suppression (Phase 23-D, issue #534) -------------------
+
+
+def test_self_authored_dm_is_suppressed(engine: Engine) -> None:
+    """A DM the operator themselves authored must not produce a row.
+
+    Issue #534 core fix: a DM the operator already replied to is not a
+    demand on them. When ``author_id == self_user_id`` the event is
+    dropped before any row is written.
+    """
+    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    event = _slack_observed(
+        channel_id="D444SELF",
+        ts="1700000040.000400",
+        body="ok, on it!",
+        author_id=_SELF_USER_ID,
+    )
+
+    with engine.begin() as conn:
+        _apply(projection, conn, event)
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(slack_demand_digest_table)).all()
+    assert rows == []
+
+
+def test_self_authored_mention_is_suppressed(engine: Engine) -> None:
+    """A ``<@self>`` literal the operator wrote themselves is not a demand.
+
+    Edge case: the operator pastes their own id into a public channel
+    message. Without the author guard this would self-trigger a mention
+    row.
+    """
+    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    event = _slack_observed(
+        channel_id="C444SELF",
+        ts="1700000041.000400",
+        body=f"reminder to <@{_SELF_USER_ID}> from myself",
+        author_id=_SELF_USER_ID,
+    )
+
+    with engine.begin() as conn:
+        _apply(projection, conn, event)
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(slack_demand_digest_table)).all()
+    assert rows == []
+
+
+def test_self_reply_does_not_overwrite_peer_demand(engine: Engine) -> None:
+    """A later self-reply must not clobber the peer's demand excerpt.
+
+    This is the precise mechanism #534 describes: the high-water upsert
+    would otherwise let the operator's own reply (a strictly newer ts)
+    replace the peer's actionable excerpt / permalink. Suppressing
+    self-authored events keeps the row pinned to the peer's ping.
+    """
+    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    peer_ping = _slack_observed(
+        channel_id="D555PEER",
+        ts="1700000050.000500",
+        body="can you review this?",
+        author_id=_OTHER_USER_ID,
+    )
+    self_reply = _slack_observed(
+        channel_id="D555PEER",
+        ts="1700000051.000600",
+        body="sure, looking now",
+        author_id=_SELF_USER_ID,
+    )
+
+    with engine.begin() as conn:
+        _apply(projection, conn, peer_ping)
+        _apply(projection, conn, self_reply)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(slack_demand_digest_table)).mappings().one()
+    # The peer's ping survives — neither the ts nor the excerpt advanced.
+    assert row["last_demand_ts"] == pytest.approx(1700000050.000500)  # pyright: ignore[reportUnknownMemberType]
+    assert row["last_demand_excerpt"] == "can you review this?"
+    assert row["last_demand_user_id"] == _OTHER_USER_ID
+
+
+def test_dm_without_self_user_id_still_records_author(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Author suppression is skipped when self id is unavailable, but author is recorded.
+
+    With no resolvable self id the projection cannot compare authors, so
+    the suppression guard is a no-op (the DM still lands) — but the
+    peer's author id is still persisted for the FROM column.
+    """
+    monkeypatch.delenv(SELF_USER_ID_ENV_VAR, raising=False)
+    monkeypatch.setattr(
+        "opshub.projections.slack_demand_digest._resolve_self_user_id_from_auth",
+        lambda: None,
+    )
+    projection = SlackDemandDigestProjection()  # no explicit id
+    event = _slack_observed(
+        channel_id="D666NOID",
+        ts="1700000060.000600",
+        body="hello there",
+        author_id="U_PEER",
+    )
+
+    with engine.begin() as conn:
+        _apply(projection, conn, event)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(slack_demand_digest_table)).mappings().one()
+    assert row["demand_kind"] == "dm"
+    assert row["last_demand_user_id"] == "U_PEER"
+
+
+# ---- DM peer name resolution (Phase 23-D, issue #534 §4) ------------------
+
+
+def test_dm_channel_name_resolves_to_peer_display_name(engine: Engine) -> None:
+    """A DM row surfaces the peer display name, not the opaque ``D...`` id.
+
+    Issue #534 §4: for a DM the Slack fetcher has no channel name and the
+    title degrades to ``"{peer} in #{D...}: ..."``; the projection lifts
+    the peer name out of the title prefix so the operator sees "alice"
+    rather than "D777PEER".
+    """
+    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    event = _slack_observed(
+        channel_id="D777PEER",
+        ts="1700000070.000700",
+        body="quick question",
+        title="alice smith in #D777PEER: quick question",
+        author_id=_OTHER_USER_ID,
+    )
+
+    with engine.begin() as conn:
+        _apply(projection, conn, event)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(slack_demand_digest_table)).mappings().one()
+    assert row["demand_kind"] == "dm"
+    assert row["channel_name"] == "alice smith"
 
 
 # ---- idempotency / ordering -----------------------------------------------

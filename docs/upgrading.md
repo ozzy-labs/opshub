@@ -1613,3 +1613,48 @@ sync 失敗時の stderr サマリが、これまで `OPSHUB_DEBUG=1`（`--debug
 - **No DB migration.** stderr 表示の昇格のみ。schema / event 不変。
 - **MCP surface 不変**（19 tools）。skill catalog 不変（14）。
 - **関連**: [ADR-0027](adr/0027-observability-and-troubleshooting-logging.md)（observability / redaction）, [#320](https://github.com/ozzy-labs/opshub/issues/320) (R2/R3/R4)。
+
+## Phase 23-D: Slack demand digest の誤報を断つ（author id 貫通 + epoch→ISO + 名前解決）
+
+Phase 23-D（[ADR-0033 §改訂](adr/0033-slack-mention-demand-digest.md)、[issue #534](https://github.com/ozzy-labs/opshub/issues/534)）は `slack_demand_digest` projection の誤報を断つ 4 点を着地させた:
+
+1. **author id 貫通** — Slack mapper が message author の `U...` id を `SourceObserved.author_id`（新 optional field、`fingerprint` と同じ後方互換追加で `schema_version` は 1 のまま）に貫通させ、projection が `author_id == self_user_id` の行を demand から除外する。これで「自分が返信し終えた DM が最上位に出る」誤報の根因が消える（high-water upsert が自分の返信で excerpt / permalink を上書きする機序も同時に止まる）。
+2. **epoch → ISO 8601** — MCP `slack.demand.list` の出力 `last_demand_ts`（raw Slack epoch float）を `last_demand_at`（ISO 8601 UTC 文字列）に統一。他 read tool（`task.list` / `decision.list` 等）と timestamp 方言が揃う。`since_ts` *filter* 入力は projection が保持する epoch のままで変わらない。
+3. **名前解決** — DM 行は相手の表示名、channel 行は `#name` を `channel_name` に入れる（opaque `D...` id 露出を解消）。
+4. **死に値 enum 削除** — `demand_kind=mpim`（apply が書かないため構造上 0 件）を `DEMAND_KINDS` / CHECK 制約 / MCP schema / CLI filter から削除。
+
+### DB migration（必須）
+
+スキーマ変更は migration `0032_drop_mpim_demand_kind` 1 本。`demand_kind` の CHECK 制約を 3 値（`mention` / `dm` / `mpim`）から 2 値（`mention` / `dm`）に絞る。`mpim` 行は構造上存在しないため**データ削除は発生しない**（SQLite は CHECK を in-place ALTER できないため rebuild-via-temp-table で張り替えるだけ）。
+
+```bash
+opshub db migrate   # 0032_drop_mpim_demand_kind を適用
+```
+
+### author 付き replay の projection rebuild 手順
+
+`author_id` は Phase 23-D 以前の `SourceObserved` event には**存在しない**（mapper が貫通させ始めたのが本 Phase から）。したがって:
+
+- **`opshub projections rebuild` 単独では過去 event の誤報は消えない。** rebuild は event log を流し直すだけで、過去 event の `author_id` は `NULL` のまま replay される（`author_id is None` の行は self 判定不能なので従来どおり demand に残る）。これは ADR-0033 §決定 (a)「event schema には触れない」前提を本 issue が見直した帰結であり、author を後付けで遡及はできない（event は immutable）。
+- **誤報抑制を全 channel に効かせるには Slack の full re-sync が必要。** cursor を巻き戻して現行 mapper で過去 message を取り直すと、`author_id` 付きの新 `SourceObserved` event が append され、その後の rebuild で self-authored 行が除外される。
+
+```bash
+# 1) 対象 channel の cursor を巻き戻して過去分を author 付きで取り直す
+#    (pre-feature channel の救済は Phase 22-E の backfill 経路を使う)
+opshub slack cursor backfill --channel C1 --since 90d   # 直近 90 日を取り直し
+#    ...または全 channel を cold-start させる場合:
+# opshub slack cursor reset --all
+opshub slack sync                                       # author 付き event を append
+
+# 2) projection を rebuild して self-authored 行を除外した digest に収束させる
+opshub projections rebuild
+opshub slack mentions list                              # FROM 列に相手 U... id、CHANNEL に相手名 / #name
+```
+
+re-sync しない場合でも、**着地以降に sync された新規 message は author 付き**で入るため、新しい誤報は発生しない（過去分だけ NULL author で残る）。pre-userbase posture（実ユーザー不在）のため、過去分の取り直しは任意。
+
+### Phase 23-D specifics
+
+- **DB head** = `0032_drop_mpim_demand_kind`。Phase 23-D は migration 1 本。
+- **MCP surface 不変**（19 tools）。`slack.demand.list` の出力 field 名（`last_demand_ts` → `last_demand_at`）と `demand_kinds` enum（`mpim` 削除）が変わるが tool 本数は不変。skill catalog 不変（14、`test_skills_install_only_writes_14_assistant_skills` green）。
+- **event schema** は `SourceObserved.author_id`（optional、default `None`）追加のみ。他 connector（github / ms365 / box / ...）は `author_id` を出さず `NULL` round-trip（後方互換、ADR-0002 §4）。

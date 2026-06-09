@@ -196,6 +196,13 @@ def map_message(raw: RawSlackMessage) -> dict[str, Any]:
       already handles the rare permalink-lookup failure by yielding
       an empty string rather than crashing the sync); the projection
       can store ``""`` as a degraded URL without a foreign-key issue.
+    * ``author_id = raw.user_id or None`` — Phase 23-D (ADR-0033 §改訂,
+      issue #534). The message author's Slack ``U...`` id, threaded onto
+      :attr:`SourceObserved.author_id` so the ``slack_demand_digest``
+      projection can compare it against the operator's own id and drop
+      self-authored DMs / mentions. Bot / system messages omit the
+      ``user`` field (the fetcher yields ``""``), so the empty string
+      normalises to ``None`` → ``NULL`` on the event.
 
     The mapper deliberately does **not** carry ``observed_at`` /
     Slack ``ts`` onto the event payload: :class:`DomainEvent` already
@@ -234,6 +241,13 @@ def map_message(raw: RawSlackMessage) -> dict[str, Any]:
         "body": body,
         "provenance_origin": "external",
         "provenance_trust": "untrusted",
+        # Phase 23-D (ADR-0033 §改訂, issue #534): thread the message
+        # author's Slack ``U...`` id onto the event so the
+        # ``slack_demand_digest`` projection can drop self-authored DMs /
+        # mentions. Bot / system messages have no ``user`` id (the
+        # fetcher yields the empty string) — normalise to ``None`` so the
+        # column stores NULL rather than an empty string.
+        "author_id": raw.user_id or None,
     }
 
 

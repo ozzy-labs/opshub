@@ -450,8 +450,8 @@ Phase 18-B ([ADR-0033](adr/0033-slack-mention-demand-digest.md)) で導入され
 | `opshub slack mentions list` が空 | (1) `opshub slack sync` を実行済みか確認 / (2) sync 後に `opshub projections rebuild` を実行 (新 projection 登録後は **既存 event を流し直す必要がある**) |
 | DM だけ出て mention が hit しない | `auth.test` が失敗していて self user id が解決できていない可能性。`opshub slack auth test` で確認。一時的な workaround として `OPSHUB_SLACK_SELF_USER_ID=U12345` を export してから `opshub projections rebuild` 実行 (CI / headless 用、本番でも有効) |
 | 一部 channel が `private` でなく `public` に classify されている | `SourceObserved` event は raw payload を持たないため、projection は channel id prefix (`C` / `G` / `D`) で type を判定する ([ADR-0033 §決定 (b)](adr/0033-slack-mention-demand-digest.md))。`G...` channel は全て `private` に collapse (mpim は body の `<@self>` 経路で別途検知される) |
-| mention の `FROM` 列が常に `-` | Phase 18-B の `SourceObserved` event は author の Slack ID を持たない (`title` に display name は載るが id は載らない)。FROM 列に user id を埋めるのは Phase 19+ の connector 拡張に依存 (ADR-0033 §Consequences §scope 外) |
-| MPIM の demand が出ない | MPIM 自体は `dm` row として出ない (Slack DM = `D...` のみ)。MPIM 内の `<@self>` mention は `demand_kind=mention` で hit する (body 経路) |
+| `FROM` 列が `-`、または自分が返信済みの DM が出続ける | Phase 23-D ([issue #534](https://github.com/ozzy-labs/opshub/issues/534)) 以前に sync された event は `author_id` を持たない (mapper が貫通させ始めたのが本 Phase から)。`opshub projections rebuild` 単独では過去 event の author は復元できない (event は immutable)。誤報抑制 + FROM 列充填を全 channel に効かせるには Slack の full re-sync が必要 (`opshub slack cursor backfill` / `reset` → `opshub slack sync` → `opshub projections rebuild`、[`docs/upgrading.md`](upgrading.md) §Phase 23-D)。bot / system message は元々 author id を持たず `-` のまま |
+| MPIM の demand が出ない | MPIM 自体は `dm` row として出ない (Slack DM = `D...` のみ)。MPIM 内の `<@self>` mention は `demand_kind=mention` で hit する (body 経路)。`demand_kind=mpim` は Phase 23-D で削除済み (apply が書かない死に値だった) |
 
 **手動で再構築する**:
 
@@ -471,10 +471,11 @@ opshub slack mentions list --format json | jq .  # JSON 出力 (full row schema)
 
 **関連**:
 
-- [ADR-0033 Slack mention / DM demand digest](adr/0033-slack-mention-demand-digest.md) — 設計根拠 + 6 軸決定の SSOT
-- [`src/opshub/projections/slack_demand_digest.py`](../src/opshub/projections/slack_demand_digest.py) — projection 実装 (self user id cascade / mention literal / DM prefix 判定)
+- [ADR-0033 Slack mention / DM demand digest](adr/0033-slack-mention-demand-digest.md) — 設計根拠 + 6 軸決定の SSOT (Phase 23-D §改訂 で author id 貫通 / epoch→ISO / 名前解決 / mpim 廃止を追記)
+- [`src/opshub/projections/slack_demand_digest.py`](../src/opshub/projections/slack_demand_digest.py) — projection 実装 (self user id cascade / mention literal / DM prefix 判定 / self-authored 除外)
 - [`src/opshub/db/migrations/versions/0029_create_slack_demand_digest.py`](../src/opshub/db/migrations/versions/0029_create_slack_demand_digest.py) — table schema (natural key + 2 CHECK + FK + 2 INDEX)
-- Phase 18-C で MCP `slack.demand.list` tool が同 projection 上に薄く乗る予定 ([#430](https://github.com/ozzy-labs/opshub/issues/430))
+- [`src/opshub/db/migrations/versions/0032_drop_mpim_demand_kind.py`](../src/opshub/db/migrations/versions/0032_drop_mpim_demand_kind.py) — Phase 23-D で `demand_kind` CHECK を 2 値に絞る (mpim 廃止)
+- Phase 18-C で MCP `slack.demand.list` tool が同 projection 上に薄く乗る ([#430](https://github.com/ozzy-labs/opshub/issues/430)); Phase 23-D ([#534](https://github.com/ozzy-labs/opshub/issues/534)) で出力 `last_demand_at` (ISO 8601) + self-authored 除外を追加
 
 ### 3.12 Slack thread reply の取り込みが想定通りでない
 

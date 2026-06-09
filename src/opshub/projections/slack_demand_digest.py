@@ -62,6 +62,31 @@ the self-mention are independent signals and the operator might
 filter on either). The two rows share ``channel_id`` but differ on
 ``demand_kind``, so the natural-key PK keeps them distinct.
 
+Self-authored suppression (Phase 23-D, issue #534)
+--------------------------------------------------
+
+A DM or mention the **operator themselves** authored is not a demand
+on them: surfacing a DM the operator already replied to as "next to
+read" is a corrosive false positive (an end-user who sees a stale
+self-reply at the top of ``next-actions`` learns the digest is
+unreliable). The Slack mapper now threads the message author's
+``U...`` id onto :attr:`SourceObserved.author_id`; when it equals the
+resolved operator self id the projection drops the event entirely, so
+the digest row always reflects the *peer's* last ping. Because the
+upsert is high-water on ``last_demand_ts``, suppressing self-authored
+events also stops the operator's own reply from overwriting the
+excerpt / permalink of the peer's actionable message.
+
+Demand kinds (Phase 23-D revision)
+----------------------------------
+
+The projection writes exactly two ``demand_kind`` values —
+``"mention"`` and ``"dm"``. The historical ``"mpim"`` placeholder was
+removed in Phase 23-D (issue #534): the apply path never produced it
+(group-DM ``<@self>`` messages land in the ``"mention"`` row), so it
+was a structurally-unreachable enum value across the CHECK constraint,
+the CLI filter, and the MCP schema.
+
 Idempotency / replay
 --------------------
 
@@ -123,13 +148,16 @@ _LOGGER = logging.getLogger(__name__)
 
 #: Permitted ``demand_kind`` values; mirrors the migration's CHECK
 #: constraint so a mismatch surfaces at type-check time rather than as
-#: an opaque ``IntegrityError`` at runtime. ADR-0033 §Decision (b)
-#: §不変条件 #2 pins the enum as 3 values (``mention`` / ``dm`` /
-#: ``mpim``) — Phase 18-B writes ``mention`` and ``dm`` only (group-DM
-#: messages with a ``<@self>`` literal land in the mention row), but
-#: the CLI filter and the CHECK constraint admit all three so a
-#: Phase 19+ MPIM-specific refinement can land without a schema bump.
-DEMAND_KINDS: tuple[str, ...] = ("mention", "dm", "mpim")
+#: an opaque ``IntegrityError`` at runtime.
+#:
+#: Phase 23-D (issue #534) dropped the dead ``"mpim"`` value: the apply
+#: path never wrote it (group-DM ``<@self>`` messages land in the
+#: ``"mention"`` row), so the enum / CHECK constraint / MCP schema
+#: carried a structurally-unreachable third value. Pre-userbase posture
+#: (no installed base) lets us tighten the enum to exactly the two
+#: values the projection produces. A future MPIM-specific refinement, if
+#: ever needed, re-adds the value with its own migration + apply branch.
+DEMAND_KINDS: tuple[str, ...] = ("mention", "dm")
 
 #: Permitted ``channel_type`` values; mirrors the migration's CHECK
 #: constraint and the discovery-time
@@ -181,7 +209,7 @@ slack_demand_digest_table: Table = Table(
         name="ck_slack_demand_digest_channel_type_valid",
     ),
     CheckConstraint(
-        "demand_kind IN ('mention', 'dm', 'mpim')",
+        "demand_kind IN ('mention', 'dm')",
         name="ck_slack_demand_digest_demand_kind_valid",
     ),
     Index(
@@ -194,7 +222,12 @@ slack_demand_digest_table: Table = Table(
         "last_demand_ts",
     ),
 )
-"""SQLAlchemy ``Table`` mirroring migration ``0029_create_slack_demand_digest``.
+"""SQLAlchemy ``Table`` mirroring the ``slack_demand_digest`` physical schema.
+
+Created by migration ``0029_create_slack_demand_digest``; the
+``demand_kind`` CHECK constraint was tightened to ``('mention', 'dm')``
+by migration ``0032_drop_mpim_demand_kind`` (Phase 23-D, issue #534),
+so this metadata-only ``Table`` reflects the post-0032 2-value enum.
 
 The index ordering here intentionally drops the DESC qualifier the
 migration uses on the physical index — SQLAlchemy 2.x does not surface
@@ -225,6 +258,9 @@ class SlackDemandDigestProjection:
       ``source_type == "slack_message"`` — parse the ``external_id``
       (``"{channel_id}:{ts}"``) into its components and:
 
+      - If :attr:`SourceObserved.author_id` equals the resolved
+        operator self id, the event is dropped before any row is
+        written (self-authored suppression, Phase 23-D / issue #534).
       - If the channel_id starts with ``"D"`` upsert the ``"dm"`` row
         (Slack DM channels always have a ``D...`` id; see module
         docstring for the prefix rule rationale).
@@ -324,6 +360,22 @@ class SlackDemandDigestProjection:
         # path is silently skipped but DM detection still works for
         # operators who only care about that signal.
 
+        # Phase 23-D (issue #534): the message author's Slack ``U...`` id
+        # now rides on :attr:`SourceObserved.author_id` (threaded by the
+        # mapper). A DM / mention the operator *themselves* authored is
+        # not a demand on them — surfacing a DM they already replied to as
+        # "next to read" is the precise false positive #534 fixes. When
+        # ``author_id`` matches the resolved self id we drop the event so
+        # the digest row reflects the peer's last ping, not the
+        # operator's own reply.
+        last_demand_user_id = event.author_id
+        if (
+            self_user_id is not None
+            and last_demand_user_id is not None
+            and last_demand_user_id == self_user_id
+        ):
+            return
+
         is_dm = _is_dm_channel(channel_id)
         # ``_self_user_id`` resolution fills ``_mention_literal`` in
         # lock-step (see :meth:`_self_user_id`), so the ``is not None``
@@ -343,14 +395,18 @@ class SlackDemandDigestProjection:
             return
 
         channel_type = _classify_channel_type(channel_id)
-        channel_name = _extract_channel_name(event.title)
+        # Phase 23-D (issue #534, あるべき #4): resolve a human label so
+        # the MCP / CLI surface never leaks an opaque ``D...`` id. For a
+        # DM the Slack fetcher has no channel ``name`` and falls back to
+        # the channel id, so ``_extract_channel_name`` would return the
+        # ``D...`` id; instead surface the peer's display name, which the
+        # mapper bakes into the title prefix (``"{peer} in #..."``).
+        # Channel / private rows keep the ``#name`` extraction.
+        if is_dm:
+            channel_name = _extract_dm_peer_name(event.title) or _extract_channel_name(event.title)
+        else:
+            channel_name = _extract_channel_name(event.title)
         excerpt = _build_excerpt(event)
-        # The Slack mapper does not surface the message author id on
-        # :class:`SourceObserved` (only the resolved display name
-        # lands in ``title``). Recording ``None`` keeps the column's
-        # nullability honest while leaving room for a future Slack
-        # connector enhancement to thread the user id through.
-        last_demand_user_id = None
         updated_at = event.occurred_at.astimezone(UTC)
 
         if is_dm:
@@ -608,6 +664,34 @@ def _extract_channel_name(title: str | None) -> str | None:
             rest = rest[:cut]
         return rest.strip()[:250] or None
     return None
+
+
+def _extract_dm_peer_name(title: str | None) -> str | None:
+    """Best-effort recovery of a DM peer's display name from the title.
+
+    Phase 23-D (issue #534, あるべき #4). A DM has no Slack channel
+    ``name`` so the fetcher falls back to the channel id; the Phase 7
+    mapper then builds the title as ``"{peer} in #{D...}: {excerpt}"``
+    (the ``{peer}`` prefix is the message author's resolved display
+    name). For DM rows we surface that peer name instead of the opaque
+    ``D...`` id so ``slack.demand.list`` / ``opshub slack mentions list``
+    show "alice" rather than "D04ABCXYZ".
+
+    Extracts the substring **before** the dominant ``" in #"`` separator.
+    Returns ``None`` when the separator is absent (system-message
+    subtypes such as ``"{peer} joined #..."`` — those are not DM
+    demands in practice, and the caller falls back to
+    :func:`_extract_channel_name`). The result is bounded to ``250``
+    characters as a defensive cap on the column write.
+    """
+    if not title:
+        return None
+    needle = " in #"
+    idx = title.find(needle)
+    if idx <= 0:
+        return None
+    peer = title[:idx].strip()
+    return peer[:250] or None
 
 
 def _build_excerpt(event: SourceObserved) -> str | None:

@@ -184,6 +184,7 @@ class SourceService:
         fingerprint: str | None = None,
         provenance_origin: ProvenanceOrigin | None = None,
         provenance_trust: ProvenanceTrust | None = None,
+        author_id: str | None = None,
     ) -> tuple[SourceObserved, ItemEnqueued]:
         """Record a fresh observation of an external item.
 
@@ -246,6 +247,13 @@ class SourceService:
         + ADR-0015 §決定 (f)). Both default to ``None`` and round-trip
         as ``NULL`` for the operator-authored workspace ingest path.
 
+        ``author_id`` (Phase 23-D, ADR-0033 §改訂) is the connector-native
+        id of the item's author (Slack ``U...`` / bot id, ...). Optional;
+        most connectors leave it ``None``. The Slack mapper threads the
+        message ``user`` id through so the ``slack_demand_digest``
+        projection can drop self-authored DMs / mentions (see
+        :mod:`opshub.projections.slack_demand_digest`).
+
         Returns the ``(source_event, inbox_event)`` tuple so callers
         can render both ULIDs without re-querying the store.
         """
@@ -262,6 +270,7 @@ class SourceService:
             body=body,
             provenance_origin=provenance_origin,
             provenance_trust=provenance_trust,
+            author_id=author_id,
         )
         # The inbox event borrows ``SourceService``'s configured actor.
         # In production the wiring helper passes the same actor to both

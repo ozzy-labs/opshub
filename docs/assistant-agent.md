@@ -205,12 +205,14 @@ Phase 15+ で symmetric に拡張する候補: Calendar instance 展開 projecti
 | MCP tool | argument | projection 列 |
 |---|---|---|
 | `slack.demand.list` | `types` (list[str]) | `slack_demand_digest.channel_type` (`im` / `mpim` / `private` / `public`) |
-| `slack.demand.list` | `demand_kinds` (list[str]) | `slack_demand_digest.demand_kind` (`mention` / `dm` / `mpim`) |
-| `slack.demand.list` | `since_ts` (float) | `slack_demand_digest.last_demand_ts` (>= 半開下界、Slack epoch float) |
+| `slack.demand.list` | `demand_kinds` (list[str]) | `slack_demand_digest.demand_kind` (`mention` / `dm`、Phase 23-D で `mpim` 廃止) |
+| `slack.demand.list` | `since_ts` (float) | `slack_demand_digest.last_demand_ts` (>= 半開下界、Slack epoch float; *filter* 入力は epoch のまま) |
 | `slack.demand.list` | `limit` (int、default 50) | ADR-0022 §(d) page cap |
 | `slack.demand.list` | `order` (固定 `last_demand_desc`) | `last_demand_ts DESC` (ADR-0033 §決定 (e)、forward-compat 余地) |
 
 `slack.demand.list` は Phase 18-B `slack_demand_digest` projection ([ADR-0033](adr/0033-slack-mention-demand-digest.md)) を読む read-only tool。`readOnlyHint=true` / `destructiveHint=false` / `openWorldHint=false` (local SQLite のみ、Slack API 不発火 = projection 自体は既存 `SourceObserved` event を消費するため新 fetch 経路を持たない)。Slack への投稿 / reaction / reply 送信は本 tool 経路に含まない (ADR-0010 §禁止事項 7、ADR-0033 §決定 (a))。skill 利用者は `next-actions` (priority 上位に組み込む) / `personal-brief` (「期間内の状況」に含める) / `inbox-triage` (補助的に priority 補強) の 3 経路 (§6.1 マトリクス参照)。
+
+Phase 23-D ([ADR-0033 §改訂](adr/0033-slack-mention-demand-digest.md)、[issue #534](https://github.com/ozzy-labs/opshub/issues/534)) で誤報を断つ 3 点を追加した: (1) Slack mapper が message author の `U...` id を `SourceObserved.author_id` に貫通させ、projection が `author_id == self_user_id` の行 (= 自分が最後に発言した DM / mention) を除外する (自分が返信済みの DM が最上位に出る誤報の根因)、(2) MCP 出力の `last_demand_ts` (raw Slack epoch float) を `last_demand_at` (ISO 8601 UTC) に統一 (他 read tool と timestamp 方言を揃える; `since_ts` *filter* 入力は epoch のまま)、(3) DM 行は相手の表示名、channel 行は `#name` を解決して `channel_name` に入れる (opaque `D...` id 露出を解消)。死に値だった `demand_kind=mpim` を enum / CHECK 制約 / MCP schema から削除した (apply が書かないため構造上 0 件)。`author_id` 付きの過去 event は Phase 23-D 以前には存在しないため、誤報抑制を全 channel に効かせるには full re-sync が必要 ([`docs/upgrading.md`](upgrading.md) §Phase 23-D)。
 
 ### 6.6 Slack 取り込み単位: thread reply (late reply 含む) も含む message 単位 (Phase 20 ADR-0030 landed)
 
