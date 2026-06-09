@@ -321,14 +321,16 @@ def test_box_sync_records_failure_event(isolated_env: _PathsDict) -> None:
     """A fetcher exception surfaces as a :class:`ConnectorSyncFailed` event.
 
     The CLI driver in :mod:`opshub.cli._connector_common` is responsible for
-    catching the connector-side exception, sanitising the message to
-    ``type(exc).__name__``, and recording the failure event via
-    :meth:`SourceService.record_sync_failure`. This test pins the
-    end-to-end contract: a fetcher that raises
+    catching the connector-side exception, recording the failure event
+    with ``error_message=type(exc).__name__`` (event log stays
+    type-name-only), and surfacing the sanitised message body on stderr.
+    This test pins the end-to-end contract: a fetcher that raises
     :class:`ConnectorFailedError` produces (a) a non-zero CLI exit,
-    (b) no source rows (the connector never reached
-    :meth:`SourceService.observe`), and (c) one
-    ``connector.sync_failed`` row in the event log.
+    (b) the sanitised message body on the default stderr trail
+    (Phase 23-B / #532), (c) no source rows (the connector never reached
+    :meth:`SourceService.observe`), and (d) one
+    ``connector.sync_failed`` row in the event log whose
+    ``error_message`` is the type name only.
     """
     db_path = isolated_env["db_path"]
     _install_stub_connector(
@@ -340,12 +342,13 @@ def test_box_sync_records_failure_event(isolated_env: _PathsDict) -> None:
 
     # ---- CLI surface ---------------------------------------------------
     assert result.exit_code == 1
-    # Only the sanitised exception *type name* should reach the
-    # operator — never the raw message (which could carry remnants of
-    # request bodies).
+    # Phase 23-B (#532): the sanitised message body is now part of the
+    # default stderr trail so the operator gets actionable recovery text
+    # without re-running under OPSHUB_DEBUG=1. (The message here carries
+    # no secret shape, so it surfaces verbatim after sanitisation.)
     combined = (result.stdout or "") + (result.stderr or "")
-    assert "ConnectorFailedError" in combined
-    assert "exhausted retries" not in combined
+    assert "sync failed: ConnectorFailedError: " in combined
+    assert "exhausted retries" in combined
 
     # ---- Event log -----------------------------------------------------
     # Exactly one ``connector.sync_failed`` row should be persisted —

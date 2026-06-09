@@ -163,9 +163,15 @@ def run_connector_sync(name: str) -> None:
     sync`` surface:
 
     * stdout: ``synced <name>: N item(s) observed`` on success
-    * stderr: ``sync failed: <Type>`` on failure (always);
-      ``sync failed: <Type>: <sanitised-msg>`` + sanitised traceback
-      additionally on ``OPSHUB_DEBUG=1`` (R2 / R3 / R4 of #320).
+    * stderr: ``sync failed: <Type>: <sanitised-msg>`` on failure
+      (always — Phase 23-B promotes the previously debug-only body so
+      the default trail carries actionable recovery text, e.g. scope
+      catalogue URLs / ``run opshub slack auth set``); the sanitised
+      traceback stays gated behind ``OPSHUB_DEBUG=1`` (R2 / R3 / R4 of
+      #320). The ``sync failed:`` prefix is preserved so log-grep
+      scripts keep matching, and the event-log row recorded via
+      ``record_sync_failure`` still carries the **type name only** so
+      the audit trail never widens its token surface.
     """
     _import_connector_modules()
 
@@ -213,16 +219,26 @@ def run_connector_sync(name: str) -> None:
             # would defeat the redaction stance even if the live
             # terminal is locked down.
             source.record_sync_failure(name, error_message=type(exc).__name__)
-            typer.echo(f"sync failed: {type(exc).__name__}", err=True)
+            # Phase 23-B (#532): surface the sanitised message body on the
+            # **default** failure trail. sync is the path operators hit
+            # most (scope / token / rate-limit / legacy-cursor errors) and
+            # the connector-side messages carry the actionable recovery
+            # text; gating that behind OPSHUB_DEBUG=1 left the default
+            # operator with a bare type name. The body is run through
+            # ``sanitise_error_message`` (the same scrub the debug path
+            # already applied), so no new secret reaches stderr that the
+            # debug path did not already emit. The event-log row above
+            # stays type-name-only — redaction there is unchanged.
+            from opshub.core.sanitise import sanitise_error_message
+
+            sanitised_msg = sanitise_error_message(str(exc))
+            typer.echo(
+                f"sync failed: {type(exc).__name__}: {sanitised_msg}",
+                err=True,
+            )
             if is_debug_enabled():
                 from opshub.core.logging import format_debug_traceback
-                from opshub.core.sanitise import sanitise_error_message
 
-                sanitised_msg = sanitise_error_message(str(exc))
-                typer.echo(
-                    f"sync failed: {type(exc).__name__}: {sanitised_msg}",
-                    err=True,
-                )
                 typer.echo(format_debug_traceback(exc), err=True)
             raise typer.Exit(code=1) from exc
 

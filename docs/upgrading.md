@@ -622,7 +622,7 @@ Phase 17 ([ADR-0031](adr/0031-cli-command-surface-organization.md), epic [#409](
 
 - **Keyring slot names** (e.g. `connector:slack:token`, `connector:google_workspace:refresh_token`, `embedder:openai:api_key`, `llm:anthropic:api_key`) are **unchanged** — only the CLI command surface moves. Operators do **not** need to re-run `auth set` after the upgrade; the stored tokens remain valid.
 - **Environment variable overrides** (`OPSHUB_CONNECTOR_SLACK_TOKEN`, `OPSHUB_CONNECTOR_GITHUB_PAT`, `OPSHUB_CONNECTOR_TEAMS_TOKEN`, `OPSHUB_DB_ENCRYPTION_KEY`, etc.) are **unchanged**. Existing CI / cron configurations continue to work.
-- **stdout / stderr output shapes** are byte-identical: `synced <name>: N item(s) observed` (stdout, success) / `sync failed: <Type>` (stderr, failure). Scripts grepping the legacy markers keep working.
+- **stdout / stderr output shapes** keep the same markers: `synced <name>: N item(s) observed` (stdout, success) / `sync failed: <Type>...` (stderr, failure). Scripts grepping the `synced ` / `sync failed:` prefixes keep working. (Phase 23-B [#532] later appended the sanitised message body to the failure line — `sync failed: <Type>: <sanitised-msg>` — but the `sync failed:` prefix is preserved, so prefix-anchored grep is unaffected; see §Phase 23-B below.)
 - **MCP tool surface** ([ADR-0022](adr/0022-mcp-server-surface.md)) is **unchanged** — MCP tool names (`connector.sync`, `recall.search`, etc.) are independent of the CLI group naming.
 - **`Connector` Protocol** ([ADR-0010](adr/0010-connector-contract.md)) and the `connectors/<name>/` package layout (`auth.py` + `fetcher.py` + `mapper.py` + `connector.py`) are **unchanged**.
 
@@ -656,7 +656,7 @@ sync_all() {
 }
 ```
 
-**Recovery scripts**: error-handling scripts that grep the failure summary (`sync failed: <Type>`) keep working — the summary line shape is byte-identical. Only the command invocation changes.
+**Recovery scripts**: error-handling scripts that grep the failure summary by its `sync failed:` prefix keep working — the prefix is preserved. (Phase 23-B [#532] appends the sanitised message body after the type name, `sync failed: <Type>: <sanitised-msg>`; scripts anchored on the `sync failed:` prefix are unaffected. Scripts that matched the *exact* `sync failed: <Type>` line with no trailing text should switch to prefix matching.) Only the command invocation changes for the Phase 17 reorg itself.
 
 ### Phase 17 specifics
 
@@ -1572,3 +1572,27 @@ opshub slack cursor backfill --channel C1 --since 2026-01-01 --until 2026-03-01 
 - **No DB migration.** cursor schema 拡張は `connector_cursors.cursor_value`（TEXT）内の JSON で完結（additive、新 column / event なし）。
 - **MCP surface 不変**（19 tools）。skill catalog 不変（14、`test_skills_install_only_writes_14_assistant_skills` green）。
 - **関連**: inbox `ItemEnqueued` の `source_ref` 冪等化（[#522](https://github.com/ozzy-labs/opshub/issues/522)、旧 #339 class）は hardening dependency として別 issue 化。着地すれば `reset` / pre-feature 経路の残留 overlap も無害化される。
+
+## Phase 23-B: `opshub <connector> sync` 失敗 stderr にサニタイズ済み本文をデフォルト表示 ([#532](https://github.com/ozzy-labs/opshub/issues/532))
+
+sync 失敗時の stderr サマリが、これまで `OPSHUB_DEBUG=1`（`--debug`）でしか出なかった**サニタイズ済みの例外本文**をデフォルトで表示するようになった。sync は scope / token / rate limit / legacy cursor など最もエラーに当たる経路で、connector 側が回復手順（scope catalogue URL / `run opshub slack auth set` / 代替軸誘導など）を本文に書いているのに、default では型名だけ（`sync failed: ConfigError`）しか手に入らなかった問題を是正する。
+
+### 変更点
+
+- **Before**: `sync failed: <Type>`（型名のみ）。本文は `OPSHUB_DEBUG=1` 限定。
+- **After**: `sync failed: <Type>: <sanitised-msg>`（型名 + サニタイズ済み本文）をデフォルト stderr に表示。`--debug` が追加するのはサニタイズ済み traceback だけ。
+
+### 不変条件（変わらないもの）
+
+- **`sync failed:` prefix は維持**。prefix-anchored な grep スクリプトは引き続き機能する。
+- **secret redaction は全 verbosity で維持**。本文は `core/sanitise.sanitise_error_message` を通すので、`sk-` / `ghp_` / `github_pat_` / `xox*-` / `AKIA` / `AIza` / JWT / `Bearer` 等のトークン形状は marker に置換される（ADR-0027 R4）。本文は元々 `--debug` 経路で同じサニタイズを経て出ていたため、**secret 新規露出はゼロ**。
+- **event log の `error_message` は型名のみ**（`ConnectorSyncFailed.error_message`、R3 不変条件）。stderr を昇格しても event log の token surface は広がらない。
+- 成功時の `synced <name>: N item(s) observed` は **stdout** 据え置き。
+
+これで sync と `opshub slack conversations`（`Error: <full text>`）のエラー表示が対称になった。
+
+### Phase 23-B specifics
+
+- **No DB migration.** stderr 表示の昇格のみ。schema / event 不変。
+- **MCP surface 不変**（19 tools）。skill catalog 不変（14）。
+- **関連**: [ADR-0027](adr/0027-observability-and-troubleshooting-logging.md)（observability / redaction）, [#320](https://github.com/ozzy-labs/opshub/issues/320) (R2/R3/R4)。
