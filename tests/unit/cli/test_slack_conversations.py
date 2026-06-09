@@ -238,6 +238,11 @@ def test_conversations_format_toml_emits_paste_ready_snippet(
 
     assert result.exit_code == 0, result.stdout + result.stderr
     out = result.stdout
+    # Phase 23-E (#535): the snippet is now a complete, paste-ready
+    # section — header + enabled flag + channels array — so the output
+    # drops straight into opshub.toml without manual editing.
+    assert "[connectors.slack]" in out
+    assert "enabled = true" in out
     assert "# Slack conversations (3)" in out
     assert "channels = [" in out
     assert '"C01234567"' in out
@@ -246,6 +251,80 @@ def test_conversations_format_toml_emits_paste_ready_snippet(
     assert '"D04567890"' in out
     assert "Alice (im)" in out
     assert out.rstrip().endswith("]")
+    # The section header must precede the array so the parsed TOML lands
+    # under [connectors.slack] (the trap the old bare-array form fell into).
+    assert out.index("[connectors.slack]") < out.index("channels = [")
+
+
+def test_conversations_format_toml_round_trips_under_connectors_slack(
+    _slack_token_env: None,
+) -> None:
+    """The toml output parses as valid TOML with channels under [connectors.slack].
+
+    Regression for the Phase 23-E (#535) "paste-and-it-just-works"
+    contract: the bare ``channels = [...]`` form parsed fine on its own
+    but, pasted into a config that already had other tables, the array
+    landed in the wrong section. The complete-block form must round-trip
+    so ``connectors.slack.channels`` resolves to the printed ids.
+    """
+    import tomllib
+
+    rows = [
+        _public_row("C01234567", name="general"),
+        _private_row("G03456789", name="leadership"),
+    ]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(app, ["slack", "conversations", "--format", "toml"])
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    parsed = tomllib.loads(result.stdout)
+    assert parsed["connectors"]["slack"]["enabled"] is True
+    assert parsed["connectors"]["slack"]["channels"] == ["C01234567", "G03456789"]
+
+
+def test_conversations_toml_emits_next_action_hint(
+    _slack_token_env: None,
+) -> None:
+    """Phase 23-E (#535): a non-empty toml render points at the sync step.
+
+    The hint is stderr-only so it never pollutes a piped ``--format=toml``
+    capture that an operator redirects into ``opshub.toml``.
+    """
+    rows = [_public_row("C01234567", name="general")]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(app, ["slack", "conversations", "--format", "toml"])
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "next:" in result.stderr
+    assert "opshub slack sync" in result.stderr
+    assert "next:" not in result.stdout
+
+
+def test_conversations_toml_no_next_action_when_empty(
+    _slack_token_env: None,
+) -> None:
+    """No rows → no "next" hint (nothing to paste)."""
+    runner = CliRunner()
+    with _patch_list_conversations([], record=_CallRecord()):
+        result = runner.invoke(app, ["slack", "conversations", "--format", "toml"])
+
+    assert result.exit_code == 0
+    assert "next:" not in result.stderr
+
+
+def test_conversations_json_no_next_action_hint(
+    _slack_token_env: None,
+) -> None:
+    """The next hint is toml-only; json (machine-read) stays clean."""
+    rows = [_public_row("C01234567", name="general")]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(app, ["slack", "conversations", "--format", "json"])
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "next:" not in result.stderr
 
 
 def test_conversations_format_json_emits_array_of_dataclass_dicts(
@@ -504,6 +583,10 @@ def test_conversations_empty_toml_emits_empty_array(_slack_token_env: None) -> N
         )
 
     assert result.exit_code == 0
+    # Even the empty result is a complete section (Phase 23-E, #535) so a
+    # paste-then-edit workflow starts from a valid [connectors.slack] block.
+    assert "[connectors.slack]" in result.stdout
+    assert "enabled = true" in result.stdout
     assert "# Slack conversations (0)" in result.stdout
     assert "channels = []" in result.stdout
     assert "no conversations matched" in result.stderr

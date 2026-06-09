@@ -254,7 +254,7 @@ opshub slack conversations --sort=last_activity --since 30d # 旧挙動: 直近 
 opshub slack conversations --since 2026-05-01 --format=toml  # 絶対日付指定 (ISO 8601。YYYY-MM-DD は UTC 0:00 解釈、`+09:00` 付き timezone も可)
 ```
 
-default `--format=toml` の出力を `~/.config/opshub/config.toml` の `[connectors.slack]` セクションに貼り、不要行を消すだけで sync 対象が確定する (ADR-0035 §(a))。`--since` 指定時 / `--sort=last_*` 指定時は TOML コメントにも `# <name> (public, last post 2026-05-30)` (engagement 軸) / `# <name> (public, last 2026-05-30)` (any 軸) 形式で activity 日付が付くので、レビュアが「最近動いている channel か」を一目で判断できる。
+default `--format=toml` の出力は `[connectors.slack]` ヘッダ + `enabled = true` + `channels = [...]` を含む**完結ブロック**なので (Phase 23-E [#535](https://github.com/ozzy-labs/opshub/issues/535))、`~/.config/opshub/config.toml` にそのまま貼り、不要行を消すだけで sync 対象が確定する (旧仕様の bare `channels = [...]` 配列は section 外に落ちて壊れる罠があった)。初回 setup の全手順は [`docs/slack-setup.md`](slack-setup.md) を参照。`--since` 指定時 / `--sort=last_*` 指定時は TOML コメントにも `# <name> (public, last post 2026-05-30)` (engagement 軸) / `# <name> (public, last 2026-05-30)` (any 軸) 形式で activity 日付が付くので、レビュアが「最近動いている channel か」を一目で判断できる。
 
 **sync の取得範囲を絞る (Phase 20 / [ADR-0036](adr/0036-slack-sync-date-floor.md))**: ボリュームの大きい channel で初回 sync が重い場合、`[connectors.slack] sync_since` で日付 floor を設定すると、それより古いメッセージを `opshub slack sync` が取得しなくなる。相対 (`"90d"` / `"4w"`、sync 実行時点で評価) でも ISO 絶対日付 (`"2026-01-01"`) でも指定でき、未設定なら従来どおり全件バックフィルする。特定 channel だけ全件取りたい場合は table 形式で `[[connectors.slack.channels]] id=... / since="all"` と書く (貼り付けた `channels = ["C..."]` 文字列配列もそのまま有効)。
 

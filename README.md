@@ -191,8 +191,8 @@ opshub handoff close <handoff-id> --note "merged"
 # Connectors (Phase 3 + Phase 7, ADR-0010 / ADR-0014)
 opshub github auth set                      # store GitHub PAT in OS keychain
 opshub github sync                          # incremental sync (OPSHUB_CONNECTOR_GITHUB_REPO=owner/repo)
-opshub slack auth set             # store Slack OAuth token in OS keychain (User Token preferred, Bot Token also accepted — ADR-0018)
-opshub slack conversations                                    # TOML / name order (default, paste into [connectors.slack] channels; ADR-0035)
+opshub slack auth set             # store Slack OAuth token in OS keychain (User Token preferred, Bot Token also accepted — ADR-0018; full walkthrough: docs/slack-setup.md)
+opshub slack conversations                                    # complete paste-ready [connectors.slack] block / name order (default; ADR-0035, #535)
 opshub slack conversations --since 30d                        # name order + your last-post date (engagement-axis implicit, requires search:read User Token; ADR-0035 §(d))
 opshub slack conversations --sort=last_self_post              # descending by your last post (implicit --since 90d cutoff + stderr notice; ADR-0035 §(e))
 opshub slack conversations --sort=last_activity --since 30d   # descending by any-author last activity within 30 days
@@ -322,6 +322,7 @@ guarantees.
 - [`docs/assistant-agent.md`](docs/assistant-agent.md) — Phase 10 assistant agent platform usage (skills catalog, what it can / cannot do)
 - [`docs/mcp-setup.md`](docs/mcp-setup.md) — Phase 10 MCP setup for agent hosts (Claude Code etc.)
 - [`docs/adr/`](docs/adr/README.md) — Architecture Decision Records (incl. ADR-0026 CLI progress reporting)
+- [`docs/slack-setup.md`](docs/slack-setup.md) — Phase 7 `slack` connector setup (Slack app → MVP scopes → token → discover → sync, end-to-end)
 - [`docs/box-drive-setup.md`](docs/box-drive-setup.md) — Phase 9 `box_drive` connector setup (WSL2 / macOS)
 - [`docs/onedrive-drive-setup.md`](docs/onedrive-drive-setup.md) — Phase 11 `onedrive_drive` connector setup (WSL2 / macOS)
 - [`docs/teams-setup.md`](docs/teams-setup.md) — Phase 11 `teams` connector setup (Azure app registration + User Token)
