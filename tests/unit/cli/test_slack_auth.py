@@ -123,6 +123,7 @@ def test_slack_auth_test_success(monkeypatch: pytest.MonkeyPatch) -> None:
                 "user": "alice",
                 "user_id": "U1",
                 "principal": "user",
+                "scopes": "channels:history,channels:read,users:read",
             }
 
     monkeypatch.setattr(slack_auth, "SlackAuth", _FakeSlackAuth)
@@ -134,6 +135,11 @@ def test_slack_auth_test_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "connector: slack" in result.stdout
     assert "principal" in result.stdout
     assert "user" in result.stdout
+    # Granted scopes are surfaced so operators can verify a token carries
+    # the history scopes ``sync`` needs before hitting ``missing_scope``
+    # (#533, byte-symmetric with ``opshub github auth test``).
+    assert "scopes" in result.stdout
+    assert "channels:history,channels:read,users:read" in result.stdout
 
 
 def test_slack_auth_test_failure_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
