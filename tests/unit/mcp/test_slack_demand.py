@@ -171,7 +171,7 @@ async def test_handler_types_filter_returns_only_dm_rows(engine: Engine) -> None
 
 
 async def test_handler_demand_kinds_filter_returns_only_mentions(engine: Engine) -> None:
-    """``demand_kinds=["mention"]`` excludes ``dm`` / ``mpim`` rows."""
+    """``demand_kinds=["mention"]`` excludes ``dm`` rows."""
     _seed_row(
         engine,
         channel_id="D100DMA",
@@ -410,17 +410,49 @@ async def test_handler_item_shape_includes_all_projection_columns(engine: Engine
     items = cast("list[dict[str, Any]]", payload["items"])
     assert len(items) == 1
     row = items[0]
+    # Phase 23-D (issue #534): the epoch float ``last_demand_ts`` is
+    # rendered as an ISO 8601 UTC string ``last_demand_at`` so the read
+    # tool speaks the same timestamp dialect as ``task.list`` etc.
     assert row == {
         "channel_id": "D100DMA",
         "channel_type": "im",
         "channel_name": "alice",
         "demand_kind": "dm",
-        "last_demand_ts": 1700000020.5,
+        "last_demand_at": "2023-11-14T22:13:40.500000+00:00",
         "last_demand_user_id": "U_ALICE",
         "last_demand_excerpt": "quick question about phase 18-c",
         "last_demand_permalink": "https://example.slack.com/archives/D100DMA/p1700000020500000",
         "last_source_id": source_id,
     }
+    # The raw epoch float must NOT leak alongside the ISO field.
+    assert "last_demand_ts" not in row
+
+
+# ---------------------------------------------------------------------------
+# 7b. last_demand_at — ISO 8601 UTC rendering (Phase 23-D, issue #534)
+# ---------------------------------------------------------------------------
+
+
+async def test_handler_renders_last_demand_at_as_iso_utc(engine: Engine) -> None:
+    """The epoch ``last_demand_ts`` column surfaces as ISO 8601 ``last_demand_at``.
+
+    Issue #534 §3: every read tool emits timestamps via ``.isoformat()``.
+    The projection stores a Slack epoch float; the handler converts it
+    to a UTC ISO string at the boundary so a skill never has to do
+    epoch arithmetic on Slack's ``ts`` format.
+    """
+    _seed_row(
+        engine,
+        channel_id="D900ISO",
+        channel_type="im",
+        demand_kind="dm",
+        last_demand_ts=1700000000.0,
+    )
+    handler = build_slack_demand_list_handler(engine)
+    payload = _parse(await handler({}))
+    items = cast("list[dict[str, Any]]", payload["items"])
+    assert items[0]["last_demand_at"] == "2023-11-14T22:13:20+00:00"
+    assert "last_demand_ts" not in items[0]
 
 
 # ---------------------------------------------------------------------------

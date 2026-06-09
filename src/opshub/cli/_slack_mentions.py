@@ -120,14 +120,15 @@ def _format_last_demand_column(row: dict[str, Any]) -> str:
 
 
 def _format_from_column(row: dict[str, Any]) -> str:
-    """Render ``FROM`` cell — the Slack ``U...`` id if recorded.
+    """Render ``FROM`` cell — the peer's Slack ``U...`` id if recorded.
 
-    The Phase 18-B projection writes ``NULL`` for every row because
-    :class:`SourceObserved` does not currently carry the message
-    author id (only the resolved display name lands in ``title``).
-    Renders as ``"-"`` until a future connector enhancement threads
-    the user id through (tracked in ADR-0033 §Consequences §scope
-    外).
+    Phase 23-D (issue #534) threads the message author id onto
+    :class:`SourceObserved` (``author_id``), so the projection now
+    records the *peer's* ``U...`` id here (rows the operator themselves
+    authored are excluded upstream). Renders as ``"-"`` for bot / system
+    messages that arrive without a ``user`` id, and for historic
+    pre-Phase-23 events that predate author threading (a full re-sync
+    back-fills those — see ``docs/upgrading.md`` §Phase 23-D).
     """
     value = row.get("last_demand_user_id")
     return str(value) if value else "-"

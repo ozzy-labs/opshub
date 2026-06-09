@@ -123,6 +123,10 @@ def test_map_message_basic_shape() -> None:
         "body": "Hello",
         "provenance_origin": "external",
         "provenance_trust": "untrusted",
+        # Phase 23-D (issue #534): the message author's Slack id is
+        # threaded onto the event (``_raw_message`` defaults user_id to
+        # "U1").
+        "author_id": "U1",
     }
 
 
@@ -335,6 +339,35 @@ def test_map_message_surfaces_unknown_only_as_last_resort() -> None:
     kwargs = map_message(raw)
 
     assert kwargs["title"] == "unknown in #alerts: (no text)"
+
+
+# ---------------------------------------------------------- author_id (Phase 23-D, #534)
+
+
+def test_map_message_threads_user_id_as_author_id() -> None:
+    """The message author's ``U...`` id rides on ``author_id``.
+
+    Issue #534: the ``slack_demand_digest`` projection needs the author
+    id to suppress self-authored DMs / mentions, so the mapper threads
+    ``raw.user_id`` through.
+    """
+    raw = _raw_message(user_id="U_PEER123", text="hi")
+    kwargs = map_message(raw)
+
+    assert kwargs["author_id"] == "U_PEER123"
+
+
+def test_map_message_empty_user_id_normalises_author_id_to_none() -> None:
+    """A bot / system message (no ``user``) normalises ``author_id`` to ``None``.
+
+    The fetcher yields ``user_id=""`` for bot / system messages; the
+    mapper stores ``None`` so the event column is NULL rather than an
+    empty string.
+    """
+    raw = _raw_message(user_id="", user_display_name="bot:B1", channel_name="alerts", text="ping")
+    kwargs = map_message(raw)
+
+    assert kwargs["author_id"] is None
 
 
 # ---------------------------------------------------------------------- title format (issue #367)

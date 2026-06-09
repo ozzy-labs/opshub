@@ -211,6 +211,34 @@ class SourceObserved(DomainEvent):
     ``provenance_*`` remain optional (``None`` permitted) because the
     operator-authored workspace ingest path leaves both unset; the
     SaaS connector family stamps ``external`` / ``untrusted`` uniformly.
+
+    ``author_id`` (Phase 23-D, ADR-0033 §改訂)
+    -----------------------------------------
+    The connector-native id of the human / bot that **authored** the
+    observed item (Slack ``U...`` / bot id, GitHub login, ...). It is a
+    generic, optional field — most connectors leave it ``None`` — added
+    so a downstream projection can tell self-authored content apart from
+    content that demands the operator's attention without re-deriving the
+    author from the free-text ``title``.
+
+    The Phase 23-D ``slack_demand_digest`` projection is the first
+    consumer: it compares ``author_id`` against the operator's own Slack
+    id to drop DMs / mentions the operator themselves last spoke in (a
+    DM the operator already replied to must not surface as "next to
+    read"). Threading the author id onto the event — rather than parsing
+    it back out of the title — revises ADR-0033 §決定 (a)'s "connector /
+    mapper / event schema には触れない" premise: the self-authored
+    false-positive cannot be suppressed without the author identity, and
+    the title only carries the resolved *display name* (ambiguous across
+    users that share a name).
+
+    Adding ``author_id`` is a backward-compatible optional-field addition
+    (ADR-0002 §4) exactly like ``fingerprint`` (Phase 9): ``schema_version``
+    stays at ``1``, historic events deserialise with the default ``None``,
+    and a ``projections rebuild`` reproduces a ``NULL`` write for every
+    pre-Phase-23 Slack event (those events predate author threading, so a
+    full re-sync — not just a rebuild — is required to back-fill the
+    column; see ``docs/upgrading.md`` §Phase 23-D).
     """
 
     event_type: Literal["source.observed"] = "source.observed"  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -225,6 +253,7 @@ class SourceObserved(DomainEvent):
     body: str = Field(min_length=1)
     provenance_origin: ProvenanceOrigin | None = None
     provenance_trust: ProvenanceTrust | None = None
+    author_id: str | None = Field(default=None, max_length=200)
 
 
 class SourceReferenced(DomainEvent):

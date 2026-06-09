@@ -167,6 +167,41 @@ def test_inbox_items_source_ref_partial_unique_index(tmp_path: Path) -> None:
         engine.dispose()
 
 
+def test_slack_demand_digest_rejects_mpim_demand_kind(tmp_path: Path) -> None:
+    """Migration 0032 tightens ``demand_kind`` CHECK to ``('mention', 'dm')``.
+
+    Issue #534: the dead ``'mpim'`` value is removed from the CHECK
+    constraint. ``'mention'`` / ``'dm'`` insert fine; ``'mpim'`` now
+    violates the constraint.
+    """
+    db_path = tmp_path / "demand_kind_check.sqlite"
+    cfg = _make_alembic_config(db_path)
+    command.upgrade(cfg, "head")
+
+    engine = create_engine_for_sqlite(db_path)
+
+    def _insert(channel_id: str, demand_kind: str) -> None:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO slack_demand_digest "
+                    "(channel_id, channel_type, demand_kind, last_demand_ts, updated_at) "
+                    "VALUES (:cid, 'im', :kind, 1700000000.0, :ts)"
+                ),
+                {"cid": channel_id, "kind": demand_kind, "ts": datetime.now(UTC)},
+            )
+
+    try:
+        # The two live values insert without complaint.
+        _insert("D000AAA", "dm")
+        _insert("C000BBB", "mention")
+        # The removed ``mpim`` value now violates the CHECK constraint.
+        with pytest.raises(IntegrityError):
+            _insert("G000CCC", "mpim")
+    finally:
+        engine.dispose()
+
+
 def test_embeddings_unique_constraint(tmp_path: Path) -> None:
     """Inserting two rows with the same (entity, model) tuple raises IntegrityError.
 

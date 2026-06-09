@@ -82,6 +82,39 @@ def test_source_observed_full_fields() -> None:
     assert event.body == "PR description body"
 
 
+def test_source_observed_author_id_defaults_to_none() -> None:
+    """Phase 23-D (issue #534): ``author_id`` is an optional field, default ``None``.
+
+    Backward-compatible optional-field addition (ADR-0002 §4) — historic
+    events that never carried an author deserialise with ``None``.
+    """
+    event = SourceObserved(
+        aggregate_id=_agg(),
+        actor="connector:github",
+        connector_name="github",
+        external_id="owner/repo#42",
+        source_type="issue",
+        title="something is broken",
+        body="full issue body",
+    )
+    assert event.author_id is None
+
+
+def test_source_observed_accepts_author_id() -> None:
+    """A connector-native author id round-trips onto ``author_id``."""
+    event = SourceObserved(
+        aggregate_id=_agg(),
+        actor="connector:slack",
+        connector_name="slack",
+        external_id="D1:1700000000.0001",
+        source_type="slack_message",
+        title="alice in #D1: hi",
+        body="hi",
+        author_id="U_PEER",
+    )
+    assert event.author_id == "U_PEER"
+
+
 def test_source_observed_requires_non_empty_body() -> None:
     """epic #470 / issue #481 pins ``body`` to ``str = Field(min_length=1)``.
 

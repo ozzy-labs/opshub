@@ -50,6 +50,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT_LOCATION = _REPO_ROOT / "src" / "opshub" / "db" / "migrations"
 
 _SELF_USER_ID = "U_SELF_INT"
+_OTHER_USER_ID = "U_OTHER_INT"
 
 
 def _make_alembic_config(db_path: Path) -> Config:
@@ -79,6 +80,7 @@ def _slack_observed(
     body: str,
     title: str = "alice in #general: ...",
     occurred_at: datetime | None = None,
+    author_id: str | None = None,
 ) -> SourceObserved:
     if occurred_at is None:
         occurred_at = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
@@ -101,6 +103,11 @@ def _slack_observed(
         body=resolved_body,
         provenance_origin="external",
         provenance_trust="untrusted",
+        # Phase 23-D (issue #534): author id rides on the event so the
+        # rebuild can reproduce self-authored suppression. Default
+        # ``None`` models a historic (pre-Phase-23) event whose author
+        # was never threaded.
+        author_id=author_id,
     )
 
 
@@ -190,6 +197,52 @@ def test_rebuild_materialises_demand_digest(migrated_engine: Engine) -> None:
     # Channel type classification.
     assert snapshot[0]["channel_type"] == "public"
     assert snapshot[1]["channel_type"] == "im"
+
+
+def test_rebuild_suppresses_self_authored_demand(migrated_engine: Engine) -> None:
+    """Author-aware replay drops self-authored DMs / mentions (issue #534).
+
+    Reproduces the #534 acceptance criterion through the full
+    event-store → ``rebuild_all`` path: a peer's DM ping followed by the
+    operator's own (strictly newer) reply in the same channel must leave
+    the digest pinned to the peer's ping, never the self-reply.
+    """
+    store = SqlAlchemyEventStore(migrated_engine)
+    base = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+    store.append(
+        _slack_observed(
+            channel_id="D900SELF",
+            ts="1700000300.000300",
+            body="can you take a look?",
+            title="alice in #D900SELF: can you take a look?",
+            occurred_at=base,
+            author_id=_OTHER_USER_ID,
+        )
+    )
+    store.append(
+        _slack_observed(
+            channel_id="D900SELF",
+            ts="1700000301.000400",
+            body="sure, on it",
+            title=f"{_SELF_USER_ID} in #D900SELF: sure, on it",
+            occurred_at=base + timedelta(minutes=1),
+            author_id=_SELF_USER_ID,
+        )
+    )
+
+    rebuild_all(migrated_engine, store, _build_projections(_SELF_USER_ID))
+
+    snapshot = _read_digest_rows(migrated_engine)
+    assert len(snapshot) == 1
+    row = snapshot[0]
+    assert row["channel_id"] == "D900SELF"
+    assert row["demand_kind"] == "dm"
+    # The peer's ping survives; the self-reply never advanced the row.
+    assert row["last_demand_ts"] == pytest.approx(1700000300.000300)  # pyright: ignore[reportUnknownMemberType]
+    assert row["last_demand_excerpt"] == "can you take a look?"
+    assert row["last_demand_user_id"] == _OTHER_USER_ID
+    # DM peer name resolved from the title prefix, not the opaque id.
+    assert row["channel_name"] == "alice"
 
 
 def test_rebuild_is_idempotent(migrated_engine: Engine) -> None:

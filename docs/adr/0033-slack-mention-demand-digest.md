@@ -69,6 +69,14 @@ Slack の demand 信号 (@mention / DM / MPIM の自分宛 受信) を、既存 
 event を消費する **専用 projection + 専用 MCP tool** として最小実装する。6 軸で
 方針を pin する。
 
+> **改訂 (Phase 23-D、[issue #534](https://github.com/ozzy-labs/opshub/issues/534))**: 当初の §(a)「connector / fetcher / mapper / event schema には触れない」前提を一部見直した。本 projection の致命的な誤報 = 「自分が返信し終えた DM / mention が最上位に出る」は **message author の identity が event に乗っていない** ことが根因で、projection 内では抑制できない (`title` の display 名は曖昧で id ではない)。そのため以下を着地させた:
+> 1. **author id 貫通** — Slack mapper が `raw.user_id` を `SourceObserved.author_id` (新 optional field、`fingerprint` と同じ後方互換追加で `schema_version` は 1 のまま) に貫通させ、projection が `author_id == self_user_id` の行を demand から除外する。過去 event は `author_id=NULL` のため遡及不能で、全 channel に効かせるには full re-sync が必要 (`docs/upgrading.md` §Phase 23-D)。
+> 2. **epoch → ISO 8601** — MCP 出力 `last_demand_ts` (raw Slack epoch float) を `last_demand_at` (ISO 8601 UTC) に統一 (他 read tool と方言を揃える)。`since_ts` *filter* 入力は epoch のまま。
+> 3. **名前解決** — DM 行は相手の表示名、channel 行は `#name` を `channel_name` に解決 (opaque `D...` id 露出を解消、§不変条件 #4 強化)。
+> 4. **死に値 enum 削除** — §(b) / §不変条件 #2 の `demand_kind` 3 値固定から `"mpim"` を削除し 2 値 (`"mention"` / `"dm"`) に絞る (apply が書かないため構造上 0 件、pre-userbase posture で migration `0032` が CHECK 制約を張り替え)。
+>
+> **scope 外 (本 issue では入れない)**: 「自分が後続発言したら retire する decay」は往復 thread で逆の誤報 (相手が ball を持つケースの誤 retire) を生むため別 issue。author id 貫通だけで誤報の大半が消える。
+
 ### (a) demand 信号は既存 `SourceObserved` event を消費する projection で生成する
 
 新 fetch 経路は作らない。`opshub slack sync` が既に append している

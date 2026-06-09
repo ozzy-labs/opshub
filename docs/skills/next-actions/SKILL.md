@@ -51,11 +51,11 @@ input:
   order: "last_demand_desc"
 ```
 
-戻り値の `items[]` は Slack の `<@self>` mention と DM 相手の最終発言を新しい順に返す (`channel_id` / `channel_type` / `channel_name` / `demand_kind` / `last_demand_ts` / `last_demand_excerpt` / `last_demand_permalink` / `last_source_id` を持つ)。これは「自分が放置している ping」= operator 視点で読むべき未処理 signal なので、task 列と並べる際の priority を以下のように扱うのが推奨:
+戻り値の `items[]` は Slack の `<@self>` mention と DM 相手の最終発言を新しい順に返す (`channel_id` / `channel_type` / `channel_name` / `demand_kind` / `last_demand_at` / `last_demand_user_id` / `last_demand_excerpt` / `last_demand_permalink` / `last_source_id` を持つ)。`last_demand_at` は ISO 8601 UTC 文字列 (Phase 23-D / issue #534)、`channel_name` は DM なら相手の表示名 / channel なら `#name`、`last_demand_user_id` は相手 (= 自分以外) の Slack `U...` id。自分が最後に発言した DM / mention は demand から除外済み (Phase 23-D)。これは「自分が放置している ping」= operator 視点で読むべき未処理 signal なので、task 列と並べる際の priority を以下のように扱うのが推奨:
 
 - `demand_kind=dm` の最新行 → 「DM が来ている」最上位 (個人宛、context は会話ログ全体)
 - `demand_kind=mention` の最新行 → 「自分宛 mention」、channel context に依存して priority 判断
-- `last_demand_ts` が古いものは fade (例えば 48h 以上前の mention は P2 相当に下げる)
+- `last_demand_at` が古いものは fade (例えば 48h 以上前の mention は P2 相当に下げる)
 - DM と mention の static tier (DM > mention 等) は持たない (ADR-0033 §決定 (e))。ユーザー context で動的に判断する
 
 `slack.demand.list` は read-only / `readOnlyHint=true` / `openWorldHint=false` (Slack API を叩かず、Phase 18-B `slack_demand_digest` projection の local SQLite を読む)。Slack 投稿 / 通知 / reaction は本 skill から行わない (ADR-0010 §禁止事項 7)。
