@@ -235,14 +235,29 @@ scheduler:
 */15 * * * * opshub slack sync
 ```
 
-## Cursor / recovery
+## Status / recovery
 
-Slack cursor state is a 3-axis compound (`channels` / `backfill` /
-`threads`). The working operations are the `opshub slack cursor`
-subcommands (Phase 22-E,
+Slack sync state is a 3-axis compound resume cursor (`channels` forward
+high-water / `backfill` low-water / `threads` late-reply marks). It is a
+*resume* cursor, not a coverage ledger — a single low-water per channel
+cannot represent gap-backfill holes, and Slack has no thread-late-reply delta
+API, so a quiet window is indistinguishable from an unfetched one.
+
+**Daily view — `opshub slack status`** (Phase 23-F, #536):
+
+```bash
+opshub slack status            # per channel: forward high-water, backfill
+                               # low-water, thread count + "next sync will
+                               # re-fetch history" when the floor was lowered
+opshub slack status --verbose  # raw 3-axis cursor + raw ts (the old `cursor show`)
+```
+
+`status` shows the high-water and low-water as **separate facts** and never
+asserts a continuous covered range (the cursor cannot prove one).
+
+**Recovery / surgery — `opshub slack cursor`** (Phase 22-E,
 [ADR-0038](adr/0038-slack-sync-gap-backfill.md) §(f)):
 
-- `opshub slack cursor show` — pretty-print the cursor.
 - `opshub slack cursor reset [--channel C1,C2 | --all]` — drop cursor
   entries so the selected channels cold-start on the next sync.
 - `opshub slack cursor backfill --channel <id> --since <new> [--until <old>]`

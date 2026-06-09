@@ -17,7 +17,7 @@
 
 さらに、過去区間を素朴に再取得する設計には別の罠がある:
 
-3. **再観測は inbox を膨張させる。** `SourceService.observe` は呼ぶたびに `SourceObserved` + `ItemEnqueued` を無条件発行する (`src/opshub/services/source_service.py`、既存 source のガードなし)。`inbox` projection は `ItemEnqueued` を毎回新 `aggregate_id` で INSERT し `source_ref` で重複排除しない (`src/opshub/projections/inbox.py`)。一方 `sources` のみ `(connector_name, external_id)` upsert で冪等 (`src/opshub/projections/sources.py`)。したがって cursor を単純に巻き戻して既取得区間を再 fetch すると inbox 行が二重化する (旧 issue #339 cascade と同型)。
+1. **再観測は inbox を膨張させる。** `SourceService.observe` は呼ぶたびに `SourceObserved` + `ItemEnqueued` を無条件発行する (`src/opshub/services/source_service.py`、既存 source のガードなし)。`inbox` projection は `ItemEnqueued` を毎回新 `aggregate_id` で INSERT し `source_ref` で重複排除しない (`src/opshub/projections/inbox.py`)。一方 `sources` のみ `(connector_name, external_id)` upsert で冪等 (`src/opshub/projections/sources.py`)。したがって cursor を単純に巻き戻して既取得区間を再 fetch すると inbox 行が二重化する (旧 issue #339 cascade と同型)。
 
 本 ADR は Phase 22 (epic #516) として、floor 引き下げ時に **「新たに広がった窓だけ」を自動取得する gap backfill** を pin する。pre-userbase につき後方互換は不要 ([AGENTS.md](../../AGENTS.md) §設計判断のスタンス)。
 
@@ -70,13 +70,23 @@ Phase 20-B ([ADR-0030](0030-slack-thread-reply-ingestion.md)) の 2 軸 compound
 
 帰結として §Context の発端シナリオ (feature 着地前に `7d` で sync 済み → `30d` に下げる) は **自動では解決しない**。pre-feature channel の救済は §(f) の明示コマンド (`opshub slack cursor backfill`) で行う。
 
-### (f) operability: `opshub slack cursor` サブコマンド
+### (f) operability: `opshub slack status`（日常）と `opshub slack cursor`（復旧）の二層
 
-ADR-0036 が案内した壊れた rebuild 経路を置き換える、実際に機能する cursor 操作経路を提供する:
+ADR-0036 が案内した壊れた rebuild 経路を置き換える、実際に機能する操作経路を提供する。Phase 23-F ([#536](https://github.com/ozzy-labs/opshub/issues/536)) で **日常 operator 面（読み取り = `opshub slack status`）と復旧面（書き換え = `opshub slack cursor`）に二層化**した。
 
-- **`opshub slack cursor show`** — 現在の compound cursor (`channels` / `backfill` / `threads` 3 軸) を pretty-print。
+**日常面 — `opshub slack status`**（旧 `cursor show` 昇格）:
+
+- 3 軸 cursor を人間語で表示する: channel ごとに「前進取得済み（high-water）/ 過去取得下限（low-water、無記録なら『先頭まで』）/ 追跡中スレッド数」。configured だが未取得の channel は「未取得」と明示する。
+- **cursor は「再開点」であって「被覆台帳」ではない**: `backfill` 軸は channel ごとに low-water を 1 個しか持たず飛び地（穴あき被覆）を表現できない。さらに thread late-reply に delta API が無く「静か」と「未取得」を原理的に区別できない。よって status は high-water と low-water を**別々の事実**として出し、連続被覆区間を主張しない（gap を正確に数える Option B＝cursor の区間台帳化は pre-userbase には過剰と判断し不採用）。
+- cursor で確実に分かる唯一の gap signal —「次回 sync で過去取り直し予定」（実効 floor < 記録 low-water、§(d) の自動 gap backfill trigger を status 側で再現）— だけを正確に表示する。
+- `--verbose` で生 3 軸 + raw ts を dump する（旧 `cursor show` の出力）。
+
+**復旧面 — `opshub slack cursor`**（書き換え系のみ）:
+
 - **`opshub slack cursor backfill --channel <id> --since <new> [--until <old>]`** — operator が指定した bounded 窓 `(since, until]` を §(c) の bounded fetch で取得・ingest し、`backfill[ch] = since` に後退させる。`--until` 既定 = 追跡中の low-water (`backfill[ch]`)。**pre-feature channel の発端シナリオ救済の主経路** (operator が old floor を `--until` に与え、既取得区間と disjoint な窓を明示する)。
 - **`opshub slack cursor reset [--channel C... | --all]`** — 対象 channel の cursor entry を除去して cold-start 化する破壊的経路 (最終手段)。reset 後の cold-start 再取得は既取得区間を再観測して inbox を膨張させ得る (§(h)) ため `AskUserQuestion` で HITL 確認し、lossy である旨を警告する。基本は `cursor backfill` を推奨。
+
+`cursor` group は help から隠さない（pre-userbase では operator = maintainer 自身で、障害時に help が命綱。flat-dict reject エラー (§Context / [#531](https://github.com/ozzy-labs/opshub/issues/531)) が `cursor reset --all` を案内する以上、行き先を隠すのは不整合）。二層化は help 文・命名・docs で表現する。
 
 いずれも cursor 更新は `ConnectorSyncCompleted` event の append で行い、`connector_cursors` projection に反映する (event-sourced の規律を維持)。
 

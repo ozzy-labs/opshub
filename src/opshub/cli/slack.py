@@ -15,6 +15,9 @@ Surface:
   ``slack_demand_digest`` projection (Phase 18-B, ADR-0033). Operator
   inspection only; the first-class skill surface is the Phase 18-C
   MCP ``slack.demand.list`` tool.
+* ``opshub slack status`` — operator-facing sync status: the 3-axis
+  resume cursor in human terms (Phase 23-F, #536). The daily face;
+  the raw cursor + recovery verbs live under ``opshub slack cursor``.
 
 Module-level imports are restricted to ``__future__`` and ``typer``
 so ``opshub --help`` cold start stays under the ~300ms budget set by
@@ -48,7 +51,10 @@ slack_app.add_typer(slack_mentions_app)
 
 slack_cursor_app = typer.Typer(
     name="cursor",
-    help="Inspect / reset / backfill the Slack resume cursor (Phase 22-E, ADR-0038).",
+    help=(
+        "Recovery / low-level cursor surgery (reset / backfill). For the "
+        "day-to-day view use `opshub slack status` (Phase 23-F, ADR-0038)."
+    ),
     no_args_is_help=True,
 )
 slack_app.add_typer(slack_cursor_app)
@@ -518,26 +524,43 @@ def slack_mentions_list(
         typer.echo(rendered)
 
 
-@slack_cursor_app.command("show")
-def slack_cursor_show(
+@slack_app.command("status")
+def slack_status(
     output_format: str = typer.Option(
         "table",
         "--format",
         help="Output format: table | json. Default 'table'.",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show the raw 3-axis cursor (channels / backfill / threads) + raw ts.",
+    ),
 ) -> None:
-    """Pretty-print the Slack compound resume cursor (channels / backfill / threads).
+    """Show the Slack sync status in human terms (Phase 23-F, #536).
 
-    Read-only view of the ``connector_cursors`` row for ``slack`` (Phase
-    22-E, :doc:`ADR-0038 </adr/0038-slack-sync-gap-backfill>`). Exits 1 on a
-    legacy / corrupt cursor (same ``ConfigError`` the sync path raises).
+    The day-to-day view of the resume cursor: per configured channel it
+    prints how far forward the sync has read (high-water), how far back
+    history has been backfilled (low-water), and the number of threads being
+    polled for late replies. It shows the high-water and low-water as
+    **separate facts** and does not assert a continuous covered range — the
+    cursor is a resume point, not a coverage ledger, and gap-backfill holes
+    are not tracked (:doc:`ADR-0038 </adr/0038-slack-sync-gap-backfill>`).
+    The one gap it states precisely is "the next sync will re-fetch history"
+    (effective floor below the recorded low-water).
+
+    ``--verbose`` dumps the raw 3-axis cursor (the former ``cursor show``).
+    Recovery / mutation verbs live under ``opshub slack cursor`` (reset /
+    backfill). Exits 1 on a legacy / corrupt cursor (same ``ConfigError`` the
+    sync path raises).
     """
-    from opshub.cli._slack_cursor import parse_show_format, render_cursor_show
+    from opshub.cli._slack_status import parse_status_format, render_status
     from opshub.core.errors import ConfigError
 
-    fmt = parse_show_format(output_format)
+    fmt = parse_status_format(output_format)
     try:
-        typer.echo(render_cursor_show(output_format=fmt))
+        typer.echo(render_status(output_format=fmt, verbose=verbose))
     except ConfigError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

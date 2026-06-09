@@ -622,7 +622,7 @@ Phase 17 ([ADR-0031](adr/0031-cli-command-surface-organization.md), epic [#409](
 
 - **Keyring slot names** (e.g. `connector:slack:token`, `connector:google_workspace:refresh_token`, `embedder:openai:api_key`, `llm:anthropic:api_key`) are **unchanged** — only the CLI command surface moves. Operators do **not** need to re-run `auth set` after the upgrade; the stored tokens remain valid.
 - **Environment variable overrides** (`OPSHUB_CONNECTOR_SLACK_TOKEN`, `OPSHUB_CONNECTOR_GITHUB_PAT`, `OPSHUB_CONNECTOR_TEAMS_TOKEN`, `OPSHUB_DB_ENCRYPTION_KEY`, etc.) are **unchanged**. Existing CI / cron configurations continue to work.
-- **stdout / stderr output shapes** keep the same markers: `synced <name>: N item(s) observed` (stdout, success) / `sync failed: <Type>...` (stderr, failure). Scripts grepping the `synced ` / `sync failed:` prefixes keep working. (Phase 23-B [#532] later appended the sanitised message body to the failure line — `sync failed: <Type>: <sanitised-msg>` — but the `sync failed:` prefix is preserved, so prefix-anchored grep is unaffected; see §Phase 23-B below.)
+- **stdout / stderr output shapes** keep the same markers: `synced <name>: N item(s) observed` (stdout, success) / `sync failed: <Type>...` (stderr, failure). Scripts grepping the `synced` / `sync failed:` prefixes keep working. (Phase 23-B [#532] later appended the sanitised message body to the failure line — `sync failed: <Type>: <sanitised-msg>` — but the `sync failed:` prefix is preserved, so prefix-anchored grep is unaffected; see §Phase 23-B below.)
 - **MCP tool surface** ([ADR-0022](adr/0022-mcp-server-surface.md)) is **unchanged** — MCP tool names (`connector.sync`, `recall.search`, etc.) are independent of the CLI group naming.
 - **`Connector` Protocol** ([ADR-0010](adr/0010-connector-contract.md)) and the `connectors/<name>/` package layout (`auth.py` + `fetcher.py` + `mapper.py` + `connector.py`) are **unchanged**.
 
@@ -1567,10 +1567,13 @@ The event log is untouched (every historic `ItemEnqueued` is preserved); the reb
 
 旧ドキュメント（ADR-0036 §Consequences 等）は「古い履歴を取り直すには `opshub projections rebuild`」と案内していたが、これは**誤りだった**。rebuild は event log を保持したまま projection を流し直し、`connector_cursors` は `ConnectorSyncCompleted` を replay して cursor を**同じ最新値に復元する**ため、cursor はリセットされず再 backfill も起きない。Phase 22 で正しい手段を提供した（下記）。
 
-### 新コマンド `opshub slack cursor`
+### 新コマンド `opshub slack status`（日常）/ `opshub slack cursor`（復旧）
+
+Phase 23-F ([#536](https://github.com/ozzy-labs/opshub/issues/536)) で読み取りを `opshub slack status` に昇格し、`opshub slack cursor` は書き換え系（reset / backfill）の復旧経路に絞った（旧 `cursor show` は `status --verbose` に移設）。
 
 ```bash
-opshub slack cursor show                                   # 現在の 3 軸 cursor を pretty-print (--format=json も可)
+opshub slack status                                        # 日常: 3 軸 cursor を人間語で (前進取得済み / 過去取得下限 / 追跡スレッド)
+opshub slack status --verbose                              # 生 3 軸 + raw ts を pretty-print (旧 `cursor show`、--format=json も可)
 opshub slack cursor reset --channel C1,C2                  # 指定 channel を cold-start 化 (working reset; --all で全 channel)
 opshub slack cursor backfill --channel C1 --since 30d      # (since, low-water] を取り直し (low-water 既知なら --until 省略可)
 opshub slack cursor backfill --channel C1 --since 2026-01-01 --until 2026-03-01  # 明示窓
