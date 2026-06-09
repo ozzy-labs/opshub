@@ -241,18 +241,96 @@ def test_cursor_backfill_fetches_window_and_advances_low_water(
     assert state["backfill"] == {"C1": since_ts}
 
 
-def test_cursor_backfill_requires_until_for_pre_feature_channel(
+def test_cursor_backfill_requires_until_when_no_messages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from opshub.cli._slack_cursor import run_cursor_backfill
 
-    # Pre-feature channel: present in channels, no backfill entry.
+    # Pre-feature channel (no backfill entry) AND no ingested messages to
+    # infer --until from → still requires explicit --until (Phase 23-F-2).
     source = _FakeSource('{"channels":{"C1":"600.000000"},"threads":{}}')
     _patch_source(monkeypatch, source)
     _patch_backfill_fetcher(monkeypatch, gap_yields=[])
 
-    with pytest.raises(ConfigError, match="no recorded low-water"):
+    def _no_oldest(_factory: object, *, channel_id: str) -> str | None:
+        return None
+
+    monkeypatch.setattr("opshub.cli._slack_cursor._oldest_observed_ts", _no_oldest)
+
+    with pytest.raises(ConfigError, match="no ingested messages"):
         run_cursor_backfill(channel_id="C1", since="2026-01-01", until=None)
+
+
+def test_cursor_backfill_defaults_until_to_oldest_ingested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from opshub.cli._slack_cursor import run_cursor_backfill
+    from opshub.connectors.slack.connector import (
+        _load_cursors,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    since_ts = since_to_ts(parse_since("2026-01-01"))
+    oldest_ts = since_to_ts(parse_since("2026-03-01"))
+    gap_ts = since_to_ts(parse_since("2026-02-01"))
+    head_ts = since_to_ts(parse_since("2026-06-01"))
+
+    # Pre-feature channel: no backfill entry → --until inferred from the
+    # oldest ingested message ts (2026-03-01) rather than erroring.
+    source = _FakeSource(f'{{"channels":{{"C1":"{head_ts}"}},"threads":{{}}}}')
+    _patch_source(monkeypatch, source)
+    captured = _patch_backfill_fetcher(monkeypatch, gap_yields=[("C1", _raw("C1", gap_ts), gap_ts)])
+
+    def _oldest(_factory: object, *, channel_id: str) -> str | None:
+        return oldest_ts
+
+    monkeypatch.setattr("opshub.cli._slack_cursor._oldest_observed_ts", _oldest)
+
+    observed = run_cursor_backfill(channel_id="C1", since="2026-01-01", until=None)
+
+    assert observed == 1
+    # --until defaulted to the oldest ingested ts (upper bound of the gap).
+    assert captured["latest_per_channel"] == {"C1": oldest_ts}
+    assert captured["cursor_per_channel"] == {"C1": since_ts}
+    state = _load_cursors(source.cursor_set_calls[-1]["value"])
+    assert state["backfill"] == {"C1": since_ts}
+
+
+def test_oldest_observed_ts_returns_numeric_min(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime
+
+    from sqlalchemy import create_engine, insert
+
+    from opshub.cli._slack_cursor import _oldest_observed_ts  # pyright: ignore[reportPrivateUsage]
+    from opshub.projections.sources import sources_table
+
+    engine = create_engine("sqlite://")
+    sources_table.metadata.create_all(engine)
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    rows = [
+        # C1: two messages — lexical max ("9...") is numerically smaller than
+        # "1700...", so a lexical min would pick the wrong one; assert numeric.
+        ("s1", "slack", "C1:1700000500.000000"),
+        ("s2", "slack", "C1:999999999.000000"),
+        ("s3", "slack", "C2:1700000000.000000"),
+        ("s4", "github", "C1:1700000001.000000"),
+    ]
+    with engine.begin() as conn:
+        for sid, connector, ext in rows:
+            conn.execute(
+                insert(sources_table).values(
+                    id=sid,
+                    connector_name=connector,
+                    external_id=ext,
+                    source_type="slack_message",
+                    title="t",
+                    observed_at=now,
+                    updated_at=now,
+                    body="b",
+                )
+            )
+
+    # Numeric min over C1's slack rows = 999999999 (not the lexical-min path).
+    assert _oldest_observed_ts(lambda: engine, channel_id="C1") == "999999999.000000"
 
 
 def test_cursor_backfill_rejects_since_not_older_than_until(

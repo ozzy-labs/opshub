@@ -83,7 +83,7 @@ ADR-0036 が案内した壊れた rebuild 経路を置き換える、実際に�
 
 **復旧面 — `opshub slack cursor`**（書き換え系のみ）:
 
-- **`opshub slack cursor backfill --channel <id> --since <new> [--until <old>]`** — operator が指定した bounded 窓 `(since, until]` を §(c) の bounded fetch で取得・ingest し、`backfill[ch] = since` に後退させる。`--until` 既定 = 追跡中の low-water (`backfill[ch]`)。**pre-feature channel の発端シナリオ救済の主経路** (operator が old floor を `--until` に与え、既取得区間と disjoint な窓を明示する)。
+- **`opshub slack cursor backfill --channel <id> --since <new> [--until <old>]`** — operator が指定した bounded 窓 `(since, until]` を §(c) の bounded fetch で取得・ingest し、`backfill[ch] = since` に後退させる。`--until` 既定 = 追跡中の low-water (`backfill[ch]`)。**pre-feature channel の発端シナリオ救済の主経路** (operator が old floor を `--until` に与え、既取得区間と disjoint な窓を明示する)。Phase 23-F-2 ([#536](https://github.com/ozzy-labs/opshub/issues/536)): low-water 未記録の pre-feature channel でも `--until` を省略でき、**CLI 層が `sources` projection からその channel の最古取得 ts (`external_id = "{channel_id}:{ts}"` の最小 ts) を逆引きして `--until` 既定値にする** (取得実績ゼロのときだけ明示要求)。逆引きは CLI/query 層に閉じ、connector は引き続き projection に依存しない (結合方向を太らせない)。
 - **`opshub slack cursor reset [--channel C... | --all]`** — 対象 channel の cursor entry を除去して cold-start 化する破壊的経路 (最終手段)。reset 後の cold-start 再取得は既取得区間を再観測して inbox を膨張させ得る (§(h)) ため `AskUserQuestion` で HITL 確認し、lossy である旨を警告する。基本は `cursor backfill` を推奨。
 
 `cursor` group は help から隠さない（pre-userbase では operator = maintainer 自身で、障害時に help が命綱。flat-dict reject エラー (§Context / [#531](https://github.com/ozzy-labs/opshub/issues/531)) が `cursor reset --all` を案内する以上、行き先を隠すのは不整合）。二層化は help 文・命名・docs で表現する。

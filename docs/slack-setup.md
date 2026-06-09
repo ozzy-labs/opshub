@@ -261,7 +261,9 @@ asserts a continuous covered range (the cursor cannot prove one).
 - `opshub slack cursor reset [--channel C1,C2 | --all]` — drop cursor
   entries so the selected channels cold-start on the next sync.
 - `opshub slack cursor backfill --channel <id> --since <new> [--until <old>]`
-  — explicit bounded backfill of a past window.
+  — explicit bounded backfill of a past window. `--until` is optional once
+  the channel has ingested messages: it defaults to the oldest already-ingested
+  message ts (#536). Pass it explicitly only for a never-synced channel.
 
 > **`opshub projections rebuild` does NOT reset the Slack cursor** — it
 > replays the event log and restores the same cursor value, so it cannot
