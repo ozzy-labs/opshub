@@ -802,7 +802,8 @@ def test_conversations_since_flag_propagates(_slack_token_env: None) -> None:
     with _patch_list_conversations([], record=record):
         result = runner.invoke(
             app,
-            ["slack", "conversations", "--since", "7d"],
+            # Phase 23-G (#537): --since requires an explicit activity --sort.
+            ["slack", "conversations", "--sort", "last_self_post", "--since", "7d"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
@@ -815,9 +816,12 @@ def test_conversations_since_flag_propagates(_slack_token_env: None) -> None:
 
 def test_conversations_since_invalid_value_exits_2(_slack_token_env: None) -> None:
     runner = CliRunner()
+    # Phase 23-G (#537): pair --since with an activity --sort so the value
+    # parser runs (a bad --since value is a usage error → exit 2); --sort=name
+    # + --since would short-circuit to exit 1 before parsing.
     result = runner.invoke(
         app,
-        ["slack", "conversations", "--since", "garbage"],
+        ["slack", "conversations", "--sort", "last_self_post", "--since", "garbage"],
     )
 
     assert result.exit_code == 2, result.stdout + result.stderr
@@ -886,25 +890,25 @@ def test_conversations_sort_last_activity_orders_by_activity_desc(
     assert id_order == ["C-new", "C-old", "D1"]
 
 
-def test_conversations_since_alone_keeps_name_order(
-    _slack_token_env: None,
-) -> None:
-    """``--since 30d`` alone (engagement implicit) keeps name order (ADR-0035 §(b))."""
-    rows = [
-        _row_with_activity(_public_row("C-old", name="alpha"), last_activity_ts=1_000_000.0),
-        _row_with_activity(_public_row("C-new", name="zulu"), last_activity_ts=2_000_000.0),
-    ]
-    runner = CliRunner()
-    with _patch_list_conversations(rows, record=_CallRecord()):
-        result = runner.invoke(
-            app,
-            ["slack", "conversations", "--since", "30d", "--format", "toml"],
-        )
+def test_conversations_sort_name_with_since_rejected(_slack_token_env: None) -> None:
+    """Phase 23-G (#537): ``--sort=name`` + ``--since`` is rejected (orthogonality).
 
-    assert result.exit_code == 0, result.stdout + result.stderr
-    id_order = [line.split('"')[1] for line in result.stdout.splitlines() if line.startswith('  "')]
-    # default --sort=name → display_name ascending: alpha < zulu.
-    assert id_order == ["C-old", "C-new"]
+    ``--since`` is a pure filter on the axis selected by ``--sort``; name has
+    no activity ts, so the combination errors (exit 1) and steers the operator
+    to an explicit activity axis instead of covertly switching API / scope.
+    """
+    runner = CliRunner()
+    # No list_conversations patch needed — the CLI rejects before dispatch.
+    result = runner.invoke(
+        app,
+        ["slack", "conversations", "--since", "30d"],
+    )
+
+    assert result.exit_code == 1, result.stdout + result.stderr
+    combined = result.stdout + result.stderr
+    assert "--sort=name" in combined
+    assert "--sort=last_self_post" in combined
+    assert "--sort=last_activity" in combined
 
 
 def test_conversations_sort_last_activity_table_shows_last_activity_column(
@@ -1037,7 +1041,9 @@ def test_conversations_warnings_from_iterator_surface_on_stderr_in_order(
     ):
         result = runner.invoke(
             app,
-            ["slack", "conversations", "--since", "7d"],
+            # any-author axis: the missing_scope warnings come from per-row
+            # conversations.history (Phase 23-G #537: --since needs an axis).
+            ["slack", "conversations", "--sort", "last_activity", "--since", "7d"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
@@ -1167,17 +1173,19 @@ def _row_with_self_post(
 def test_conversations_default_sort_is_name(
     _slack_token_env: None,
 ) -> None:
-    """Default ``--sort`` is ``name`` (ADR-0035 §(b)); engagement-axis is implicit via --since."""
+    """Default ``--sort`` is ``name`` (ADR-0035 §(b)); no probe without an
+    activity --sort (Phase 23-G #537: --since no longer flips the axis)."""
     record = _CallRecord()
     runner = CliRunner()
     with _patch_list_conversations([], record=record):
         result = runner.invoke(
             app,
-            ["slack", "conversations", "--since", "30d"],
+            ["slack", "conversations"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
     assert record.kwargs["sort"] == "name"
+    assert record.kwargs["since"] is None
 
 
 def test_conversations_sort_last_activity_propagates(_slack_token_env: None) -> None:
@@ -1228,20 +1236,6 @@ def test_conversations_all_plus_sort_last_self_post_rejected(_slack_token_env: N
     result = runner.invoke(
         app,
         ["slack", "conversations", "--all", "--since", "30d", "--sort", "last_self_post"],
-    )
-
-    assert result.exit_code == 1, result.stdout + result.stderr
-    combined = result.stdout + result.stderr
-    assert "--all" in combined
-    assert "--sort=last_activity" in combined
-
-
-def test_conversations_all_plus_sort_name_with_since_rejected(_slack_token_env: None) -> None:
-    """``--all + --sort=name + --since`` → ConfigError (engagement-axis implicit default)."""
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        ["slack", "conversations", "--all", "--since", "30d"],
     )
 
     assert result.exit_code == 1, result.stdout + result.stderr
@@ -1332,25 +1326,6 @@ def test_conversations_sort_last_self_post_table_header_uses_last_post(
     assert "2024-06-01" in result.stdout
 
 
-def test_conversations_sort_name_with_since_table_header_uses_last_post(
-    _slack_token_env: None,
-) -> None:
-    """``--since`` + default ``--sort=name`` → engagement-axis implicit → LAST_POST column."""
-    rows = [
-        _row_with_self_post(_public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0),
-    ]
-    runner = CliRunner()
-    with _patch_list_conversations(rows, record=_CallRecord()):
-        result = runner.invoke(
-            app,
-            ["slack", "conversations", "--since", "30d", "--format", "table"],
-        )
-
-    assert result.exit_code == 0, result.stdout + result.stderr
-    assert "LAST_POST" in result.stdout
-    assert "LAST_ACTIVITY" not in result.stdout
-
-
 def test_conversations_sort_last_self_post_toml_comment_uses_last_post_label(
     _slack_token_env: None,
 ) -> None:
@@ -1399,29 +1374,6 @@ def test_conversations_sort_last_self_post_json_emits_last_self_post_ts_only(
                 "--format",
                 "json",
             ],
-        )
-
-    assert result.exit_code == 0
-    payload = _json.loads(result.stdout)
-    entry = payload[0]
-    assert entry["last_self_post_ts"] == 1_717_200_000.0
-    assert "last_activity_ts" not in entry
-
-
-def test_conversations_sort_name_with_since_json_emits_last_self_post_ts(
-    _slack_token_env: None,
-) -> None:
-    """``--sort=name --since 30d`` (engagement implicit) → JSON carries ``last_self_post_ts``."""
-    import json as _json
-
-    rows = [
-        _row_with_self_post(_public_row("C1", name="general"), last_self_post_ts=1_717_200_000.0),
-    ]
-    runner = CliRunner()
-    with _patch_list_conversations(rows, record=_CallRecord()):
-        result = runner.invoke(
-            app,
-            ["slack", "conversations", "--since", "30d", "--format", "json"],
         )
 
     assert result.exit_code == 0
@@ -1551,11 +1503,12 @@ def test_conversations_progress_description_engagement_path(
     assert any("engagement" in d for d in captured)
 
 
-def test_conversations_progress_description_sort_name_with_since(
+def test_conversations_progress_description_engagement(
     _slack_token_env: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``--sort=name`` + ``--since`` resolves to the engagement-axis spinner label."""
+    """``--sort=last_self_post`` resolves to the engagement-axis spinner label
+    (Phase 23-G #537: the engagement axis is selected only by explicit sort)."""
     from opshub.cli import _progress
 
     captured: list[str] = []
@@ -1580,7 +1533,7 @@ def test_conversations_progress_description_sort_name_with_since(
     with _patch_list_conversations([], record=_CallRecord()):
         result = runner.invoke(
             app,
-            ["slack", "conversations", "--since", "30d"],
+            ["slack", "conversations", "--sort", "last_self_post"],
         )
 
     assert result.exit_code == 0, result.stdout + result.stderr
@@ -1763,6 +1716,39 @@ def _patch_list_conversations_emitting_cutoff_notice(
         "opshub.connectors.slack.conversations.list_conversations",
         side_effect=_fake_list,
     )
+
+
+def test_conversations_sort_last_self_post_stamps_cutoff_window_in_toml(
+    _slack_token_env: None,
+) -> None:
+    """Phase 23-G (#537): the implicit 90d window is stamped into the output.
+
+    When an activity sort runs without ``--since``, the resolved cutoff date is
+    surfaced via the ``resolved_cutoff`` out-param and stamped as a comment in
+    the TOML block — observable in-band, not only on the transient stderr
+    notice. An explicit ``--since`` leaves ``resolved_cutoff`` empty (no stamp).
+    """
+    from datetime import UTC, datetime
+
+    def _fake_list(auth: Any, **kwargs: Any) -> Iterator[SlackConversation]:
+        del auth
+        holder = kwargs.get("resolved_cutoff")
+        if isinstance(holder, list):
+            cast("list[datetime]", holder).append(datetime(2026, 3, 11, tzinfo=UTC))
+        return iter([_row_with_self_post(_public_row("C1", name="general"), last_self_post_ts=1.0)])
+
+    runner = CliRunner()
+    with patch(
+        "opshub.connectors.slack.conversations.list_conversations",
+        side_effect=_fake_list,
+    ):
+        result = runner.invoke(
+            app,
+            ["slack", "conversations", "--sort", "last_self_post", "--format", "toml"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "# activity window: since 2026-03-11 (90d default" in result.stdout
 
 
 def test_conversations_sort_last_self_post_implicit_cutoff_notice_emits_literal_to_stderr(

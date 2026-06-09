@@ -14,6 +14,13 @@
 > §(f) / field 二重化解消 §(g) motivation / indexing-lag notice §(i) /
 > §不変条件 3, 5, 6, 7) は完全継承され、本 ADR は引き続き有効**。
 > 該当 section にはインライン注記 + ADR-0035 へのリンクを追加してある。
+>
+> **Phase 23-G ([#537](https://github.com/ozzy-labs/opshub/issues/537)) 追補**:
+> ADR-0035 §(d) の「`--sort=name` + `--since` 暗黙 engagement default」は撤去された。
+> engagement 軸は `--sort=last_self_post` 明示時のみ起動し、`--sort=name` + `--since`
+> は `ConfigError` で拒否される。本 ADR 本文中の「`--sort=name` + `--since`」=
+> engagement という記述はすべてこの反転後の意味で読むこと (engagement 信号源 §(a) /
+> Bot Token 不可 §(d) / `search:read` §(c) の本質は不変、起動経路のみ明示化)。
 
 ## Context
 

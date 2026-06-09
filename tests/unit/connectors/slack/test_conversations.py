@@ -1885,7 +1885,11 @@ def test_fetch_self_post_index_aggregates_max_ts_per_channel(
     client.search_messages.return_value = _search_response(matches)
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    results = list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+        )
+    )
 
     by_id = {r.id: r.last_self_post_ts for r in results}
     # Three channels; each retained ts is the per-channel max.
@@ -1917,7 +1921,11 @@ def test_fetch_self_post_index_walks_cursor_pagination(
     ]
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    results = list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+        )
+    )
 
     assert client.search_messages.call_count == 2
     # Second call must carry the cursor from the first response.
@@ -1954,7 +1962,11 @@ def test_fetch_self_post_index_falls_back_to_legacy_page_pagination(
     ]
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    results = list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+        )
+    )
 
     assert client.search_messages.call_count == 2
     second_kwargs = client.search_messages.call_args_list[1].kwargs
@@ -1988,7 +2000,11 @@ def test_fetch_self_post_index_page_pagination_handles_missing_total_pages(
 
     # Must not raise (``ConnectorFailedError`` would surface here) and
     # must terminate after one page.
-    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    results = list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+        )
+    )
 
     assert client.search_messages.call_count == 1
     assert {r.id for r in results} == {"C1"}
@@ -2003,7 +2019,11 @@ def test_fetch_self_post_index_empty_response_drops_all_rows(
     client.search_messages.return_value = _search_response([])
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    results = list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+        )
+    )
 
     assert results == []
 
@@ -2027,7 +2047,9 @@ def test_fetch_self_post_index_query_uses_documented_from_user_form(
 
     list(
         list_conversations(
-            _auth_with_user(monkeypatch, user_id="UABC123"), since=_since_dt(days_ago=7)
+            _auth_with_user(monkeypatch, user_id="UABC123"),
+            since=_since_dt(days_ago=7),
+            sort="last_self_post",
         )
     )
 
@@ -2051,7 +2073,11 @@ def test_list_conversations_mine_axis_does_not_call_conversations_history(
     )
     _patch_webclient(monkeypatch, client)
 
-    list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+        )
+    )
 
     assert client.conversations_history.call_count == 0
     assert client.search_messages.call_count == 1
@@ -2069,7 +2095,11 @@ def test_list_conversations_mine_axis_drops_rows_absent_from_index(
     )
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    results = list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+        )
+    )
 
     assert [r.id for r in results] == ["C1"]
 
@@ -2084,7 +2114,11 @@ def test_list_conversations_mine_axis_index_ts_below_since_dropped(
     client.search_messages.return_value = _search_response([_search_match("C1", "100.000000")])
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=1)))
+    results = list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=1), sort="last_self_post"
+        )
+    )
 
     assert results == []
 
@@ -2099,7 +2133,11 @@ def test_list_conversations_mine_axis_populates_self_post_ts(
     client.search_messages.return_value = _search_response([_search_match("C1", f"{fresh_ts:.6f}")])
     _patch_webclient(monkeypatch, client)
 
-    results = list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    results = list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+        )
+    )
 
     assert results[0].last_self_post_ts is not None
     assert abs(results[0].last_self_post_ts - fresh_ts) < 1e-3
@@ -2124,7 +2162,11 @@ def test_list_conversations_mine_axis_emits_indexing_lag_notice_once(
     _patch_webclient(monkeypatch, client)
 
     # Two separate calls — each must emit the notice exactly once.
-    list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+        )
+    )
     captured_first = capsys.readouterr()
     # Pin the full ADR-0035 §(f) string so a future rename of
     # ``--sort=last_activity`` shows up as a test diff, not silent drift.
@@ -2135,7 +2177,11 @@ def test_list_conversations_mine_axis_emits_indexing_lag_notice_once(
     assert captured_first.err.count("search.messages may lag") == 1
 
     # Second invocation; stderr is captured fresh per readouterr().
-    list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+        )
+    )
     captured_second = capsys.readouterr()
     assert captured_second.err.count("search.messages may lag") == 1
 
@@ -2181,7 +2227,11 @@ def test_list_conversations_mine_axis_missing_search_read_scope_raises(
     _patch_webclient(monkeypatch, client)
 
     with pytest.raises(ConnectorFailedError) as excinfo:
-        list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+        list(
+            list_conversations(
+                _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+            )
+        )
 
     message = str(excinfo.value)
     assert "search.messages" in message
@@ -2220,7 +2270,11 @@ def test_list_conversations_mine_axis_search_error_codes_endpoint_qualified(
     _patch_webclient(monkeypatch, client)
 
     with pytest.raises(ConnectorFailedError) as excinfo:
-        list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+        list(
+            list_conversations(
+                _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+            )
+        )
 
     message = str(excinfo.value)
     assert "search.messages" in message
@@ -2239,7 +2293,11 @@ def test_list_conversations_mine_axis_bot_token_principal_raises_config_error(
     _patch_webclient(monkeypatch, client)
 
     with pytest.raises(_errors_mod.ConfigError) as excinfo:
-        list(list_conversations(_auth_with_bot(monkeypatch), since=_since_dt(days_ago=7)))
+        list(
+            list_conversations(
+                _auth_with_bot(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+            )
+        )
 
     message = str(excinfo.value)
     assert "Bot Token" in message
@@ -2272,7 +2330,11 @@ def test_list_conversations_mine_axis_engagement_index_orphan_logged_at_debug(
 
     monkeypatch.setattr(_logging_module, "get_logger", mock_get_logger)
 
-    list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+        )
+    )
 
     # Exactly one debug log with the orphan counter.
     debug_calls = [
@@ -2317,7 +2379,11 @@ def test_list_conversations_mine_axis_engagement_index_orphan_not_logged_when_ze
 
     monkeypatch.setattr(_logging_module, "get_logger", mock_get_logger)
 
-    list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+    list(
+        list_conversations(
+            _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+        )
+    )
 
     # No ``engagement_index_orphan`` debug entry must be present.
     debug_calls = [
@@ -2360,7 +2426,11 @@ def test_list_conversations_mine_axis_search_429_retries_and_eventually_raises(
     monkeypatch.setattr("opshub.connectors.slack._retry.time.sleep", _no_sleep)
 
     with pytest.raises(ConnectorFailedError) as excinfo:
-        list(list_conversations(_auth_with_user(monkeypatch), since=_since_dt(days_ago=7)))
+        list(
+            list_conversations(
+                _auth_with_user(monkeypatch), since=_since_dt(days_ago=7), sort="last_self_post"
+            )
+        )
 
     assert "search.messages" in str(excinfo.value)
     # 3 attempts (default ``MAX_RETRIES_ON_RATE_LIMIT``).
@@ -2387,10 +2457,16 @@ def test_list_conversations_no_since_with_default_sort_skips_search_messages(
 # ----- ADR-0035 sort axis consolidation ----------------------------------
 
 
-def test_list_conversations_sort_name_with_since_falls_back_to_engagement_axis(
+def test_list_conversations_sort_name_does_not_probe_even_with_since(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``sort="name"`` + ``--since`` runs the engagement-axis probe (ADR-0035 §(d))."""
+    """Phase 23-G (#537): ``sort="name"`` never probes, even with ``since``.
+
+    The former ADR-0035 §(d) implicit engagement default was removed — a
+    direct ``list_conversations(sort="name", since=...)`` call ignores
+    ``since`` (name has no activity ts to filter by) and runs *no* probe of
+    either axis. (The CLI rejects ``--sort=name`` + ``--since`` outright.)
+    """
     page = _list_response([_public_channel("C1")])
     client = _build_client(list_pages=[page])
     client.users_conversations.return_value = page
@@ -2407,12 +2483,12 @@ def test_list_conversations_sort_name_with_since_falls_back_to_engagement_axis(
         )
     )
 
-    # search.messages was walked (engagement axis); per-row history did not.
-    assert client.search_messages.call_count >= 1
+    # Neither axis was probed (no search.messages, no per-row history).
+    assert client.search_messages.call_count == 0
     assert client.conversations_history.call_count == 0
     assert len(results) == 1
-    # Engagement-axis ts populated; any-axis stays None (ADR-0034 §(g)).
-    assert results[0].last_self_post_ts is not None
+    # Both axis fields stay None (no probe ran).
+    assert results[0].last_self_post_ts is None
     assert results[0].last_activity_ts is None
 
 
@@ -2575,71 +2651,6 @@ def test_list_conversations_sort_name_without_since_emits_no_notices(
     assert "search.messages may lag" not in captured.err
 
 
-def test_list_conversations_bot_token_rejected_for_sort_name_plus_since(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Bot Token + ``sort="name"`` + ``--since`` → ``ConfigError`` (engagement-axis implicit)."""
-    import opshub.core.errors as _errors_mod
-
-    page = _list_response([_public_channel("C1")])
-    client = _build_client(list_pages=[page])
-    _patch_webclient(monkeypatch, client)
-
-    with pytest.raises(_errors_mod.ConfigError) as excinfo:
-        list(
-            list_conversations(
-                _auth_with_bot(monkeypatch),
-                since=_since_dt(days_ago=7),
-                sort="name",
-            )
-        )
-
-    message = str(excinfo.value)
-    assert "Bot Token" in message
-    assert "search:read" in message
-    assert "--sort=last_activity" in message
-    assert client.search_messages.call_count == 0
-
-
-def test_list_conversations_missing_search_read_for_sort_name_plus_since(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``sort="name"`` + ``--since`` + missing ``search:read`` → ``ConnectorFailedError``."""
-    import slack_sdk.errors as _errors
-
-    page = _list_response([_public_channel("C1")])
-    client = _build_client(list_pages=[page])
-
-    resp = MagicMock()
-    resp.status_code = 403
-
-    def _get_missing_search_read(key: str, default: object = None) -> object:
-        return {"error": "missing_scope", "needed": "search:read"}.get(key, default)
-
-    resp.get = _get_missing_search_read
-    resp.headers = {}
-    client.search_messages.side_effect = _errors.SlackApiError(  # type: ignore[no-untyped-call]
-        message="missing_scope",
-        response=resp,
-    )
-    _patch_webclient(monkeypatch, client)
-
-    with pytest.raises(ConnectorFailedError) as excinfo:
-        list(
-            list_conversations(
-                _auth_with_user(monkeypatch),
-                since=_since_dt(days_ago=7),
-                sort="name",
-            )
-        )
-
-    message = str(excinfo.value)
-    assert "search.messages" in message
-    assert "missing_scope" in message
-    assert "--sort=last_self_post" in message
-    assert "--sort=last_activity" in message
-
-
 def test_list_conversations_bot_token_with_sort_last_activity_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2650,7 +2661,7 @@ def test_list_conversations_bot_token_with_sort_last_activity_succeeds(
     needs the ``*:history`` scope set (Bot Tokens can satisfy that).
     The engagement-axis Bot-Token rejection is pinned by
     ``test_list_conversations_mine_axis_bot_token_principal_raises_config_error``
-    and ``test_list_conversations_bot_token_rejected_for_sort_name_plus_since``;
+    (``--sort=last_self_post`` only, post Phase 23-G #537);
     without this counterpart a future refactor that tightened the
     principal gate too far (e.g. rejecting Bot Tokens for *every*
     ts-axis sort) would slip through the negative-path coverage.

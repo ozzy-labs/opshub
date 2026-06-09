@@ -1661,3 +1661,20 @@ re-sync しない場合でも、**着地以降に sync された新規 message �
 - **DB head** = `0032_drop_mpim_demand_kind`。Phase 23-D は migration 1 本。
 - **MCP surface 不変**（19 tools）。`slack.demand.list` の出力 field 名（`last_demand_ts` → `last_demand_at`）と `demand_kinds` enum（`mpim` 削除）が変わるが tool 本数は不変。skill catalog 不変（14、`test_skills_install_only_writes_14_assistant_skills` green）。
 - **event schema** は `SourceObserved.author_id`（optional、default `None`）追加のみ。他 connector（github / ms365 / box / ...）は `author_id` を出さず `NULL` round-trip（後方互換、ADR-0002 §4）。
+
+## Phase 23-G: `opshub slack conversations` sort 軸の直交化 — **BREAKING CHANGE** ([#537](https://github.com/ozzy-labs/opshub/issues/537))
+
+Phase 23-G は `--sort`（活動軸）と `--since`（日付 filter）を**直交化**した。従来は `--sort=name`（default）に `--since` を足すだけで engagement 軸（`search.messages`、`search:read` User Token 必須）が**暗黙発火**していた（ADR-0035 §(d)）。`--since` が「最近で絞る filter」という直感に反して別 API・別 token 種別・別 scope を要求するため、`--sort` を唯一の軸選択子に変更した。
+
+**移行（破壊的変更）:**
+
+- `opshub slack conversations --since 30d`（= 旧 `--sort=name` + `--since`）は **`ConfigError` exit 1** で拒否されるようになった。activity 軸を明示する:
+  - `opshub slack conversations --sort=last_self_post --since 30d` — 自分が発言した channel（engagement 軸、`search:read` User Token 必須）
+  - `opshub slack conversations --sort=last_activity --since 30d` — 誰かが発言した channel（any-author 軸、`*:history` scope 必須）
+- engagement 軸は `--sort=last_self_post` 明示時のみ起動する（Bot Token 不可 / `search:read` 要件は変わらず、起動経路のみ明示化）。
+- `--all` 非両立マトリクスが簡素化: `--all` + `--sort=last_self_post` のみ非両立（旧 `--all` + `--sort=name` + `--since` 分岐は name+since 自体が拒否されるため消滅）。`--all` + `--sort=last_activity` は引き続き受理。
+- `--sort=name`（default、`--since` なし）の `--format=toml` paste flow は不変（probe なし、#535 の完結ブロック）。
+
+**暗黙 90d cutoff の可視化:** `--sort=last_self_post|last_activity` を `--since` なしで指定したときの暗黙 90d cutoff（ADR-0035 §(e)）は維持しつつ、解決済み cutoff 日付を出力にも刻む（TOML/table の `# activity window: since YYYY-MM-DD (90d default; pass --since to widen)`）。従来の stderr notice も維持。
+
+pre-userbase につき compat shim なし（ADR-0035 §(d) を反転、§(e) を改訂。[ADR-0034](adr/0034-slack-engagement-axis.md) / [ADR-0026](adr/0026-cli-progress-reporting.md) / [ADR-0027](adr/0027-observability-and-troubleshooting-logging.md) は pointer 注記のみ）。

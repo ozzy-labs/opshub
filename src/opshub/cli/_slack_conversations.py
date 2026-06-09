@@ -245,20 +245,22 @@ def run_conversations_command(
         When ``True``, switch from ``users.conversations`` (joined-
         only) to ``conversations.list`` (workspace-wide).
     since:
-        Optional tz-aware :class:`datetime.datetime` cutoff. When
-        ``sort in ("last_self_post", "last_activity")`` and ``since``
-        is ``None``, the adapter applies an implicit ``90d`` cutoff and
-        emits an ADR-0035 §(e) notice. The listing iterator runs an
-        activity probe whose shape depends on the resolved axis
-        (engagement vs any-author, ADR-0035 §(c) §(d)). The table
-        renderer adds a ``LAST_POST`` / ``LAST_ACTIVITY`` column when
-        any probe ran.
+        Optional tz-aware :class:`datetime.datetime` cutoff, applied on
+        the ts of the axis selected by ``sort``. Phase 23-G (#537):
+        ``--since`` is a pure filter — it never selects an axis on its
+        own, so the CLI rejects ``--sort=name`` + ``--since`` (name has no
+        activity ts to filter by). When ``sort in ("last_self_post",
+        "last_activity")`` and ``since`` is ``None``, the adapter applies
+        an implicit ``90d`` cutoff, emits an ADR-0035 §(e) notice, and
+        stamps the resolved window into the listing output. The table
+        renderer adds a ``LAST_POST`` / ``LAST_ACTIVITY`` column when a
+        probe ran.
     sort:
-        Sort key + axis selector (ADR-0035 §(c)):
+        Sort key + axis selector (ADR-0035 §(c); Phase 23-G #537 made the
+        axis selectable *only* by an explicit ``--sort``):
 
-        * ``"name"`` (default) — display_name within type bucket. With
-          ``since`` set, takes the engagement-axis implicit default
-          (ADR-0035 §(d)).
+        * ``"name"`` (default) — display_name within type bucket. Never
+          probes; ``--since`` is rejected with this sort.
         * ``"last_self_post"`` — engagement axis. One
           ``search.messages`` call returns the operator's own posts;
           channels missing from the index are dropped. Populates
@@ -285,15 +287,14 @@ def run_conversations_command(
 
     auth = SlackAuth()
 
-    # Resolve the activity-probe axis from the sort key + since
-    # combination so the spinner description / table header / TOML
-    # comment label / JSON field selection all agree (ADR-0035 §(c)
-    # §(d)). ``engagement_probe`` covers both the explicit
-    # ``sort="last_self_post"`` path and the implicit
-    # ``sort="name" + --since`` default; ``any_probe`` is
-    # ``sort="last_activity"``; ``probe_ran`` controls the ts column
-    # / TOML comment / JSON field exposure.
-    engagement_probe = sort == "last_self_post" or (sort == "name" and since is not None)
+    # Resolve the activity-probe axis from the sort key alone (Phase 23-G
+    # #537: the axis is selected *only* by an explicit ``--sort``; the
+    # former ``sort="name" + --since`` implicit engagement default was
+    # removed). ``engagement_probe`` = ``sort="last_self_post"``;
+    # ``any_probe`` = ``sort="last_activity"``; ``probe_ran`` controls the
+    # ts column / TOML comment / JSON field exposure. ``sort="name"`` never
+    # probes (and ``--sort=name`` + ``--since`` is rejected upstream).
+    engagement_probe = sort == "last_self_post"
     any_probe = sort == "last_activity"
     probe_ran = engagement_probe or any_probe
 
@@ -306,6 +307,11 @@ def run_conversations_command(
     # being walked vs per-row ``conversations.history`` — useful for
     # debugging rate-limit / scope failures.
     warnings: list[str] = []
+    # Phase 23-G (#537): single-element sink for the resolved implicit-90d
+    # cutoff (populated by ``list_conversations`` only when an explicit
+    # ts-axis sort ran without ``--since``) so the renderer can stamp the
+    # window into the output, making the default observable in-band.
+    resolved_cutoff: list[datetime] = []
     if engagement_probe:
         description = "listing conversations + engagement"
     elif any_probe:
@@ -323,6 +329,7 @@ def run_conversations_command(
             since=since,
             sort=sort,
             warnings=warnings,
+            resolved_cutoff=resolved_cutoff,
             reporter=reporter,
         )
 
@@ -345,11 +352,17 @@ def run_conversations_command(
     if not sorted_rows and output_format != "json":
         _emit_empty_hint(filter_substring=filter_substring, err=True)
 
+    # Stamp the resolved implicit-90d cutoff into the output when it fired
+    # (Phase 23-G #537), so the window is observable in the artifact the
+    # operator reads, not only on the transient stderr notice.
+    cutoff_date = resolved_cutoff[0].date().isoformat() if resolved_cutoff else None
+
     rendered = render_conversations(
         sorted_rows,
         output_format=output_format,
         show_activity=probe_ran,
         engagement_probe=engagement_probe,
+        cutoff_date=cutoff_date,
     )
     if rendered:
         typer.echo(rendered)
@@ -372,6 +385,7 @@ def render_conversations(
     output_format: OutputFormat,
     show_activity: bool = False,
     engagement_probe: bool = False,
+    cutoff_date: str | None = None,
 ) -> str:
     """Format a stream of :class:`SlackConversation` rows for stdout.
 
@@ -399,9 +413,14 @@ def render_conversations(
             materialised,
             show_activity=show_activity,
             engagement_probe=engagement_probe,
+            cutoff_date=cutoff_date,
         )
     if output_format == "toml":
-        return _render_toml(materialised, engagement_probe=engagement_probe)
+        return _render_toml(
+            materialised,
+            engagement_probe=engagement_probe,
+            cutoff_date=cutoff_date,
+        )
     if output_format == "json":
         return _render_json(materialised)
     raise ValueError(f"unknown output format: {output_format!r}")
@@ -483,6 +502,7 @@ def _render_table(
     *,
     show_activity: bool = False,
     engagement_probe: bool = False,
+    cutoff_date: str | None = None,
 ) -> str:
     """Render conversations as a fixed-width table.
 
@@ -530,6 +550,9 @@ def _render_table(
             cells.append(f"{_format_activity_date(row_ts):<{_LAST_ACTIVITY_WIDTH}}")
         cells.append(purpose)
         lines.append("  ".join(cells))
+    if cutoff_date is not None:
+        # Phase 23-G (#537): make the implicit 90d window observable in-band.
+        lines.append(f"# activity window: since {cutoff_date} (90d default; pass --since to widen)")
     return "\n".join(lines)
 
 
@@ -578,6 +601,7 @@ def _render_toml(
     rows: list[SlackConversation],
     *,
     engagement_probe: bool = False,
+    cutoff_date: str | None = None,
 ) -> str:
     """Render conversations as a complete, paste-ready ``[connectors.slack]`` block.
 
@@ -600,10 +624,18 @@ def _render_toml(
     """
     section = ["[connectors.slack]", "enabled = true"]
     header = f"# Slack conversations ({len(rows)})"
+    # Phase 23-G (#537): when an explicit ts-axis sort defaulted to the
+    # implicit 90d window, stamp the resolved cutoff as a comment so the
+    # filter boundary is visible in the pasted block (not just on stderr).
+    cutoff_comment = (
+        [f"# activity window: since {cutoff_date} (90d default; pass --since to widen)"]
+        if cutoff_date is not None
+        else []
+    )
     if not rows:
-        return "\n".join([*section, header, "channels = []"])
+        return "\n".join([*section, header, *cutoff_comment, "channels = []"])
     label_prefix = "last post" if engagement_probe else "last"
-    lines = [*section, header, "channels = ["]
+    lines = [*section, header, *cutoff_comment, "channels = ["]
     for row in rows:
         flags: list[str] = [row.type]
         if row.is_archived:

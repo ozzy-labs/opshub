@@ -131,6 +131,8 @@ ADR-0034 §(b) で追加した `--activity={mine|any}` flag を完全削除す�
 
 ### (d) `--sort=name` + `--since` の軸暗黙 default = engagement (`last_self_post`)
 
+> **Phase 23-G ([#537](https://github.com/ozzy-labs/opshub/issues/537)) で反転 (superseded)**: 本節の「暗黙 engagement default」は撤去された。`--since` が `search:read`・別 API・別 token 種別を**暗黙に**要求する非直交性 (operator のメンタルモデル「`--since`=最近で絞る filter」と乖離し「name 順なのに search 権限?」という理解不能な failure を生む) が UX バグと判定されたため。**現行**: 活動軸は `--sort` 明示でのみ選択され、`--sort=name` + `--since` は `ConfigError` exit 1 (下記「不採用案 1」を採用に転換) で `--sort=last_self_post --since` / `--sort=last_activity --since` を誘導する。`--since` は選んだ軸の ts に対する純粋 filter で、scope/token を追加要求しない (= その軸が既に宣言済みの要件のみ)。以下は当時の決定記録 (経緯保存)。
+
 `--since` を単独で指定した (sort 未指定 = default `--sort=name`) 場合は、
 engagement 軸 (`last_self_post`) で probe + cutoff filter を行い、name 順
 listing、`last_self_post_ts` 列を表示する。
@@ -152,6 +154,8 @@ listing、`last_self_post_ts` 列を表示する。
   本 ADR にも適用と明示)。これは UX trade-off として doc 化
 
 ### (e) `--sort=last_self_post|last_activity` + `--since` なし → 暗黙 cutoff `--since 90d` + stderr notice
+
+> **Phase 23-G ([#537](https://github.com/ozzy-labs/opshub/issues/537)) 改訂**: 暗黙 90d default は維持 (probe コスト cap として妥当) するが、「暗黙」性への対処として **解決済み cutoff 日付を出力にも刻む**。`list_conversations` が `resolved_cutoff` out-param で解決済み datetime を surface し、CLI が TOML/table に `# activity window: since YYYY-MM-DD (90d default; pass --since to widen)` を stamp する。stderr notice (下記 pin、verbatim 維持) と二重化することで、stdout を file に流しても cutoff 境界が artifact 内に残る。なお §(d) 反転により本経路は `--sort=last_self_post|last_activity` 明示時のみ到達する (旧 `--sort=name` + `--since` 経路は消滅)。
 
 `--sort=last_self_post` / `--sort=last_activity` を `--since` なしで指定した
 場合、暗黙 cutoff `--since 90d` を当てた上で probe を実行し、stderr に notice
