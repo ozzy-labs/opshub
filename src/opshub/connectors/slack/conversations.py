@@ -147,6 +147,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from opshub.connectors.slack._retry import retry_on_rate_limit
+from opshub.connectors.slack.scopes import history_scope_for_type
 from opshub.core.errors import ConfigError, ConnectorFailedError
 from opshub.core.time import now_utc
 
@@ -234,11 +235,15 @@ _INDEXING_LAG_NOTICE = (
 #: for a given conversation type. Used to build the per-type warning
 #: surfaced when ``--since`` is set but the token lacks the relevant
 #: ``*:history`` scope (ADR-0018 §Decision (7)).
+#:
+#: Phase 23-I (#539, ADR-0040): derived from the feature→scope SSOT in
+#: :mod:`opshub.connectors.slack.scopes` instead of an independent literal, so
+#: the type → history-scope mapping has exactly one home. Behaviour is
+#: unchanged (``public`` → ``channels:history`` etc.); the existing per-type
+#: ``test_conversations.py`` warnings pin it indirectly.
 _HISTORY_SCOPE_FOR_TYPE: dict[ConversationType, str] = {
-    "public": "channels:history",
-    "private": "groups:history",
-    "im": "im:history",
-    "mpim": "mpim:history",
+    conversation_type: history_scope_for_type(conversation_type)
+    for conversation_type in CONVERSATION_TYPES
 }
 
 #: Reverse map for classifying rows returned by the API. ``is_im`` /

@@ -645,6 +645,19 @@ now resolves to 'T-BBB'. opshub supports one Slack workspace per install
 - **live と bound の見方**: `opshub slack auth test` は token が**今**属する workspace (live)、`opshub slack status` は cursor が **bind 済みの** workspace (bound) を表示する。両者の食い違いが次回 sync で止まる状態。
 - mismatch は **fetch 前**に検出されるため、別 workspace のメッセージが DB に入ることはない (`external_id` の workspace-wide 一意性は保たれる)。
 
+### 3.15 `auth test` の feature が `MISSING` と出る / `READY` なのに `not_in_channel` で取れない (Phase 23-I / [#539](https://github.com/ozzy-labs/opshub/issues/539))
+
+`opshub slack auth test` の **`features:`** ブロック ([ADR-0040](adr/0040-slack-feature-scope-ssot-and-readiness.md)) は、各取り込み feature が token の granted scope で使えるかを `READY` / `MISSING` / `N/A` で示す。**scope レイヤだけ**を判定する capability model で、config も channel membership も読まない (追加 API コール 0)。
+
+- **`MISSING <scope>` と出る** → その feature には `<scope>` が要る。Slack app の **OAuth & Permissions** で scope を足し、**app を再インストール**(scope 変更時は必須) してから再度 `auth test`。例: `DM sync: MISSING im:history` → `im:history` を足す。
+- **`N/A (User Token only)` と出る (engagement axis)** → Bot Token は `search:read` を構造的に持てない ([ADR-0034](adr/0034-slack-engagement-axis.md))。engagement 軸 (`--sort=last_self_post`) を使うには User Token (`xoxp-`) に切り替える。`MISSING` でない (= scope を足しても直らない) のはこのため。
+- **`READY` なのに sync / conversations が `not_in_channel` で取れない** → `READY` は **scope が granted という事実だけ**を表し、その channel を読める保証ではない。membership は別レイヤ:
+  - User Token: 自分が **join していない** channel は読めない → Slack で当該 channel に join する。
+  - Bot Token: bot が **`/invite` されていない** channel は読めない → 当該 channel で `/invite @<bot>`。
+  - これは feature readiness の意図的な scope外 (membership を判定すると per-channel `conversations.info` が要り、それ自体が `not_in_channel` 領域になるため、ADR-0040 §決定 2)。
+- **`features: (scopes header unavailable — cannot assess readiness)` と出る** → Slack が `x-oauth-scopes` header を返さなかった (fine-grained な token 等)。token 自体は有効。実際に `sync` / `conversations` を 1 度叩いて `missing_scope` エラーが出るかで確認する。
+- **`conversations` が空** で listing scope が原因のケースは §「`opshub slack conversations` returns nothing」(slack-setup.md) も参照。readiness は **ingestion feature 限定**で `listing` は対象外 (`conversations` 自身が per-type `missing_scope` を self-report するため)。
+
 ## 4. セキュリティ注意書き
 
 `-v` / `-vv` / `--debug` / `--log-file` を使うときに operator が知っておくこと:

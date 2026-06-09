@@ -113,6 +113,7 @@ NNNN-kebab-case-title.md
 | 0037 | [Browser Read Layer via Playwright](0037-browser-read-layer-playwright.md) | Accepted |
 | 0038 | [Slack Sync Gap Backfill (low-water-mark 軸 + bounded fetch)](0038-slack-sync-gap-backfill.md) | Accepted + Landed (Phase 22) |
 | 0039 | [Slack Single-Workspace Non-Goal (+ team_id bind guard)](0039-slack-single-workspace-non-goal.md) | Accepted + Landed (Phase 23-H) |
+| 0040 | [Slack feature→scope SSOT + auth-test readiness (capability model)](0040-slack-feature-scope-ssot-and-readiness.md) | Accepted + Landed (Phase 23-I) |
 
 ## Open Questions
 

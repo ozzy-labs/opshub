@@ -154,9 +154,80 @@ def test_slack_auth_test_success(monkeypatch: pytest.MonkeyPatch) -> None:
     # (#533, byte-symmetric with ``opshub github auth test``).
     assert "scopes" in result.stdout
     assert "channels:history,channels:read,users:read" in result.stdout
+    # Phase 23-I (#539, ADR-0040): a features readiness block follows the
+    # field list on stdout. With channels:history + users:read the public
+    # sync is READY; the private / DM / mpim syncs and engagement are MISSING.
+    assert "features:" in result.stdout
+    assert "public channel sync: READY" in result.stdout
+    assert "DM sync: MISSING im:history" in result.stdout
+    assert "engagement axis (--sort=last_self_post): MISSING search:read" in result.stdout
+    # The membership caveat is surfaced once so READY is never read as a
+    # guarantee that the token can actually read a channel.
+    assert "does not guarantee channel membership" in result.stdout
     # Phase 23-E (#535): a successful test points at the discovery step.
     assert "next:" in result.stderr
     assert "opshub slack conversations --format=toml" in result.stderr
+
+
+def test_slack_auth_test_features_block_bot_principal_marks_engagement_na(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Bot Token reports the engagement axis as ``N/A``, not ``MISSING`` —
+    a Bot Token cannot hold ``search:read`` (ADR-0034), so suggesting it as a
+    fixable gap would mislead (Phase 23-I, #539)."""
+    import opshub.connectors.slack.auth as slack_auth
+
+    class _FakeSlackAuth:
+        def __init__(self) -> None:
+            pass
+
+        def test_token(self) -> dict[str, str]:
+            return {
+                "team": "Acme",
+                "team_id": "T1",
+                "user": "acme-bot",
+                "user_id": "U1",
+                "principal": "bot",
+                "scopes": "channels:history,users:read",
+            }
+
+    monkeypatch.setattr(slack_auth, "SlackAuth", _FakeSlackAuth)
+
+    result = CliRunner().invoke(app, ["slack", "auth", "test"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "engagement axis (--sort=last_self_post): N/A (User Token only)" in result.stdout
+    assert "MISSING search:read" not in result.stdout
+
+
+def test_slack_auth_test_features_block_degrades_without_scopes_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When Slack omits the scopes header the block cannot assess readiness and
+    says so rather than emitting a misleading all-MISSING verdict (#539)."""
+    import opshub.connectors.slack.auth as slack_auth
+
+    class _FakeSlackAuth:
+        def __init__(self) -> None:
+            pass
+
+        def test_token(self) -> dict[str, str]:
+            return {
+                "team": "Acme",
+                "team_id": "T1",
+                "user": "alice",
+                "user_id": "U1",
+                "principal": "user",
+                "scopes": "",
+            }
+
+    monkeypatch.setattr(slack_auth, "SlackAuth", _FakeSlackAuth)
+
+    result = CliRunner().invoke(app, ["slack", "auth", "test"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "features:" in result.stdout
+    assert "cannot assess readiness" in result.stdout
 
 
 def test_slack_auth_test_failure_does_not_emit_next_action(
