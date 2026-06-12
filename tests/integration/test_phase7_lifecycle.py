@@ -486,8 +486,8 @@ def phase7_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     access — the SDK boundaries are mocked anyway).
     """
     # Slack: OAuth token via env override (User Token per ADR-0018), single channel id.
-    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_TOKEN", "xoxp-test")
-    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '["C1"]')
+    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_ACME_TOKEN", "xoxp-test")
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__CHANNELS", '["C1"]')
     # Phase 23-H (#538, ADR-0039): stub auth.test (the single-workspace bind
     # guard resolves team_id before any fetch) so the lifecycle stays hermetic.
     from opshub.connectors.slack.auth import SlackAuth

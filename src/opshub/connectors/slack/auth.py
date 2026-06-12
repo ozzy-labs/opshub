@@ -1,11 +1,16 @@
-"""Slack connector auth (Phase 7 step A1; principal updated in Phase 7.x).
+"""Slack connector auth (Phase 7 step A1; per-workspace slots in Phase 24-C).
 
-Loads the Slack OAuth access token from :mod:`opshub.core.secrets` under
-the key ``connector:slack:token`` (ADR-0014). The same precedence rule
-as every other connector token applies — env-var override
-(``OPSHUB_CONNECTOR_SLACK_TOKEN``) wins over keyring so CI / docker /
-WSL2 (where the OS keychain may be unreachable) can inject tokens
-without keyring setup.
+Loads a Slack OAuth access token from :mod:`opshub.core.secrets` under
+the **per-workspace** key ``connector:slack:<alias>:token`` (ADR-0014
+convention, extended per-alias by [ADR-0041](../../../docs/adr/0041-slack-multi-workspace.md)
+§(a) — one opshub install syncs N Slack workspaces, each under an
+operator-chosen alias). The same precedence rule as every other
+connector token applies — env-var override
+(``OPSHUB_CONNECTOR_SLACK_<ALIAS>_TOKEN``) wins over keyring so CI /
+docker / WSL2 (where the OS keychain may be unreachable) can inject
+tokens without keyring setup. The alias grammar
+(``^[a-z0-9][a-z0-9_]*$``, :data:`opshub.core.config.SLACK_WORKSPACE_ALIAS_RE`)
+keeps the alias → env-var-name mapping injective.
 
 Per [ADR-0018](../../../docs/adr/0018-slack-token-principal.md) the
 **User Token** (``xoxp-...``, issued under "User Token Scopes" on a
@@ -46,28 +51,50 @@ from typing import Any
 
 from opshub.core.errors import ConfigError
 
-__all__ = ["SLACK_TOKEN_SECRET_KEY", "SlackAuth"]
+__all__ = ["SlackAuth", "slack_token_secret_key"]
 
-#: Keyring key used to store the Slack OAuth access token. Exposed so
-#: the CLI command ``opshub slack auth set`` writes to the
-#: same key the connector reads at sync time — i.e. this constant is
-#: the contract between the CLI writer and the connector reader
-#: (mirrors the Phase 3 GitHub PAT precedent). The suffix is
-#: ``token`` (not ``user_token`` / ``bot_token``) because both
-#: principal forms share the same slot per ADR-0018.
-SLACK_TOKEN_SECRET_KEY = "connector:slack:token"
+
+def slack_token_secret_key(alias: str) -> str:
+    """Return the keyring key for one workspace's Slack OAuth token.
+
+    Phase 24-C ([ADR-0041](../../../docs/adr/0041-slack-multi-workspace.md)
+    §(a)): the pre-Phase-24 install-wide ``connector:slack:token`` slot
+    is replaced by a **per-alias** slot so each configured workspace
+    carries its own token. The suffix stays ``token`` (not
+    ``user_token`` / ``bot_token``) because both principal forms share
+    the same slot per ADR-0018. The CLI writer
+    (``opshub slack auth set --workspace <alias>``) and the connector
+    reader (:class:`SlackAuth`) both derive the key through this
+    function — it is the contract between them (mirrors the Phase 3
+    GitHub PAT precedent).
+    """
+    return f"connector:slack:{alias}:token"
+
+
+def _token_env_var_name(alias: str) -> str:
+    """Render the env override name for one workspace's token slot.
+
+    Mirrors :func:`opshub.core.secrets._env_var_name` (``:`` → ``_``,
+    uppercase) so the error message below names the exact variable the
+    resolver consults. The alias grammar bans ``-``, keeping the
+    mapping injective.
+    """
+    return f"OPSHUB_CONNECTOR_SLACK_{alias.upper()}_TOKEN"
 
 
 class SlackAuth:
-    """Resolve + validate Slack OAuth access tokens.
+    """Resolve + validate one workspace's Slack OAuth access token.
 
     Construction order:
 
-    1. If ``token`` is supplied explicitly, use it (handy for tests).
-    2. Otherwise consult :func:`opshub.core.secrets.get_secret` with the
-       :data:`SLACK_TOKEN_SECRET_KEY` key. ``get_secret`` already
-       implements the env-var override (``OPSHUB_CONNECTOR_SLACK_TOKEN``
-       wins over keyring), so the env-var path is exercised transparently.
+    1. If ``token`` is supplied explicitly, use it (handy for tests;
+       ``alias`` is then optional and informational).
+    2. Otherwise ``alias`` is required: consult
+       :func:`opshub.core.secrets.get_secret` with the per-alias
+       :func:`slack_token_secret_key`. ``get_secret`` already implements
+       the env-var override (``OPSHUB_CONNECTOR_SLACK_<ALIAS>_TOKEN``
+       wins over keyring), so the env-var path is exercised
+       transparently.
 
     Validation: the token must start with ``xoxp-`` (user, recommended
     per ADR-0018) or ``xoxb-`` (bot, alternative for workspace-policy
@@ -76,25 +103,27 @@ class SlackAuth:
     at sync time; failing fast here gives a more actionable error.
     """
 
-    # Re-expose as a class attribute so callers can write
-    # ``SlackAuth.SECRET_KEY`` without a separate import. Kept in sync
-    # with the module-level constant for the CLI writer contract.
-    SECRET_KEY = SLACK_TOKEN_SECRET_KEY
-
-    def __init__(self, *, token: str | None = None) -> None:
+    def __init__(self, alias: str | None = None, *, token: str | None = None) -> None:
+        self._alias = alias
         if token is None:
+            if alias is None:
+                raise ConfigError(
+                    "Slack workspace alias is required to resolve a token "
+                    "(per-alias keyring slots, ADR-0041); construct "
+                    "SlackAuth('<alias>') or pass an explicit token."
+                )
             # Lazy import keeps :mod:`opshub.core.secrets` (and its
             # ``keyring`` dependency) off the path when an explicit
             # token is supplied — e.g. in unit tests that monkeypatch
             # the SDK directly.
             from opshub.core.secrets import get_secret
 
-            token = get_secret(self.SECRET_KEY)
+            token = get_secret(slack_token_secret_key(alias))
         if not token:
             raise ConfigError(
-                "Slack OAuth token is not configured; run "
-                "`opshub slack auth set` or set "
-                "OPSHUB_CONNECTOR_SLACK_TOKEN in the environment"
+                f"Slack OAuth token for workspace {alias!r} is not configured; "
+                f"run `opshub slack auth set --workspace {alias}` or set "
+                f"{_token_env_var_name(alias or '<alias>')} in the environment"
             )
         if not (token.startswith("xoxp-") or token.startswith("xoxb-")):
             raise ConfigError(
@@ -103,6 +132,11 @@ class SlackAuth:
                 "https://api.slack.com/authentication/token-types"
             )
         self._token = token
+
+    @property
+    def alias(self) -> str | None:
+        """Return the workspace alias this auth was constructed for (or ``None``)."""
+        return self._alias
 
     @property
     def token(self) -> str:

@@ -57,19 +57,24 @@ STARTER_CONFIG_TOML = """\
 backend = "disabled"
 
 # Slack connector. Disabled out of the box — flip `enabled` to true after you
-# store the OAuth token and pick channels. Full walkthrough: docs/slack-setup.md.
-#   1. opshub slack auth set                       # store the xoxp- token (keyring)
-#   2. opshub slack auth test                       # verify token + granted scopes
+# store the OAuth token and pick channels. Each Slack workspace lives under a
+# named [connectors.slack.workspaces.<alias>] table (Phase 24, ADR-0041; one
+# install syncs N workspaces). Full walkthrough: docs/slack-setup.md.
+#   1. opshub slack auth set --workspace <alias>    # store the xoxp- token (keyring)
+#   2. opshub slack auth test --workspace <alias>   # verify token + granted scopes
 #   3. opshub slack conversations --format=toml     # discover ids → paste the block here
 #   4. set enabled = true, then run `opshub slack sync`
 [connectors.slack]
-enabled = false                  # flip to true once channels are populated
-channels = []                    # e.g. ["C0123ABC", "C0456DEF"] — ids, not #names
-                                 # (paste the `opshub slack conversations --format=toml` block here)
-# sync_since = "90d"             # optional date floor: relative "90d"/"4w" or ISO "2026-01-01";
-                                 # omit for full-history backfill (default)
+enabled = false                  # flip to true once a workspace table is populated
+# sync_since = "90d"             # optional connector-wide date floor: relative "90d"/"4w"
+                                 # or ISO "2026-01-01"; omit for full-history backfill
+# One table per workspace. Alias grammar: ^[a-z0-9][a-z0-9_]*$ ('-' not allowed).
+#   [connectors.slack.workspaces.main]
+#   channels = ["C0123ABC"]      # ids, not #names — paste the `opshub slack
+#                                # conversations --format=toml` block here
+#   sync_since = "30d"           # optional per-workspace floor override
 # Per-channel date-floor overrides use the table form instead of the bare-id array:
-#   [[connectors.slack.channels]]
+#   [[connectors.slack.workspaces.main.channels]]
 #   id = "C0123ABC"
 #   since = "all"                # opt this one channel back into full backfill
 """

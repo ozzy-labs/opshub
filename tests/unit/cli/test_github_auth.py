@@ -151,14 +151,14 @@ def test_github_and_slack_use_distinct_keyring_slots(
 ) -> None:
     """GitHub PAT and Slack token live under different keyring slots."""
     pytest.importorskip("slack_sdk", reason="Slack extras required")
-    from opshub.connectors.slack.auth import SLACK_TOKEN_SECRET_KEY
+    from opshub.connectors.slack.auth import slack_token_secret_key
 
     runner = CliRunner()
     r1 = runner.invoke(app, ["github", "auth", "set", "--token", "ghp_xxx"])
-    r2 = runner.invoke(app, ["slack", "auth", "set", "--token", "xoxp-yyy"])
+    r2 = runner.invoke(app, ["slack", "auth", "set", "--workspace", "acme", "--token", "xoxp-yyy"])
 
     assert r1.exit_code == 0
     assert r2.exit_code == 0
     assert get_secret(GITHUB_PAT_SECRET_KEY) == "ghp_xxx"
-    assert get_secret(SLACK_TOKEN_SECRET_KEY) == "xoxp-yyy"
-    assert GITHUB_PAT_SECRET_KEY != SLACK_TOKEN_SECRET_KEY
+    assert get_secret(slack_token_secret_key("acme")) == "xoxp-yyy"
+    assert GITHUB_PAT_SECRET_KEY != slack_token_secret_key("acme")

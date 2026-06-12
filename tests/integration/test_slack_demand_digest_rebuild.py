@@ -15,9 +15,10 @@ registry, and pins:
   byte-identical (replay idempotency).
 
 The test uses :func:`SlackDemandDigestProjection` constructed with
-an explicit ``self_user_id`` so it does not need a Slack token to
+an explicit ``self_user_ids`` map so it does not need a Slack token to
 run; the production code path resolves the same value via the
-``OPSHUB_SLACK_SELF_USER_ID`` env var or :meth:`SlackAuth.test_token`
+per-alias ``OPSHUB_SLACK_SELF_USER_ID__<ALIAS>`` env vars or per-alias
+:meth:`SlackAuth.test_token` calls
 (see the projection module docstring).
 """
 
@@ -124,7 +125,7 @@ def _build_projections(self_user_id: str) -> list[Projection]:
     result: list[Projection] = []
     for projection in all_projections():
         if isinstance(projection, SlackDemandDigestProjection):
-            result.append(SlackDemandDigestProjection(self_user_id=self_user_id))
+            result.append(SlackDemandDigestProjection(self_user_ids={"T-int": self_user_id}))
         else:
             result.append(projection)
     return result

@@ -191,8 +191,8 @@ def _install_slack_fetcher(
 
 @pytest.fixture
 def slack_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_TOKEN", "xoxp-test")
-    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '["C1"]')
+    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_ACME_TOKEN", "xoxp-test")
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__CHANNELS", '["C1"]')
     # Phase 23-H (#538, ADR-0039): stub the workspace-resolving auth.test the
     # single-workspace bind guard calls before any fetch, so the hermetic test
     # does not hit the network (the guard binds T-int; the failure / partial
@@ -422,7 +422,10 @@ def test_slack_failure_records_sync_failed(
         # exception type.
         assert _failed_event_count(engine) == 1
         payloads = _failed_event_payloads(engine)
-        assert "ConnectorFailedError" in payloads[0]
+        # Phase 24-C (ADR-0041 §(b)): the per-workspace failure aggregates
+        # into SlackWorkspaceSyncError naming the failed alias.
+        assert "SlackWorkspaceSyncError" in payloads[0]
+        assert "failed workspace(s): acme" in payloads[0]
         # Raw exception message must NOT be persisted (ADR-0005 + the
         # CLI driver's ``type(exc).__name__`` sanitisation contract).
         assert "rate-limit" not in payloads[0]
@@ -476,7 +479,10 @@ def test_slack_partial_success_persists_yielded_messages(
         # Exactly one sync_failed event with the sanitised type name.
         assert _failed_event_count(engine) == 1
         payloads = _failed_event_payloads(engine)
-        assert "ConnectorFailedError" in payloads[0]
+        # Phase 24-C (ADR-0041 §(b)): the per-workspace failure aggregates
+        # into SlackWorkspaceSyncError naming the failed alias.
+        assert "SlackWorkspaceSyncError" in payloads[0]
+        assert "failed workspace(s): acme" in payloads[0]
         # The "ratelimited" substring (verbatim API error code) must
         # not leak into the persisted event.
         assert "ratelimited" not in payloads[0]

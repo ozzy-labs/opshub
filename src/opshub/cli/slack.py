@@ -3,10 +3,12 @@
 Surface:
 
 * ``opshub slack sync`` — incremental sync from the Slack Web API
-  (``[connectors.slack] channels``).
-* ``opshub slack auth set [--token ...]`` — store a Slack OAuth token
-  in the OS keychain (User Token preferred, Bot Token accepted —
-  ADR-0018).
+  (``[connectors.slack.workspaces.<alias>] channels``, Phase 24-C
+  ADR-0041; all configured workspaces serially, ``--workspace`` to
+  narrow).
+* ``opshub slack auth set [--token ...] [--workspace <alias>]`` —
+  store one workspace's Slack OAuth token in the OS keychain (User
+  Token preferred, Bot Token accepted — ADR-0018).
 * ``opshub slack auth test`` — verify the stored token via
   ``auth.test``.
 * ``opshub slack conversations`` — list conversations visible to the
@@ -62,6 +64,15 @@ slack_app.add_typer(slack_cursor_app)
 
 @slack_app.command("sync")
 def slack_sync(
+    workspace: str | None = typer.Option(
+        None,
+        "--workspace",
+        help=(
+            "Sync only this workspace alias (Phase 24-C, ADR-0041 §(f)). "
+            "Default: every [connectors.slack.workspaces.<alias>] table is "
+            "synced serially with per-workspace error isolation."
+        ),
+    ),
     thread_activity_window: str | None = typer.Option(
         None,
         "--thread-activity-window",
@@ -97,9 +108,11 @@ def slack_sync(
     """Incremental sync from the Slack Web API.
 
     Uses the cursor stored in the ``connector_cursors`` projection.
-    ``[connectors.slack] channels`` in ``opshub.toml`` (or
-    ``OPSHUB_CONNECTORS__SLACK__CHANNELS``) selects the conversation
-    set. ``[connectors.slack] sync_since`` (and per-channel ``since``)
+    ``[connectors.slack.workspaces.<alias>] channels`` in ``opshub.toml``
+    (or ``OPSHUB_CONNECTORS__SLACK__WORKSPACES__<ALIAS>__CHANNELS``)
+    selects each workspace's conversation set (Phase 24-C, ADR-0041).
+    ``[connectors.slack] sync_since`` (with per-workspace and
+    per-channel ``since`` overrides — 3-step resolution, ADR-0041 §(c))
     sets an optional date floor so messages older than the floor are
     never fetched, capping the cold-start backfill (Phase 20,
     :doc:`ADR-0036 </adr/0036-slack-sync-date-floor>`).
@@ -115,6 +128,33 @@ def slack_sync(
     import os
 
     from opshub.cli._connector_common import run_connector_sync
+
+    if workspace is not None:
+        # Pre-flight: validate the alias against the configured set so a
+        # typo fails before the sync bracket opens (no spurious
+        # ConnectorSyncFailed event for a pure config mistake). The
+        # connector re-checks membership as a backstop.
+        from opshub.cli._slack_workspace import (
+            configured_workspace_aliases,
+            validate_alias_format,
+        )
+        from opshub.core.errors import ConfigError
+
+        try:
+            validate_alias_format(workspace)
+            aliases = configured_workspace_aliases()
+            if workspace not in aliases:
+                raise ConfigError(
+                    f"unknown Slack workspace alias {workspace!r}; configured "
+                    f"workspaces: {', '.join(aliases) or '(none)'}"
+                )
+        except ConfigError as exc:
+            typer.echo(f"Error: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+        # Same process-local env-var shim as ``--thread-activity-window``
+        # (the shared driver resolves connectors by name only); see
+        # ``SlackConnectorSettings.sync_workspace_filter``.
+        os.environ["OPSHUB_CONNECTORS__SLACK__SYNC_WORKSPACE_FILTER"] = workspace
 
     if thread_activity_window is not None:
         # The shared driver does not know about per-connector flags
@@ -181,8 +221,12 @@ def _emit_slack_sync_notice() -> bool:
     quiet 0-item exit-0 that looks like success on a TTY, with only a
     structured log warning the operator never sees:
 
-    * ``channels`` empty — the connector short-circuits to 0 items. This
-      is the genuine no-op (``is_noop`` → ``True``).
+    * no ``[connectors.slack.workspaces.<alias>]`` table, or every
+      configured workspace has an empty ``channels`` list — the
+      connector short-circuits to 0 items. This is the genuine no-op
+      (``is_noop`` → ``True``). Phase 24-C (ADR-0041 §(c)): the flat
+      ``channels`` key no longer exists, so the notice names the
+      workspaces table form.
     * ``[connectors.slack] enabled = false`` — the ``enabled`` flag is
       *informational* for the CLI (the driver runs the connector
       regardless; the flag is reserved for the future scheduler /
@@ -194,7 +238,7 @@ def _emit_slack_sync_notice() -> bool:
     Each notice is a plain-text ``notice:`` line naming the *reason* (not
     an exception type name) plus the concrete fix and a docs pointer,
     gated on the effective log level so ``-q`` / ``--quiet`` suppresses
-    it. The empty-channels return value is independent of the log level,
+    it. The no-op return value is independent of the log level,
     so the post-sync-hint suppression is not coupled to verbosity.
     """
     from opshub.core.config import OpsHubSettings
@@ -202,12 +246,25 @@ def _emit_slack_sync_notice() -> bool:
     slack = OpsHubSettings().connectors.slack
     quiet_ok = _notice_level_allows()
 
-    if not slack.channels:
+    if not slack.workspaces:
         if quiet_ok:
             typer.echo(
-                "notice: [connectors.slack] channels is empty — sync will observe 0 "
-                "items. Run `opshub slack conversations --format=toml` to discover "
-                "ids and paste the block into opshub.toml. See docs/slack-setup.md.",
+                "notice: [connectors.slack.workspaces] has no workspace tables — "
+                "sync will observe 0 items. Add a "
+                "[connectors.slack.workspaces.<alias>] table (run `opshub slack "
+                "conversations --format=toml` to discover channel ids and paste "
+                "the block into opshub.toml). See docs/slack-setup.md.",
+                err=True,
+            )
+        return True
+
+    if all(not ws.channels for ws in slack.workspaces.values()):
+        if quiet_ok:
+            typer.echo(
+                "notice: every [connectors.slack.workspaces.<alias>] channels "
+                "list is empty — sync will observe 0 items. Run `opshub slack "
+                "conversations --format=toml` to discover ids and paste the "
+                "block into opshub.toml. See docs/slack-setup.md.",
                 err=True,
             )
         return True
@@ -233,26 +290,46 @@ def slack_auth_set(
         "--token",
         help="Token value. If omitted, read securely from stdin (hidden input).",
     ),
+    workspace: str | None = typer.Option(
+        None,
+        "--workspace",
+        help=(
+            "Workspace alias the token belongs to (Phase 24-C, ADR-0041 "
+            "§(f)). Default: the single configured workspace; with zero or "
+            "multiple workspaces the flag is required."
+        ),
+    ),
 ) -> None:
-    """Store the Slack OAuth token in the OS keychain (ADR-0018).
+    """Store one workspace's Slack OAuth token in the OS keychain (ADR-0018).
 
-    The token is stored under ``connector:slack:token`` (the same
-    keyring slot the :class:`~opshub.connectors.slack.auth.SlackAuth`
-    reader consults). User Token (``xoxp-``) is the first-class
+    The token is stored under the per-alias slot
+    ``connector:slack:<alias>:token`` (the same keyring slot the
+    :class:`~opshub.connectors.slack.auth.SlackAuth` reader consults —
+    ADR-0041 §(a)). User Token (``xoxp-``) is the first-class
     principal per ADR-0018; Bot Token (``xoxb-``) is accepted as an
     alternative for workspace-policy / audit-policy constraints.
 
     Override at runtime without touching the keychain with
-    ``OPSHUB_CONNECTOR_SLACK_TOKEN`` (useful for CI / containers).
+    ``OPSHUB_CONNECTOR_SLACK_<ALIAS>_TOKEN`` (useful for CI / containers).
     """
     from opshub.cli._auth_common import set_token_credential
-    from opshub.connectors.slack.auth import SLACK_TOKEN_SECRET_KEY
+    from opshub.cli._slack_workspace import resolve_workspace_alias
+    from opshub.connectors.slack.auth import slack_token_secret_key
+    from opshub.core.errors import ConfigError
+
+    try:
+        alias = resolve_workspace_alias(workspace)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
     set_token_credential(
-        label="slack",
-        keyring_key=SLACK_TOKEN_SECRET_KEY,
+        label=f"slack:{alias}",
+        keyring_key=slack_token_secret_key(alias),
         token=token,
-        next_action="opshub slack auth test  # verify the token + see granted scopes",
+        next_action=(
+            f"opshub slack auth test --workspace {alias}  # verify the token + see granted scopes"
+        ),
     )
 
 
@@ -273,27 +350,48 @@ def _slack_features_block(result: dict[str, str]) -> list[str]:
 
 
 @slack_auth_app.command("test")
-def slack_auth_test() -> None:
-    """Verify the stored Slack token via the ``auth.test`` Web API endpoint.
+def slack_auth_test(
+    workspace: str | None = typer.Option(
+        None,
+        "--workspace",
+        help=(
+            "Workspace alias whose token to verify (Phase 24-C, ADR-0041 "
+            "§(f)/(h)). Default: the single configured workspace; with zero "
+            "or multiple workspaces the flag is required."
+        ),
+    ),
+) -> None:
+    """Verify one workspace's stored Slack token via the ``auth.test`` endpoint.
 
-    Renders ``connector: slack`` + ``status: ok`` + the team / user /
-    principal / scopes fields on success; exits 1 with ``status: failed``
-    on :class:`~opshub.core.errors.ConfigError`. ``scopes`` lists the
-    OAuth scopes Slack granted the token (from the ``x-oauth-scopes``
-    response header, byte-symmetric with ``opshub github auth test``);
-    ``(none)`` when Slack reports no scopes header.
+    Renders ``connector: slack:<alias>`` + ``status: ok`` + the team /
+    user / principal / scopes fields on success; exits 1 with ``status:
+    failed`` on :class:`~opshub.core.errors.ConfigError`. ``scopes``
+    lists the OAuth scopes Slack granted the token (from the
+    ``x-oauth-scopes`` response header, byte-symmetric with ``opshub
+    github auth test``); ``(none)`` when Slack reports no scopes header.
 
     Phase 23-I (#539, ADR-0040): a ``features:`` block follows the field
     list, mapping each ingestion feature (public / private / DM / group-DM
     sync + the engagement axis) to a scope-readiness verdict so an operator
     sees what a token *can do* — and what scope to add — in one call.
+    Phase 24-C (ADR-0041 §(h)): the readiness evaluates the selected
+    workspace's token; the ``FEATURE_SCOPES`` SSOT itself is
+    workspace-independent.
     """
     from opshub.cli._auth_common import run_auth_test
+    from opshub.cli._slack_workspace import resolve_workspace_alias
     from opshub.connectors.slack.auth import SlackAuth
+    from opshub.core.errors import ConfigError
+
+    try:
+        alias = resolve_workspace_alias(workspace)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
     run_auth_test(
-        label="slack",
-        verifier=SlackAuth().test_token,
+        label=f"slack:{alias}",
+        verifier=lambda: SlackAuth(alias).test_token(),
         next_action=(
             "opshub slack conversations --format=toml  "
             "# discover channel ids → paste the block into opshub.toml"
@@ -304,14 +402,26 @@ def slack_auth_test() -> None:
 
 @slack_app.command("conversations")
 def slack_conversations(
+    workspace: str | None = typer.Option(
+        None,
+        "--workspace",
+        help=(
+            "Workspace alias whose token to list with (Phase 24-C, ADR-0041 "
+            "§(f)). Default: the single configured workspace; with zero or "
+            "multiple workspaces the flag is required. The --format=toml "
+            "output emits a [connectors.slack.workspaces.<alias>] block for "
+            "this alias."
+        ),
+    ),
     output_format: str = typer.Option(
         "toml",
         "--format",
         help=(
             "Output format: table | toml | json. Default 'toml' "
             "(ADR-0035 §(a)): the primary use case is pasting the "
-            "output into [connectors.slack] channels in opshub.toml. "
-            "Pass --format=table to reproduce the pre-19-D default."
+            "output into [connectors.slack.workspaces.<alias>] channels "
+            "in opshub.toml. Pass --format=table to reproduce the "
+            "pre-19-D default."
         ),
     ),
     filter_substring: str | None = typer.Option(
@@ -383,8 +493,8 @@ def slack_conversations(
     """List Slack conversations visible to the stored token (#366 / #374).
 
     Operators configure the Slack connector via
-    ``[connectors.slack] channels = ["C012345...", ...]`` in
-    ``opshub.toml``. Discovering those ids by hand (Slack Web UI →
+    ``[connectors.slack.workspaces.<alias>] channels = ["C012345...", ...]``
+    in ``opshub.toml``. Discovering those ids by hand (Slack Web UI →
     "Copy link") is painful in busy workspaces; this command surfaces
     every conversation the configured token participates in
     (channels + DMs + MPIMs) so the operator can paste the default
@@ -467,7 +577,11 @@ def slack_conversations(
     normalised_filter: str | None = filter_substring or None
 
     try:
+        from opshub.cli._slack_workspace import resolve_workspace_alias
+
+        alias = resolve_workspace_alias(workspace)
         run_conversations_command(
+            workspace=alias,
             output_format=output_format,  # pyright: ignore[reportArgumentType]
             filter_substring=normalised_filter,
             limit=limit,
@@ -568,7 +682,15 @@ def slack_status(
         False,
         "--verbose",
         "-v",
-        help="Show the raw 3-axis cursor (channels / backfill / threads) + raw ts.",
+        help="Show the raw per-workspace cursor (channels / backfill / threads) + raw ts.",
+    ),
+    workspace: str | None = typer.Option(
+        None,
+        "--workspace",
+        help=(
+            "Show only this workspace alias (Phase 24-C, ADR-0041 §(f)). "
+            "Default: every configured workspace, one block each."
+        ),
     ),
 ) -> None:
     """Show the Slack sync status in human terms (Phase 23-F, #536).
@@ -593,7 +715,7 @@ def slack_status(
 
     fmt = parse_status_format(output_format)
     try:
-        typer.echo(render_status(output_format=fmt, verbose=verbose))
+        typer.echo(render_status(output_format=fmt, verbose=verbose, workspace=workspace))
     except ConfigError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -609,7 +731,22 @@ def slack_cursor_reset(
     reset_all: bool = typer.Option(
         False,
         "--all",
-        help="Reset the cursor for every channel (full cold-start on next sync).",
+        help=(
+            "Reset every channel. Without --workspace this hard-drops the "
+            "whole cursor (every workspace, unbind included); with "
+            "--workspace it drops only that alias's entry."
+        ),
+    ),
+    workspace: str | None = typer.Option(
+        None,
+        "--workspace",
+        help=(
+            "Workspace alias to operate on (Phase 24-C, ADR-0041 §(f)). "
+            "With --channel: required when multiple workspaces are "
+            "configured (channel ids can collide across workspaces — no "
+            "ambiguous resolution). With --all: narrows the reset to one "
+            "alias."
+        ),
     ),
     yes: bool = typer.Option(
         False,
@@ -627,10 +764,11 @@ def slack_cursor_reset(
     (bounded inbox duplication until #522 lands); prefer ``opshub slack
     cursor backfill`` for a surgical, non-overlapping catch-up.
 
-    Exit codes: 0 (reset / cancelled), 2 (neither --channel nor --all, or
-    both).
+    Exit codes: 0 (reset / cancelled), 1 (workspace resolution error),
+    2 (neither --channel nor --all, or both).
     """
     from opshub.cli._slack_cursor import run_cursor_reset
+    from opshub.core.errors import ConfigError
 
     selected = [c.strip() for c in (channels or "").split(",") if c.strip()]
     if reset_all and selected:
@@ -638,7 +776,14 @@ def slack_cursor_reset(
     if not reset_all and not selected:
         raise typer.BadParameter("specify --channel <id> (repeatable) or --all.")
 
-    scope = "every channel" if reset_all else f"{len(selected)} channel(s): {', '.join(selected)}"
+    if reset_all:
+        scope = (
+            f"every channel of workspace '{workspace}'"
+            if workspace is not None
+            else "every channel of every workspace"
+        )
+    else:
+        scope = f"{len(selected)} channel(s): {', '.join(selected)}"
     if not yes:
         confirmed = typer.confirm(
             f"Reset the Slack cursor for {scope}? They will re-fetch from "
@@ -649,12 +794,16 @@ def slack_cursor_reset(
             typer.echo("aborted; cursor unchanged.")
             return
 
-    removed, _ = run_cursor_reset(channels=selected, reset_all=reset_all)
-    # ``--all`` hard-drops without parsing the prior cursor (so it can
-    # recover a pre-Phase-20-B flat-dict, #531); ``run_cursor_reset``
+    try:
+        removed, _ = run_cursor_reset(channels=selected, reset_all=reset_all, workspace=workspace)
+    except ConfigError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    # The global ``--all`` hard-drops without parsing the prior cursor (so
+    # it can recover any legacy / corrupt shape, #531); ``run_cursor_reset``
     # returns -1 to signal "count unknown" on that path.
     if removed < 0:
-        typer.echo("reset slack cursor: all channel entries cleared.")
+        typer.echo("reset slack cursor: all workspace entries cleared.")
     else:
         typer.echo(f"reset slack cursor: {removed} channel entr(y/ies) removed.")
 
@@ -665,6 +814,15 @@ def slack_cursor_backfill(
         ...,
         "--channel",
         help="Channel id to backfill.",
+    ),
+    workspace: str | None = typer.Option(
+        None,
+        "--workspace",
+        help=(
+            "Workspace alias the channel belongs to (Phase 24-C, ADR-0041 "
+            "§(f)). Default: the single configured workspace; with zero or "
+            "multiple workspaces the flag is required."
+        ),
     ),
     since: str = typer.Option(
         ...,
@@ -698,7 +856,9 @@ def slack_cursor_backfill(
     from opshub.core.errors import ConfigError, ConnectorFailedError, ValidationError
 
     try:
-        observed = run_cursor_backfill(channel_id=channel, since=since, until=until)
+        observed = run_cursor_backfill(
+            channel_id=channel, since=since, until=until, workspace=workspace
+        )
     except ValidationError as exc:
         # parse_since rejects a malformed --since / --until value.
         raise typer.BadParameter(str(exc)) from exc

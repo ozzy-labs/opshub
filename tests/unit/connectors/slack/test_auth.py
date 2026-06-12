@@ -8,8 +8,9 @@ principal updated in Phase 7.x per ADR-0018).
    secrets-manager integrations).
 2. When no ``token`` is supplied, the constructor delegates to
    :func:`opshub.core.secrets.get_secret` with
-   :data:`SLACK_TOKEN_SECRET_KEY` — which already honours the
-   ``OPSHUB_CONNECTOR_SLACK_TOKEN`` env-var override per ADR-0014.
+   the per-alias :func:`slack_token_secret_key` — which already honours
+   the ``OPSHUB_CONNECTOR_SLACK_<ALIAS>_TOKEN`` env-var override per
+   ADR-0014 / ADR-0041 §(a).
 3. Missing token → actionable :class:`ConfigError` mentioning both the
    CLI command and the env-var override (matches the GitHub PAT
    precedent so operators see a uniform error shape).
@@ -56,29 +57,27 @@ pytest.importorskip(
 )
 
 from opshub.connectors.slack.auth import (
-    SLACK_TOKEN_SECRET_KEY,
     SlackAuth,
+    slack_token_secret_key,
 )
 from opshub.core.errors import ConfigError
 
 # ----- constants ---------------------------------------------------------
 
 
-def test_slack_token_secret_key_constant() -> None:
-    """The exported constant is the public contract between the CLI
-    writer (``opshub slack auth set``) and the SlackAuth
-    reader. Changing this string is a breaking change for already-stored
+def test_slack_token_secret_key_per_alias() -> None:
+    """The key helper is the public contract between the CLI writer
+    (``opshub slack auth set --workspace <alias>``) and the SlackAuth
+    reader. Changing this shape is a breaking change for already-stored
     tokens; pinning it in a test makes that visible at review time.
 
-    The key suffix is ``token`` (not ``user_token`` / ``bot_token``)
-    per ADR-0018: User Token (first-class) and Bot Token (alternative)
-    share the same slot so principal-neutral naming matches the
-    storage reality."""
-    assert SLACK_TOKEN_SECRET_KEY == "connector:slack:token"
-    # The class attribute alias must stay in sync — callers may consult
-    # either ``SLACK_TOKEN_SECRET_KEY`` or ``SlackAuth.SECRET_KEY`` and
-    # both must point at the same keyring slot.
-    assert SlackAuth.SECRET_KEY == SLACK_TOKEN_SECRET_KEY
+    Phase 24-C (ADR-0041 §(a)): the slot is **per workspace alias** —
+    ``connector:slack:<alias>:token``. The suffix stays ``token`` (not
+    ``user_token`` / ``bot_token``) per ADR-0018: User Token
+    (first-class) and Bot Token (alternative) share the same slot so
+    principal-neutral naming matches the storage reality."""
+    assert slack_token_secret_key("acme") == "connector:slack:acme:token"
+    assert slack_token_secret_key("oss_2") == "connector:slack:oss_2:token"
 
 
 # ----- construction: explicit token --------------------------------------
@@ -126,9 +125,10 @@ def test_init_loads_from_secrets_when_not_supplied(
 
     monkeypatch.setattr(secrets_module, "get_secret", _stub)
 
-    auth = SlackAuth()
+    auth = SlackAuth("acme")
 
     assert auth.token == FAKE_SLACK_USER_TOKEN_FROM_SECRET
+    assert auth.alias == "acme"
 
 
 def test_init_raises_when_token_missing(
@@ -144,11 +144,19 @@ def test_init_raises_when_token_missing(
     monkeypatch.setattr(secrets_module, "get_secret", _stub)
 
     with pytest.raises(ConfigError) as excinfo:
-        SlackAuth()
+        SlackAuth("acme")
 
     message = str(excinfo.value)
-    assert "opshub slack auth set" in message
-    assert "OPSHUB_CONNECTOR_SLACK_TOKEN" in message
+    assert "opshub slack auth set --workspace acme" in message
+    assert "OPSHUB_CONNECTOR_SLACK_ACME_TOKEN" in message
+
+
+def test_init_raises_when_alias_missing_and_no_token() -> None:
+    """Phase 24-C: keyring slots are per-alias, so a token-less
+    construction without an alias has no slot to consult — fail loud
+    with the ADR-0041 pointer rather than guessing a default alias."""
+    with pytest.raises(ConfigError, match="alias is required"):
+        SlackAuth()
 
 
 def test_init_raises_when_token_has_wrong_prefix() -> None:
@@ -166,16 +174,16 @@ def test_init_raises_when_token_has_wrong_prefix() -> None:
 
 
 def test_env_var_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``OPSHUB_CONNECTOR_SLACK_TOKEN`` wins over keyring per ADR-0014.
+    """``OPSHUB_CONNECTOR_SLACK_<ALIAS>_TOKEN`` wins over keyring (ADR-0014 / ADR-0041 §(a)).
 
     We exercise the real :func:`get_secret` here (no monkeypatch on
     ``get_secret`` itself) so the env-var precedence rule documented
     in ``opshub.core.secrets`` is genuinely tested end-to-end on the
     Slack code path — not just stubbed away.
     """
-    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_TOKEN", "xoxp-from-env")
+    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_ACME_TOKEN", "xoxp-from-env")
 
-    auth = SlackAuth()
+    auth = SlackAuth("acme")
 
     assert auth.token == "xoxp-from-env"
 

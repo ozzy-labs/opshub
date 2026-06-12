@@ -132,8 +132,22 @@ def _patch_list_conversations(
 
 @pytest.fixture
 def _slack_token_env(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]
-    """Plant a Slack OAuth token in the env so :class:`SlackAuth` constructs."""
-    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_TOKEN", "xoxb-test")
+    """Single-workspace fixture: config table + per-alias env token.
+
+    Phase 24-C (ADR-0041 §(f)): ``opshub slack conversations`` resolves
+    its workspace alias from the configured
+    ``[connectors.slack.workspaces.<alias>]`` set when ``--workspace``
+    is omitted, and :class:`SlackAuth` reads the per-alias slot
+    (``OPSHUB_CONNECTOR_SLACK_ACME_TOKEN`` env override). One configured
+    workspace = the historical no-flag invocations keep working.
+    """
+    import opshub.core.config as opshub_config
+    from opshub.core.config import ConnectorSettings, OpsHubSettings, SlackConnectorSettings
+
+    slack = SlackConnectorSettings.model_validate({"workspaces": {"acme": {"channels": []}}})
+    settings = OpsHubSettings(connectors=ConnectorSettings(slack=slack))
+    monkeypatch.setattr(opshub_config, "OpsHubSettings", lambda: settings)
+    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_ACME_TOKEN", "xoxb-test")
 
 
 # ----- happy path: each output format -----------------------------------
@@ -243,6 +257,7 @@ def test_conversations_format_toml_emits_paste_ready_snippet(
     # drops straight into opshub.toml without manual editing.
     assert "[connectors.slack]" in out
     assert "enabled = true" in out
+    assert "[connectors.slack.workspaces.acme]" in out
     assert "# Slack conversations (3)" in out
     assert "channels = [" in out
     assert '"C01234567"' in out
@@ -251,15 +266,16 @@ def test_conversations_format_toml_emits_paste_ready_snippet(
     assert '"D04567890"' in out
     assert "Alice (im)" in out
     assert out.rstrip().endswith("]")
-    # The section header must precede the array so the parsed TOML lands
-    # under [connectors.slack] (the trap the old bare-array form fell into).
-    assert out.index("[connectors.slack]") < out.index("channels = [")
+    # The workspace-table header must precede the array so the parsed TOML
+    # lands under [connectors.slack.workspaces.acme] (Phase 24-C — the flat
+    # [connectors.slack] channels key is rejected by the settings layer).
+    assert out.index("[connectors.slack.workspaces.acme]") < out.index("channels = [")
 
 
 def test_conversations_format_toml_round_trips_under_connectors_slack(
     _slack_token_env: None,
 ) -> None:
-    """The toml output parses as valid TOML with channels under [connectors.slack].
+    """The toml output parses with channels under the workspace table.
 
     Regression for the Phase 23-E (#535) "paste-and-it-just-works"
     contract: the bare ``channels = [...]`` form parsed fine on its own
@@ -280,7 +296,8 @@ def test_conversations_format_toml_round_trips_under_connectors_slack(
     assert result.exit_code == 0, result.stdout + result.stderr
     parsed = tomllib.loads(result.stdout)
     assert parsed["connectors"]["slack"]["enabled"] is True
-    assert parsed["connectors"]["slack"]["channels"] == ["C01234567", "G03456789"]
+    workspace = parsed["connectors"]["slack"]["workspaces"]["acme"]
+    assert workspace["channels"] == ["C01234567", "G03456789"]
 
 
 def test_conversations_toml_emits_next_action_hint(
@@ -584,9 +601,10 @@ def test_conversations_empty_toml_emits_empty_array(_slack_token_env: None) -> N
 
     assert result.exit_code == 0
     # Even the empty result is a complete section (Phase 23-E, #535) so a
-    # paste-then-edit workflow starts from a valid [connectors.slack] block.
+    # paste-then-edit workflow starts from a valid workspace block.
     assert "[connectors.slack]" in result.stdout
     assert "enabled = true" in result.stdout
+    assert "[connectors.slack.workspaces.acme]" in result.stdout
     assert "# Slack conversations (0)" in result.stdout
     assert "channels = []" in result.stdout
     assert "no conversations matched" in result.stderr
@@ -1830,3 +1848,63 @@ def test_conversations_sort_with_explicit_since_skips_cutoff_notice(
 
     assert result.exit_code == 0, result.stdout + result.stderr
     assert "defaulted to --since 90d" not in result.stderr
+
+
+# ----- --workspace resolution (Phase 24-C, ADR-0041 §(f)) -----------------
+
+
+def _patch_two_workspaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configure two workspaces so the no-flag default is ambiguous."""
+    import opshub.core.config as opshub_config
+    from opshub.core.config import ConnectorSettings, OpsHubSettings, SlackConnectorSettings
+
+    slack = SlackConnectorSettings.model_validate(
+        {"workspaces": {"acme": {"channels": []}, "oss": {"channels": []}}}
+    )
+    settings = OpsHubSettings(connectors=ConnectorSettings(slack=slack))
+    monkeypatch.setattr(opshub_config, "OpsHubSettings", lambda: settings)
+
+
+def test_conversations_multiple_workspaces_require_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two configured workspaces + no ``--workspace`` → loud ConfigError."""
+    _patch_two_workspaces(monkeypatch)
+    runner = CliRunner()
+    with _patch_list_conversations([], record=_CallRecord()):
+        result = runner.invoke(app, ["slack", "conversations"])
+
+    assert result.exit_code == 1
+    assert "multiple Slack workspaces configured" in result.stderr
+    assert "acme" in result.stderr
+    assert "oss" in result.stderr
+
+
+def test_conversations_explicit_workspace_selects_token_and_toml_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--workspace oss`` reads the oss token slot and emits the oss block."""
+    _patch_two_workspaces(monkeypatch)
+    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_OSS_TOKEN", "xoxb-oss")
+    rows = [_public_row("C01234567", name="general")]
+    runner = CliRunner()
+    with _patch_list_conversations(rows, record=_CallRecord()):
+        result = runner.invoke(
+            app, ["slack", "conversations", "--workspace", "oss", "--format", "toml"]
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "[connectors.slack.workspaces.oss]" in result.stdout
+
+
+def test_conversations_rejects_invalid_workspace_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hyphenated alias is rejected by the shared grammar check."""
+    _patch_two_workspaces(monkeypatch)
+    runner = CliRunner()
+    with _patch_list_conversations([], record=_CallRecord()):
+        result = runner.invoke(app, ["slack", "conversations", "--workspace", "my-ws"])
+
+    assert result.exit_code == 1
+    assert "invalid Slack workspace alias" in result.stderr

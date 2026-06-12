@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from opshub.cli.app import app
-from opshub.connectors.slack.auth import SLACK_TOKEN_SECRET_KEY
+from opshub.connectors.slack.auth import slack_token_secret_key
 from opshub.core.secrets import get_secret
 from tests.unit.cli.conftest import InMemoryKeyring
 
@@ -26,12 +26,12 @@ def test_slack_auth_set_with_token_flag_stores_to_keyring(
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["slack", "auth", "set", "--token", "xoxp-test"],
+        ["slack", "auth", "set", "--workspace", "acme", "--token", "xoxp-test"],
     )
 
     assert result.exit_code == 0, result.stdout
     assert "slack" in result.stdout
-    assert get_secret(SLACK_TOKEN_SECRET_KEY) == "xoxp-test"
+    assert get_secret(slack_token_secret_key("acme")) == "xoxp-test"
 
 
 def test_slack_auth_set_emits_next_action_hint(
@@ -39,7 +39,9 @@ def test_slack_auth_set_emits_next_action_hint(
 ) -> None:
     """Phase 23-E (#535): ``auth set`` points at ``auth test`` on stderr."""
     runner = CliRunner()
-    result = runner.invoke(app, ["slack", "auth", "set", "--token", "xoxp-test"])
+    result = runner.invoke(
+        app, ["slack", "auth", "set", "--workspace", "acme", "--token", "xoxp-test"]
+    )
 
     assert result.exit_code == 0, result.stdout
     assert "next:" in result.stderr
@@ -55,12 +57,12 @@ def test_slack_auth_set_with_stdin_prompt(
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["slack", "auth", "set"],
+        ["slack", "auth", "set", "--workspace", "acme"],
         input="xoxp-prompted\n",
     )
 
     assert result.exit_code == 0, result.stdout
-    assert get_secret(SLACK_TOKEN_SECRET_KEY) == "xoxp-prompted"
+    assert get_secret(slack_token_secret_key("acme")) == "xoxp-prompted"
 
 
 def test_slack_auth_set_strips_surrounding_whitespace(
@@ -70,11 +72,11 @@ def test_slack_auth_set_strips_surrounding_whitespace(
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["slack", "auth", "set", "--token", "  xoxp-test  "],
+        ["slack", "auth", "set", "--workspace", "acme", "--token", "  xoxp-test  "],
     )
 
     assert result.exit_code == 0, result.stdout
-    assert get_secret(SLACK_TOKEN_SECRET_KEY) == "xoxp-test"
+    assert get_secret(slack_token_secret_key("acme")) == "xoxp-test"
 
 
 # ----- error paths ---------------------------------------------------------
@@ -85,11 +87,11 @@ def test_slack_auth_set_rejects_empty_token(
 ) -> None:
     """``--token ""`` is a user error, not a "stored empty token"."""
     runner = CliRunner()
-    result = runner.invoke(app, ["slack", "auth", "set", "--token", ""])
+    result = runner.invoke(app, ["slack", "auth", "set", "--workspace", "acme", "--token", ""])
 
     assert result.exit_code == 2
     assert "non-empty" in result.stderr
-    assert get_secret(SLACK_TOKEN_SECRET_KEY) is None
+    assert get_secret(slack_token_secret_key("acme")) is None
 
 
 def test_slack_auth_set_rejects_whitespace_only_token(
@@ -97,26 +99,26 @@ def test_slack_auth_set_rejects_whitespace_only_token(
 ) -> None:
     """Whitespace-only tokens are also rejected."""
     runner = CliRunner()
-    result = runner.invoke(app, ["slack", "auth", "set", "--token", "   "])
+    result = runner.invoke(app, ["slack", "auth", "set", "--workspace", "acme", "--token", "   "])
 
     assert result.exit_code == 2
     assert "non-empty" in result.stderr
-    assert get_secret(SLACK_TOKEN_SECRET_KEY) is None
+    assert get_secret(slack_token_secret_key("acme")) is None
 
 
 # ----- env-var override ----------------------------------------------------
 
 
-def test_slack_token_env_var_name_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Phase 17-B keeps ``OPSHUB_CONNECTOR_SLACK_TOKEN`` env var unchanged.
+def test_slack_token_env_var_name_per_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 24-C (ADR-0041 §(a)): the env override is per workspace alias.
 
-    ADR-0031 §non-goals explicitly pins keyring key / env var override
-    names as unchanged — only the CLI command surface moves. This test
-    pins that contract by exercising the env-var precedence rule
-    (env wins over keyring per ADR-0014).
+    ``connector:slack:<alias>:token`` derives
+    ``OPSHUB_CONNECTOR_SLACK_<ALIAS>_TOKEN`` via the standard
+    ``_env_var_name`` folding; env wins over keyring per ADR-0014. The
+    alias grammar bans ``-`` so the folding stays injective.
     """
-    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_TOKEN", "xoxp-env-wins")
-    assert get_secret(SLACK_TOKEN_SECRET_KEY) == "xoxp-env-wins"
+    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_ACME_TOKEN", "xoxp-env-wins")
+    assert get_secret(slack_token_secret_key("acme")) == "xoxp-env-wins"
 
 
 # ----- auth test happy path -----------------------------------------------
@@ -127,8 +129,8 @@ def test_slack_auth_test_success(monkeypatch: pytest.MonkeyPatch) -> None:
     import opshub.connectors.slack.auth as slack_auth
 
     class _FakeSlackAuth:
-        def __init__(self) -> None:
-            pass
+        def __init__(self, alias: str) -> None:
+            self.alias = alias
 
         def test_token(self) -> dict[str, str]:
             return {
@@ -143,7 +145,7 @@ def test_slack_auth_test_success(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(slack_auth, "SlackAuth", _FakeSlackAuth)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["slack", "auth", "test"])
+    result = runner.invoke(app, ["slack", "auth", "test", "--workspace", "acme"])
 
     assert result.exit_code == 0, result.stdout
     assert "connector: slack" in result.stdout
@@ -178,8 +180,8 @@ def test_slack_auth_test_features_block_bot_principal_marks_engagement_na(
     import opshub.connectors.slack.auth as slack_auth
 
     class _FakeSlackAuth:
-        def __init__(self) -> None:
-            pass
+        def __init__(self, alias: str) -> None:
+            self.alias = alias
 
         def test_token(self) -> dict[str, str]:
             return {
@@ -193,7 +195,7 @@ def test_slack_auth_test_features_block_bot_principal_marks_engagement_na(
 
     monkeypatch.setattr(slack_auth, "SlackAuth", _FakeSlackAuth)
 
-    result = CliRunner().invoke(app, ["slack", "auth", "test"])
+    result = CliRunner().invoke(app, ["slack", "auth", "test", "--workspace", "acme"])
 
     assert result.exit_code == 0, result.stdout
     assert "engagement axis (--sort=last_self_post): N/A (User Token only)" in result.stdout
@@ -208,8 +210,8 @@ def test_slack_auth_test_features_block_degrades_without_scopes_header(
     import opshub.connectors.slack.auth as slack_auth
 
     class _FakeSlackAuth:
-        def __init__(self) -> None:
-            pass
+        def __init__(self, alias: str) -> None:
+            self.alias = alias
 
         def test_token(self) -> dict[str, str]:
             return {
@@ -223,7 +225,7 @@ def test_slack_auth_test_features_block_degrades_without_scopes_header(
 
     monkeypatch.setattr(slack_auth, "SlackAuth", _FakeSlackAuth)
 
-    result = CliRunner().invoke(app, ["slack", "auth", "test"])
+    result = CliRunner().invoke(app, ["slack", "auth", "test", "--workspace", "acme"])
 
     assert result.exit_code == 0, result.stdout
     assert "features:" in result.stdout
@@ -238,8 +240,8 @@ def test_slack_auth_test_failure_does_not_emit_next_action(
     from opshub.core.errors import ConfigError
 
     class _FakeSlackAuth:
-        def __init__(self) -> None:
-            pass
+        def __init__(self, alias: str) -> None:
+            self.alias = alias
 
         def test_token(self) -> dict[str, str]:
             raise ConfigError("Slack auth.test returned non-ok: invalid_auth")
@@ -247,7 +249,7 @@ def test_slack_auth_test_failure_does_not_emit_next_action(
     monkeypatch.setattr(slack_auth, "SlackAuth", _FakeSlackAuth)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["slack", "auth", "test"])
+    result = runner.invoke(app, ["slack", "auth", "test", "--workspace", "acme"])
 
     assert result.exit_code == 1
     assert "next:" not in result.stderr
@@ -259,8 +261,8 @@ def test_slack_auth_test_failure_exits_1(monkeypatch: pytest.MonkeyPatch) -> Non
     from opshub.core.errors import ConfigError
 
     class _FakeSlackAuth:
-        def __init__(self) -> None:
-            pass
+        def __init__(self, alias: str) -> None:
+            self.alias = alias
 
         def test_token(self) -> dict[str, str]:
             raise ConfigError("Slack auth.test returned non-ok: invalid_auth")
@@ -268,7 +270,7 @@ def test_slack_auth_test_failure_exits_1(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(slack_auth, "SlackAuth", _FakeSlackAuth)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["slack", "auth", "test"])
+    result = runner.invoke(app, ["slack", "auth", "test", "--workspace", "acme"])
 
     assert result.exit_code == 1
     assert "status:    failed" in result.stderr
@@ -280,8 +282,8 @@ def test_slack_auth_test_renders_empty_values_as_none(monkeypatch: pytest.Monkey
     import opshub.connectors.slack.auth as slack_auth
 
     class _FakeSlackAuth:
-        def __init__(self) -> None:
-            pass
+        def __init__(self, alias: str) -> None:
+            self.alias = alias
 
         def test_token(self) -> dict[str, str]:
             return {"team": "Acme", "user": ""}
@@ -289,7 +291,7 @@ def test_slack_auth_test_renders_empty_values_as_none(monkeypatch: pytest.Monkey
     monkeypatch.setattr(slack_auth, "SlackAuth", _FakeSlackAuth)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["slack", "auth", "test"])
+    result = runner.invoke(app, ["slack", "auth", "test", "--workspace", "acme"])
 
     assert result.exit_code == 0
     assert "(none)" in result.stdout
@@ -303,3 +305,93 @@ def test_slack_auth_does_not_expose_get_subcommand() -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["slack", "auth", "get"])
     assert result.exit_code != 0
+
+
+# ----- --workspace default resolution (Phase 24-C, ADR-0041 §(f)) ----------
+
+
+def _patch_settings_workspaces(monkeypatch: pytest.MonkeyPatch, aliases: list[str]) -> None:
+    """Patch ``OpsHubSettings`` so the configured workspace set is ``aliases``."""
+    import opshub.core.config as opshub_config
+    from opshub.core.config import ConnectorSettings, OpsHubSettings, SlackConnectorSettings
+
+    slack = SlackConnectorSettings.model_validate(
+        {"workspaces": {alias: {"channels": ["C1"]} for alias in aliases}}
+    )
+    settings = OpsHubSettings(connectors=ConnectorSettings(slack=slack))
+    monkeypatch.setattr(opshub_config, "OpsHubSettings", lambda: settings)
+
+
+def test_slack_auth_set_defaults_to_single_configured_workspace(
+    in_memory_keyring: InMemoryKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One configured workspace → the flag is optional (ADR-0041 §(f))."""
+    _patch_settings_workspaces(monkeypatch, ["acme"])
+    result = CliRunner().invoke(app, ["slack", "auth", "set", "--token", "xoxp-test"])
+
+    assert result.exit_code == 0, result.stdout
+    assert get_secret(slack_token_secret_key("acme")) == "xoxp-test"
+
+
+def test_slack_auth_set_with_zero_workspaces_requires_flag(
+    in_memory_keyring: InMemoryKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_settings_workspaces(monkeypatch, [])
+    result = CliRunner().invoke(app, ["slack", "auth", "set", "--token", "xoxp-test"])
+
+    assert result.exit_code == 1
+    assert "no Slack workspaces configured" in result.stderr
+    assert "--workspace" in result.stderr
+
+
+def test_slack_auth_set_with_multiple_workspaces_requires_flag(
+    in_memory_keyring: InMemoryKeyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multiple workspaces → ambiguity is loud and the aliases are listed."""
+    _patch_settings_workspaces(monkeypatch, ["acme", "oss"])
+    result = CliRunner().invoke(app, ["slack", "auth", "set", "--token", "xoxp-test"])
+
+    assert result.exit_code == 1
+    assert "multiple Slack workspaces configured" in result.stderr
+    assert "acme" in result.stderr
+    assert "oss" in result.stderr
+    assert get_secret(slack_token_secret_key("acme")) is None
+    assert get_secret(slack_token_secret_key("oss")) is None
+
+
+def test_slack_auth_set_rejects_invalid_alias_format(
+    in_memory_keyring: InMemoryKeyring,
+) -> None:
+    """A hyphenated alias is rejected before any keyring write (ADR-0041 §(a))."""
+    result = CliRunner().invoke(
+        app, ["slack", "auth", "set", "--workspace", "my-ws", "--token", "xoxp-test"]
+    )
+
+    assert result.exit_code == 1
+    assert "invalid Slack workspace alias" in result.stderr
+    assert get_secret("connector:slack:my-ws:token") is None
+
+
+def test_slack_auth_set_writes_per_alias_slots_independently(
+    in_memory_keyring: InMemoryKeyring,
+) -> None:
+    """Two aliases store two independent tokens (ADR-0041 §(a))."""
+    runner = CliRunner()
+    assert (
+        runner.invoke(
+            app, ["slack", "auth", "set", "--workspace", "acme", "--token", "xoxp-a"]
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            app, ["slack", "auth", "set", "--workspace", "oss", "--token", "xoxb-b"]
+        ).exit_code
+        == 0
+    )
+
+    assert get_secret(slack_token_secret_key("acme")) == "xoxp-a"
+    assert get_secret(slack_token_secret_key("oss")) == "xoxb-b"

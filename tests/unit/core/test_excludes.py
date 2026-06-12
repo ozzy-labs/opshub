@@ -118,3 +118,56 @@ def test_single_unknown_key_also_raises(tmp_path: Path) -> None:
     )
     with pytest.raises(ConfigError, match="unknown top-level key"):
         load_excludes(config_dir=tmp_path)
+
+
+# ---- workspace-qualified Slack excludes (Phase 24-C, ADR-0041 §(j)) -------
+
+
+def test_scoped_to_workspace_resolves_qualified_and_bare_entries() -> None:
+    """``acme/C123`` applies only in acme; bare ids apply everywhere."""
+    from opshub.core.excludes import ExcludeRules
+
+    rules = ExcludeRules(
+        channels=frozenset({"C-everywhere", "acme/C-secret", "oss/C-other"}),
+        senders=frozenset({"bot@example.com", "acme/U-bot"}),
+        repos=frozenset({"acme/secret-vault"}),
+        paths=("**/.git/**",),
+    )
+
+    acme = rules.scoped_to_workspace("acme")
+    assert acme.excludes_channel("C-everywhere")
+    assert acme.excludes_channel("C-secret")
+    assert not acme.excludes_channel("C-other")
+    assert acme.excludes_sender("bot@example.com")
+    assert acme.excludes_sender("U-bot")
+
+    oss = rules.scoped_to_workspace("oss")
+    assert oss.excludes_channel("C-everywhere")
+    assert not oss.excludes_channel("C-secret")
+    assert oss.excludes_channel("C-other")
+    assert not oss.excludes_sender("U-bot")
+
+    # repos / paths have no workspace dimension and pass through verbatim
+    # (note: a GitHub "owner/repo" id naturally contains a slash — the
+    # qualifier grammar lives only on the Slack-facing selectors).
+    assert acme.repos == rules.repos
+    assert acme.paths == rules.paths
+
+
+def test_scoped_to_workspace_drops_other_alias_qualifiers_from_view() -> None:
+    """The per-workspace view never matches another alias's qualified entry."""
+    from opshub.core.excludes import ExcludeRules
+
+    rules = ExcludeRules(channels=frozenset({"oss/C1"}))
+    acme = rules.scoped_to_workspace("acme")
+    assert not acme.excludes_channel("C1")
+    assert not acme.excludes_channel("oss/C1")
+
+
+def test_scoped_to_workspace_ignores_dangling_qualifier() -> None:
+    """``acme/`` (empty id after the qualifier) never excludes everything."""
+    from opshub.core.excludes import ExcludeRules
+
+    rules = ExcludeRules(channels=frozenset({"acme/"}))
+    acme = rules.scoped_to_workspace("acme")
+    assert acme.channels == frozenset()

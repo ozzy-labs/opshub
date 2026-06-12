@@ -46,6 +46,24 @@ def _patch_source(monkeypatch: pytest.MonkeyPatch, source: _FakeSource) -> None:
     monkeypatch.setattr("opshub.cli._wiring.build_source_service", lambda actor="x": source)
 
 
+def _patch_workspaces(monkeypatch: pytest.MonkeyPatch, aliases: list[str]) -> None:
+    """Patch settings so the ADR-0041 §(f) default rule resolves over ``aliases``."""
+    import types
+
+    from opshub.core.config import SlackConnectorSettings
+
+    slack = SlackConnectorSettings.model_validate(
+        {"workspaces": {alias: {"channels": []} for alias in aliases}}
+    )
+    fake = types.SimpleNamespace(connectors=types.SimpleNamespace(slack=slack))
+    monkeypatch.setattr("opshub.core.config.OpsHubSettings", lambda: fake)
+
+
+def _envelope(state_json: str, alias: str = "acme") -> str:
+    """Wrap one alias's inner state JSON in the Phase 24-C envelope."""
+    return f'{{"workspaces":{{"{alias}":{state_json}}}}}'
+
+
 # ----- show (promoted to ``opshub slack status``, Phase 23-F #536) -------
 # The read-only cursor view moved to ``opshub slack status`` (raw 3-axis dump
 # behind ``status --verbose``); see ``tests/unit/cli/test_slack_status.py``.
@@ -63,16 +81,19 @@ def test_cursor_reset_channel_removes_only_that_channel(
     )
 
     source = _FakeSource(
-        '{"channels":{"C1":"200.000000","C2":"300.000000"},'
-        '"backfill":{"C1":"100.000000"},'
-        '"threads":{"C1:t1":"150.000000","C2:t2":"250.000000"}}'
+        _envelope(
+            '{"channels":{"C1":"200.000000","C2":"300.000000"},'
+            '"backfill":{"C1":"100.000000"},'
+            '"threads":{"C1:t1":"150.000000","C2:t2":"250.000000"}}'
+        )
     )
     _patch_source(monkeypatch, source)
+    _patch_workspaces(monkeypatch, ["acme"])
 
     removed, new_value = run_cursor_reset(channels=["C1"], reset_all=False)
 
     assert removed == 1
-    state = _load_cursors(new_value)
+    state = _load_cursors(new_value)["workspaces"]["acme"]
     # C1 gone from every axis; C2 untouched.
     assert state["channels"] == {"C2": "300.000000"}
     assert state["backfill"] == {}
@@ -88,7 +109,7 @@ def test_cursor_reset_all_clears_everything(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
     source = _FakeSource(
-        '{"channels":{"C1":"200.000000"},"backfill":{"C1":"100.000000"},"threads":{}}'
+        _envelope('{"channels":{"C1":"200.000000"},"backfill":{"C1":"100.000000"},"threads":{}}')
     )
     _patch_source(monkeypatch, source)
 
@@ -96,14 +117,10 @@ def test_cursor_reset_all_clears_everything(monkeypatch: pytest.MonkeyPatch) -> 
 
     # Phase 23-A (#531): the ``--all`` path hard-drops without parsing the
     # prior cursor, so it returns -1 ("count unknown") rather than a
-    # concrete entry count.
+    # concrete entry count. Phase 24-C: the replacement is the empty
+    # envelope (no workspace entries at all — every alias unbinds).
     assert removed == -1
-    assert _load_cursors(new_value) == {
-        "channels": {},
-        "backfill": {},
-        "threads": {},
-        "team_id": None,
-    }
+    assert _load_cursors(new_value) == {"workspaces": {}}
 
 
 def test_cursor_reset_all_recovers_pre_20b_flat_dict(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -132,13 +149,8 @@ def test_cursor_reset_all_recovers_pre_20b_flat_dict(monkeypatch: pytest.MonkeyP
     removed, new_value = run_cursor_reset(channels=None, reset_all=True)
 
     assert removed == -1
-    assert _load_cursors(new_value) == {
-        "channels": {},
-        "backfill": {},
-        "threads": {},
-        "team_id": None,
-    }
-    # The persisted replacement is the empty compound (rebuild-safe).
+    assert _load_cursors(new_value) == {"workspaces": {}}
+    # The persisted replacement is the empty envelope (rebuild-safe).
     assert source.cursor_set_calls[-1]["value"] == new_value
     assert source.cursor_set_calls[-1]["sync_started"] is False
 
@@ -159,7 +171,7 @@ def test_cli_reset_all_reports_cleared_for_flat_dict(monkeypatch: pytest.MonkeyP
 
     result = CliRunner().invoke(app, ["slack", "cursor", "reset", "--all", "-y"])
     assert result.exit_code == 0, result.stdout
-    assert "all channel entries cleared" in result.stdout
+    assert "all workspace entries cleared" in result.stdout
 
 
 def test_cursor_reset_no_cursor_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -244,10 +256,13 @@ def test_cursor_backfill_fetches_window_and_advances_low_water(
 
     # Post-feature channel: low-water recorded at 2026-03-01.
     source = _FakeSource(
-        f'{{"channels":{{"C1":"{since_to_ts(parse_since("2026-06-01"))}"}},'
-        f'"backfill":{{"C1":"{until_ts}"}},"threads":{{}}}}'
+        _envelope(
+            f'{{"channels":{{"C1":"{since_to_ts(parse_since("2026-06-01"))}"}},'
+            f'"backfill":{{"C1":"{until_ts}"}},"threads":{{}}}}'
+        )
     )
     _patch_source(monkeypatch, source)
+    _patch_workspaces(monkeypatch, ["acme"])
     captured = _patch_backfill_fetcher(monkeypatch, gap_yields=[("C1", _raw("C1", gap_ts), gap_ts)])
 
     # No --until → defaults to the recorded low-water (2026-03-01).
@@ -258,7 +273,7 @@ def test_cursor_backfill_fetches_window_and_advances_low_water(
     assert captured["cursor_per_channel"] == {"C1": since_ts}
     assert captured["latest_per_channel"] == {"C1": until_ts}
     # Low-water advanced down to the new floor.
-    state = _load_cursors(source.cursor_set_calls[-1]["value"])
+    state = _load_cursors(source.cursor_set_calls[-1]["value"])["workspaces"]["acme"]
     assert state["backfill"] == {"C1": since_ts}
 
 
@@ -269,11 +284,12 @@ def test_cursor_backfill_requires_until_when_no_messages(
 
     # Pre-feature channel (no backfill entry) AND no ingested messages to
     # infer --until from → still requires explicit --until (Phase 23-F-2).
-    source = _FakeSource('{"channels":{"C1":"600.000000"},"threads":{}}')
+    source = _FakeSource(_envelope('{"channels":{"C1":"600.000000"},"threads":{}}'))
     _patch_source(monkeypatch, source)
+    _patch_workspaces(monkeypatch, ["acme"])
     _patch_backfill_fetcher(monkeypatch, gap_yields=[])
 
-    def _no_oldest(_factory: object, *, channel_id: str) -> str | None:
+    def _no_oldest(_factory: object, *, channel_id: str, team_id: str | None = None) -> str | None:
         return None
 
     monkeypatch.setattr("opshub.cli._slack_cursor._oldest_observed_ts", _no_oldest)
@@ -297,11 +313,12 @@ def test_cursor_backfill_defaults_until_to_oldest_ingested(
 
     # Pre-feature channel: no backfill entry → --until inferred from the
     # oldest ingested message ts (2026-03-01) rather than erroring.
-    source = _FakeSource(f'{{"channels":{{"C1":"{head_ts}"}},"threads":{{}}}}')
+    source = _FakeSource(_envelope(f'{{"channels":{{"C1":"{head_ts}"}},"threads":{{}}}}'))
     _patch_source(monkeypatch, source)
+    _patch_workspaces(monkeypatch, ["acme"])
     captured = _patch_backfill_fetcher(monkeypatch, gap_yields=[("C1", _raw("C1", gap_ts), gap_ts)])
 
-    def _oldest(_factory: object, *, channel_id: str) -> str | None:
+    def _oldest(_factory: object, *, channel_id: str, team_id: str | None = None) -> str | None:
         return oldest_ts
 
     monkeypatch.setattr("opshub.cli._slack_cursor._oldest_observed_ts", _oldest)
@@ -312,7 +329,7 @@ def test_cursor_backfill_defaults_until_to_oldest_ingested(
     # --until defaulted to the oldest ingested ts (upper bound of the gap).
     assert captured["latest_per_channel"] == {"C1": oldest_ts}
     assert captured["cursor_per_channel"] == {"C1": since_ts}
-    state = _load_cursors(source.cursor_set_calls[-1]["value"])
+    state = _load_cursors(source.cursor_set_calls[-1]["value"])["workspaces"]["acme"]
     assert state["backfill"] == {"C1": since_ts}
 
 
@@ -369,6 +386,7 @@ def test_cursor_backfill_rejects_since_not_older_than_until(
 
     source = _FakeSource(None)
     _patch_source(monkeypatch, source)
+    _patch_workspaces(monkeypatch, ["acme"])
     _patch_backfill_fetcher(monkeypatch, gap_yields=[])
 
     with pytest.raises(ConfigError, match="must be strictly older"):
@@ -405,14 +423,168 @@ def test_cursor_reset_channel_preserves_team_id(monkeypatch: pytest.MonkeyPatch)
     )
 
     source = _FakeSource(
-        '{"channels":{"C1":"200.000000","C2":"300.000000"},'
-        '"backfill":{},"threads":{},"team_id":"T-WS1"}'
+        _envelope(
+            '{"channels":{"C1":"200.000000","C2":"300.000000"},'
+            '"backfill":{},"threads":{},"team_id":"T-WS1"}'
+        )
     )
     _patch_source(monkeypatch, source)
+    _patch_workspaces(monkeypatch, ["acme"])
 
     _removed, new_value = run_cursor_reset(channels=["C1"], reset_all=False)
 
-    state = _load_cursors(new_value)
+    state = _load_cursors(new_value)["workspaces"]["acme"]
     # team_id survives a per-channel reset (only --all cold-starts the bind).
     assert state["team_id"] == "T-WS1"
     assert state["channels"] == {"C2": "300.000000"}
+
+
+# ----- Phase 24-C workspace scoping (ADR-0041 §(f)) -----------------------
+
+
+def test_cursor_reset_all_with_workspace_drops_only_that_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``reset --all --workspace acme`` drops acme's entry, keeps oss intact."""
+    from opshub.cli._slack_cursor import run_cursor_reset
+    from opshub.connectors.slack.connector import (
+        _load_cursors,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    source = _FakeSource(
+        '{"workspaces":{'
+        '"acme":{"channels":{"C1":"1.0"},"backfill":{},"threads":{},"team_id":"T1"},'
+        '"oss":{"channels":{"C1":"2.0"},"backfill":{},"threads":{},"team_id":"T2"}'
+        "}}"
+    )
+    _patch_source(monkeypatch, source)
+
+    removed, new_value = run_cursor_reset(channels=None, reset_all=True, workspace="acme")
+
+    assert removed == 1
+    envelope = _load_cursors(new_value)
+    assert "acme" not in envelope["workspaces"]
+    assert envelope["workspaces"]["oss"]["channels"] == {"C1": "2.0"}
+    assert envelope["workspaces"]["oss"]["team_id"] == "T2"
+
+
+def test_cursor_reset_channel_ambiguous_with_multiple_workspaces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``reset --channel`` with N workspaces and no flag → loud ConfigError.
+
+    Channel ids can collide across workspaces, so the default rule never
+    guesses (ADR-0041 §(f)).
+    """
+    from opshub.cli._slack_cursor import run_cursor_reset
+
+    source = _FakeSource(
+        '{"workspaces":{'
+        '"acme":{"channels":{"C1":"1.0"},"backfill":{},"threads":{},"team_id":"T1"},'
+        '"oss":{"channels":{"C1":"2.0"},"backfill":{},"threads":{},"team_id":"T2"}'
+        "}}"
+    )
+    _patch_source(monkeypatch, source)
+    _patch_workspaces(monkeypatch, ["acme", "oss"])
+
+    with pytest.raises(ConfigError, match="multiple Slack workspaces configured"):
+        run_cursor_reset(channels=["C1"], reset_all=False)
+
+
+def test_cursor_reset_channel_with_workspace_targets_that_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``reset --channel C1 --workspace oss`` trims only oss's C1 entry."""
+    from opshub.cli._slack_cursor import run_cursor_reset
+    from opshub.connectors.slack.connector import (
+        _load_cursors,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    source = _FakeSource(
+        '{"workspaces":{'
+        '"acme":{"channels":{"C1":"1.0"},"backfill":{},"threads":{},"team_id":"T1"},'
+        '"oss":{"channels":{"C1":"2.0"},"backfill":{},"threads":{},"team_id":"T2"}'
+        "}}"
+    )
+    _patch_source(monkeypatch, source)
+    _patch_workspaces(monkeypatch, ["acme", "oss"])
+
+    removed, new_value = run_cursor_reset(channels=["C1"], reset_all=False, workspace="oss")
+
+    assert removed == 1
+    envelope = _load_cursors(new_value)
+    assert envelope["workspaces"]["acme"]["channels"] == {"C1": "1.0"}
+    assert envelope["workspaces"]["oss"]["channels"] == {}
+
+
+def test_cursor_backfill_workspace_flag_selects_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``backfill --workspace oss`` operates on oss's cursor entry."""
+    from opshub.cli._slack_cursor import run_cursor_backfill
+    from opshub.connectors.slack.connector import (
+        _load_cursors,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    since_ts = since_to_ts(parse_since("2026-01-01"))
+    until_ts = since_to_ts(parse_since("2026-03-01"))
+    gap_ts = since_to_ts(parse_since("2026-02-01"))
+    source = _FakeSource(
+        _envelope(
+            f'{{"channels":{{"C1":"9999999999.0"}},"backfill":{{"C1":"{until_ts}"}},'
+            f'"threads":{{}},"team_id":"T-test"}}',
+            alias="oss",
+        )
+    )
+    _patch_source(monkeypatch, source)
+    _patch_workspaces(monkeypatch, ["acme", "oss"])
+    _patch_backfill_fetcher(monkeypatch, gap_yields=[("C1", _raw("C1", gap_ts), gap_ts)])
+
+    observed = run_cursor_backfill(channel_id="C1", since="2026-01-01", until=None, workspace="oss")
+
+    assert observed == 1
+    state = _load_cursors(source.cursor_set_calls[-1]["value"])["workspaces"]["oss"]
+    assert state["backfill"] == {"C1": since_ts}
+
+
+def test_oldest_observed_ts_team_scoped(tmp_path: Any) -> None:
+    """A bound team_id pre-filters colliding channel ids to the right workspace."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import create_engine, insert
+
+    from opshub.cli._slack_cursor import _oldest_observed_ts  # pyright: ignore[reportPrivateUsage]
+    from opshub.projections.sources import sources_table
+
+    # File-backed: the helper disposes the engine per call, which would
+    # drop an in-memory DB between the two assertions below.
+    engine = create_engine(f"sqlite:///{tmp_path}/sources.sqlite")
+    sources_table.metadata.create_all(engine)
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    rows = [
+        ("s1", "T-ACME:C1:200.000000"),
+        ("s2", "T-OSS:C1:100.000000"),
+    ]
+    with engine.begin() as conn:
+        for sid, ext in rows:
+            conn.execute(
+                insert(sources_table).values(
+                    id=sid,
+                    connector_name="slack",
+                    external_id=ext,
+                    source_type="slack_message",
+                    title="t",
+                    observed_at=now,
+                    updated_at=now,
+                    body="b",
+                )
+            )
+
+    # team-scoped: only T-ACME's rows are considered despite T-OSS having
+    # the numerically-older ts for the same channel id.
+    def _fresh_engine() -> Any:
+        return create_engine(f"sqlite:///{tmp_path}/sources.sqlite")
+
+    assert _oldest_observed_ts(_fresh_engine, channel_id="C1", team_id="T-ACME") == "200.000000"
+    # Unbound: the global numeric min across workspaces.
+    assert _oldest_observed_ts(_fresh_engine, channel_id="C1") == "100.000000"
