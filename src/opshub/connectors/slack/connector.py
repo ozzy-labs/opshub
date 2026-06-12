@@ -417,11 +417,17 @@ class SlackConnector:
                 # and continue so the remaining workspaces still get
                 # their attempt. The aggregate raise below keeps the run
                 # non-zero. The structured log carries the per-alias
-                # detail; the aggregate message carries type names only
-                # (the CLI driver sanitises the full message anyway).
+                # detail — scrubbed through ``sanitise_error_message``
+                # because this is a new emission path that bypasses the
+                # CLI driver's sanitise rail (Slack error strings can
+                # echo request fragments); the aggregate message carries
+                # type names only.
+                from opshub.core.sanitise import sanitise_error_message
+
                 failures[alias] = exc
                 context.logger.warning(
-                    f"slack connector: workspace {alias!r} sync failed: {type(exc).__name__}: {exc}"
+                    f"slack connector: workspace {alias!r} sync failed: "
+                    f"{type(exc).__name__}: {sanitise_error_message(str(exc))}"
                 )
             finally:
                 # Checkpoint the envelope after every workspace —
