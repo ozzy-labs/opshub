@@ -242,7 +242,7 @@ bare `C123` = 全 workspace で除外（後者は「全 workspace の同名 id �
 - **既存 install は DB 再 init + 全 connector re-sync が必須**（§(e)）。re-key
   migration を提供しないため、Slack 以外の connector データも再取得になる。
 - alias rename は当該 workspace の cursor 喪失 = 全量 re-fetch コスト（source は
-  重複しないがAPI 取得コストは乗る）。
+  重複しないが API 取得コストは乗る）。
 - 単一 workspace 構成でも `workspaces.<alias>` table が必須になり、最小構成の
   config が 1 行分冗長になる（暗黙 default の特例コードパスを作らないことの対価）。
 - sync は workspace 直列 loop のため、N workspace の合計時間は線形に伸びる
