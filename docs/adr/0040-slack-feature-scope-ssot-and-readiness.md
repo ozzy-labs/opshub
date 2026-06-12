@@ -3,7 +3,7 @@
 - Status: Accepted + Landed (Phase 23-I, epic [#530](https://github.com/ozzy-labs/opshub/issues/530))
 - Date: 2026-06-10
 - Deciders: opshub maintainers
-- Related: [ADR-0018](0018-slack-token-principal.md) (token principal + scope catalogue — the prose rationale that now points here for the data), [ADR-0033](0033-slack-mention-demand-digest.md) (demand digest is covered by history scopes — no independent readiness row), [ADR-0034](0034-slack-engagement-axis.md) (`search:read` is User-Token-only — the basis for the engagement axis `N/A` verdict), [#533](https://github.com/ozzy-labs/opshub/issues/533) (granted-scope display, the feature this builds on)
+- Related: [ADR-0018](0018-slack-token-principal.md) (token principal + scope catalogue — the prose rationale that now points here for the data), [ADR-0033](0033-slack-mention-demand-digest.md) (demand digest is covered by history scopes — no independent readiness row), [ADR-0034](0034-slack-engagement-axis.md) (`search:read` is User-Token-only — the basis for the engagement axis `N/A` verdict), [#533](https://github.com/ozzy-labs/opshub/issues/533) (granted-scope display, the feature this builds on), [ADR-0041](0041-slack-multi-workspace.md) (Phase 24 — `FEATURE_SCOPES` SSOT は workspace 非依存のまま不変。readiness は per-workspace token で評価され、`auth test` は `--workspace <alias>` で対象 token を切り替える)
 
 ## Context
 
