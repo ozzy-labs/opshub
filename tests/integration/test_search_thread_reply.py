@@ -98,8 +98,9 @@ def _seed_slack_thread_pair(
     """Insert one parent + one reply ``sources`` row mirroring Slack ingestion.
 
     Returns ``(parent_source_id, reply_source_id)``. The reply row's
-    ``external_id`` follows the ``f"{channel_id}:{ts}"`` natural-key
-    convention (see :mod:`opshub.connectors.slack.mapper`). ``thread_ts``
+    ``external_id`` follows the ``f"{team_id}:{channel_id}:{ts}"``
+    natural-key convention (Phase 24-B, ADR-0041 §(a); see
+    :mod:`opshub.connectors.slack.mapper`). ``thread_ts``
     is intentionally **not** modelled in the projection — the connector
     stores it on the event's ``raw`` payload (per ADR-0030 §不変条件 #1)
     — the projection only carries the discriminator fields the search
@@ -112,7 +113,7 @@ def _seed_slack_thread_pair(
             insert(sources_table).values(
                 id=parent_id,
                 connector_name="slack",
-                external_id=f"{channel_id}:{parent_ts}",
+                external_id=f"T-int:{channel_id}:{parent_ts}",
                 source_type="slack_message",
                 title=f"alice in #general: {parent_body}",
                 url=f"https://acme.slack.com/archives/{channel_id}/p{parent_ts.replace('.', '')}",
@@ -126,7 +127,7 @@ def _seed_slack_thread_pair(
             insert(sources_table).values(
                 id=reply_id,
                 connector_name="slack",
-                external_id=f"{channel_id}:{reply_ts}",
+                external_id=f"T-int:{channel_id}:{reply_ts}",
                 source_type="slack_message",
                 title=f"bob in #general: {reply_body}",
                 url=f"https://acme.slack.com/archives/{channel_id}/p{reply_ts.replace('.', '')}",

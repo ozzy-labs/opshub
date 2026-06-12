@@ -202,12 +202,23 @@ def _patch_backfill_fetcher(
 
     fake_auth = MagicMock()
     fake_auth.return_value.token = "xoxb-fake"
+    # Phase 24-B (ADR-0041 §(a)): ``backfill_channel`` now runs the
+    # single-workspace bind guard before fetching, so the auth double must
+    # resolve a workspace identity (mirrors the sync-path test helper).
+    fake_auth.return_value.test_token.return_value = {
+        "team": "t",
+        "team_id": "T-test",
+        "user": "u",
+        "user_id": "U1",
+        "principal": "bot",
+    }
     monkeypatch.setattr("opshub.connectors.slack.connector.SlackAuth", fake_auth)
     return captured
 
 
 def _raw(channel_id: str, ts: str) -> RawSlackMessage:
     return RawSlackMessage(
+        team_id="T-test",
         channel_id=channel_id,
         channel_name="general",
         ts=ts,
@@ -243,7 +254,7 @@ def test_cursor_backfill_fetches_window_and_advances_low_water(
     observed = run_cursor_backfill(channel_id="C1", since="2026-01-01", until=None)
 
     assert observed == 1
-    assert source.observed == [f"C1:{gap_ts}"]
+    assert source.observed == [f"T-test:C1:{gap_ts}"]
     assert captured["cursor_per_channel"] == {"C1": since_ts}
     assert captured["latest_per_channel"] == {"C1": until_ts}
     # Low-water advanced down to the new floor.
@@ -319,10 +330,18 @@ def test_oldest_observed_ts_returns_numeric_min(monkeypatch: pytest.MonkeyPatch)
     rows = [
         # C1: two messages — lexical max ("9...") is numerically smaller than
         # "1700...", so a lexical min would pick the wrong one; assert numeric.
-        ("s1", "slack", "C1:1700000500.000000"),
-        ("s2", "slack", "C1:999999999.000000"),
-        ("s3", "slack", "C2:1700000000.000000"),
-        ("s4", "github", "C1:1700000001.000000"),
+        # Phase 24-B (ADR-0041 §(a)): external_id is the 3-token
+        # ``{team_id}:{channel_id}:{ts}`` shape; the channel filter matches
+        # the *middle* token.
+        ("s1", "slack", "T1:C1:1700000500.000000"),
+        ("s2", "slack", "T1:C1:999999999.000000"),
+        ("s3", "slack", "T1:C2:1700000000.000000"),
+        ("s4", "github", "T1:C1:1700000001.000000"),
+        # Legacy 2-token row (pre-Phase-24 ingest, only present when the
+        # operator skipped the ADR-0041 §(e) DB re-init): never matches the
+        # ``%:C1:%`` middle-token pattern and is ignored even though its ts
+        # would be the numeric min.
+        ("s5", "slack", "C1:0.500000"),
     ]
     with engine.begin() as conn:
         for sid, connector, ext in rows:

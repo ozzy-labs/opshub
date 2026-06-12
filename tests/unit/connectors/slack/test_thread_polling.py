@@ -110,6 +110,7 @@ class _RecordingSourceService:
 
 def _raw_message(
     *,
+    team_id: str = "T-test",
     channel_id: str = "C1",
     channel_name: str = "general",
     ts: str,
@@ -121,6 +122,7 @@ def _raw_message(
     thread_ts: str | None = None,
 ) -> RawSlackMessage:
     return RawSlackMessage(
+        team_id=team_id,
         channel_id=channel_id,
         channel_name=channel_name,
         ts=ts,
@@ -366,7 +368,7 @@ def test_polling_phase_fetches_thread_replies_for_in_window_cursor(
     ]
     # The late reply was observed.
     assert result.observed_count == 1
-    assert service.calls[0]["external_id"] == f"C1:{new_reply_ts}"
+    assert service.calls[0]["external_id"] == f"T-test:C1:{new_reply_ts}"
     # The threads cursor advanced to the new reply ts.
     parsed = _load_cursors(result.new_cursor)
     assert parsed["threads"] == {"C1:1700000010.000100": new_reply_ts}

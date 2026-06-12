@@ -86,6 +86,7 @@ def _slack_observed(
     *,
     channel_id: str,
     ts: str,
+    team_id: str = "T-test",
     body: str,
     title: str = "alice in #general",
     summary: str | None = None,
@@ -117,7 +118,8 @@ def _slack_observed(
         recorded_at=occurred_at,
         actor="connector:slack",
         connector_name="slack",
-        external_id=f"{channel_id}:{ts}",
+        # Phase 24-B (ADR-0041 §(a)): 3-token natural key.
+        external_id=f"{team_id}:{channel_id}:{ts}",
         source_type="slack_message",
         title=title,
         url=permalink,
@@ -571,7 +573,7 @@ def test_unrelated_event_types_are_ignored(engine: Engine) -> None:
 
 
 def test_malformed_external_id_is_ignored(engine: Engine) -> None:
-    """An external_id without ``"<channel>:<ts>"`` shape is dropped silently."""
+    """An external_id without ``"<team>:<channel>:<ts>"`` shape is dropped silently."""
     projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
     event = SourceObserved(
         aggregate_id=new_ulid(),
@@ -591,6 +593,61 @@ def test_malformed_external_id_is_ignored(engine: Engine) -> None:
     with engine.connect() as conn:
         rows = conn.execute(select(slack_demand_digest_table)).all()
     assert rows == []
+
+
+def test_legacy_two_token_external_id_is_dropped(engine: Engine) -> None:
+    """A pre-Phase-24 2-token external_id (``"{channel_id}:{ts}"``) is dropped.
+
+    Phase 24-B ([ADR-0041](docs/adr/0041-slack-multi-workspace.md) §(a))
+    re-keyed the natural key to ``"{team_id}:{channel_id}:{ts}"``. The
+    sanctioned upgrade path for pre-existing data is a DB re-init + full
+    re-sync (ADR-0041 §(e)); accepting both shapes would let one message
+    appear under two natural keys and double-count demands, so the parser
+    deliberately returns ``None`` for the legacy shape. This pin makes the
+    drop **explicit** — a future change that silently re-accepts 2-token
+    events should have to flip this test consciously.
+    """
+    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    event = SourceObserved(
+        aggregate_id=new_ulid(),
+        occurred_at=datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC),
+        recorded_at=datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC),
+        actor="connector:slack",
+        connector_name="slack",
+        # Would have produced a DM row under the pre-24 2-token parser
+        # (D-prefixed channel + valid ts).
+        external_id="D123ABC:1700000000.000100",
+        source_type="slack_message",
+        title="alice",
+        body=f"<@{_SELF_USER_ID}> hi",
+    )
+
+    with engine.begin() as conn:
+        _apply(projection, conn, event)
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(slack_demand_digest_table)).all()
+    assert rows == []
+
+
+def test_parse_slack_external_id_three_token_shape() -> None:
+    """``_parse_slack_external_id`` reads the channel from the middle token."""
+    from opshub.projections.slack_demand_digest import (
+        _parse_slack_external_id,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert _parse_slack_external_id("T0ACME:C123ABC:1700000000.000100") == (
+        "C123ABC",
+        1700000000.000100,
+    )
+    # Legacy 2-token / malformed shapes all return None (dropped upstream).
+    assert _parse_slack_external_id("C123ABC:1700000000.000100") is None
+    assert _parse_slack_external_id("no-colon") is None
+    assert _parse_slack_external_id("") is None
+    assert _parse_slack_external_id(":C1:1.0") is None
+    assert _parse_slack_external_id("T1::1.0") is None
+    assert _parse_slack_external_id("T1:C1:") is None
+    assert _parse_slack_external_id("T1:C1:not-a-ts") is None
 
 
 # ---- reset ----------------------------------------------------------------

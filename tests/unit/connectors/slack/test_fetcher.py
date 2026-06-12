@@ -220,7 +220,21 @@ def test_init_requires_at_least_one_channel() -> None:
     and an operator might assume the connector is "working".
     """
     with pytest.raises(ValueError, match="at least one channel"):
-        SlackFetcher(_auth(), channels=[])
+        SlackFetcher(_auth(), channels=[], team_id="T-test")
+
+
+def test_init_requires_non_empty_team_id() -> None:
+    """Empty ``team_id`` → :class:`ValueError` at construction time.
+
+    Phase 24-B ([ADR-0041](docs/adr/0041-slack-multi-workspace.md) §(i)):
+    ``team_id`` is a constituent of every ``external_id``
+    (``f"{team_id}:{channel_id}:{ts}"``); an empty value would silently
+    mint malformed natural keys. The connector's bind guard resolves a
+    non-empty value (or raises ``ConfigError``) before constructing the
+    fetcher, so this tripwire only fires on a programming error.
+    """
+    with pytest.raises(ValueError, match="non-empty team_id"):
+        SlackFetcher(_auth(), channels=["C1"], team_id="")
 
 
 def test_init_takes_defensive_copy_of_channels() -> None:
@@ -230,7 +244,7 @@ def test_init_takes_defensive_copy_of_channels() -> None:
     without surprising side effects on in-flight fetchers.
     """
     channels = ["C1"]
-    fetcher = SlackFetcher(_auth(), channels=channels)
+    fetcher = SlackFetcher(_auth(), channels=channels, team_id="T-test")
     channels.append("C2")
     # Access the snapshot through a fetch-like call rather than the
     # private attribute so we test the observable behaviour. Empty
@@ -260,7 +274,7 @@ def test_fetch_messages_yields_each_message(monkeypatch: pytest.MonkeyPatch) -> 
     client = _build_client(history=[_history_response(msgs)])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     # Slack returns newest-first; the fetcher yields oldest-first so
@@ -284,6 +298,10 @@ def test_fetch_messages_yields_each_message(monkeypatch: pytest.MonkeyPatch) -> 
     # The first message's channel + author / permalink fields are
     # populated end-to-end.
     first = results[0][1]
+    # Phase 24-B (ADR-0041 §(i)): the constructor-supplied team_id is
+    # stamped onto every yielded message so the mapper can compose the
+    # 3-token external_id without an extra API call.
+    assert first.team_id == "T-test"
     assert first.channel_id == "C1"
     assert first.channel_name == "general"
     assert first.user_id == "U1"
@@ -325,7 +343,7 @@ def test_fetch_messages_paginates_via_next_cursor(
     client = _build_client(history=[page1, page2])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     # Yields are sorted ts-ascending across pages (issue #339 fix)
@@ -386,7 +404,7 @@ def test_fetch_messages_yields_chronological_order_across_pages(
     client = _build_client(history=[page1, page2, page3])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     # All five messages yielded in strict ts-ascending order across
@@ -435,7 +453,7 @@ def test_fetch_messages_single_page_yields_chronological_order(
     client = _build_client(history=[_history_response(msgs)])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     assert [r[1].ts for r in results] == [
@@ -504,7 +522,7 @@ def test_iter_channel_skips_malformed_ts_and_preserves_sort(
     client = _build_client(history=[_history_response(msgs)])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     # Only the three well-formed messages survive, in strict
@@ -544,7 +562,7 @@ def test_fetch_messages_skips_already_fetched_when_oldest_set(
     client = _build_client(history=[_history_response([])])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     list(fetcher.fetch_messages(cursor_per_channel={"C1": "1700000000.000000"}))
 
     call_kwargs = client.conversations_history.call_args.kwargs
@@ -567,7 +585,7 @@ def test_fetch_messages_no_cursor_skips_oldest_kwarg(
     client = _build_client(history=[_history_response([])])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     list(fetcher.fetch_messages(cursor_per_channel={}))
 
     call_kwargs = client.conversations_history.call_args.kwargs
@@ -594,7 +612,7 @@ def test_fetch_messages_bounded_window_passes_oldest_latest_and_inclusive_true(
     client = _build_client(history=[_history_response([])])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     list(
         fetcher.fetch_messages(
             cursor_per_channel={"C1": "1700000000.000000"},
@@ -622,7 +640,7 @@ def test_fetch_messages_latest_only_sets_inclusive_true_without_oldest(
     client = _build_client(history=[_history_response([])])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     list(
         fetcher.fetch_messages(
             cursor_per_channel={},
@@ -649,7 +667,7 @@ def test_fetch_messages_forward_omits_latest_kwarg(
     client = _build_client(history=[_history_response([])])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     # ``latest_per_channel`` provided but without an entry for C1 → no bound.
     list(
         fetcher.fetch_messages(
@@ -690,7 +708,7 @@ def test_fetch_messages_bounded_window_still_fetches_thread_replies(
     client.conversations_replies.return_value = _replies_response([parent, reply])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(
         fetcher.fetch_messages(
             cursor_per_channel={"C1": "1700000005.000000"},
@@ -753,7 +771,7 @@ def test_fetch_messages_respects_retry_after_on_429(
     sleep_mock = MagicMock()
     monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     assert [r[1].text for r in results] == ["recovered"]
@@ -795,7 +813,7 @@ def test_fetch_messages_exhausts_retries_then_raises(
     sleep_mock = MagicMock()
     monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     with pytest.raises(ConnectorFailedError) as excinfo:
         list(fetcher.fetch_messages(cursor_per_channel={}))
 
@@ -839,7 +857,7 @@ def test_fetch_messages_raises_connector_failed_on_invalid_auth(
     )
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     with pytest.raises(ConnectorFailedError) as excinfo:
         list(fetcher.fetch_messages(cursor_per_channel={}))
 
@@ -896,7 +914,7 @@ def test_fetch_messages_raises_connector_failed_on_missing_scope_with_hint(
     )
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     with pytest.raises(ConnectorFailedError) as excinfo:
         list(fetcher.fetch_messages(cursor_per_channel={}))
 
@@ -953,7 +971,7 @@ def test_fetch_messages_missing_scope_omits_needed_when_absent(
     )
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     with pytest.raises(ConnectorFailedError) as excinfo:
         list(fetcher.fetch_messages(cursor_per_channel={}))
 
@@ -992,7 +1010,7 @@ def test_fetch_messages_raises_connector_failed_on_channel_not_found(
     )
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C-gone"])
+    fetcher = SlackFetcher(_auth(), channels=["C-gone"], team_id="T-test")
     with pytest.raises(ConnectorFailedError) as excinfo:
         list(fetcher.fetch_messages(cursor_per_channel={}))
 
@@ -1019,7 +1037,7 @@ def test_user_display_name_cached_across_messages(
     client = _build_client(history=[_history_response(msgs)])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     list(fetcher.fetch_messages(cursor_per_channel={}))
 
     assert client.users_info.call_count == 1
@@ -1047,7 +1065,7 @@ def test_user_resolution_falls_back_when_user_and_bot_profile_missing(
     )
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     assert len(results) == 1
@@ -1080,7 +1098,7 @@ def test_user_display_name_falls_back_to_real_name(
     }
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     assert results[0][1].user_display_name == "Bob Builder"
@@ -1106,7 +1124,7 @@ def test_fetch_channel_name_resolves_id_to_name(
     )
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     assert [r[1].channel_name for r in results] == ["ops-room", "ops-room"]
@@ -1143,7 +1161,7 @@ def test_bot_message_uses_bot_profile_name(monkeypatch: pytest.MonkeyPatch) -> N
     )
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     assert len(results) == 1
@@ -1178,7 +1196,7 @@ def test_bot_message_without_bot_profile_falls_back_to_bot_id(
     )
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     assert results[0][1].user_display_name == "bot:B999"
@@ -1211,7 +1229,7 @@ def test_bot_message_with_empty_bot_profile_name_falls_back_to_bot_id(
     )
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     assert results[0][1].user_display_name == "bot:B321"
@@ -1238,7 +1256,7 @@ def test_real_user_message_prefers_users_info_over_bot_profile(
     client = _build_client(history=[_history_response(msgs)])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     assert results[0][1].user_display_name == "alice"  # default ``_users_info_response``
@@ -1279,7 +1297,7 @@ def test_subtype_is_carried_as_first_class_field(monkeypatch: pytest.MonkeyPatch
     client = _build_client(history=[_history_response(msgs)])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     # Yielded ts-ascending; the subtype on each row matches the
@@ -1368,7 +1386,7 @@ def test_replies_not_called_when_latest_reply_absent(
     client = _build_client(history=[_history_response(msgs)])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     # Two parents, zero replies → two yields and no
@@ -1392,7 +1410,7 @@ def test_replies_fetched_when_latest_reply_present_and_messages_zero_skipped(
     * Yield the parent exactly once (via the history path) — the
       replies-response ``messages[0]`` (parent) is skipped to honour
       the natural-key invariant from ADR-0030 §不変条件 3 (the
-      ``UNIQUE`` constraint on ``external_id = f"{channel_id}:{ts}"``
+      ``UNIQUE`` constraint on ``external_id = f"{team_id}:{channel_id}:{ts}"``
       catches a regression but skipping at source keeps the event
       log clean and saves one ``users.info`` / ``chat.getPermalink``
       budget per parent).
@@ -1419,7 +1437,7 @@ def test_replies_fetched_when_latest_reply_present_and_messages_zero_skipped(
     client.conversations_replies.return_value = _replies_response([parent, reply_1, reply_2])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     # Three yields: parent + 2 replies. Parent itself appears only
@@ -1472,10 +1490,14 @@ def test_thread_ts_field_set_for_parent_and_reply(
     client.conversations_replies.return_value = _replies_response([parent_with_replies, reply])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     by_text = {r[1].text: r[1] for r in results}
+    # Phase 24-B (ADR-0041 §(i)): both the history path and the
+    # ``conversations.replies`` path stamp the constructor-supplied
+    # team_id onto their yields.
+    assert all(m.team_id == "T-test" for m in by_text.values())
     # Parent with replies: thread_ts == ts (Slack convention).
     assert by_text["parent-with-replies"].thread_ts == "1700000010.000100"
     # Standalone top-level message: no thread_ts in payload → None.
@@ -1513,7 +1535,7 @@ def test_thread_reply_cursor_anchored_to_parent_ts(
     client.conversations_replies.return_value = _replies_response([parent, reply])
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     # Parent's cursor element is its own ts; reply's cursor element
@@ -1569,7 +1591,7 @@ def test_thread_replies_retry_429_via_shared_helper(
     sleep_mock = MagicMock()
     monkeypatch.setattr(_stdlib_time, "sleep", sleep_mock)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     # Parent + reply both yielded after the retry succeeded.
@@ -1611,7 +1633,7 @@ def test_thread_replies_non_429_error_surfaces_connector_failed_with_thread_ts(
     ]
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     with pytest.raises(ConnectorFailedError) as excinfo:
         list(fetcher.fetch_messages(cursor_per_channel={}))
 
@@ -1661,7 +1683,7 @@ def test_thread_replies_missing_scope_surfaces_scope_hint_with_thread_ts(
     ]
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     with pytest.raises(ConnectorFailedError) as excinfo:
         list(fetcher.fetch_messages(cursor_per_channel={}))
 
@@ -1710,7 +1732,7 @@ def test_thread_replies_skipped_when_parent_channel_excluded(
     _patch_webclient(monkeypatch, client)
 
     excludes = ExcludeRules(channels=frozenset({"C1"}))
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     # Parent still yielded — the connector applies excludes filter
     # on the yielded row; the fetcher's excludes short-circuit only
     # affects the follow-up ``conversations.replies`` call.
@@ -1749,7 +1771,7 @@ def test_thread_replies_skipped_when_parent_sender_excluded(
 
     # ``_parent_with_latest_reply`` defaults ``user`` to ``"U1"``.
     excludes = ExcludeRules(senders=frozenset({"U1"}))
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}, excludes=excludes))
 
     assert [r[1].text for r in results] == ["parent-from-excluded-sender"]
@@ -1808,7 +1830,7 @@ def test_thread_replies_fetched_for_mixed_threads_only_when_latest_reply_present
     client.conversations_replies.side_effect = _replies_side_effect
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     results = list(fetcher.fetch_messages(cursor_per_channel={}))
 
     # 3 parents + 3 replies = 6 yields total; parent-B contributes
@@ -1910,7 +1932,7 @@ def test_thread_reply_fetch_failure_yields_parent_then_raises(
     ]
     _patch_webclient(monkeypatch, client)
 
-    fetcher = SlackFetcher(_auth(), channels=["C1"])
+    fetcher = SlackFetcher(_auth(), channels=["C1"], team_id="T-test")
     iterator = fetcher.fetch_messages(cursor_per_channel={})
 
     # Manual ``next()`` so the parent yield is observable before the

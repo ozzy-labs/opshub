@@ -281,6 +281,7 @@ def _invoke(args: list[str]) -> tuple[int, str, str]:
 
 def _slack_raw(*, ts: str, text: str) -> RawSlackMessage:
     return RawSlackMessage(
+        team_id="T-int",
         channel_id="C1",
         channel_name="general",
         ts=ts,

@@ -44,6 +44,7 @@ from opshub.connectors.slack.mapper import (
 
 def _raw_message(
     *,
+    team_id: str = "T-test",
     channel_id: str = "C123",
     channel_name: str = "general",
     ts: str = "1700000000.000100",
@@ -61,6 +62,7 @@ def _raw_message(
     its scenario cares about.
     """
     return RawSlackMessage(
+        team_id=team_id,
         channel_id=channel_id,
         channel_name=channel_name,
         ts=ts,
@@ -115,7 +117,7 @@ def test_map_message_basic_shape() -> None:
 
     assert kwargs == {
         "connector_name": "slack",
-        "external_id": "C123:1700000000.000100",
+        "external_id": "T-test:C123:1700000000.000100",
         "source_type": "slack_message",
         "title": "alice in #general: Hello",
         "summary": "Hello",
@@ -130,17 +132,20 @@ def test_map_message_basic_shape() -> None:
     }
 
 
-def test_map_message_external_id_is_channel_id_colon_ts() -> None:
-    """Natural-key composition is ``f"{channel_id}:{ts}"``.
+def test_map_message_external_id_is_team_channel_colon_ts() -> None:
+    """Natural-key composition is ``f"{team_id}:{channel_id}:{ts}"``.
 
-    Pinning the exact format prevents an accidental refactor that
-    swaps the separator (which would orphan every existing row's
-    natural key on resume).
+    Phase 24-B ([ADR-0041](docs/adr/0041-slack-multi-workspace.md)
+    §(a)) re-keyed the natural key with a leading ``team_id`` so
+    channel ids that collide across workspaces never collide in the
+    source namespace. Pinning the exact format (token order AND
+    separator) prevents an accidental refactor that swaps either —
+    which would orphan every existing row's natural key on resume.
     """
-    raw = _raw_message(channel_id="C-room-1", ts="1700000099.123456")
+    raw = _raw_message(team_id="T0ACME", channel_id="C-room-1", ts="1700000099.123456")
     kwargs = map_message(raw)
 
-    assert kwargs["external_id"] == "C-room-1:1700000099.123456"
+    assert kwargs["external_id"] == "T0ACME:C-room-1:1700000099.123456"
 
 
 def test_map_message_title_uses_hash_prefix_for_channel() -> None:
@@ -213,7 +218,7 @@ def test_map_message_normalises_empty_text_to_title_body() -> None:
     # epic #470 / issue #481: empty text falls back to the title.
     assert kwargs["body"] == kwargs["title"]
     assert kwargs["title"] == "alice in #general: (no text)"
-    assert kwargs["external_id"] == "C123:1700000000.000100"
+    assert kwargs["external_id"] == "T-test:C123:1700000000.000100"
 
 
 def test_map_message_normalises_whitespace_only_text_to_none() -> None:
@@ -248,7 +253,7 @@ def test_map_message_normalises_whitespace_only_text_to_none() -> None:
     # ``_truncate_body`` normalises whitespace and strips before the
     # length check, so the title is still recognisable.
     assert kwargs["title"] == "alice in #general: (no text)"
-    assert kwargs["external_id"] == "C123:1700000000.000100"
+    assert kwargs["external_id"] == "T-test:C123:1700000000.000100"
 
     # Mixed tab / newline whitespace behaves identically.
     raw_mixed = _raw_message(text="\t\n")

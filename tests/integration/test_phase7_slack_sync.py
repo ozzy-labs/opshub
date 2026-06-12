@@ -84,6 +84,7 @@ def _row_count(engine: Engine, table_name: str) -> int:
 
 def _raw_message(
     *,
+    team_id: str = "T-int",
     channel_id: str = "C1",
     channel_name: str = "general",
     ts: str,
@@ -100,6 +101,7 @@ def _raw_message(
     if permalink is None:
         permalink = f"https://acme.slack.com/archives/{channel_id}/p{ts.replace('.', '')}"
     return RawSlackMessage(
+        team_id=team_id,
         channel_id=channel_id,
         channel_name=channel_name,
         ts=ts,
@@ -271,8 +273,8 @@ def test_slack_sync_creates_sources(
         assert {row["connector_name"] for row in source_rows} == {"slack"}
         assert {row["source_type"] for row in source_rows} == {"slack_message"}
         assert {row["external_id"] for row in source_rows} == {
-            "C1:1700000001.000100",
-            "C1:1700000002.000200",
+            "T-int:C1:1700000001.000100",
+            "T-int:C1:1700000002.000200",
         }
         # Title shape matches the mapper contract — issue #367 added
         # the body excerpt suffix so search results are recognisable
@@ -287,8 +289,8 @@ def test_slack_sync_creates_sources(
         # Every inbox row links back through ``source_ref``.
         assert all(row["state"] == "pending" for row in inbox_rows)
         assert {row["source_ref"] for row in inbox_rows} == {
-            "slack:C1:1700000001.000100",
-            "slack:C1:1700000002.000200",
+            "slack:T-int:C1:1700000001.000100",
+            "slack:T-int:C1:1700000002.000200",
         }
     finally:
         engine.dispose()
@@ -373,7 +375,7 @@ def test_slack_sync_handles_empty_text_message(
 
         # The empty-text source row stores NULL ``summary`` (mapper
         # normalises empty → None for symmetry with ``body``).
-        empty_text_external_id = "C1:1700000002.000200"
+        empty_text_external_id = "T-int:C1:1700000002.000200"
         empty_text_source = next(
             row for row in source_rows if row["external_id"] == empty_text_external_id
         )
@@ -477,7 +479,7 @@ def test_slack_sync_handles_whitespace_only_message(
 
         # Mapper flattens whitespace-only summaries to NULL; the body
         # retains verbatim whitespace per ADR-0020 §(d).
-        ws_external_id = "C1:1700000002.000200"
+        ws_external_id = "T-int:C1:1700000002.000200"
         ws_source = next(row for row in source_rows if row["external_id"] == ws_external_id)
         assert ws_source["summary"] is None
         # Title's excerpt collapses to the empty-body placeholder
@@ -1608,11 +1610,12 @@ def test_slack_sync_thread_happy_path_ingests_parent_and_replies(
             )
 
         # Parent + both replies all landed with distinct external_ids
-        # (``f"{channel_id}:{ts}"`` per ADR-0030 §不変条件 3).
+        # (``f"{team_id}:{channel_id}:{ts}"`` per ADR-0030 §不変条件 3,
+        # re-keyed with the team_id prefix in Phase 24-B, ADR-0041 §(a)).
         assert external_ids == {
-            "C1:1700000010.000100",
-            "C1:1700000015.000150",
-            "C1:1700000020.000200",
+            "T-int:C1:1700000010.000100",
+            "T-int:C1:1700000015.000150",
+            "T-int:C1:1700000020.000200",
         }
         # Cursor anchored to the parent ts even though replies have
         # newer ts (ADR-0030 §(d)). Pre-ADR-0030 a naive impl would
@@ -1717,7 +1720,7 @@ def test_slack_sync_thread_reply_idempotent_on_rerun(
     """Second sync with the same stubbed thread history → zero duplicate rows.
 
     ADR-0030 §(b) dedup pin. The
-    ``sources.external_id = f"{channel_id}:{ts}"`` UNIQUE constraint
+    ``sources.external_id = f"{team_id}:{channel_id}:{ts}"`` UNIQUE constraint
     catches the parent / reply dedup at the projection boundary,
     but a more direct invariant is the cursor: after sync #1
     advances the per-channel cursor past the parent's ``ts``, sync

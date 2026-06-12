@@ -121,6 +121,7 @@ class _RecordingSourceService:
 
 def _raw_message(
     *,
+    team_id: str = "T-test",
     channel_id: str = "C1",
     channel_name: str = "general",
     ts: str = "1700000001.000100",
@@ -130,6 +131,7 @@ def _raw_message(
     permalink: str = "https://acme.slack.com/archives/C1/p1700000001000100",
 ) -> RawSlackMessage:
     return RawSlackMessage(
+        team_id=team_id,
         channel_id=channel_id,
         channel_name=channel_name,
         ts=ts,
@@ -754,10 +756,11 @@ def test_sync_observes_each_yielded_message(monkeypatch: pytest.MonkeyPatch) -> 
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=None))
 
-    # The fetcher was built with the configured channel list and
+    # The fetcher was built with the configured channel list, the
+    # bind-guard-resolved team_id (Phase 24-B, ADR-0041 §(i)), and
     # called with an empty resume dict (first-sync semantics).
     fetcher_cls.assert_called_once()
-    assert fetcher_cls.call_args.kwargs == {"channels": ["C1"]}
+    assert fetcher_cls.call_args.kwargs == {"channels": ["C1"], "team_id": "T-test"}
     # ``captured`` holds the cursor dict snapshot taken at fetch_messages
     # entry, before the connector mutates it in-place per yield.
     assert captured["cursor_per_channel"] == {}
@@ -766,8 +769,8 @@ def test_sync_observes_each_yielded_message(monkeypatch: pytest.MonkeyPatch) -> 
     # mapper contract.
     assert result.observed_count == 2
     assert [c["external_id"] for c in service.calls] == [
-        "C1:1700000001.000100",
-        "C1:1700000002.000200",
+        "T-test:C1:1700000001.000100",
+        "T-test:C1:1700000002.000200",
     ]
     assert [c["summary"] for c in service.calls] == ["first", "second"]
     assert all(c["connector_name"] == "slack" for c in service.calls)
@@ -1070,7 +1073,7 @@ def test_sync_skips_excluded_channel_but_advances_cursor(
     # Only the public channel's message reaches the source service.
     assert result.observed_count == 1
     assert len(service.calls) == 1
-    assert service.calls[0]["external_id"] == "C1:ts-1"
+    assert service.calls[0]["external_id"] == "T-test:C1:ts-1"
     # Both channels' cursors advance (skip-but-advance contract).
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
@@ -1105,7 +1108,7 @@ def test_sync_skips_excluded_sender_but_advances_cursor(
     result = SlackConnector().sync(_context(service, cursor_value=None))
 
     assert result.observed_count == 1
-    assert service.calls[0]["external_id"] == "C1:ts-human"
+    assert service.calls[0]["external_id"] == "T-test:C1:ts-human"
     assert result.new_cursor is not None
     assert _load_cursors(result.new_cursor) == {
         "team_id": "T-test",
@@ -1226,8 +1229,8 @@ def test_sync_checkpoints_partial_cursor_on_mid_iteration_failure(
 
     # Both messages reached observe before the crash.
     assert [c["external_id"] for c in service.calls] == [
-        "C1:1700000001.000100",
-        "C1:1700000002.000200",
+        "T-test:C1:1700000001.000100",
+        "T-test:C1:1700000002.000200",
     ]
     # Exactly one ``cursor_set`` call, fired by the connector's
     # finally arm with the partial-progress cursor encoded as JSON.
@@ -1597,7 +1600,7 @@ def test_sync_lowered_floor_triggers_gap_backfill(monkeypatch: pytest.MonkeyPatc
     }
     # The gap message was observed (and nothing else — the forward set is
     # not re-fetched, so no inbox inflation on the already-covered region).
-    assert [c["external_id"] for c in service.calls] == [f"C1:{gap_ts}"]
+    assert [c["external_id"] for c in service.calls] == [f"T-test:C1:{gap_ts}"]
     parsed = _load_cursors(result.new_cursor)
     # Low-water advanced down to the new floor; high-water unchanged (the
     # older gap ts never rewinds the forward cursor).
@@ -1777,6 +1780,7 @@ def test_sync_gap_parent_seeds_threads_axis(monkeypatch: pytest.MonkeyPatch) -> 
     parent_ts = since_to_ts(parse_since("2026-02-01"))
     latest_reply_ts = since_to_ts(now_utc() - timedelta(days=1))
     gap_parent = RawSlackMessage(
+        team_id="T-test",
         channel_id="C1",
         channel_name="general",
         ts=parent_ts,
@@ -1835,6 +1839,7 @@ def test_sync_mid_gap_crash_does_not_advance_low_water(
     # (so the checkpoint fires) but never the channels high-water (the
     # reply's cursor anchor is the parent ts, below the forward cursor).
     gap_reply = RawSlackMessage(
+        team_id="T-test",
         channel_id="C1",
         channel_name="general",
         ts=reply_ts,
@@ -1867,7 +1872,7 @@ def test_sync_mid_gap_crash_does_not_advance_low_water(
         SlackConnector().sync(_context(service, cursor_value=prior))
 
     # The gap reply was observed before the crash.
-    assert [c["external_id"] for c in service.calls] == [f"C1:{reply_ts}"]
+    assert [c["external_id"] for c in service.calls] == [f"T-test:C1:{reply_ts}"]
     # The partial-progress checkpoint fired (threads axis advanced).
     assert len(service.cursor_set_calls) == 1
     checkpoint = service.cursor_set_calls[0]
@@ -1962,18 +1967,130 @@ def test_sync_legacy_cursor_without_team_id_binds(monkeypatch: pytest.MonkeyPatc
     assert _load_cursors(result.new_cursor)["team_id"] == "T-WS1"
 
 
-def test_sync_empty_team_id_does_not_bind(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``auth.test`` returning no team_id warns and does not bind (no ConfigError)."""
+def test_sync_empty_team_id_is_config_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``auth.test`` returning no team_id hard-fails before any fetch (Phase 24-B).
+
+    Reverses the Phase 23-H warn-and-proceed pin: ``team_id`` is now a
+    constituent of every ``external_id``
+    (``f"{team_id}:{channel_id}:{ts}"``, ADR-0041 §(i)), so proceeding
+    without one would mint malformed natural keys. The guard runs before
+    any fetch, so nothing is observed.
+    """
     _patch_settings(monkeypatch, channels=["C1"])
     _patch_auth(monkeypatch, team_id="")
     _patch_fetcher(
         monkeypatch, yields=[("C1", _raw_message(channel_id="C1", ts="1.0", text="x"), "1.0")]
     )
     service = _RecordingSourceService()
-    result = SlackConnector().sync(_context(service, cursor_value=None))
+    with pytest.raises(ConfigError, match="no team_id"):
+        SlackConnector().sync(_context(service, cursor_value=None))
 
-    # Sync proceeds (no raise); team_id stays unbound (binding "" would make
-    # every later sync mismatch).
-    assert result.observed_count == 1
+    # Hard ConfigError before any fetch → nothing observed, no cursor write.
+    assert service.calls == []
+    assert service.cursor_set_calls == []
+
+
+# -------------------------------------------------- backfill_channel bind guard
+
+
+def _patch_backfill_fetcher(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    yields: list[tuple[str, RawSlackMessage, str | None]],
+) -> MagicMock:
+    """Patch :class:`SlackFetcher` for the ``backfill_channel`` signature.
+
+    ``backfill_channel`` calls ``fetch_messages`` with the Phase 22-C
+    ``latest_per_channel=`` bound, which the sync-path ``_patch_fetcher``
+    helper does not accept — hence the dedicated double.
+    """
+    fake_fetcher_cls = MagicMock()
+
+    def _fetch_messages(
+        *,
+        cursor_per_channel: dict[str, str | None],
+        latest_per_channel: dict[str, str | None] | None = None,
+        max_per_channel: int = 100,
+        excludes: Any = None,
+    ) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
+        del cursor_per_channel, latest_per_channel, max_per_channel, excludes
+        return iter(yields)
+
+    fake_fetcher_cls.return_value.fetch_messages.side_effect = _fetch_messages
+    monkeypatch.setattr(
+        "opshub.connectors.slack.connector.SlackFetcher",
+        fake_fetcher_cls,
+    )
+    return fake_fetcher_cls
+
+
+def test_backfill_channel_binds_team_id_on_unbound_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``backfill_channel`` runs the bind guard too (Phase 24-B, ADR-0041 §(a)).
+
+    The guard previously ran only inside :meth:`sync`, so an explicit
+    ``opshub slack cursor backfill`` against an unbound cursor never
+    recorded the workspace identity. Now it binds (and the fetcher gets
+    the resolved team_id for the 3-token external_id).
+    """
+    _patch_auth(monkeypatch, team_id="T-WS1")
+    fetcher_cls = _patch_backfill_fetcher(
+        monkeypatch,
+        yields=[("C1", _raw_message(team_id="T-WS1", channel_id="C1", ts="1.5"), "1.5")],
+    )
+    service = _RecordingSourceService()
+    result = SlackConnector().backfill_channel(
+        _context(service, cursor_value=None),
+        channel_id="C1",
+        since_ts="1.000000",
+        until_ts="2.000000",
+    )
+
+    assert fetcher_cls.call_args.kwargs["team_id"] == "T-WS1"
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor)["team_id"] is None
+    assert _load_cursors(result.new_cursor)["team_id"] == "T-WS1"
+    assert [c["external_id"] for c in service.calls] == ["T-WS1:C1:1.5"]
+
+
+def test_backfill_channel_rejects_team_id_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A token swapped to another workspace cannot slip data in via backfill."""
+    _patch_auth(monkeypatch, team_id="T-OTHER")
+    fetcher_cls = _patch_backfill_fetcher(
+        monkeypatch,
+        yields=[("C1", _raw_message(channel_id="C1", ts="1.5"), "1.5")],
+    )
+    prior = _dump_cursors(
+        {"channels": {"C1": "2.0"}, "backfill": {}, "threads": {}, "team_id": "T-WS1"}
+    )
+    service = _RecordingSourceService()
+    with pytest.raises(ConfigError, match="cursor reset --all"):
+        SlackConnector().backfill_channel(
+            _context(service, cursor_value=prior),
+            channel_id="C1",
+            since_ts="1.000000",
+            until_ts="2.000000",
+        )
+
+    # Guard fires before any fetch: nothing observed, fetcher never built.
+    assert service.calls == []
+    fetcher_cls.return_value.fetch_messages.assert_not_called()
+
+
+def test_backfill_channel_empty_team_id_is_config_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``auth.test`` without a team_id hard-fails the backfill path too."""
+    _patch_auth(monkeypatch, team_id="")
+    _patch_backfill_fetcher(monkeypatch, yields=[])
+    service = _RecordingSourceService()
+    with pytest.raises(ConfigError, match="no team_id"):
+        SlackConnector().backfill_channel(
+            _context(service, cursor_value=None),
+            channel_id="C1",
+            since_ts="1.000000",
+            until_ts="2.000000",
+        )
+    assert service.calls == []
