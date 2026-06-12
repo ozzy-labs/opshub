@@ -148,11 +148,19 @@ def map_message(raw: RawSlackMessage) -> dict[str, Any]:
       forwards this verbatim onto :class:`SourceObserved.connector_name`
       and the inbox row's ``source_ref`` prefix
       (``slack:<external_id>``).
-    * ``external_id = f"{channel_id}:{ts}"`` — Slack's natural key.
-      ``ts`` is unique within a channel (it doubles as the message
-      primary key in their data model); compounding with the channel
-      id keeps the key unique workspace-wide so a multi-channel
-      config produces no collisions.
+    * ``external_id = f"{team_id}:{channel_id}:{ts}"`` — Slack's
+      natural key, re-keyed in Phase 24-B ([ADR-0041](
+      docs/adr/0041-slack-multi-workspace.md) §(a)). ``ts`` is unique
+      within a channel (it doubles as the message primary key in
+      their data model) and compounding with the channel id keeps the
+      key unique workspace-wide; the leading ``team_id`` (the stable,
+      rename-proof workspace identity) extends that uniqueness
+      **across workspaces** so the multi-workspace flip (Phase 24-C)
+      can ingest channels whose ids collide between workspaces
+      without colliding in the source namespace. The connector's
+      bind guard resolves ``team_id`` before any fetch, so the value
+      is always present here (the fetcher rejects an empty one at
+      construction time).
     * ``source_type = "slack_message"`` — the Phase 7 discriminator
       (see :data:`SOURCE_TYPE`).
     * ``title`` — a short human-recognisable label that **includes a
@@ -226,7 +234,9 @@ def map_message(raw: RawSlackMessage) -> dict[str, Any]:
     body = raw.text if raw.text else title
     return {
         "connector_name": "slack",
-        "external_id": f"{raw.channel_id}:{raw.ts}",
+        # Phase 24-B (ADR-0041 §(a)): the leading ``team_id`` makes the
+        # natural key unique across workspaces, not just workspace-wide.
+        "external_id": f"{raw.team_id}:{raw.channel_id}:{raw.ts}",
         "source_type": SOURCE_TYPE,
         "title": title,
         "summary": summary,

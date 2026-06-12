@@ -290,7 +290,6 @@ class SlackConnector:
         floors = _resolve_floors(specs, slack_settings.sync_since)
 
         auth = SlackAuth()
-        fetcher = SlackFetcher(auth, channels=channels)
 
         # Phase 10 (ADR-0020 §(b)): shared ingest excludes. Slack honours
         # the ``channels`` and ``senders`` selectors — a message in an
@@ -316,7 +315,12 @@ class SlackConnector:
         # workspace's messages into the cursor / ``external_id`` namespace
         # (the silent-corruption pathology epic #530 targets). On first sync
         # (or after ``cursor reset --all``) ``team_id`` is unbound → bind it.
-        _bind_or_check_workspace(cursors, auth=auth, logger=context.logger)
+        # Phase 24-B (ADR-0041 §(i)): the guard now *returns* the resolved
+        # ``team_id`` (and hard-fails when ``auth.test`` reports none) so the
+        # fetcher can stamp it onto every yielded message — the mapper
+        # composes ``external_id = f"{team_id}:{channel_id}:{ts}"`` from it.
+        team_id = _bind_or_check_workspace(cursors, auth=auth)
+        fetcher = SlackFetcher(auth, channels=channels, team_id=team_id)
         # Phase 20-B: the fetcher signature still takes
         # ``cursor_per_channel=`` (a flat ``dict[str, str | None]``) so
         # 20-A and 20-B can land independently. We hand it the
@@ -429,7 +433,7 @@ class SlackConnector:
                     f"channel(s); backfilling the newly-uncovered window "
                     f"(one-time catch-up). channels={sorted(gap_targets)}"
                 )
-                gap_fetcher = SlackFetcher(auth, channels=list(gap_targets))
+                gap_fetcher = SlackFetcher(auth, channels=list(gap_targets), team_id=team_id)
                 for channel_id, raw_message, new_cursor in gap_fetcher.fetch_messages(
                     cursor_per_channel=gap_oldest,
                     latest_per_channel=gap_latest,
@@ -644,10 +648,18 @@ class SlackConnector:
         from opshub.core.excludes import load_excludes
 
         auth = SlackAuth()
-        fetcher = SlackFetcher(auth, channels=[channel_id])
         excludes = load_excludes()
 
         cursors = _load_cursors(context.cursor_value)
+        # Phase 24-B (ADR-0041 §(a) §(i)): the bind guard now covers the
+        # explicit backfill path too — it previously ran only inside
+        # :meth:`sync`, so a token swapped to a different workspace could
+        # slip a foreign workspace's history in via ``cursor backfill``.
+        # The guard runs before any fetch (foreign data never enters the
+        # DB) and resolves the ``team_id`` the fetcher stamps onto every
+        # message for the 3-token ``external_id``.
+        team_id = _bind_or_check_workspace(cursors, auth=auth)
+        fetcher = SlackFetcher(auth, channels=[channel_id], team_id=team_id)
         channel_cursors = cursors["channels"]
         thread_cursors = cursors["threads"]
         backfill_cursors = cursors["backfill"]
@@ -1112,13 +1124,19 @@ def _bind_or_check_workspace(
     cursors: SlackCursorState,
     *,
     auth: SlackAuth,
-    logger: Any,
-) -> None:
-    """Bind / verify the single-workspace ``team_id`` invariant (Phase 23-H, ADR-0039).
+) -> str:
+    """Bind / verify the single-workspace ``team_id`` invariant and return it.
 
-    opshub supports one Slack workspace per install. The cursor records the
-    workspace ``team_id`` it was first synced against; this guard resolves the
-    live workspace (via ``auth.test``) and:
+    Phase 23-H (ADR-0039) established the guard; Phase 24-B ([ADR-0041](
+    docs/adr/0041-slack-multi-workspace.md) §(i)) hardens it and makes it
+    return the resolved ``team_id`` so callers can thread the value into the
+    fetcher (the mapper now composes
+    ``external_id = f"{team_id}:{channel_id}:{ts}"`` — zero additional API
+    calls, the ``auth.test`` round-trip here is the single resolution point).
+
+    opshub currently supports one Slack workspace per install. The cursor
+    records the workspace ``team_id`` it was first synced against; this guard
+    resolves the live workspace (via ``auth.test``) and:
 
     * **unbound** (first sync / after ``cursor reset --all``) → bind it
       (mutates ``cursors["team_id"]`` in place; the caller persists it).
@@ -1128,25 +1146,28 @@ def _bind_or_check_workspace(
       into one cursor + ``external_id`` namespace (exit 0 "success" — the
       silent-failure pathology epic #530 targets). Because this runs **before
       any fetch**, the foreign workspace's data never enters the DB, so the
-      ``external_id = "{channel_id}:{ts}"`` workspace-wide-uniqueness premise
-      (``mapper.py``) is never broken (ADR-0039 §Decision 2).
+      ``external_id`` uniqueness premise (``mapper.py``) is never broken
+      (ADR-0039 §Decision 2, carried into ADR-0041 §(a)).
 
-    An ``auth.test`` that returns no ``team_id`` (abnormal) does **not** bind
-    (binding ``""`` would make every later sync mismatch); it warns and lets
-    the sync proceed. Enterprise Grid User Tokens report a stable home
-    ``team_id`` so the guard does not false-positive (ADR-0039 §Decision 5).
+    An ``auth.test`` that returns no ``team_id`` (abnormal) is a hard
+    :class:`ConfigError` as of Phase 24-B — ``team_id`` is now a constituent
+    of every ``external_id``, so proceeding without one would mint malformed
+    natural keys (the pre-24 fail-soft warn-and-proceed arm is gone, ADR-0041
+    §(i)). Enterprise Grid User Tokens report a stable home ``team_id`` so
+    the guard does not false-positive (ADR-0039 §Decision 5).
     """
     current_team = auth.test_token().get("team_id", "")
     if not current_team:
-        logger.warning(
-            "slack connector: auth.test returned no team_id; skipping the "
-            "single-workspace bind guard for this sync (ADR-0039)."
+        raise ConfigError(
+            "Slack auth.test returned no team_id; cannot compose the "
+            "external_id namespace (team_id prefixes every Slack source key, "
+            "ADR-0041). Verify the stored token with `opshub slack auth test` "
+            "and re-run the sync once auth.test reports a team_id."
         )
-        return
     bound_team = cursors["team_id"]
     if bound_team is None:
         cursors["team_id"] = current_team
-        return
+        return current_team
     if bound_team != current_team:
         raise ConfigError(
             f"Slack cursor is bound to workspace team_id {bound_team!r} but the "
@@ -1158,3 +1179,4 @@ def _bind_or_check_workspace(
             "messages remain and must be purged manually — an unsupported "
             "path). Multi-workspace support is out of scope (ADR-0039)."
         )
+    return current_team

@@ -128,6 +128,7 @@ def _failed_event_payloads(engine: Engine) -> list[str]:
 
 def _slack_raw(*, ts: str, text: str) -> RawSlackMessage:
     return RawSlackMessage(
+        team_id="T-int",
         channel_id="C1",
         channel_name="general",
         ts=ts,

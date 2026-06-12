@@ -116,9 +116,21 @@ class RawSlackMessage:
 
     Attributes
     ----------
+    team_id:
+        The Slack workspace ``team_id`` (``"T..."``) the message
+        belongs to (Phase 24-B, [ADR-0041](
+        docs/adr/0041-slack-multi-workspace.md) §(i)). Leads the
+        mapper's ``external_id``
+        (``f"{team_id}:{channel_id}:{ts}"``) so channel ids that
+        collide across workspaces never collide in the source
+        namespace. The connector resolves it once per sync via the
+        bind guard (``auth.test``) and threads it through the
+        fetcher constructor — no additional API call is paid per
+        message.
     channel_id:
-        The Slack channel id (``"C..."``). Pairs with ``ts`` to form
-        the mapper's ``external_id`` (``f"{channel_id}:{ts}"``).
+        The Slack channel id (``"C..."``). Pairs with ``team_id`` and
+        ``ts`` to form the mapper's ``external_id``
+        (``f"{team_id}:{channel_id}:{ts}"``).
     channel_name:
         The human-readable channel name (without the ``#`` prefix),
         resolved once per channel via ``conversations.info``.
@@ -174,6 +186,7 @@ class RawSlackMessage:
         context without a projection schema change.
     """
 
+    team_id: str
     channel_id: str
     channel_name: str
     ts: str
@@ -203,7 +216,7 @@ class SlackFetcher:
     enough that operator-side renames are visible on the next run.
     """
 
-    def __init__(self, auth: SlackAuth, *, channels: list[str]) -> None:
+    def __init__(self, auth: SlackAuth, *, channels: list[str], team_id: str) -> None:
         if not channels:
             # Empty channel list almost certainly means an operator typo
             # in the config (``[connectors.slack] channels = []``). Failing
@@ -211,7 +224,17 @@ class SlackFetcher:
             # silently-no-op sync that misleads the operator into thinking
             # Slack is configured.
             raise ValueError("SlackFetcher requires at least one channel id")
+        if not team_id:
+            # Phase 24-B (ADR-0041 §(i)): ``team_id`` is a constituent of
+            # the mapper's ``external_id`` (``f"{team_id}:{channel_id}:{ts}"``).
+            # An empty value would silently mint malformed natural keys, so
+            # fail loud at construction time — the connector's bind guard
+            # resolves a non-empty value (or raises ConfigError) before
+            # building the fetcher, making this branch a programming-error
+            # tripwire rather than an operator-facing path.
+            raise ValueError("SlackFetcher requires a non-empty team_id")
         self._auth = auth
+        self._team_id = team_id
         # Defensive copy: the caller might mutate the supplied list
         # between construction and the actual sync call (e.g. config
         # reload). Pinning a snapshot keeps the fetcher behaviour
@@ -511,6 +534,7 @@ class SlackFetcher:
                 str(parent_thread_ts_raw) if parent_thread_ts_raw is not None else None
             )
             message = RawSlackMessage(
+                team_id=self._team_id,
                 channel_id=channel_id,
                 channel_name=channel_name,
                 ts=ts,
@@ -580,7 +604,7 @@ class SlackFetcher:
         * ``messages[0]`` is the parent message itself
           (``conversations.replies`` includes the parent as the
           envelope head). We **skip it** explicitly to avoid the
-          duplicate ``external_id = f"{channel_id}:{ts}"`` (parent
+          duplicate ``external_id = f"{team_id}:{channel_id}:{ts}"`` (parent
           already yielded by :meth:`_iter_channel`). ADR-0030 §不変条件
           3 leaves dedup to the projection's ``UNIQUE`` constraint as
           a fallback, but skipping at the source keeps the event log
@@ -634,6 +658,7 @@ class SlackFetcher:
                 client=client, channel_id=channel_id, ts=reply_ts
             )
             reply_message = RawSlackMessage(
+                team_id=self._team_id,
                 channel_id=channel_id,
                 channel_name=channel_name,
                 ts=reply_ts,
@@ -854,6 +879,7 @@ class SlackFetcher:
                 client=client, channel_id=channel_id, ts=reply_ts
             )
             yield RawSlackMessage(
+                team_id=self._team_id,
                 channel_id=channel_id,
                 channel_name=resolved_channel_name,
                 ts=reply_ts,

@@ -184,13 +184,20 @@ def run_cursor_backfill(*, channel_id: str, since: str, until: str | None) -> in
 def _oldest_observed_ts(engine_factory: Any, *, channel_id: str) -> str | None:
     """Return the oldest ingested Slack message ts for ``channel_id``, or ``None``.
 
-    Slack sources carry ``external_id = "{channel_id}:{ts}"`` (the message's
-    natural key, see ``connectors/slack/mapper.py``), so the oldest ingested ts
-    is the numeric ``min`` over the ts suffix of the channel's ``sources`` rows.
-    Used to default ``cursor backfill --until`` for a pre-feature channel
-    (Phase 23-F-2, #536) **without reaching into the connector** — the
-    connector stays decoupled from the projection; this CLI/query layer owns
-    the lookup. Returns ``None`` when the channel has no ingested rows.
+    Slack sources carry ``external_id = "{team_id}:{channel_id}:{ts}"`` (the
+    message's natural key, re-keyed in Phase 24-B per [ADR-0041](
+    ../../docs/adr/0041-slack-multi-workspace.md) §(a); see
+    ``connectors/slack/mapper.py``), so the oldest ingested ts is the numeric
+    ``min`` over the ts token of the channel's ``sources`` rows. The SQL
+    pre-filter matches the channel id **between two colons** (the middle
+    token) so a hypothetical team id equal to the channel id never
+    false-matches; the Python loop then re-verifies the exact 3-token split.
+    Legacy 2-token rows (pre-Phase-24 ingest — only present when the operator
+    skipped the ADR-0041 §(e) DB re-init) never match the pattern and are
+    ignored. Used to default ``cursor backfill --until`` for a pre-feature
+    channel (Phase 23-F-2, #536) **without reaching into the connector** —
+    the connector stays decoupled from the projection; this CLI/query layer
+    owns the lookup. Returns ``None`` when the channel has no ingested rows.
     """
     from sqlalchemy import select
 
@@ -202,7 +209,7 @@ def _oldest_observed_ts(engine_factory: Any, *, channel_id: str) -> str | None:
             rows = conn.execute(
                 select(sources_table.c.external_id).where(
                     sources_table.c.connector_name == _CONNECTOR,
-                    sources_table.c.external_id.like(f"{channel_id}:%"),
+                    sources_table.c.external_id.like(f"%:{channel_id}:%"),
                 )
             ).all()
     finally:
@@ -211,9 +218,13 @@ def _oldest_observed_ts(engine_factory: Any, *, channel_id: str) -> str | None:
     oldest: float | None = None
     oldest_raw: str | None = None
     for (external_id,) in rows:
-        _, _, suffix = str(external_id).partition(":")
-        if not suffix:
+        parts = str(external_id).split(":")
+        if len(parts) != 3 or parts[1] != channel_id:
+            # Either a malformed key or a LIKE false-positive (e.g. the
+            # channel id substring-matching a different token). The exact
+            # token check keeps the inference precise.
             continue
+        suffix = parts[2]
         try:
             value = float(suffix)
         except ValueError:

@@ -256,7 +256,8 @@ class SlackDemandDigestProjection:
 
     * :class:`SourceObserved` with ``connector_name == "slack"`` AND
       ``source_type == "slack_message"`` — parse the ``external_id``
-      (``"{channel_id}:{ts}"``) into its components and:
+      (``"{team_id}:{channel_id}:{ts}"``, Phase 24-B) into its
+      components and:
 
       - If :attr:`SourceObserved.author_id` equals the resolved
         operator self id, the event is dropped before any row is
@@ -332,7 +333,8 @@ class SlackDemandDigestProjection:
         1. event must be :class:`SourceObserved`,
         2. ``connector_name`` must be ``"slack"``,
         3. ``source_type`` must equal :data:`SLACK_SOURCE_TYPE`,
-        4. ``external_id`` must parse as ``"<channel_id>:<ts>"``,
+        4. ``external_id`` must parse as ``"<team_id>:<channel_id>:<ts>"``
+           (Phase 24-B 3-token shape; legacy 2-token events drop),
         5. the ``last_demand_ts`` must compute (a malformed ts is
            treated as a non-event and skipped).
 
@@ -556,28 +558,45 @@ class SlackDemandDigestProjection:
 
 
 def _parse_slack_external_id(external_id: str) -> tuple[str, float] | None:
-    """Split a Slack ``external_id`` (``"{channel_id}:{ts}"``).
+    """Split a Slack ``external_id`` (``"{team_id}:{channel_id}:{ts}"``).
 
     Returns ``(channel_id, ts_float)`` on success, ``None`` on any
     parse failure. Defensive parsing is justified by the rebuild
     driver: a malformed event must not crash the whole replay.
+
+    Phase 24-B ([ADR-0041](docs/adr/0041-slack-multi-workspace.md)
+    §(a) §(g)): the natural key gained a leading ``team_id`` token.
+    The digest row key stays ``(channel_id, demand_kind)`` until the
+    Phase 24-D ``(team_id, channel)`` re-key, so this parser still
+    returns the 2-tuple — it just reads the channel from the middle
+    token now.
+
+    Legacy 2-token events (``"{channel_id}:{ts}"``, pre-Phase-24
+    ingest) deliberately return ``None`` — i.e. they are **dropped**
+    from the digest. The sanctioned upgrade path is a DB re-init +
+    full re-sync (ADR-0041 §(e)), after which every replayed event
+    carries the 3-token shape; silently accepting both shapes would
+    let one message appear under two natural keys and double-count
+    demands. The drop is pinned explicitly by
+    ``test_legacy_two_token_external_id_is_dropped``.
     """
     if not external_id:
         return None
-    # Slack ``ts`` is a string like ``"1700000000.123456"`` — split
-    # on the **first** ``":"`` so a channel id never collides with a
-    # ``ts`` that hypothetically contains a colon (defensive; the
-    # current Slack format does not).
-    head, sep, tail = external_id.partition(":")
-    if not sep:
+    # Slack ``ts`` is a string like ``"1700000000.123456"`` — split on
+    # the first two ``":"`` separators so a ``ts`` that hypothetically
+    # contains a colon never bleeds into the channel token (defensive;
+    # the current Slack format does not contain one).
+    team_id, sep1, rest = external_id.partition(":")
+    if not sep1 or not team_id:
         return None
-    if not head or not tail:
+    channel_id, sep2, tail = rest.partition(":")
+    if not sep2 or not channel_id or not tail:
         return None
     try:
         ts_value = float(tail)
     except (TypeError, ValueError):
         return None
-    return head, ts_value
+    return channel_id, ts_value
 
 
 def _is_dm_channel(channel_id: str) -> bool:

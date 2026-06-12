@@ -95,7 +95,8 @@ def _slack_observed(
         recorded_at=occurred_at,
         actor="connector:slack",
         connector_name="slack",
-        external_id=f"{channel_id}:{ts}",
+        # Phase 24-B (ADR-0041 §(a)): 3-token natural key.
+        external_id=f"T-int:{channel_id}:{ts}",
         source_type="slack_message",
         title=title,
         url=f"https://example.slack.com/archives/{channel_id}/p{ts.replace('.', '')}",
