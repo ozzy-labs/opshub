@@ -1,7 +1,7 @@
 # 0039. Slack Single-Workspace Non-Goal (+ team_id bind guard)
 
-- Status: Accepted + Landed (Phase 23-H, epic [#530](https://github.com/ozzy-labs/opshub/issues/530))
-- Date: 2026-06-09
+- Status: Superseded by [ADR-0041](0041-slack-multi-workspace.md) (Phase 24, epic [#552](https://github.com/ozzy-labs/opshub/issues/552) — 本 ADR §決定 3 が予約した出口条件「新 top-level Phase + 新 ADR + `team_id` re-key、pre-userbase hard flip」をそのまま引いた。team_id bind guard の semantics は ADR-0041 §(a) が per-alias に一般化して継承する)
+- Date: 2026-06-09 (Accepted + Landed, Phase 23-H, epic [#530](https://github.com/ozzy-labs/opshub/issues/530)); 2026-06-12 (Superseded by ADR-0041)
 - Deciders: opshub maintainers
 - Related: [ADR-0018](0018-slack-token-principal.md) (User/Bot token principal — orthogonal axis; this ADR constrains *how many* workspaces, not *which principal*), [ADR-0030](0030-slack-thread-reply-ingestion.md) / [ADR-0038](0038-slack-sync-gap-backfill.md) (compound cursor schema — the `team_id` bind axis is added here), [ADR-0010](0010-connector-contract.md) (connector / cursor contract)
 

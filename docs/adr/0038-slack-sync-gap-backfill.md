@@ -3,7 +3,7 @@
 - Status: Accepted + Landed (Phase 22 完了、epic [#516](https://github.com/ozzy-labs/opshub/issues/516))
 - Date: 2026-06-08 (Accepted); 2026-06-08 (Landed: 22-A docs [#523](https://github.com/ozzy-labs/opshub/pull/523) / 22-B cursor schema [#525](https://github.com/ozzy-labs/opshub/pull/525) / 22-C bounded fetch [#526](https://github.com/ozzy-labs/opshub/pull/526) / 22-D connector gap pass [#527](https://github.com/ozzy-labs/opshub/pull/527) / 22-E `opshub slack cursor` CLI + closeout)
 - Deciders: opshub maintainers
-- Related: [ADR-0036](0036-slack-sync-date-floor.md) (date floor — 本 ADR が §(g) cursor authoritative を「forward 限定」へ精緻化し §Consequences の rebuild 記述を是正)、[ADR-0030](0030-slack-thread-reply-ingestion.md) (thread reply ingestion / compound cursor schema)、[ADR-0010](0010-connector-contract.md) (connector / cursor contract — `backfill` 軸を追加)、[ADR-0002](0002-event-sourced-architecture.md) (projection は event log から再構築 = `opshub projections rebuild` の意味論)
+- Related: [ADR-0036](0036-slack-sync-date-floor.md) (date floor — 本 ADR が §(g) cursor authoritative を「forward 限定」へ精緻化し §Consequences の rebuild 記述を是正)、[ADR-0030](0030-slack-thread-reply-ingestion.md) (thread reply ingestion / compound cursor schema)、[ADR-0010](0010-connector-contract.md) (connector / cursor contract — `backfill` 軸を追加)、[ADR-0002](0002-event-sourced-architecture.md) (projection は event log から再構築 = `opshub projections rebuild` の意味論)、[ADR-0041](0041-slack-multi-workspace.md) (Phase 24 — 本 ADR §(a) の 3 軸 compound cursor は per-alias nest の内側に移る。`backfill` 軸の意味・lifecycle / §(f) の status / cursor 二層 operability は per-workspace で不変、`cursor backfill` の `--until` 逆引きは 3-token `external_id` に追従)
 
 ## Context
 

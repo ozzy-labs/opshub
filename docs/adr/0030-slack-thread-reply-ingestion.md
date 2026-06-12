@@ -3,7 +3,7 @@
 - Status: Accepted + Landed (revised, Phase 20)
 - Date: 2026-06-02 (revised 2026-06-07 — §(d) を Phase 20 実装に合わせて改訂、`## Implementation plan` を deferred → landed 化)
 - Deciders: opshub maintainers
-- Related: [ADR-0036](0036-slack-sync-date-floor.md) — sync の date floor で親メッセージが `oldest` 以前に落ちると、その thread reply (`conversations.replies`) も取得対象外になる (floor と整合)
+- Related: [ADR-0036](0036-slack-sync-date-floor.md) — sync の date floor で親メッセージが `oldest` 以前に落ちると、その thread reply (`conversations.replies`) も取得対象外になる (floor と整合); [ADR-0041](0041-slack-multi-workspace.md) — Phase 24 で本 ADR §(d) の compound cursor を per-alias nest (`{"workspaces": {"<alias>": {...}}}`) の内側に移す (軸の意味・lifecycle は不変)。`external_id` は `f"{team_id}:{channel_id}:{ts}"` の 3-token に re-key される
 
 ## Context
 
@@ -79,7 +79,7 @@ duplicate dedup には `external_id = f"{channel_id}:{ts}"` を natural key と�
 
 ### (d) Cursor 戦略: 2 軸 compound cursor + late reply polling + activity window pruning (Phase 20 revised)
 
-`SlackFetcher` の resume cursor は **2 軸 compound 構造** に拡張する (Phase 20-B `connector_cursors.cursor_value` schema 改訂、PR [#473](https://github.com/ozzy-labs/opshub/pull/473)):
+`SlackFetcher` の resume cursor は **2 軸 compound 構造** に拡張する (Phase 20-B `connector_cursors.cursor_value` schema 改訂、PR [#473](https://github.com/ozzy-labs/opshub/pull/473))。その後 [ADR-0038](0038-slack-sync-gap-backfill.md) §(a) が `backfill` 軸を、[ADR-0039](0039-slack-single-workspace-non-goal.md) が scalar `team_id` 軸を追加し、Phase 24 ([ADR-0041](0041-slack-multi-workspace.md) §(d)) で 4 軸 shape ごと per-alias nest の内側に移る (軸定義は不変):
 
 ```json
 {
