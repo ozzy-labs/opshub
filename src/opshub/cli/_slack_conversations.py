@@ -25,12 +25,13 @@ Output formats
   channels, the peer name for DMs, and a comma-joined participant
   list (capped at :data:`_MPIM_PARTICIPANT_DISPLAY_LIMIT` with a
   ``+N`` suffix) for MPIMs.
-* ``toml``: emits a complete, paste-ready ``[connectors.slack]`` block
-  — the table header, ``enabled = true``, and the ``channels`` array —
-  so the output drops straight into ``opshub.toml`` and ``opshub slack
-  sync`` runs with no further editing (Phase 23-E, #535). Each id is
-  annotated with a comment carrying the conversation type and a
-  human-readable label.
+* ``toml``: emits a complete, paste-ready block — the
+  ``[connectors.slack]`` header with ``enabled = true`` plus the
+  ``[connectors.slack.workspaces.<alias>]`` table carrying the
+  ``channels`` array (Phase 24-C, ADR-0041 §(f)) — so the output drops
+  straight into ``opshub.toml`` and ``opshub slack sync`` runs with no
+  further editing (Phase 23-E, #535). Each id is annotated with a
+  comment carrying the conversation type and a human-readable label.
 * ``json``: a JSON array of objects matching
   ``SlackConversation.__dataclass_fields__`` 1:1 (id / type / name /
   display_name / is_private / is_archived / purpose / participants).
@@ -210,6 +211,7 @@ def parse_types(raw: str) -> tuple[ConversationType, ...]:
 
 def run_conversations_command(
     *,
+    workspace: str,
     output_format: OutputFormat,
     filter_substring: str | None,
     limit: int | None,
@@ -228,6 +230,13 @@ def run_conversations_command(
 
     Parameters
     ----------
+    workspace:
+        Resolved workspace alias (Phase 24-C,
+        [ADR-0041](../../docs/adr/0041-slack-multi-workspace.md) §(f) —
+        the ``slack.py`` wrapper applies the shared default rule before
+        calling here). Selects the per-alias token slot
+        (``connector:slack:<alias>:token``) and the alias the
+        ``--format=toml`` block is emitted for.
     output_format:
         One of :data:`FORMAT_CHOICES`.
     filter_substring:
@@ -285,7 +294,7 @@ def run_conversations_command(
     from opshub.connectors.slack.auth import SlackAuth
     from opshub.connectors.slack.conversations import list_conversations
 
-    auth = SlackAuth()
+    auth = SlackAuth(workspace)
 
     # Resolve the activity-probe axis from the sort key alone (Phase 23-G
     # #537: the axis is selected *only* by an explicit ``--sort``; the
@@ -363,6 +372,7 @@ def run_conversations_command(
         show_activity=probe_ran,
         engagement_probe=engagement_probe,
         cutoff_date=cutoff_date,
+        workspace=workspace,
     )
     if rendered:
         typer.echo(rendered)
@@ -386,6 +396,7 @@ def render_conversations(
     show_activity: bool = False,
     engagement_probe: bool = False,
     cutoff_date: str | None = None,
+    workspace: str,
 ) -> str:
     """Format a stream of :class:`SlackConversation` rows for stdout.
 
@@ -420,6 +431,7 @@ def render_conversations(
             materialised,
             engagement_probe=engagement_probe,
             cutoff_date=cutoff_date,
+            workspace=workspace,
         )
     if output_format == "json":
         return _render_json(materialised)
@@ -602,8 +614,9 @@ def _render_toml(
     *,
     engagement_probe: bool = False,
     cutoff_date: str | None = None,
+    workspace: str,
 ) -> str:
-    """Render conversations as a complete, paste-ready ``[connectors.slack]`` block.
+    """Render conversations as a paste-ready workspace-table TOML block.
 
     Phase 23-E (#535): the output is a self-contained section — the
     ``[connectors.slack]`` table header, ``enabled = true``, and the
@@ -614,6 +627,14 @@ def _render_toml(
     array into whatever table preceded it (or none), silently breaking
     the config. Emitting the header + ``enabled`` flag closes that trap.
 
+    Phase 24-C ([ADR-0041](../../docs/adr/0041-slack-multi-workspace.md)
+    §(f)): the ``channels`` array now lives under the
+    ``[connectors.slack.workspaces.<alias>]`` table — the flat
+    ``[connectors.slack] channels`` key is rejected by the settings
+    layer — so the block emits the workspace table for the alias the
+    listing ran against (``workspace``, resolved by the shared
+    ADR-0041 §(f) default rule in ``slack.py``).
+
     Each id sits inside string quotes followed by a comment that names
     the conversation type and a human-readable label so reviewers can
     spot DMs / MPIMs / archived entries at a glance before pasting. The
@@ -622,7 +643,12 @@ def _render_toml(
     label), ``"last YYYY-MM-DD"`` for the any-author axis (preserves the
     #374 wording).
     """
-    section = ["[connectors.slack]", "enabled = true"]
+    section = [
+        "[connectors.slack]",
+        "enabled = true",
+        "",
+        f"[connectors.slack.workspaces.{workspace}]",
+    ]
     header = f"# Slack conversations ({len(rows)})"
     # Phase 23-G (#537): when an explicit ts-axis sort defaulted to the
     # implicit 90d window, stamp the resolved cutoff as a comment so the

@@ -146,6 +146,16 @@ def _context(
     )
 
 
+def _dump_state(state: Any) -> str:
+    """Wrap one workspace's state in the Phase 24-C envelope and serialise."""
+    return _dump_cursors({"workspaces": {"acme": state}})
+
+
+def _load_state(value: str | None) -> Any:
+    """Parse a persisted cursor and unwrap the test workspace's state."""
+    return _load_cursors(value)["workspaces"]["acme"]
+
+
 def _patch_settings(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -156,16 +166,19 @@ def _patch_settings(
     """Patch :class:`OpsHubSettings` to return a controllable Slack section.
 
     Mirrors :func:`tests.unit.connectors.slack.test_connector._patch_settings`
-    but defaults the activity window to the production default
+    (Phase 24-C: ``channels`` lands under the single ``"acme"`` workspace
+    table) but defaults the activity window to the production default
     (:data:`SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW`) so tests opt into a
     narrower window only when they exercise the prune behaviour.
     """
-    from opshub.core.config import SlackChannelSpec
+    from opshub.core.config import SlackChannelSpec, SlackWorkspaceSettings
 
-    specs = [SlackChannelSpec(id=cid) for cid in channels]
+    workspace = SlackWorkspaceSettings(channels=[SlackChannelSpec(id=cid) for cid in channels])
     fake_settings = MagicMock()
-    fake_settings.connectors.slack.channels = specs
+    fake_settings.connectors.slack.workspaces = {"acme": workspace}
     fake_settings.connectors.slack.sync_since = sync_since
+    fake_settings.connectors.slack.sync_workspace_filter = None
+    fake_settings.connectors.slack.backfill_on_floor_lower = True
     fake_settings.connectors.slack.thread_activity_window = (
         thread_activity_window
         if thread_activity_window is not None
@@ -345,7 +358,7 @@ def test_polling_phase_fetches_thread_replies_for_in_window_cursor(
         },
     )
 
-    prior_cursor = _dump_cursors(
+    prior_cursor = _dump_state(
         {
             "team_id": None,
             "channels": {"C1": "1700000010.000100"},
@@ -370,7 +383,7 @@ def test_polling_phase_fetches_thread_replies_for_in_window_cursor(
     assert result.observed_count == 1
     assert service.calls[0]["external_id"] == f"T-test:C1:{new_reply_ts}"
     # The threads cursor advanced to the new reply ts.
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     assert parsed["threads"] == {"C1:1700000010.000100": new_reply_ts}
 
 
@@ -397,7 +410,7 @@ def test_polling_phase_skips_out_of_window_threads(
     # outside the 30-day window.
     cold_ts = since_to_ts(now_utc() - timedelta(days=60))
     cold_key = "C1:1700000010.000100"
-    prior_cursor = _dump_cursors(
+    prior_cursor = _dump_state(
         {
             "team_id": None,
             "channels": {"C1": "1700000010.000100"},
@@ -418,7 +431,7 @@ def test_polling_phase_skips_out_of_window_threads(
     # The cold thread was not polled.
     assert polling_calls == []
     # The cold thread was pruned from the cursor.
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     assert cold_key not in parsed["threads"]
 
 
@@ -458,7 +471,7 @@ def test_new_parent_initialises_thread_cursor_at_latest_reply(
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=None))
 
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     # The threads axis gained a new entry seeded at ``latest_reply``,
     # so the next sync's polling phase will pass ``oldest=<latest_reply>``
     # and skip the snapshot replies.
@@ -507,7 +520,7 @@ def test_phase1_initial_snapshot_replies_advance_threads_cursor(
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=None))
 
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     # Threads cursor reflects ``max(latest_reply, reply.ts)`` — they
     # coincide here, but a reply newer than the parent's
     # ``latest_reply`` (hypothetical mid-page race) would still
@@ -550,7 +563,7 @@ def test_polling_phase_advances_threads_cursor_monotonically(
         thread_replies={("C1", "1700000010.000100"): [late_a, late_b]},
     )
 
-    prior_cursor = _dump_cursors(
+    prior_cursor = _dump_state(
         {
             "team_id": None,
             "channels": {"C1": "1700000010.000100"},
@@ -562,7 +575,7 @@ def test_polling_phase_advances_threads_cursor_monotonically(
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=prior_cursor))
 
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     # ``_max_ts`` keeps the cursor at the highest yielded ts.
     assert parsed["threads"] == {"C1:1700000010.000100": ts_late_a}
 
@@ -593,7 +606,7 @@ def test_polling_phase_skipped_for_thread_in_excluded_channel(
         # Use a recent ts so the in-window guard alone is satisfied;
         # the excludes guard is what we're pinning here.
         recent_ts = since_to_ts(now_utc() - timedelta(days=1))
-        prior_cursor = _dump_cursors(
+        prior_cursor = _dump_state(
             {
                 "team_id": None,
                 "channels": {"C1": "1700000010.000100"},
@@ -639,7 +652,7 @@ def test_thread_activity_window_overrides_default_via_settings(
     _patch_auth(monkeypatch)
 
     fortnight_ts = since_to_ts(now_utc() - timedelta(days=14))
-    prior_cursor = _dump_cursors(
+    prior_cursor = _dump_state(
         {
             "team_id": None,
             "channels": {"C1": "1700000010.000100"},
@@ -659,7 +672,7 @@ def test_thread_activity_window_overrides_default_via_settings(
 
     # 7d window → the 14-day-old thread is cold; no polling, pruned.
     assert polling_calls == []
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     assert parsed["threads"] == {}
 
 
@@ -760,7 +773,7 @@ def test_polling_phase_treats_null_last_reply_as_in_window(
     _patch_settings(monkeypatch, channels=["C1"])
     _patch_auth(monkeypatch)
 
-    prior_cursor = _dump_cursors(
+    prior_cursor = _dump_state(
         {
             "team_id": None,
             "channels": {"C1": "1700000010.000100"},
@@ -875,7 +888,7 @@ def test_polling_phase_preserves_all_threads_when_window_disabled(
 
     cold_ts = since_to_ts(now_utc() - timedelta(days=60))
     cold_key = "C1:1700000010.000100"
-    prior_cursor = _dump_cursors(
+    prior_cursor = _dump_state(
         {
             "team_id": None,
             "channels": {"C1": "1700000010.000100"},
@@ -902,7 +915,7 @@ def test_polling_phase_preserves_all_threads_when_window_disabled(
         }
     ]
     # Cursor entry is preserved (no prune).
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     assert parsed["threads"] == {cold_key: cold_ts}
 
 

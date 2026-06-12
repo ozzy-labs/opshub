@@ -192,10 +192,15 @@ def build_connector_sync_handler(engine: Engine) -> ToolHandler:
         except Exception as exc:
             # Match the CLI's sanitise: record only the exception
             # *type* on ConnectorSyncFailed so tokens / PII never
-            # land in the event log. Re-raise so the server wrapper
-            # renders an MCP ``isError`` response with a redacted
-            # message.
-            source.record_sync_failure(name, error_message=type(exc).__name__)
+            # land in the event log (plus the connector-vouched
+            # ``failure_event_detail`` supplement when present —
+            # Phase 24-C, ADR-0041 §(b), e.g. the Slack
+            # multi-workspace failed-alias list). Re-raise so the
+            # server wrapper renders an MCP ``isError`` response with
+            # a redacted message.
+            from opshub.core.sanitise import failure_event_message
+
+            source.record_sync_failure(name, error_message=failure_event_message(exc))
             raise
 
         source.cursor_set(name, result.new_cursor, sync_started=False)

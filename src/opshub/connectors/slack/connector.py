@@ -11,66 +11,84 @@ its conventions exactly so a future "common sync orchestrator" refactor
 Sync semantics
 --------------
 
-The persisted resume cursor is a **compound** JSON object (Phase 20-B,
-[ADR-0030 §(d) revised, epic #465](https://github.com/ozzy-labs/opshub/issues/465);
-``backfill`` axis added Phase 22-B, [ADR-0038](docs/adr/0038-slack-sync-gap-backfill.md)):
+The persisted resume cursor is a **per-workspace nest** of the Phase
+20-B compound JSON object (Phase 24-C,
+[ADR-0041](docs/adr/0041-slack-multi-workspace.md) §(d); the inner
+4-axis shape is unchanged from
+[ADR-0030 §(d) revised, epic #465](https://github.com/ozzy-labs/opshub/issues/465)
++ ``backfill`` axis Phase 22-B [ADR-0038](docs/adr/0038-slack-sync-gap-backfill.md)
++ ``team_id`` axis Phase 23-H ADR-0039):
 
 .. code-block:: json
 
    {
-     "channels": {"<channel_id>": "<max_ts>"},
-     "backfill": {"<channel_id>": "<low_water_ts>"},
-     "threads": {"<channel_id>:<thread_ts>": "<last_reply_ts>"}
+     "workspaces": {
+       "<alias>": {
+         "channels": {"<channel_id>": "<max_ts>"},
+         "backfill": {"<channel_id>": "<low_water_ts>"},
+         "threads": {"<channel_id>:<thread_ts>": "<last_reply_ts>"},
+         "team_id": "<T...>"
+       }
+     }
    }
 
 The ``channels`` axis carries the per-channel forward high-water cursor
 that drives ``conversations.history`` (Phase 7 semantics, unchanged).
 The ``backfill`` axis carries the per-channel low-water mark (the oldest
-ts boundary fetched down to) — Phase 22-B establishes the schema only;
-the gap-backfill lifecycle lands in 22-D, so this axis is always written
-empty by the current code. The ``threads`` axis carries the per-thread
-resume cursor for ``conversations.replies(oldest=last_reply_ts)``
-increments — the late thread reply polling path established in Phase
-20-C. Round-trip:
+ts boundary fetched down to, Phase 22-D lifecycle). The ``threads`` axis
+carries the per-thread resume cursor for
+``conversations.replies(oldest=last_reply_ts)`` increments — the late
+thread reply polling path established in Phase 20-C. The scalar
+``team_id`` axis binds the alias to its Slack workspace (per-alias bind
+guard, ADR-0041 §(a)). Round-trip:
 
 1. ``context.cursor_value`` is the JSON string we wrote on the previous
    sync (or ``None`` for first-sync).
 2. :func:`_load_cursors` parses it into the
-   ``{"channels": dict, "backfill": dict, "threads": dict}`` compound
-   shape (a pre-Phase-22 cursor lacking the ``backfill`` axis is
-   tolerated and defaulted to empty — ADR-0038 §(g)). ``None`` yields
-   the empty compound (all dicts empty).
-3. The ``channels`` axis is handed to the fetcher via
-   ``cursor_per_channel=`` (the fetcher signature is unchanged in
-   Phase 20-B). As the fetcher yields
+   ``{"workspaces": {alias: SlackCursorState}}`` envelope. ``None``
+   yields the empty envelope (no workspaces). Inside each alias entry a
+   pre-Phase-22 state lacking the ``backfill`` axis is tolerated and
+   defaulted to empty (ADR-0038 §(g)).
+3. :meth:`SlackConnector.sync` loops the configured workspaces
+   serially. Each workspace's ``channels`` axis is handed to a fresh
+   fetcher via ``cursor_per_channel=``. As the fetcher yields
    ``(channel_id, message, new_cursor)`` triples we update the
    in-memory ``channels`` dict per yield and forward the mapped
    ``SourceObserved`` to :meth:`SourceService.observe`. The dict
    advances in lock-step with the commit so a crash mid-loop loses at
-   most one message worth of progress (the one whose ``observe`` call
-   was about to commit).
-4. After the iterator drains we serialise the compound dict back to
-   JSON and hand it to the CLI driver as :attr:`SyncResult.new_cursor`.
+   most one message worth of progress.
+4. After **each workspace** completes (success or failure) the envelope
+   is checkpointed via ``cursor_set(sync_started=True)`` (per-workspace
+   error isolation, ADR-0041 §(b)) — a later workspace's failure can
+   never roll back an earlier workspace's progress, because the CLI
+   driver only persists the terminal cursor on a normal return.
+5. After every workspace drains we serialise the envelope back to JSON
+   and hand it to the CLI driver as :attr:`SyncResult.new_cursor`. If
+   any workspace failed, a :class:`SlackWorkspaceSyncError` naming the
+   failed aliases is raised instead (non-zero exit; the succeeded
+   workspaces' cursors are already checkpointed).
 
 The cursor JSON is opaque to the driver and projection — both treat it
-as a single string. A future operator-facing ``opshub connector status``
-CLI could pretty-print the parsed dict.
+as a single string. ``opshub slack status --verbose`` pretty-prints the
+parsed envelope.
 
 Schema migration (pre-userbase, no compat)
 ------------------------------------------
 
-The pre-Phase-20-B cursor was a flat ``dict[channel_id, ts]`` (single
-axis, no thread cursor). Phase 20-B is a hard schema flip: the
-:func:`_load_cursors` parser rejects the legacy shape with a
-:class:`ConfigError` that directs the operator to ``opshub projections
-rebuild`` (per opshub's pre-userbase stance — see ``AGENTS.md`` §
-"設計判断のスタンス" and the epic [#465](
-https://github.com/ozzy-labs/opshub/issues/465) discussion). We do
-not silently coerce because the legacy shape is ambiguous: a JSON
-object whose top-level keys are channel ids (``"C1"``, ``"C2"``)
-could be a freshly-rebuilt empty compound (``{"channels": {},
-"threads": {}}``) only by coincidence, and we would lose the chance
-to surface the migration to the operator.
+The pre-Phase-24 cursor was a single top-level compound
+(``{"channels": ..., "backfill": ..., "threads": ..., "team_id": ...}``,
+Phase 20-B/22-B/23-H shape) with no workspace nest; before that, a flat
+``dict[channel_id, ts]``. Phase 24-C is a hard schema flip: the
+:func:`_load_cursors` parser rejects **both** legacy shapes with a
+:class:`ConfigError` that directs the operator to ``opshub slack cursor
+reset --all`` (per opshub's pre-userbase stance — see ``AGENTS.md`` §
+"設計判断のスタンス"; Phase 23-A [#531](
+https://github.com/ozzy-labs/opshub/issues/531) established that
+``opshub projections rebuild`` is a dead-end for cursor recovery because
+replay restores the same value). We do not silently coerce: the legacy
+shapes carry no workspace alias, so any lift would have to invent one —
+and the ADR-0041 §(e) upgrade path is a DB re-init anyway (the
+``external_id`` re-key of Phase 24-B makes old rows unreachable).
 
 Cursor monotonicity (defense in depth)
 --------------------------------------
@@ -103,23 +121,24 @@ the next sync re-fetches them, re-observes them, and (because
 inflates ``inbox_items`` on every aborted-then-retried run. That is
 the second half of the issue #339 cascade.
 
-We close this gap with a ``try / finally`` around the fetcher loop:
-if the loop exits via exception **after** at least one message was
-observed (i.e. ``cursors`` has advanced relative to the input we
-parsed from ``context.cursor_value``), we persist the partial
-progress via ``cursor_set(sync_started=True)``. The
+We close this gap with the **per-workspace checkpoint** (Phase 24-C,
+ADR-0041 §(b)): the workspace loop persists the envelope via
+``cursor_set(sync_started=True)`` in a per-iteration ``finally`` arm —
+after every workspace, success or failure (including
+``KeyboardInterrupt``). The
 :class:`~opshub.projections.connector_cursors.ConnectorCursorsProjection`
 reducer upserts ``cursor_value`` on every ``ConnectorSyncStarted``
 event, so the partial-progress write is immediately visible to the
 next sync — bounding the re-fetch window on retry to "messages that
 threw mid-iteration", not "everything since the last successful
-sync".
+sync". The same mechanism delivers per-workspace error isolation: a
+later workspace's failure aborts the driver's terminal cursor write,
+but the earlier workspaces' progress is already checkpointed.
 
-The happy path is unchanged: the ``finally`` arm is a no-op when
-the loop completed normally because we set ``completed_normally =
-True`` just before exiting the ``try`` arm, and the CLI driver
-still writes the terminal ``ConnectorSyncCompleted`` event with the
-same JSON value. Idempotency on the failure path: writing the
+The all-clean happy path skips the final checkpoint (the serialised
+value would be byte-identical to the terminal
+``ConnectorSyncCompleted`` the CLI driver writes — emitting both would
+be event-log noise). Idempotency on the failure path: writing the
 same cursor twice (once via the partial checkpoint, once via the
 CLI's ``record_sync_failure`` arm) is safe because
 ``record_sync_failure`` itself does not touch the cursor —
@@ -129,16 +148,18 @@ no-op in the cursor projection (phase-3-plan §4 Q3).
 Configuration source
 --------------------
 
-Channels are read from ``[connectors.slack] channels`` (or the
-``OPSHUB_CONNECTORS__SLACK__CHANNELS`` env var) on
-:class:`~opshub.core.config.OpsHubSettings`. ``enabled = false`` is the
-default per phase-7-plan §1 #2 (opt-in by design) but the CLI driver
-treats the connector as runnable as soon as it is registered — the
-``enabled`` flag is informational for downstream wiring (Phase 7.x
-scheduler / autopilot will respect it). We treat an empty channel list
-as a no-op with a structured log warning rather than a hard error so an
-operator who misconfigured ``[connectors.slack]`` sees an actionable
-event in the log instead of a stack trace.
+Workspaces + channels are read from
+``[connectors.slack.workspaces.<alias>]`` tables (or the
+``OPSHUB_CONNECTORS__SLACK__WORKSPACES__<ALIAS>__CHANNELS`` env vars)
+on :class:`~opshub.core.config.OpsHubSettings` (Phase 24-C, ADR-0041
+§(c)). ``enabled = false`` is the default per phase-7-plan §1 #2
+(opt-in by design) but the CLI driver treats the connector as runnable
+as soon as it is registered — the ``enabled`` flag is informational
+for downstream wiring (Phase 7.x scheduler / autopilot will respect
+it). We treat "no workspaces configured" (and a per-workspace empty
+channel list) as a no-op with a structured log warning rather than a
+hard error so an operator who misconfigured ``[connectors.slack]``
+sees an actionable event in the log instead of a stack trace.
 
 Fail-fast posture (phase-7-plan §1 #8)
 --------------------------------------
@@ -166,7 +187,7 @@ from opshub.connectors.base import SyncResult
 from opshub.connectors.slack.auth import SlackAuth
 from opshub.connectors.slack.fetcher import SlackFetcher
 from opshub.connectors.slack.mapper import map_message
-from opshub.core.errors import ConfigError
+from opshub.core.errors import ConfigError, ConnectorFailedError
 from opshub.core.time import now_utc, parse_since, since_to_ts
 
 if TYPE_CHECKING:
@@ -174,11 +195,20 @@ if TYPE_CHECKING:
 
     from opshub.connectors.context import ConnectorContext
     from opshub.connectors.slack.fetcher import RawSlackMessage
-    from opshub.core.config import SlackChannelSpec, SlackConnectorSettings
+    from opshub.core.config import (
+        SlackChannelSpec,
+        SlackConnectorSettings,
+        SlackWorkspaceSettings,
+    )
     from opshub.core.excludes import ExcludeRules
 
 
-__all__ = ["SlackConnector", "SlackCursorState"]
+__all__ = [
+    "SlackConnector",
+    "SlackCursorEnvelope",
+    "SlackCursorState",
+    "SlackWorkspaceSyncError",
+]
 
 #: Slack ``ts`` sentinel meaning "covered down to the beginning of channel
 #: history" (Phase 22-D, [ADR-0038](docs/adr/0038-slack-sync-gap-backfill.md)
@@ -226,15 +256,51 @@ class SlackCursorState(TypedDict):
     backfill: dict[str, str | None]
     threads: dict[str, str | None]
     # Phase 23-H ([#538](https://github.com/ozzy-labs/opshub/issues/538),
-    # ADR-0039): the Slack workspace ``team_id`` this cursor is bound to.
-    # ``None`` = not yet bound (first sync, or a legacy pre-23-H cursor).
-    # The sync hot path binds it on the first non-empty sync and rejects a
-    # later token swap to a different workspace (single-workspace is an
-    # explicit non-goal — one opshub install = one Slack workspace). This is
-    # a *scalar* axis (unlike the three dict axes above); callers that
+    # ADR-0039; per-alias since Phase 24-C, ADR-0041 §(a)): the Slack
+    # workspace ``team_id`` this alias's cursor entry is bound to.
+    # ``None`` = not yet bound (first sync for the alias, or after a
+    # cursor reset). The sync hot path binds it on the first sync and
+    # rejects a later token swap to a different workspace. This is a
+    # *scalar* axis (unlike the three dict axes above); callers that
     # iterate the dict axes must enumerate them explicitly, not via
     # ``.values()`` / ``for axis in cursors``.
     team_id: str | None
+
+
+class SlackCursorEnvelope(TypedDict):
+    """Top-level persisted cursor shape (Phase 24-C, ADR-0041 §(d)).
+
+    One :class:`SlackCursorState` per configured workspace alias. The
+    ``connector_cursors`` projection row stays a single TEXT value — the
+    nest lives inside the JSON. Aliases present in the envelope but no
+    longer configured are preserved verbatim (an operator who removes a
+    workspace from ``opshub.toml`` and re-adds it later resumes where
+    they left off); ``opshub slack cursor reset --workspace <alias>
+    --all`` drops a stale entry explicitly.
+    """
+
+    workspaces: dict[str, SlackCursorState]
+
+
+class SlackWorkspaceSyncError(ConnectorFailedError):
+    """Aggregate failure for one or more workspaces in a multi-workspace sync.
+
+    Phase 24-C ([ADR-0041](docs/adr/0041-slack-multi-workspace.md) §(b)):
+    the sync loop isolates per-workspace failures — every configured
+    workspace gets its attempt and a cursor checkpoint — then raises
+    this aggregate at the end so the run still exits non-zero. The
+    message lists the failed aliases (+ per-alias exception type) for
+    the stderr trail; :attr:`failure_event_detail` carries the same
+    alias list for the ``ConnectorSyncFailed`` event message (the
+    shared CLI driver appends it to the type name — aliases are
+    operator-chosen labels, never secrets, so the event log's redaction
+    posture is unchanged).
+    """
+
+    def __init__(self, message: str, *, failed_aliases: list[str]) -> None:
+        super().__init__(message)
+        self.failed_aliases = list(failed_aliases)
+        self.failure_event_detail = f"failed workspace(s): {', '.join(failed_aliases)}"
 
 
 class SlackConnector:
@@ -253,11 +319,20 @@ class SlackConnector:
     name = "slack"
 
     def sync(self, context: ConnectorContext) -> SyncResult:
-        """Run one Slack sync pass and return the outcome.
+        """Run one Slack sync pass over every configured workspace.
 
-        The implementation is intentionally linear: resolve config →
-        resolve auth → build fetcher → iterate yields → return
-        ``SyncResult``. Each yielded message is forwarded to
+        Phase 24-C ([ADR-0041](docs/adr/0041-slack-multi-workspace.md)
+        §(b)): the configured ``[connectors.slack.workspaces.<alias>]``
+        tables are synced **serially** with per-workspace error
+        isolation — each workspace gets its own auth resolution, bind
+        guard, fetch pass, and a cursor checkpoint
+        (``cursor_set(sync_started=True)``) before the loop moves on,
+        so one workspace's failure (expired token, missing scope, ...)
+        never rolls back another's progress. After the loop, any
+        failures aggregate into a :class:`SlackWorkspaceSyncError`
+        naming the failed aliases (non-zero exit).
+
+        Each yielded message is forwarded to
         :meth:`SourceService.observe` (which atomically appends a
         :class:`SourceObserved` + :class:`ItemEnqueued` event pair),
         and the per-channel cursor dict is updated **after** the
@@ -267,80 +342,206 @@ class SlackConnector:
         fetcher's module docstring).
         """
         slack_settings = self._resolve_slack_settings()
-        specs = list(slack_settings.channels)
-        if not specs:
-            # Empty channel list is a degraded-but-not-failing state:
-            # the connector is configured (token + extras present) but
-            # the operator hasn't picked any channels yet. We log a
-            # structured warning and return a no-op SyncResult that
-            # preserves the prior cursor — mirrors the GitHub
-            # connector's "no observed items → keep prior cursor"
+        workspaces = dict(slack_settings.workspaces)
+        if not workspaces:
+            # No workspaces configured is a degraded-but-not-failing
+            # state: the connector may be enabled but the operator has
+            # not added any [connectors.slack.workspaces.<alias>] table
+            # yet. We log a structured warning and return a no-op
+            # SyncResult that preserves the prior cursor — mirrors the
+            # GitHub connector's "no observed items → keep prior cursor"
             # contract pinned by ``test_empty_sync_preserves_cursor``.
             context.logger.warning(
-                "slack connector: no channels configured; skipping sync. "
-                "Populate [connectors.slack] channels in opshub.toml or "
-                "set OPSHUB_CONNECTORS__SLACK__CHANNELS to enable."
+                "slack connector: no workspaces configured; skipping sync. "
+                "Add a [connectors.slack.workspaces.<alias>] table with a "
+                "channels list to opshub.toml (ADR-0041) to enable."
             )
             return SyncResult(observed_count=0, new_cursor=context.cursor_value)
 
-        channels = [spec.id for spec in specs]
-        # Phase 20 (ADR-0036): resolve the per-channel date floor (channel
-        # ``since`` → connector ``sync_since`` → no floor). Relative floors
-        # (``"90d"``) are evaluated *now* (sync time), not at config load.
-        floors = _resolve_floors(specs, slack_settings.sync_since)
-
-        auth = SlackAuth()
+        # Phase 24-C CLI seam: ``opshub slack sync --workspace <alias>``
+        # narrows the run to one workspace via the
+        # ``sync_workspace_filter`` setting (env-shim, see config.py).
+        filter_alias = slack_settings.sync_workspace_filter
+        if filter_alias is not None:
+            if filter_alias not in workspaces:
+                raise ConfigError(
+                    f"unknown Slack workspace alias {filter_alias!r}; "
+                    f"configured workspaces: {', '.join(sorted(workspaces)) or '(none)'}"
+                )
+            aliases = [filter_alias]
+        else:
+            aliases = sorted(workspaces)
 
         # Phase 10 (ADR-0020 §(b)): shared ingest excludes. Slack honours
         # the ``channels`` and ``senders`` selectors — a message in an
         # excluded channel, or from an excluded sender, is never observed
         # (the cursor still advances so the connector does not re-scan it
-        # forever). ``load_excludes()`` resolves the file path via
-        # ``default_config_dir()`` directly so we avoid threading
-        # ``OpsHubSettings`` through this path — tests that patch
-        # ``OpsHubSettings`` at the class level would otherwise hand us
-        # a MagicMock whose ``config_dir`` attribute is itself a
+        # forever). Phase 24-C (ADR-0041 §(j)): entries may carry an
+        # ``<alias>/`` workspace qualifier; ``scoped_to_workspace`` below
+        # resolves them per workspace. ``load_excludes()`` resolves the
+        # file path via ``default_config_dir()`` directly so we avoid
+        # threading ``OpsHubSettings`` through this path — tests that
+        # patch ``OpsHubSettings`` at the class level would otherwise
+        # hand us a MagicMock whose ``config_dir`` attribute is itself a
         # MagicMock that ``yaml.safe_load`` would iterate forever over.
         from opshub.core.excludes import load_excludes
 
         excludes = load_excludes()
 
-        cursors = _load_cursors(context.cursor_value)
-        # Phase 23-H ([#538](https://github.com/ozzy-labs/opshub/issues/538),
-        # ADR-0039): single-workspace bind guard. opshub treats
-        # single-workspace as an explicit non-goal (one install = one Slack
-        # workspace). Resolve the live workspace ``team_id`` and reconcile it
-        # with the one this cursor is bound to **before any fetch**, so a
-        # token swapped to a *different* workspace can never let a foreign
-        # workspace's messages into the cursor / ``external_id`` namespace
-        # (the silent-corruption pathology epic #530 targets). On first sync
-        # (or after ``cursor reset --all``) ``team_id`` is unbound → bind it.
-        # Phase 24-B (ADR-0041 §(i)): the guard now *returns* the resolved
-        # ``team_id`` (and hard-fails when ``auth.test`` reports none) so the
-        # fetcher can stamp it onto every yielded message — the mapper
-        # composes ``external_id = f"{team_id}:{channel_id}:{ts}"`` from it.
-        team_id = _bind_or_check_workspace(cursors, auth=auth)
+        envelope = _load_cursors(context.cursor_value)
+        last_persisted = context.cursor_value
+        failures: dict[str, BaseException] = {}
+        bound_teams: dict[str, str] = {}
+        observed_total = 0
+
+        for index, alias in enumerate(aliases):
+            workspace = workspaces[alias]
+            state = envelope["workspaces"].get(alias)
+            if state is None:
+                state = _empty_state()
+                envelope["workspaces"][alias] = state
+            workspace_ok = False
+            try:
+                observed_total += self._sync_workspace(
+                    context,
+                    alias=alias,
+                    workspace=workspace,
+                    settings=slack_settings,
+                    state=state,
+                    excludes=excludes.scoped_to_workspace(alias),
+                    bound_teams=bound_teams,
+                )
+                workspace_ok = True
+            except Exception as exc:
+                # Per-workspace error isolation (ADR-0041 §(b)): record
+                # and continue so the remaining workspaces still get
+                # their attempt. The aggregate raise below keeps the run
+                # non-zero. The structured log carries the per-alias
+                # detail; the aggregate message carries type names only
+                # (the CLI driver sanitises the full message anyway).
+                failures[alias] = exc
+                context.logger.warning(
+                    f"slack connector: workspace {alias!r} sync failed: {type(exc).__name__}: {exc}"
+                )
+            finally:
+                # Checkpoint the envelope after every workspace —
+                # success or failure — so a later workspace's failure
+                # (which aborts the CLI driver's terminal cursor_set)
+                # never loses an earlier workspace's progress, and a
+                # mid-fetch crash inside this workspace keeps the
+                # messages it got through (issue #339 Bug 2 closure,
+                # carried into the loop form). The one skip: the final
+                # workspace on an all-clean run — the driver's terminal
+                # ``ConnectorSyncCompleted`` pins the same value, so the
+                # extra ``ConnectorSyncStarted`` would be event-log
+                # noise. ``workspace_ok`` is False for non-Exception
+                # exits too (KeyboardInterrupt), so an operator abort
+                # still checkpoints before propagating.
+                is_final_clean = workspace_ok and not failures and index == len(aliases) - 1
+                if not is_final_clean:
+                    last_persisted = self._checkpoint(context, envelope, last_persisted)
+
+        if failures:
+            summary = ", ".join(
+                f"{alias} ({type(failures[alias]).__name__})" for alias in sorted(failures)
+            )
+            raise SlackWorkspaceSyncError(
+                f"slack sync failed for {len(failures)} of {len(aliases)} "
+                f"workspace(s): {summary}. Succeeded workspaces' cursors were "
+                "checkpointed; fix the failing workspace(s) and re-run "
+                "`opshub slack sync`.",
+                failed_aliases=sorted(failures),
+            )
+
+        return SyncResult(observed_count=observed_total, new_cursor=_dump_cursors(envelope))
+
+    def _checkpoint(
+        self, context: ConnectorContext, envelope: SlackCursorEnvelope, last_persisted: str | None
+    ) -> str:
+        """Persist the envelope via ``cursor_set(sync_started=True)`` if it moved.
+
+        The ``ConnectorCursorsProjection`` reducer upserts
+        ``cursor_value`` on every ``ConnectorSyncStarted`` event, so the
+        checkpoint is immediately visible to the next sync. Writing is
+        skipped when the serialised envelope is byte-identical to the
+        last persisted value (no progress → no redundant event).
+        Returns the serialised value for the caller to thread back in.
+        """
+        value = _dump_cursors(envelope)
+        if value != last_persisted:
+            # ``context.source_service`` is the CLI's
+            # ``_ProgressSourceProxy`` (or the raw ``SourceService``
+            # under unit-test fixtures); both forward ``cursor_set``
+            # via ``__getattr__`` so this call is transparent.
+            context.source_service.cursor_set(self.name, value, sync_started=True)
+        return value
+
+    def _sync_workspace(
+        self,
+        context: ConnectorContext,
+        *,
+        alias: str,
+        workspace: SlackWorkspaceSettings,
+        settings: SlackConnectorSettings,
+        state: SlackCursorState,
+        excludes: ExcludeRules,
+        bound_teams: dict[str, str],
+    ) -> int:
+        """Sync one workspace's channels; returns the observed count.
+
+        The body is the pre-Phase-24 single-workspace sync verbatim,
+        operating on this alias's :class:`SlackCursorState` (mutated in
+        place — the caller checkpoints the enclosing envelope). Raises
+        on any failure; the caller isolates it per ADR-0041 §(b).
+        """
+        specs = list(workspace.channels)
+        if not specs:
+            # Empty per-workspace channel list: degraded-but-not-failing,
+            # same posture as the pre-24 connector-wide empty list.
+            context.logger.warning(
+                f"slack connector: workspace {alias!r} has no channels "
+                "configured; skipping. Populate "
+                f"[connectors.slack.workspaces.{alias}] channels in "
+                "opshub.toml to enable."
+            )
+            return 0
+
+        channels = [spec.id for spec in specs]
+        # Phase 20 (ADR-0036) / Phase 24-C (ADR-0041 §(c)): resolve the
+        # per-channel date floor with 3-step precedence — channel
+        # ``since`` → workspace ``sync_since`` → connector-wide
+        # ``sync_since``. Relative floors (``"90d"``) are evaluated *now*
+        # (sync time), not at config load.
+        default_since = (
+            workspace.sync_since if workspace.sync_since is not None else settings.sync_since
+        )
+        floors = _resolve_floors(specs, default_since)
+
+        auth = SlackAuth(alias)
+        # Per-alias bind guard (ADR-0041 §(a)): resolve the live
+        # workspace team_id, reject duplicate registrations (two aliases
+        # resolving to the same workspace would corrupt cursor / digest
+        # semantics), then bind or verify this alias's cursor entry —
+        # all **before any fetch**, so a token swapped to a different
+        # workspace can never let foreign messages into the
+        # ``external_id`` namespace.
+        current_team = _resolve_live_team_id(auth, alias=alias)
+        duplicate = next((a for a, t in bound_teams.items() if t == current_team), None)
+        if duplicate is not None:
+            raise ConfigError(
+                f"Slack workspaces {duplicate!r} and {alias!r} both resolve to "
+                f"team_id {current_team!r}; each workspace may be registered "
+                "under exactly one alias (ADR-0041 §(a)). Remove one of the "
+                "two [connectors.slack.workspaces.*] tables (or fix the "
+                "stored tokens)."
+            )
+        team_id = _bind_or_check_workspace(state, current_team=current_team, alias=alias)
+        bound_teams[alias] = team_id
         fetcher = SlackFetcher(auth, channels=channels, team_id=team_id)
-        # Phase 20-B: the fetcher signature still takes
-        # ``cursor_per_channel=`` (a flat ``dict[str, str | None]``) so
-        # 20-A and 20-B can land independently. We hand it the
-        # ``channels`` axis directly and mutate that dict per yield;
-        # the ``threads`` axis is owned by 20-C (late-reply polling)
-        # and stays empty here.
-        channel_cursors = cursors["channels"]
-        # Snapshot the entry state so the ``finally`` arm below can
-        # tell "no progress was made (cursors are byte-identical to
-        # the resume point)" apart from "we observed N messages
-        # before crashing (cursors have moved)". Without the
-        # snapshot the partial-progress checkpoint would fire even
-        # on a sync that yielded zero messages and then crashed in
-        # the fetcher's setup path — emitting a redundant
-        # ``ConnectorSyncStarted`` event with a no-op cursor value.
-        # We snapshot the channels axis only because Phase 20-B does
-        # not write to the threads axis from within ``sync`` (20-C
-        # adds the per-thread polling path with its own progress
-        # tracking on the threads axis).
-        channels_at_entry: dict[str, str | None] = dict(channel_cursors)
+        # Phase 20-B: the fetcher signature takes ``cursor_per_channel=``
+        # (a flat ``dict[str, str | None]``). We hand it the ``channels``
+        # axis directly and mutate that dict per yield.
+        channel_cursors = state["channels"]
         # Phase 20 (ADR-0036 §(g)): the fetch resume bound is the *later*
         # of the persisted cursor and the date floor, so a floor only ever
         # advances ``oldest`` forward — it never rewinds past a cursor
@@ -351,7 +552,7 @@ class SlackConnector:
         # *persist*. Channels without a floor keep their raw channels-axis
         # entry (including the first-sync "absent key" shape the
         # connector-test contract pins), so a no-floor sync persists the
-        # same Phase 20-B compound envelope as before.
+        # same compound state as before.
         resume: dict[str, str | None] = dict(channel_cursors)
         for channel_id in channels:
             floor = floors.get(channel_id)
@@ -360,11 +561,9 @@ class SlackConnector:
         # Phase 22-D (ADR-0038): per-channel low-water lifecycle. The
         # ``backfill`` axis records the oldest ts each channel has been
         # fetched down to (the invariant: ``(backfill[ch], channels[ch]]``
-        # is fully covered). We snapshot before the lifecycle loop mutates
-        # it so the partial-progress checkpoint can detect changes.
-        backfill_cursors = cursors["backfill"]
-        backfill_at_entry: dict[str, str | None] = dict(backfill_cursors)
-        backfill_enabled = slack_settings.backfill_on_floor_lower
+        # is fully covered).
+        backfill_cursors = state["backfill"]
+        backfill_enabled = settings.backfill_on_floor_lower
         # ``gap_targets[ch] = target_low`` for channels whose floor was
         # lowered below the recorded low-water mark — the Phase 0 pass
         # (below) fetches the newly-uncovered window for each.
@@ -402,72 +601,36 @@ class SlackConnector:
             target_low = floor if floor is not None else _EPOCH_TS
             if backfill_enabled and low_water is not None and _ts_lt(target_low, low_water):
                 gap_targets[channel_id] = target_low
-        # Phase 20-C: snapshot the threads axis at entry so the
-        # partial-progress checkpoint below can tell "thread cursor
-        # advanced" from "no thread polling yet". The activity-window
-        # prune runs only on the happy path (after both phases drain)
-        # so a mid-iteration crash preserves every thread cursor —
-        # the next sync re-evaluates the window from scratch.
-        thread_cursors = cursors["threads"]
-        threads_at_entry: dict[str, str | None] = dict(thread_cursors)
+        # Phase 20-C: the per-thread late-reply cursors. The
+        # activity-window prune runs only on the happy path (after both
+        # phases drain) so a mid-iteration crash preserves every thread
+        # cursor — the next sync re-evaluates the window from scratch.
+        thread_cursors = state["threads"]
         observed_count = 0
-        completed_normally = False
-        try:
-            # Phase 0: gap backfill (Phase 22-D, ADR-0038 §(d)). For each
-            # channel whose floor was lowered below its recorded low-water
-            # mark, fetch the newly-uncovered window ``(target_low,
-            # low_water]`` — disjoint from the forward set ``(low_water,
-            # now]`` so no already-observed message is re-ingested (no
-            # inbox inflation). Run before the forward pass so the threads
-            # axis it seeds is visible to the Phase 2 polling path below.
-            if gap_targets:
-                # The upper bound is the *current* (pre-update) low-water
-                # mark; capture it before advancing ``backfill`` after the
-                # pass drains.
-                gap_oldest: dict[str, str | None] = dict(gap_targets)
-                gap_latest: dict[str, str | None] = {
-                    channel_id: backfill_cursors[channel_id] for channel_id in gap_targets
-                }
-                context.logger.warning(
-                    f"slack connector: date floor lowered for {len(gap_targets)} "
-                    f"channel(s); backfilling the newly-uncovered window "
-                    f"(one-time catch-up). channels={sorted(gap_targets)}"
-                )
-                gap_fetcher = SlackFetcher(auth, channels=list(gap_targets), team_id=team_id)
-                for channel_id, raw_message, new_cursor in gap_fetcher.fetch_messages(
-                    cursor_per_channel=gap_oldest,
-                    latest_per_channel=gap_latest,
-                    excludes=excludes,
-                ):
-                    if _ingest_yield(
-                        channel_id,
-                        raw_message,
-                        new_cursor,
-                        channel_cursors=channel_cursors,
-                        thread_cursors=thread_cursors,
-                        excludes=excludes,
-                        source_service=context.source_service,
-                    ):
-                        observed_count += 1
-                # Gap fully drained → advance the low-water mark down to the
-                # new floor. Done only after the loop completes so a mid-gap
-                # crash leaves ``backfill`` at the prior low-water and the
-                # next sync re-attempts the whole window (resume-safe; the
-                # re-observed overlap is bounded, idempotent on ``sources``,
-                # and healed on inbox by #522).
-                for channel_id in gap_targets:
-                    backfill_cursors[channel_id] = gap_targets[channel_id]
-
-            # Phase 1: ``conversations.history`` (top-level + initial
-            # thread snapshot). Phase 20-A wired the initial snapshot
-            # into the fetcher's yield stream; the connector's only
-            # extra job here is to populate the threads axis so the
-            # Phase 2 polling path (below) knows which threads to
-            # poll on the *next* sync. The per-yield bookkeeping (cursor
-            # advance, threads axis, excludes, observe) is shared with the
-            # Phase 0 gap pass via :func:`_ingest_yield`.
-            for channel_id, raw_message, new_cursor in fetcher.fetch_messages(
-                cursor_per_channel=resume,
+        # Phase 0: gap backfill (Phase 22-D, ADR-0038 §(d)). For each
+        # channel whose floor was lowered below its recorded low-water
+        # mark, fetch the newly-uncovered window ``(target_low,
+        # low_water]`` — disjoint from the forward set ``(low_water,
+        # now]`` so no already-observed message is re-ingested (no
+        # inbox inflation). Run before the forward pass so the threads
+        # axis it seeds is visible to the Phase 2 polling path below.
+        if gap_targets:
+            # The upper bound is the *current* (pre-update) low-water
+            # mark; capture it before advancing ``backfill`` after the
+            # pass drains.
+            gap_oldest: dict[str, str | None] = dict(gap_targets)
+            gap_latest: dict[str, str | None] = {
+                channel_id: backfill_cursors[channel_id] for channel_id in gap_targets
+            }
+            context.logger.warning(
+                f"slack connector: date floor lowered for {len(gap_targets)} "
+                f"channel(s); backfilling the newly-uncovered window "
+                f"(one-time catch-up). channels={sorted(gap_targets)}"
+            )
+            gap_fetcher = SlackFetcher(auth, channels=list(gap_targets), team_id=team_id)
+            for channel_id, raw_message, new_cursor in gap_fetcher.fetch_messages(
+                cursor_per_channel=gap_oldest,
+                latest_per_channel=gap_latest,
                 excludes=excludes,
             ):
                 if _ingest_yield(
@@ -480,141 +643,122 @@ class SlackConnector:
                     source_service=context.source_service,
                 ):
                     observed_count += 1
+            # Gap fully drained → advance the low-water mark down to the
+            # new floor. Done only after the loop completes so a mid-gap
+            # crash leaves ``backfill`` at the prior low-water and the
+            # next sync re-attempts the whole window (resume-safe; the
+            # re-observed overlap is bounded, idempotent on ``sources``,
+            # and healed on inbox by #522).
+            for channel_id in gap_targets:
+                backfill_cursors[channel_id] = gap_targets[channel_id]
 
-            # Phase 2: late-reply polling (Phase 20-C). For every
-            # thread the connector knows about that's still inside
-            # the activity window, call
-            # ``conversations.replies(oldest=last_reply_ts)`` to pick
-            # up any replies the workspace landed since the cursor
-            # was last advanced. Threads outside the window are
-            # pruned after the polling drains so the ``threads`` axis
-            # stays bounded by the operator-tunable window (default
-            # 30 days, ADR-0030 §(d) revised).
-            window_cutoff_ts = _window_cutoff_ts(slack_settings.thread_activity_window)
-            # Iterate a snapshot of the keys because the polling loop
-            # below may add new entries (a thread whose cursor was
-            # initialised at ``latest_reply`` and has zero new replies
-            # still leaves its key unchanged) — but never modifies the
-            # iteration set.
-            polling_keys = list(thread_cursors.keys())
-            for thread_key in polling_keys:
-                last_reply_ts = thread_cursors.get(thread_key)
-                if not _within_activity_window(last_reply_ts, window_cutoff_ts):
-                    # Out-of-window threads are pruned below. Skip the
-                    # API round-trip; ``conversations.replies`` would
-                    # still cost a Tier-3 budget slot per cold thread.
-                    continue
-                parsed = _parse_thread_cursor_key(thread_key)
-                if parsed is None:
-                    # Malformed key (operator hand-edit accident). Skip
-                    # and let the next sync's cursor parse error
-                    # (``_load_cursors``) surface the problem.
-                    continue
-                channel_id, thread_ts = parsed
-                if excludes.excludes_channel(channel_id):
-                    # Same short-circuit as Phase 1: an excluded
-                    # channel's replies would be filtered out at the
-                    # per-yield guard below anyway; skipping the API
-                    # call saves a Tier-3 budget slot.
-                    continue
-                for reply_message in fetcher.fetch_thread_replies(
-                    channel_id=channel_id,
-                    thread_ts=thread_ts,
-                    oldest_reply_ts=last_reply_ts,
-                ):
-                    # Advance the threads cursor before the observe
-                    # call so a partial-progress crash mid-thread
-                    # still records the reply we got through. The
-                    # parent ``new_cursor`` element on the channels
-                    # axis (Phase 1) intentionally stays anchored to
-                    # the parent ts; threads cursor advancement is
-                    # the *only* signal the polling phase persists,
-                    # which is why ``fetch_thread_replies`` yields a
-                    # bare :class:`RawSlackMessage` (no cursor triple).
-                    thread_cursors[thread_key] = _max_ts(
-                        thread_cursors.get(thread_key), reply_message.ts
-                    )
-                    if excludes.excludes_channel(
-                        reply_message.channel_id
-                    ) or excludes.excludes_sender(reply_message.user_id):
-                        continue
-                    reply_kwargs = map_message(reply_message)
-                    context.source_service.observe(**reply_kwargs)
-                    observed_count += 1
-
-            # Prune out-of-window thread cursors so the ``threads``
-            # axis stays bounded. We do this on the happy path only —
-            # a mid-iteration crash preserves the threads axis from
-            # entry (the ``finally`` arm below persists the partial
-            # state) so the next sync's prune pass re-evaluates the
-            # window cleanly. Pruning earlier would race with the
-            # iteration above; pruning later is safe because
-            # :func:`_window_cutoff_ts` is captured once at sync time.
-            _prune_inactive_threads(thread_cursors, window_cutoff_ts)
-            completed_normally = True
-        finally:
-            # Partial-progress checkpoint for issue #339 Bug 2: when the
-            # fetcher loop exits via exception (``ConnectorFailedError``
-            # / ``KeyboardInterrupt`` / unexpected mid-iteration crash),
-            # the CLI driver's ``cursor_set(sync_started=False, ...)``
-            # call never runs — so the projection cursor stays at the
-            # prior run's value even though :meth:`SourceService.observe`
-            # has already committed ``SourceObserved`` + ``ItemEnqueued``
-            # events for the N messages we got through. On retry that
-            # gap is re-fetched and re-enqueued, inflating
-            # ``inbox_items`` per aborted run (the second half of the
-            # cascade documented in issue #339).
-            #
-            # We persist the partial cursor here via
-            # ``cursor_set(sync_started=True)``. The connector_cursors
-            # reducer upserts ``cursor_value`` on every
-            # ``ConnectorSyncStarted`` event (see
-            # :meth:`ConnectorCursorsProjection._apply_started`), so the
-            # next sync resumes from where we got to, not where the
-            # *prior* run got to. We deliberately fire this only on
-            # the abnormal-exit path (``completed_normally is False``
-            # AND we made progress) to keep the happy path's event log
-            # quiet: the CLI's terminal ``ConnectorSyncCompleted``
-            # event already pins the same cursor for the success case.
-            if not completed_normally and (
-                channel_cursors != channels_at_entry
-                or thread_cursors != threads_at_entry
-                or backfill_cursors != backfill_at_entry
+        # Phase 1: ``conversations.history`` (top-level + initial
+        # thread snapshot). Phase 20-A wired the initial snapshot
+        # into the fetcher's yield stream; the connector's only
+        # extra job here is to populate the threads axis so the
+        # Phase 2 polling path (below) knows which threads to
+        # poll on the *next* sync. The per-yield bookkeeping (cursor
+        # advance, threads axis, excludes, observe) is shared with the
+        # Phase 0 gap pass via :func:`_ingest_yield`.
+        for channel_id, raw_message, new_cursor in fetcher.fetch_messages(
+            cursor_per_channel=resume,
+            excludes=excludes,
+        ):
+            if _ingest_yield(
+                channel_id,
+                raw_message,
+                new_cursor,
+                channel_cursors=channel_cursors,
+                thread_cursors=thread_cursors,
+                excludes=excludes,
+                source_service=context.source_service,
             ):
-                # ``context.source_service`` is the CLI's
-                # ``_ProgressSourceProxy`` (or the raw ``SourceService``
-                # under unit-test fixtures); both forward ``cursor_set``
-                # via ``__getattr__`` so this call is transparent.
-                # We persist the compound shape (both axes advanced as
-                # far as we got) so the next sync's :func:`_load_cursors`
-                # sees a valid Phase 20-B schema rather than a
-                # half-written legacy dict. Phase 20-C: the threads
-                # axis may also have advanced during the late-reply
-                # polling phase, so the checkpoint fires when either
-                # axis moved relative to entry.
-                context.source_service.cursor_set(
-                    self.name,
-                    _dump_cursors(cursors),
-                    sync_started=True,
-                )
+                observed_count += 1
 
-        # Phase 20-B: the compound cursor envelope is **always**
-        # populated (both axes are always present, even when empty),
-        # so we always serialise the compound dict back to JSON. The
-        # pre-20-B short-circuit to ``context.cursor_value`` when the
-        # cursor dict was empty is obsolete: returning the empty
-        # compound on a first-sync-with-zero-messages run is now the
-        # desired behaviour, because it advances the projection row
-        # from "legacy / unset" to the Phase 20-B schema marker.
-        # Subsequent syncs then parse it as a valid compound rather
-        # than re-triggering the ConfigError migration prompt.
-        new_cursor_value = _dump_cursors(cursors)
-        return SyncResult(observed_count=observed_count, new_cursor=new_cursor_value)
+        # Phase 2: late-reply polling (Phase 20-C). For every
+        # thread the connector knows about that's still inside
+        # the activity window, call
+        # ``conversations.replies(oldest=last_reply_ts)`` to pick
+        # up any replies the workspace landed since the cursor
+        # was last advanced. Threads outside the window are
+        # pruned after the polling drains so the ``threads`` axis
+        # stays bounded by the operator-tunable window (default
+        # 30 days, ADR-0030 §(d) revised).
+        # Phase 24-C (ADR-0041 §(c)): the window resolves 2-step —
+        # workspace-level ``thread_activity_window`` override, falling
+        # back to the connector-wide value (symmetric with the floor).
+        from opshub.core.config import resolve_slack_thread_activity_window
+
+        window_cutoff_ts = _window_cutoff_ts(
+            resolve_slack_thread_activity_window(workspace, settings)
+        )
+        # Iterate a snapshot of the keys because the polling loop
+        # below may add new entries (a thread whose cursor was
+        # initialised at ``latest_reply`` and has zero new replies
+        # still leaves its key unchanged) — but never modifies the
+        # iteration set.
+        polling_keys = list(thread_cursors.keys())
+        for thread_key in polling_keys:
+            last_reply_ts = thread_cursors.get(thread_key)
+            if not _within_activity_window(last_reply_ts, window_cutoff_ts):
+                # Out-of-window threads are pruned below. Skip the
+                # API round-trip; ``conversations.replies`` would
+                # still cost a Tier-3 budget slot per cold thread.
+                continue
+            parsed = _parse_thread_cursor_key(thread_key)
+            if parsed is None:
+                # Malformed key (operator hand-edit accident). Skip
+                # and let the next sync's cursor parse error
+                # (``_load_cursors``) surface the problem.
+                continue
+            channel_id, thread_ts = parsed
+            if excludes.excludes_channel(channel_id):
+                # Same short-circuit as Phase 1: an excluded
+                # channel's replies would be filtered out at the
+                # per-yield guard below anyway; skipping the API
+                # call saves a Tier-3 budget slot.
+                continue
+            for reply_message in fetcher.fetch_thread_replies(
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                oldest_reply_ts=last_reply_ts,
+            ):
+                # Advance the threads cursor before the observe
+                # call so a partial-progress crash mid-thread
+                # still records the reply we got through. The
+                # parent ``new_cursor`` element on the channels
+                # axis (Phase 1) intentionally stays anchored to
+                # the parent ts; threads cursor advancement is
+                # the *only* signal the polling phase persists,
+                # which is why ``fetch_thread_replies`` yields a
+                # bare :class:`RawSlackMessage` (no cursor triple).
+                thread_cursors[thread_key] = _max_ts(
+                    thread_cursors.get(thread_key), reply_message.ts
+                )
+                if excludes.excludes_channel(reply_message.channel_id) or excludes.excludes_sender(
+                    reply_message.user_id
+                ):
+                    continue
+                reply_kwargs = map_message(reply_message)
+                context.source_service.observe(**reply_kwargs)
+                observed_count += 1
+
+        # Prune out-of-window thread cursors so the ``threads``
+        # axis stays bounded. We do this on the happy path only —
+        # a mid-iteration crash skips this line (the caller's
+        # per-workspace checkpoint persists the partial state) so the
+        # next sync's prune pass re-evaluates the window cleanly.
+        # Pruning earlier would race with the iteration above; pruning
+        # later is safe because :func:`_window_cutoff_ts` is captured
+        # once at sync time.
+        _prune_inactive_threads(thread_cursors, window_cutoff_ts)
+        return observed_count
 
     def backfill_channel(
         self,
         context: ConnectorContext,
         *,
+        alias: str,
         channel_id: str,
         since_ts: str,
         until_ts: str,
@@ -647,22 +791,28 @@ class SlackConnector:
         """
         from opshub.core.excludes import load_excludes
 
-        auth = SlackAuth()
-        excludes = load_excludes()
+        auth = SlackAuth(alias)
+        excludes = load_excludes().scoped_to_workspace(alias)
 
-        cursors = _load_cursors(context.cursor_value)
+        envelope = _load_cursors(context.cursor_value)
+        state = envelope["workspaces"].get(alias)
+        if state is None:
+            state = _empty_state()
+            envelope["workspaces"][alias] = state
         # Phase 24-B (ADR-0041 §(a) §(i)): the bind guard now covers the
         # explicit backfill path too — it previously ran only inside
         # :meth:`sync`, so a token swapped to a different workspace could
         # slip a foreign workspace's history in via ``cursor backfill``.
         # The guard runs before any fetch (foreign data never enters the
         # DB) and resolves the ``team_id`` the fetcher stamps onto every
-        # message for the 3-token ``external_id``.
-        team_id = _bind_or_check_workspace(cursors, auth=auth)
+        # message for the 3-token ``external_id``. Phase 24-C: the guard
+        # operates on this alias's cursor entry.
+        current_team = _resolve_live_team_id(auth, alias=alias)
+        team_id = _bind_or_check_workspace(state, current_team=current_team, alias=alias)
         fetcher = SlackFetcher(auth, channels=[channel_id], team_id=team_id)
-        channel_cursors = cursors["channels"]
-        thread_cursors = cursors["threads"]
-        backfill_cursors = cursors["backfill"]
+        channel_cursors = state["channels"]
+        thread_cursors = state["threads"]
+        backfill_cursors = state["backfill"]
 
         observed_count = 0
         for ch, raw_message, new_cursor in fetcher.fetch_messages(
@@ -686,7 +836,7 @@ class SlackConnector:
         # crash leaves the prior low-water and a re-run re-attempts the
         # whole window.
         backfill_cursors[channel_id] = since_ts
-        return SyncResult(observed_count=observed_count, new_cursor=_dump_cursors(cursors))
+        return SyncResult(observed_count=observed_count, new_cursor=_dump_cursors(envelope))
 
     def _resolve_slack_settings(self) -> SlackConnectorSettings:
         """Return the resolved ``[connectors.slack]`` settings sub-model.
@@ -703,49 +853,67 @@ class SlackConnector:
         return OpsHubSettings().connectors.slack
 
 
-def _load_cursors(cursor_value: str | None) -> SlackCursorState:
-    """Parse the persisted JSON cursor into the Phase 20-B compound shape.
+#: Verbatim legacy-shape reject message (Phase 24-C, ADR-0041 §(d)).
+#: ``docs/troubleshooting.md`` / ``docs/upgrading.md`` ship this string
+#: for grep-based discovery, so keep the literal stable.
+_LEGACY_CURSOR_MESSAGE = (
+    "Slack cursor predates the Phase 24 per-workspace schema "
+    '({"workspaces": {"<alias>": {...}}}, ADR-0041). Run '
+    "`opshub slack cursor reset --all` to drop it and cold-start "
+    "(the ADR-0041 §(e) upgrade path is a DB re-init + full re-sync "
+    "anyway — the Phase 24-B external_id re-key orphans pre-24 rows). "
+    "opshub is pre-userbase and ships no silent migration."
+)
+
+
+def _load_cursors(cursor_value: str | None) -> SlackCursorEnvelope:
+    """Parse the persisted JSON cursor into the Phase 24-C envelope shape.
 
     ``None`` means "first sync — no cursors yet" and yields the empty
-    compound (both axes empty). A malformed JSON string or a
+    envelope (no workspaces). A malformed JSON string or a
     schema-violating shape raises :class:`ConfigError` so the operator
     sees an actionable error rather than a silently re-fetched history.
 
-    Schema (Phase 20-B, epic [#465](
-    https://github.com/ozzy-labs/opshub/issues/465)):
+    Schema (Phase 24-C, [ADR-0041](docs/adr/0041-slack-multi-workspace.md)
+    §(d)):
 
     .. code-block:: json
 
-       {"channels": {"<channel_id>": "<ts>"}, "threads": {"<channel_id>:<thread_ts>": "<ts>"}}
+       {"workspaces": {"<alias>": {"channels": {...}, "backfill": {...},
+                                   "threads": {...}, "team_id": "T..."}}}
 
-    The pre-20-B legacy shape (``{"<channel_id>": "<ts>"}`` at the
-    top level — a flat per-channel dict with no ``channels`` / ``threads``
-    wrapper) is **rejected** with a migration-prompt :class:`ConfigError`
-    pointing at ``opshub slack cursor reset --all`` (Phase 23-A, [#531](
-    https://github.com/ozzy-labs/opshub/issues/531); the older prompt
-    named ``opshub projections rebuild``, which is a dead-end for the
-    flat dict because rebuild replays the flat-dict event payload). opshub
-    is pre-userbase (``AGENTS.md`` §"設計判断のスタンス"), so we do not
-    silently coerce the legacy shape — coercion would lose the chance to
-    surface the schema flip to the operator and would also be ambiguous
-    (the legacy shape and a freshly-rebuilt empty compound look identical
-    only when there are no channels).
+    Both legacy shapes — the Phase 20-B/23-H top-level compound
+    (``{"channels": ..., "threads": ..., "team_id": ...}``) and the
+    pre-20-B flat per-channel dict — are **rejected** with a
+    migration-prompt :class:`ConfigError` pointing at ``opshub slack
+    cursor reset --all`` (the posture Phase 20-B established and Phase
+    23-A [#531](https://github.com/ozzy-labs/opshub/issues/531)
+    corrected the prompt target for: ``opshub projections rebuild`` is
+    a dead-end because replay restores the same payload). opshub is
+    pre-userbase (``AGENTS.md`` §"設計判断のスタンス"), so we do not
+    silently coerce — a lift would have to invent a workspace alias,
+    and the ADR-0041 §(e) upgrade path is a DB re-init regardless.
+
+    Inside each alias entry, ``channels`` / ``threads`` are required
+    axes; ``backfill`` is additive-tolerated (ADR-0038 §(g)) and the
+    scalar ``team_id`` defaults to ``None`` (unbound) when absent or
+    malformed.
     """
     if cursor_value is None:
-        return _empty_state()
+        return _empty_envelope()
     try:
         parsed = json.loads(cursor_value)
     except json.JSONDecodeError as exc:
         raise ConfigError(
             "Slack cursor is not valid JSON; the connector_cursors "
             "row may have been hand-edited. Reset with "
-            "`opshub projections rebuild` to recover."
+            "`opshub slack cursor reset --all` to recover."
         ) from exc
     if not isinstance(parsed, dict):
         raise ConfigError(
-            "Slack cursor must be a JSON object with 'channels' and "
-            f"'threads' axes; got {type(parsed).__name__}. "
-            "Reset with `opshub projections rebuild` to recover."
+            "Slack cursor must be a JSON object with a 'workspaces' "
+            f"nest; got {type(parsed).__name__}. "
+            "Reset with `opshub slack cursor reset --all` to recover."
         )
     # ``cast`` narrows pyright's ``Unknown`` widen on the ``json.loads``
     # return; mypy treats the inner cast as redundant (the cast is from
@@ -753,66 +921,62 @@ def _load_cursors(cursor_value: str | None) -> SlackCursorState:
     parsed_dict = cast(  # type: ignore[redundant-cast]
         dict[Any, Any], parsed
     )
-    # Detect the pre-20-B legacy shape (flat ``{channel_id: ts}``).
-    # Both axes are required keys in 20-B; a payload that lacks them
-    # is either the legacy shape or a hand-edit accident. We surface
-    # a migration prompt rather than silently rebuilding because
-    # operator action is required to drop the now-orphaned channels
-    # axis with the wrong semantics (the legacy values were the
-    # per-channel max ts including thread replies *that were never
-    # observed*, so even a 1:1 lift into the new ``channels`` axis
-    # would be subtly wrong for Phase 20-C's replies-fetch path).
-    if "channels" not in parsed_dict or "threads" not in parsed_dict:
-        # Phase 20-E ([#478](https://github.com/ozzy-labs/opshub/issues/478))
-        # audit: the docs (``docs/troubleshooting.md`` §3.12 + the
-        # ``docs/upgrading.md`` §Phase 20 "typical error" block) ship a
-        # verbatim error string that operators grep against. The
-        # connector previously surfaced a paraphrased variant
-        # ("uses the pre-Phase-20-B schema") which broke that
-        # grep-based discovery. Aligning the literal here keeps the
-        # doc + code messages diff-free (doc is canonical; opshub is
-        # pre-userbase and ships no silent migration).
-        #
-        # Phase 23-A ([#531](https://github.com/ozzy-labs/opshub/issues/531)):
-        # this message previously pointed at ``opshub projections rebuild``,
-        # which is a **dead-end** for the flat-dict shape — rebuild replays
-        # the ``ConnectorSyncCompleted`` event whose payload IS the flat
-        # dict, restoring it verbatim, so the same error recurs. The working
-        # recovery is ``opshub slack cursor reset --all``, which hard-drops
-        # the cursor without parsing the prior value and persists an empty
-        # compound (so rebuild then replays the empty compound). We do NOT
-        # silently auto-lift the flat dict: ADR-0030 §不変条件 #4 bans silent
-        # migration, and the legacy ``ts`` was the per-channel max including
-        # never-observed thread replies (a 1:1 lift would be subtly wrong for
-        # the Phase 20-C replies-fetch path).
+    if "workspaces" not in parsed_dict:
+        # Either the Phase 20-B/23-H top-level compound or the pre-20-B
+        # flat dict — both predate the Phase 24 nest and are rejected
+        # with the same prompt (the recovery is identical).
+        raise ConfigError(_LEGACY_CURSOR_MESSAGE)
+    workspaces_raw = parsed_dict["workspaces"]
+    if not isinstance(workspaces_raw, dict):
         raise ConfigError(
-            "Slack cursor envelope is pre-Phase-20-B (flat dict). "
-            "Run `opshub slack cursor reset --all` to drop it and "
-            'cold-start on the {"channels": ..., "threads": ...} '
-            "compound schema. opshub is pre-userbase and ships no "
-            "silent migration (per ADR-0030 §不変条件 #4)."
+            "Slack cursor 'workspaces' nest must be a JSON object; got "
+            f"{type(workspaces_raw).__name__}. Reset with "
+            "`opshub slack cursor reset --all` to recover."
         )
-    channels_axis = _coerce_axis(parsed_dict["channels"], axis_name="channels")
-    threads_axis = _coerce_axis(parsed_dict["threads"], axis_name="threads")
-    # Phase 22-B ([ADR-0038](docs/adr/0038-slack-sync-gap-backfill.md) §(a)
-    # §(g)): the ``backfill`` axis (per-channel low-water mark) is
-    # **additive**. A cursor persisted before Phase 22 lacks it, so we
-    # tolerate the absence (default empty) rather than raising — unlike
-    # the pre-20-B flat dict, a missing ``backfill`` key is unambiguous,
-    # and a ConfigError that pointed at ``opshub projections rebuild``
-    # would be a dead-end because rebuild does NOT reset the cursor
-    # (it replays ``ConnectorSyncCompleted`` and restores the same value,
-    # ADR-0038 §Context). ``channels`` / ``threads`` remain required (their
-    # absence still trips the pre-20-B legacy detection above).
-    backfill_axis = _coerce_axis(parsed_dict.get("backfill", {}), axis_name="backfill")
-    # Phase 23-H ([#538](https://github.com/ozzy-labs/opshub/issues/538),
-    # ADR-0039): the workspace ``team_id`` bind axis is **additive** and
-    # **scalar** (not a dict axis, so it is parsed explicitly here rather
-    # than via ``_coerce_axis``). A legacy pre-23-H cursor lacks it → ``None``
-    # (= unbound; the next sync binds it, forward-compatible). A non-string
-    # value (hand-edit) is tolerated as ``None`` rather than raised — the
-    # bind guard simply re-binds on the next sync, which is harmless.
-    team_id_raw = parsed_dict.get("team_id")
+    workspaces_dict = cast(  # type: ignore[redundant-cast]
+        dict[Any, Any], workspaces_raw
+    )
+    workspaces: dict[str, SlackCursorState] = {}
+    for alias, raw_state in workspaces_dict.items():
+        if not isinstance(alias, str) or not alias:
+            raise ConfigError(
+                "Slack cursor workspace aliases must be non-empty strings; "
+                f"got {alias!r}. Reset with `opshub slack cursor reset --all` "
+                "to recover."
+            )
+        workspaces[alias] = _load_workspace_state(raw_state, alias=alias)
+    return SlackCursorEnvelope(workspaces=workspaces)
+
+
+def _load_workspace_state(raw: Any, *, alias: str) -> SlackCursorState:
+    """Parse one alias's nested cursor entry into :class:`SlackCursorState`.
+
+    The inner shape is the pre-Phase-24 compound verbatim (axes +
+    lifecycle unchanged, ADR-0041 §(d)): ``channels`` / ``threads``
+    required, ``backfill`` additive-tolerated (ADR-0038 §(g)),
+    ``team_id`` scalar defaulting to ``None`` (unbound — the next sync
+    binds it; a non-string hand-edit is tolerated as ``None`` because
+    re-binding is harmless).
+    """
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            f"Slack cursor workspace entry {alias!r} must be a JSON object; "
+            f"got {type(raw).__name__}. Reset with "
+            "`opshub slack cursor reset --all` to recover."
+        )
+    raw_dict = cast(  # type: ignore[redundant-cast]
+        dict[Any, Any], raw
+    )
+    if "channels" not in raw_dict or "threads" not in raw_dict:
+        raise ConfigError(
+            f"Slack cursor workspace entry {alias!r} lacks the required "
+            "'channels' / 'threads' axes. Reset with "
+            "`opshub slack cursor reset --all` to recover."
+        )
+    channels_axis = _coerce_axis(raw_dict["channels"], axis_name="channels")
+    threads_axis = _coerce_axis(raw_dict["threads"], axis_name="threads")
+    backfill_axis = _coerce_axis(raw_dict.get("backfill", {}), axis_name="backfill")
+    team_id_raw = raw_dict.get("team_id")
     team_id = team_id_raw if isinstance(team_id_raw, str) and team_id_raw else None
     return SlackCursorState(
         channels=channels_axis, backfill=backfill_axis, threads=threads_axis, team_id=team_id
@@ -820,15 +984,20 @@ def _load_cursors(cursor_value: str | None) -> SlackCursorState:
 
 
 def _empty_state() -> SlackCursorState:
-    """Return a fresh, mutation-safe empty compound cursor.
+    """Return a fresh, mutation-safe empty per-workspace compound cursor.
 
     Factored into a helper because :class:`SlackCursorState` is a
     :class:`TypedDict` (so ``{}`` is not type-safe at the call sites)
     and because the empty compound is referenced from both
-    :func:`_load_cursors` (``cursor_value is None`` branch) and from
+    :func:`_load_cursors` callers (alias entry creation) and from
     tests that need to construct a baseline first-sync state.
     """
     return SlackCursorState(channels={}, backfill={}, threads={}, team_id=None)
+
+
+def _empty_envelope() -> SlackCursorEnvelope:
+    """Return a fresh, mutation-safe empty Phase 24-C cursor envelope."""
+    return SlackCursorEnvelope(workspaces={})
 
 
 def _coerce_axis(raw: Any, *, axis_name: str) -> dict[str, str | None]:
@@ -1100,16 +1269,17 @@ def _prune_inactive_threads(thread_cursors: dict[str, str | None], cutoff_ts: st
         del thread_cursors[key]
 
 
-def _dump_cursors(cursors: SlackCursorState) -> str:
-    """Serialise the Phase 20-B compound cursor to JSON for the projection.
+def _dump_cursors(envelope: SlackCursorEnvelope) -> str:
+    """Serialise the Phase 24-C cursor envelope to JSON for the projection.
 
-    ``sort_keys=True`` recurses into nested dicts, so both the
-    top-level ``channels`` / ``threads`` keys and every per-axis entry
-    are emitted in sorted order. That makes a no-op sync (no new
-    messages, no new replies) yield a byte-identical cursor across
-    runs — the ``connector_cursors`` row's ``updated_at`` advances on
-    timestamp only and operator dashboards can diff cursor values
-    meaningfully.
+    ``sort_keys=True`` recurses into nested dicts, so the top-level
+    ``workspaces`` nest, every alias key, the per-alias axes and every
+    per-axis entry are emitted in sorted order. That makes a no-op sync
+    (no new messages, no new replies) yield a byte-identical cursor
+    across runs — the ``connector_cursors`` row's ``updated_at``
+    advances on timestamp only and operator dashboards can diff cursor
+    values meaningfully (the per-workspace checkpoint also relies on
+    this determinism to skip redundant writes).
 
     ``separators=(",", ":")`` strips default whitespace so the row
     stays compact, matching the GitHub cursor style (the size matters
@@ -1117,66 +1287,77 @@ def _dump_cursors(cursors: SlackCursorState) -> str:
     ``connector_cursors`` projection rows visually tight across
     connectors).
     """
-    return json.dumps(cursors, sort_keys=True, separators=(",", ":"))
+    return json.dumps(envelope, sort_keys=True, separators=(",", ":"))
 
 
-def _bind_or_check_workspace(
-    cursors: SlackCursorState,
-    *,
-    auth: SlackAuth,
-) -> str:
-    """Bind / verify the single-workspace ``team_id`` invariant and return it.
-
-    Phase 23-H (ADR-0039) established the guard; Phase 24-B ([ADR-0041](
-    docs/adr/0041-slack-multi-workspace.md) §(i)) hardens it and makes it
-    return the resolved ``team_id`` so callers can thread the value into the
-    fetcher (the mapper now composes
-    ``external_id = f"{team_id}:{channel_id}:{ts}"`` — zero additional API
-    calls, the ``auth.test`` round-trip here is the single resolution point).
-
-    opshub currently supports one Slack workspace per install. The cursor
-    records the workspace ``team_id`` it was first synced against; this guard
-    resolves the live workspace (via ``auth.test``) and:
-
-    * **unbound** (first sync / after ``cursor reset --all``) → bind it
-      (mutates ``cursors["team_id"]`` in place; the caller persists it).
-    * **bound, same team** → no-op (steady state).
-    * **bound, different team** → :class:`ConfigError`. A token swapped to
-      another workspace would otherwise silently mix two workspaces' messages
-      into one cursor + ``external_id`` namespace (exit 0 "success" — the
-      silent-failure pathology epic #530 targets). Because this runs **before
-      any fetch**, the foreign workspace's data never enters the DB, so the
-      ``external_id`` uniqueness premise (``mapper.py``) is never broken
-      (ADR-0039 §Decision 2, carried into ADR-0041 §(a)).
+def _resolve_live_team_id(auth: SlackAuth, *, alias: str) -> str:
+    """Resolve the live workspace ``team_id`` for one alias via ``auth.test``.
 
     An ``auth.test`` that returns no ``team_id`` (abnormal) is a hard
-    :class:`ConfigError` as of Phase 24-B — ``team_id`` is now a constituent
-    of every ``external_id``, so proceeding without one would mint malformed
-    natural keys (the pre-24 fail-soft warn-and-proceed arm is gone, ADR-0041
-    §(i)). Enterprise Grid User Tokens report a stable home ``team_id`` so
-    the guard does not false-positive (ADR-0039 §Decision 5).
+    :class:`ConfigError` as of Phase 24-B — ``team_id`` is a constituent
+    of every ``external_id``, so proceeding without one would mint
+    malformed natural keys (the pre-24 fail-soft warn-and-proceed arm is
+    gone, ADR-0041 §(i)). Enterprise Grid User Tokens report a stable
+    home ``team_id`` so this does not false-positive (ADR-0039
+    §Decision 5). This is the single ``auth.test`` round-trip per
+    workspace per sync — both the bind guard and the fetcher's
+    ``team_id`` stamp consume the same value (zero additional API
+    calls).
     """
     current_team = auth.test_token().get("team_id", "")
     if not current_team:
         raise ConfigError(
-            "Slack auth.test returned no team_id; cannot compose the "
-            "external_id namespace (team_id prefixes every Slack source key, "
-            "ADR-0041). Verify the stored token with `opshub slack auth test` "
-            "and re-run the sync once auth.test reports a team_id."
+            f"Slack auth.test returned no team_id for workspace {alias!r}; "
+            "cannot compose the external_id namespace (team_id prefixes "
+            "every Slack source key, ADR-0041). Verify the stored token with "
+            f"`opshub slack auth test --workspace {alias}` and re-run once "
+            "auth.test reports a team_id."
         )
-    bound_team = cursors["team_id"]
+    return current_team
+
+
+def _bind_or_check_workspace(
+    state: SlackCursorState,
+    *,
+    current_team: str,
+    alias: str,
+) -> str:
+    """Bind / verify one alias's ``team_id`` invariant and return it.
+
+    Phase 23-H (ADR-0039) established the guard install-wide; Phase 24-C
+    ([ADR-0041](docs/adr/0041-slack-multi-workspace.md) §(a)) generalises
+    it **per alias**: each workspace cursor entry records the ``team_id``
+    it was first synced against, and the guard reconciles it with the
+    live workspace the alias's token resolves to (``current_team``, from
+    :func:`_resolve_live_team_id`) **before any fetch**:
+
+    * **unbound** (first sync for the alias / after a cursor reset) →
+      bind it (mutates ``state["team_id"]`` in place; the caller
+      persists it via the envelope checkpoint).
+    * **bound, same team** → no-op (steady state).
+    * **bound, different team** → :class:`ConfigError`. A token swapped
+      to another workspace under the same alias would otherwise silently
+      mix two workspaces' messages into one alias's cursor — and the
+      ``external_id`` namespace would still be correct (team-prefixed)
+      but the cursor semantics would be corrupted (exit 0 "success" —
+      the silent-failure pathology epic #530 targets). Because this runs
+      **before any fetch**, the foreign workspace's data never enters
+      the DB under this alias (ADR-0039 §Decision 2 semantics, carried
+      per-alias into ADR-0041 §(a)).
+    """
+    bound_team = state["team_id"]
     if bound_team is None:
-        cursors["team_id"] = current_team
+        state["team_id"] = current_team
         return current_team
     if bound_team != current_team:
         raise ConfigError(
-            f"Slack cursor is bound to workspace team_id {bound_team!r} but the "
-            f"stored token now resolves to {current_team!r}. opshub supports one "
-            "Slack workspace per install (ADR-0039: single-workspace is an "
-            "explicit non-goal). If you pasted the wrong token, restore the "
-            "original. To intentionally switch workspaces, run `opshub slack "
-            "cursor reset --all` first (the previous workspace's ingested "
-            "messages remain and must be purged manually — an unsupported "
-            "path). Multi-workspace support is out of scope (ADR-0039)."
+            f"Slack workspace {alias!r} is bound to team_id {bound_team!r} but "
+            f"its stored token now resolves to {current_team!r}. If you pasted "
+            "the wrong token, restore the original with `opshub slack auth set "
+            f"--workspace {alias}`. To intentionally re-point the alias at a "
+            f"different workspace, run `opshub slack cursor reset --workspace "
+            f"{alias} --all` first (the previous workspace's ingested messages "
+            "remain and must be purged manually — an unsupported path; see "
+            "ADR-0041 §(e) for the sanctioned DB re-init)."
         )
     return current_team

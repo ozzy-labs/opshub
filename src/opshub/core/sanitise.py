@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["sanitise_error_message"]
+__all__ = ["failure_event_message", "sanitise_error_message"]
 
 # Token-shape regexes. Kept module-level so they compile once on first
 # import and survive across calls (the embedding service used to hold
@@ -114,3 +114,29 @@ def sanitise_error_message(message: str) -> str:
     message = _GOOGLE_API_KEY_RE.sub("AIza***", message)
     message = _BEARER_RE.sub("Bearer ***", message)
     return message
+
+
+def failure_event_message(exc: BaseException) -> str:
+    """Compose the ``ConnectorSyncFailed`` event message for ``exc``.
+
+    The base contract (R3 — Phase 14 T3, ADR-0027) records the exception
+    **type name only** so tokens / PII never reach the event log. Phase
+    24-C ([ADR-0041](../../../docs/adr/0041-slack-multi-workspace.md)
+    §(b)) adds one sanctioned supplement: a connector exception may
+    carry a ``failure_event_detail`` string attribute whose content the
+    connector vouches is secret-free (the Slack multi-workspace
+    aggregate names its failed aliases there — operator-chosen config
+    labels, never credentials). The attribute is appended after the type
+    name; anything non-string (or absent / empty) keeps the bare type
+    name, so a foreign exception that happens to define the attribute
+    with a non-string payload cannot widen the event log's token
+    surface. Shared by the CLI sync driver
+    (:func:`opshub.cli._connector_common.run_connector_sync`) and the
+    MCP ``connector.sync`` handler so both audit trails carry the same
+    message shape; it lives here (not in the CLI helper) because the
+    MCP request path must stay typer-free.
+    """
+    detail = getattr(exc, "failure_event_detail", None)
+    if isinstance(detail, str) and detail:
+        return f"{type(exc).__name__}: {detail}"
+    return type(exc).__name__

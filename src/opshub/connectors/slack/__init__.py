@@ -45,13 +45,12 @@ and the integration cold-start budget continue to hold.
 """
 
 from opshub.connectors._registry import register_connector
-from opshub.connectors.slack.auth import SLACK_TOKEN_SECRET_KEY, SlackAuth
+from opshub.connectors.slack.auth import SlackAuth, slack_token_secret_key
 from opshub.connectors.slack.connector import SlackConnector
 from opshub.connectors.slack.fetcher import RawSlackMessage, SlackFetcher
 from opshub.connectors.slack.mapper import SOURCE_TYPE, SUMMARY_MAX_CHARS, map_message
 
 __all__ = [
-    "SLACK_TOKEN_SECRET_KEY",
     "SOURCE_TYPE",
     "SUMMARY_MAX_CHARS",
     "RawSlackMessage",
@@ -59,6 +58,7 @@ __all__ = [
     "SlackConnector",
     "SlackFetcher",
     "map_message",
+    "slack_token_secret_key",
 ]
 
 # Register exactly once on first import. The registry's idempotency rule

@@ -321,19 +321,33 @@ def _validate_slack_floor(value: str | None, *, field: str) -> str | None:
     return value
 
 
+#: Alias grammar for ``[connectors.slack.workspaces.<alias>]`` table keys
+#: (Phase 24-C, [ADR-0041](../../docs/adr/0041-slack-multi-workspace.md)
+#: §(a)). Lowercase alphanumerics + underscore, starting with an
+#: alphanumeric. ``-`` is deliberately **not** allowed: the keyring env
+#: override name is derived via :func:`opshub.core.secrets._env_var_name`,
+#: which folds both ``-`` and ``:`` to ``_`` — so ``my-ws`` and ``my_ws``
+#: would collide on the same ``OPSHUB_CONNECTOR_SLACK_MY_WS_TOKEN`` env
+#: var. Excluding ``-`` keeps alias → env-var-name injective.
+SLACK_WORKSPACE_ALIAS_RE = re.compile(r"^[a-z0-9][a-z0-9_]*$")
+
+
 class SlackChannelSpec(BaseModel):
-    """One ``[[connectors.slack.channels]]`` entry (Phase 20, ADR-0036).
+    """One ``[[connectors.slack.workspaces.<alias>.channels]]`` entry (Phase 20, ADR-0036).
 
     ``id`` is the Slack channel / DM id (``"C0123ABC"`` / ``"D0123ABC"``).
     ``since`` is the optional per-channel date floor: ``None`` (the
-    default) inherits the connector-wide :attr:`SlackConnectorSettings.sync_since`,
+    default) inherits the workspace-level
+    :attr:`SlackWorkspaceSettings.sync_since` (falling back to the
+    connector-wide :attr:`SlackConnectorSettings.sync_since` — the
+    3-step resolution of ADR-0041 §(c)),
     :data:`SLACK_FULL_HISTORY_SENTINEL` (``"all"``) forces a full-history
     backfill for this channel even when a global floor is set, and any
     other value (``"90d"`` / ``"2026-01-01"``) sets a channel-specific
-    floor that overrides the global default (ADR-0036 §(d)/(e)).
+    floor that overrides the inherited default (ADR-0036 §(d)/(e)).
 
     Operators may also write a bare channel id string in the ``channels``
-    array (``channels = ["C0123ABC"]``); :meth:`SlackConnectorSettings._coerce_channel_ids`
+    array (``channels = ["C0123ABC"]``); :meth:`SlackWorkspaceSettings._coerce_channel_ids`
     normalises it to ``{"id": "C0123ABC"}`` so the historical string-array
     form (and the ``opshub slack conversations --format=toml`` snippet)
     keeps working unchanged.
@@ -345,11 +359,13 @@ class SlackChannelSpec(BaseModel):
     @field_validator("since")
     @classmethod
     def _check_since(cls, value: str | None) -> str | None:
-        return _validate_slack_floor(value, field="[connectors.slack] channels[].since")
+        return _validate_slack_floor(
+            value, field="[connectors.slack.workspaces.<alias>] channels[].since"
+        )
 
 
 def _empty_channel_list() -> list[SlackChannelSpec]:
-    """Typed ``default_factory`` for :attr:`SlackConnectorSettings.channels`.
+    """Typed ``default_factory`` for :attr:`SlackWorkspaceSettings.channels`.
 
     A bare ``default_factory=list`` infers ``list[Unknown]`` under pyright
     strict for a model-typed list (unlike ``list[str]``, which the builtin
@@ -358,117 +374,89 @@ def _empty_channel_list() -> list[SlackChannelSpec]:
     return []
 
 
-class SlackConnectorSettings(BaseModel):
-    """Slack connector tuning (Phase 7 step A3; Phase 20 date floor).
+class SlackWorkspaceSettings(BaseModel):
+    """One ``[connectors.slack.workspaces.<alias>]`` table (Phase 24-C, ADR-0041 §(c)).
 
-    ``enabled = False`` is the default per Phase 7 plan §1 #2 — every
-    SaaS connector is opt-in so a fresh ``uv tool install`` never tries
-    to reach Slack on first run. Operators flip the flag and populate
-    ``channels`` after running ``opshub slack auth set`` to
-    store the OAuth access token.
+    Each workspace is keyed by an operator-chosen **alias** (the table
+    key — validated against :data:`SLACK_WORKSPACE_ALIAS_RE` by
+    :meth:`SlackConnectorSettings._check_workspace_aliases`) and carries
+    that workspace's channel selection plus optional per-workspace
+    overrides of the connector-wide floor / thread window:
 
-    ``channels`` selects the Slack channel ids / DMs the connector will
-    sync. Each entry is a :class:`SlackChannelSpec` (``id`` + optional
-    per-channel ``since`` floor); a bare id string is also accepted and
-    normalised to ``{"id": ...}`` so ``channels = ["C0123ABC"]`` and the
-    ``opshub slack conversations --format=toml`` snippet keep working.
-    Channel *names* (``#general``) are intentionally not accepted —
-    channel membership / access is keyed on the id and Slack does not
-    guarantee name stability. Empty list means "no channels configured"
-    — the connector surfaces this as a structured warning and runs as a
-    no-op (the sync command still exits 0).
+    * ``channels`` — the Slack channel ids / DMs to sync in this
+      workspace. Each entry is a :class:`SlackChannelSpec` (``id`` +
+      optional per-channel ``since`` floor); a bare id string is also
+      accepted and normalised to ``{"id": ...}`` so
+      ``channels = ["C0123ABC"]`` and the
+      ``opshub slack conversations --format=toml`` snippet keep working.
+      Channel *names* (``#general``) are intentionally not accepted —
+      channel membership / access is keyed on the id and Slack does not
+      guarantee name stability. An empty list means "no channels picked
+      yet" — the connector logs a structured warning for the workspace
+      and skips it (the sync still exits 0 when no other workspace
+      fails).
+    * ``sync_since`` — workspace-level date-floor override. ``None``
+      (the default) inherits the connector-wide
+      :attr:`SlackConnectorSettings.sync_since`; ``"all"`` opts the
+      whole workspace back into full-history backfill. The per-channel
+      :attr:`SlackChannelSpec.since` still wins over this (3-step
+      resolution, ADR-0041 §(c)).
+    * ``thread_activity_window`` — workspace-level override of the
+      late-reply polling window (2-step resolution, symmetric with the
+      floor). ``None`` (the default) inherits the connector-wide
+      :attr:`SlackConnectorSettings.thread_activity_window`. Accepts the
+      same ``"7d"`` / ``"4w"`` / ``"all"`` grammar; the raw string is
+      kept (not the coerced :class:`~datetime.timedelta`) so the
+      tri-state "inherit / disable / value" stays unambiguous — resolve
+      it via :func:`resolve_slack_thread_activity_window`.
 
-    ``sync_since`` (Phase 20, ADR-0036) is the connector-wide date floor:
-    ``conversations.history`` is bounded so messages older than the floor
-    are never fetched, capping the cold-start / newly-added-channel
-    backfill. ``None`` (the default) keeps the historical behaviour of
-    backfilling the full channel history. Accepts a relative duration
-    (``"90d"`` / ``"4w"``, evaluated at sync time) or an ISO date
-    (``"2026-01-01"``). Per-channel :attr:`SlackChannelSpec.since`
-    overrides it; ``since = "all"`` opts a single channel back into full
-    backfill. The floor only ever moves the resume bound *forward* — an
-    already-synced channel's cursor is authoritative, so enabling
-    ``sync_since`` never re-fetches or deletes history (ADR-0036 §(g)).
-
-    The OAuth access token lives in the OS keyring under
-    ``connector:slack:token`` per ADR-0014 / ADR-0018 — it never
-    appears in ``opshub.toml`` or this settings model. User Token
-    (``xoxp-``) is the first-class principal; Bot Token (``xoxb-``)
-    is accepted as an alternative.
+    The workspace's OAuth token lives in the OS keyring under
+    ``connector:slack:<alias>:token`` (per-alias slot, ADR-0041 §(a) —
+    extends the ADR-0014 convention); it never appears in
+    ``opshub.toml`` or this settings model.
     """
 
-    enabled: bool = False
     #: ``NoDecode`` (Phase 23-E, #535) tells pydantic-settings *not* to
-    #: JSON-decode the ``OPSHUB_CONNECTORS__SLACK__CHANNELS`` env value
+    #: JSON-decode the env value
+    #: (``OPSHUB_CONNECTORS__SLACK__WORKSPACES__<ALIAS>__CHANNELS``)
     #: before it reaches :meth:`_coerce_channel_ids`. Without it, a
     #: complex-typed (``list[...]``) field forces every env override to
-    #: be a JSON document — so the natural ``OPSHUB_CONNECTORS__SLACK__CHANNELS=C1,C2``
+    #: be a JSON document — so the natural ``...__CHANNELS=C1,C2``
     #: would raise ``SettingsError`` before any validator ran. With
     #: ``NoDecode`` the raw string lands in the validator, which accepts
     #: a comma-separated list as the primary form (and still parses a
-    #: JSON document for backward compatibility / per-channel ``since``).
+    #: JSON document for per-channel ``since``).
     channels: Annotated[list[SlackChannelSpec], NoDecode] = Field(
         default_factory=_empty_channel_list
     )
     sync_since: str | None = None
-    #: Phase 20-C (ADR-0030 §(d) revised): activity window for the late-reply
-    #: polling phase. Threads whose ``last_reply_ts`` falls outside this
-    #: window are skipped on the polling phase and pruned from the
-    #: ``threads`` axis of the compound cursor at the end of each sync.
-    #: Default 30d — long enough that "late but recent" replies (the
-    #: workspace-norm case of a reply a few weeks after the parent post)
-    #: are still picked up, short enough that the per-sync
-    #: ``conversations.replies`` budget stays bounded. Operators can
-    #: override via this setting or the ``--thread-activity-window`` CLI
-    #: flag / ``OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW`` env
-    #: var. Accepts ``"7d"`` / ``"4w"`` strings (uniform with
-    #: ``sync_since``) plus pydantic's native :class:`timedelta`
-    #: coercion (ISO 8601 ``"P7D"`` / integer seconds). Phase 20-E
-    #: ([#478](https://github.com/ozzy-labs/opshub/issues/478)) adds
-    #: the ``"all"`` (case-insensitive) sentinel that coerces to
-    #: ``None`` so the late-reply polling prune is disabled entirely —
-    #: the spelling ``docs/troubleshooting.md`` §3.12 promised
-    #: operators ahead of the validator catching up.
-    thread_activity_window: timedelta | None = SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW
-    #: Phase 22-D ([ADR-0038](../../docs/adr/0038-slack-sync-gap-backfill.md)):
-    #: when ``True`` (default), lowering the date floor (``sync_since`` /
-    #: per-channel ``since``) on a channel synced *after* the gap-backfill
-    #: feature landed triggers an automatic one-time backfill of the
-    #: newly-uncovered window ``(floor_new, low_water]`` on the next sync
-    #: (disjoint from the forward set, so no inbox inflation). Set ``False``
-    #: (or pass ``--no-backfill``) to suppress the auto-backfill — the
-    #: floor still bounds the forward fetch, but the past is not re-fetched
-    #: until re-enabled or ``opshub slack cursor backfill`` is run
-    #: explicitly. pre-feature channels never auto-backfill regardless
-    #: (their historical floor is unrecoverable, ADR-0038 §(e)).
-    backfill_on_floor_lower: bool = True
+    thread_activity_window: str | None = None
 
     @field_validator("channels", mode="before")
     @classmethod
     def _coerce_channel_ids(cls, value: Any) -> Any:
         """Normalise the ``channels`` input into a list of ``{"id": ...}`` dicts.
 
-        Three input shapes are accepted (Phase 23-E, #535 broadens the
-        env form):
+        Three input shapes are accepted (Phase 23-E, #535 broadened the
+        env form; Phase 24-C moved the field under the workspace table):
 
         * **list** — the TOML / init-arg form. A bare id string entry is
           normalised to ``{"id": "C..."}`` so the historical
           ``channels = ["C0123ABC", "C0456DEF"]`` string-array (and the
           ``opshub slack conversations --format=toml`` paste snippet,
           which emits exactly that shape) stay valid alongside the
-          ``[[connectors.slack.channels]]`` table form (ADR-0036 §(b)).
+          ``[[connectors.slack.workspaces.<alias>.channels]]`` table
+          form (ADR-0036 §(b)).
         * **comma-separated string** — the primary env override form,
-          e.g. ``OPSHUB_CONNECTORS__SLACK__CHANNELS=C0123ABC,C0456DEF``.
+          e.g. ``OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__CHANNELS=C0123ABC,C0456DEF``.
           Whitespace is trimmed and empty segments are dropped so a
           trailing comma / spaces-around-commas do not synthesise blank
-          ids. This is the documented headless/CI path now that
-          :class:`NoDecode` stops pydantic-settings from JSON-forcing the
-          env value.
+          ids.
         * **JSON document string** — a leading ``[`` / ``{`` routes the
           string through :func:`json.loads` first, preserving the
-          historical JSON-array env form
-          (``OPSHUB_CONNECTORS__SLACK__CHANNELS='[{"id":"C1","since":"30d"}]'``)
-          so per-channel ``since`` overrides remain expressible from the
+          JSON-array env form
+          (``...__CHANNELS='[{"id":"C1","since":"30d"}]'``) so
+          per-channel ``since`` overrides remain expressible from the
           environment.
 
         Already-dict entries pass through for pydantic to validate /
@@ -507,6 +495,208 @@ class SlackConnectorSettings(BaseModel):
     @field_validator("sync_since")
     @classmethod
     def _check_sync_since(cls, value: str | None) -> str | None:
+        return _validate_slack_floor(
+            value, field="[connectors.slack.workspaces.<alias>] sync_since"
+        )
+
+    @field_validator("thread_activity_window")
+    @classmethod
+    def _check_thread_activity_window(cls, value: str | None) -> str | None:
+        """Validate the workspace-level window grammar, keeping the raw string.
+
+        ``None`` = inherit the connector-wide value. Any other value must
+        be ``"all"`` (disable prune) or the ``"<N>d"`` / ``"<N>w"``
+        relative grammar — the same surface as the connector-wide field,
+        minus pydantic's native :class:`~datetime.timedelta` coercion
+        (ISO 8601 / integer-seconds), which is not needed at this layer
+        and would force a lossy "coerced value" storage that conflates
+        "inherit" with "all". Resolution happens at sync time via
+        :func:`resolve_slack_thread_activity_window`.
+        """
+        if value is None:
+            return value
+        coerced = _coerce_thread_activity_window(value)
+        if isinstance(coerced, str):
+            raise ConfigError(
+                "[connectors.slack.workspaces.<alias>] thread_activity_window "
+                f"{value!r} is invalid; use '<N>d' / '<N>w' (e.g. '30d') or "
+                "'all' to disable the late-reply prune."
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _check_unique_channel_ids(self) -> SlackWorkspaceSettings:
+        """Reject duplicate channel ids — a copy-paste accident otherwise
+        silently double-syncs (and double-floors) a channel.
+        """
+        ids = [spec.id for spec in self.channels]
+        duplicates = sorted({cid for cid in ids if ids.count(cid) > 1})
+        if duplicates:
+            raise ConfigError(
+                "[connectors.slack.workspaces.<alias>] channels has duplicate "
+                f"id(s): {duplicates}; each channel id must appear at most "
+                "once per workspace."
+            )
+        return self
+
+
+def resolve_slack_thread_activity_window(
+    workspace: SlackWorkspaceSettings, connector: SlackConnectorSettings
+) -> timedelta | None:
+    """Resolve the effective late-reply window for one workspace (2-step).
+
+    Phase 24-C ([ADR-0041](../../docs/adr/0041-slack-multi-workspace.md)
+    §(c)): the workspace-level :attr:`SlackWorkspaceSettings.thread_activity_window`
+    wins when set; otherwise the connector-wide (already-coerced)
+    :attr:`SlackConnectorSettings.thread_activity_window` applies.
+    Returns ``None`` when the prune is disabled (the ``"all"`` sentinel
+    at either layer, or pydantic coercion thereof).
+    """
+    raw = workspace.thread_activity_window
+    if raw is None:
+        return connector.thread_activity_window
+    coerced = _coerce_thread_activity_window(raw)
+    # The field validator guarantees the raw string coerces cleanly.
+    if isinstance(coerced, timedelta) or coerced is None:
+        return coerced
+    raise ConfigError(  # pragma: no cover — validator guards this arm
+        f"unresolvable thread_activity_window {raw!r}"
+    )
+
+
+#: Verbatim flat-form rewrite example embedded in the Phase 24-C
+#: ``ConfigError`` (ADR-0041 §(c)): operators upgrading from the
+#: single-workspace config see exactly how to relocate their
+#: ``channels`` under a ``workspaces.<alias>`` table.
+_SLACK_FLAT_CONFIG_REWRITE_HINT = """\
+[connectors.slack] no longer accepts a flat `channels` key — Slack is \
+multi-workspace as of Phase 24 (ADR-0041) and every channel selection \
+lives under a named [connectors.slack.workspaces.<alias>] table. Rewrite:
+
+  [connectors.slack]
+  enabled = true
+  channels = ["C0123ABC"]
+
+as:
+
+  [connectors.slack]
+  enabled = true
+
+  [connectors.slack.workspaces.main]
+  channels = ["C0123ABC"]
+
+(`main` is an example alias — pick any name matching ^[a-z0-9][a-z0-9_]*$; \
+re-store the token with `opshub slack auth set --workspace <alias>`.)"""
+
+
+class SlackConnectorSettings(BaseModel):
+    """Slack connector tuning (Phase 7 step A3; Phase 20 floor; Phase 24 workspaces).
+
+    ``enabled = False`` is the default per Phase 7 plan §1 #2 — every
+    SaaS connector is opt-in so a fresh ``uv tool install`` never tries
+    to reach Slack on first run. Operators flip the flag and populate
+    one or more ``[connectors.slack.workspaces.<alias>]`` tables after
+    running ``opshub slack auth set --workspace <alias>`` to store each
+    workspace's OAuth access token.
+
+    ``workspaces`` (Phase 24-C, [ADR-0041](../../docs/adr/0041-slack-multi-workspace.md)
+    §(a)/(c)) maps operator-chosen aliases to
+    :class:`SlackWorkspaceSettings`. One opshub install syncs N Slack
+    workspaces; even a single-workspace setup uses the table form (no
+    implicit default-workspace code path — pre-userbase hard flip). The
+    pre-Phase-24 flat ``channels`` key is **rejected** with a
+    :class:`ConfigError` carrying a rewrite example
+    (:data:`_SLACK_FLAT_CONFIG_REWRITE_HINT`).
+
+    ``sync_since`` (Phase 20, ADR-0036) is the connector-wide date floor:
+    ``conversations.history`` is bounded so messages older than the floor
+    are never fetched, capping the cold-start / newly-added-channel
+    backfill. ``None`` (the default) keeps the historical behaviour of
+    backfilling the full channel history. Accepts a relative duration
+    (``"90d"`` / ``"4w"``, evaluated at sync time) or an ISO date
+    (``"2026-01-01"``). Workspace-level
+    :attr:`SlackWorkspaceSettings.sync_since` overrides it, and the
+    per-channel :attr:`SlackChannelSpec.since` wins over both (3-step
+    resolution, ADR-0041 §(c)); ``"all"`` at any layer opts back into
+    full backfill. The floor only ever moves the resume bound *forward*
+    — an already-synced channel's cursor is authoritative, so enabling
+    ``sync_since`` never re-fetches or deletes history (ADR-0036 §(g)).
+
+    Each workspace's OAuth access token lives in the OS keyring under
+    ``connector:slack:<alias>:token`` per ADR-0014 / ADR-0018 /
+    ADR-0041 §(a) — it never appears in ``opshub.toml`` or this
+    settings model. User Token (``xoxp-``) is the first-class
+    principal; Bot Token (``xoxb-``) is accepted as an alternative.
+    """
+
+    enabled: bool = False
+    workspaces: dict[str, SlackWorkspaceSettings] = Field(default_factory=dict)
+    sync_since: str | None = None
+    #: Phase 24-C CLI-internal seam: ``opshub slack sync --workspace
+    #: <alias>`` narrows the sync to one workspace by setting the
+    #: process-local env var
+    #: ``OPSHUB_CONNECTORS__SLACK__SYNC_WORKSPACE_FILTER`` (the same
+    #: env-shim pattern ``--thread-activity-window`` uses — the shared
+    #: driver resolves connectors by name only). ``None`` (the default)
+    #: syncs every configured workspace serially (ADR-0041 §(f)).
+    #: Setting it in ``opshub.toml`` is possible but not the documented
+    #: surface.
+    sync_workspace_filter: str | None = None
+    #: Phase 20-C (ADR-0030 §(d) revised): activity window for the late-reply
+    #: polling phase. Threads whose ``last_reply_ts`` falls outside this
+    #: window are skipped on the polling phase and pruned from the
+    #: ``threads`` axis of the compound cursor at the end of each sync.
+    #: Default 30d — long enough that "late but recent" replies (the
+    #: workspace-norm case of a reply a few weeks after the parent post)
+    #: are still picked up, short enough that the per-sync
+    #: ``conversations.replies`` budget stays bounded. Operators can
+    #: override via this setting or the ``--thread-activity-window`` CLI
+    #: flag / ``OPSHUB_CONNECTORS__SLACK__THREAD_ACTIVITY_WINDOW`` env
+    #: var. Accepts ``"7d"`` / ``"4w"`` strings (uniform with
+    #: ``sync_since``) plus pydantic's native :class:`timedelta`
+    #: coercion (ISO 8601 ``"P7D"`` / integer seconds). Phase 20-E
+    #: ([#478](https://github.com/ozzy-labs/opshub/issues/478)) adds
+    #: the ``"all"`` (case-insensitive) sentinel that coerces to
+    #: ``None`` so the late-reply polling prune is disabled entirely —
+    #: the spelling ``docs/troubleshooting.md`` §3.12 promised
+    #: operators ahead of the validator catching up.
+    thread_activity_window: timedelta | None = SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW
+    #: Phase 22-D ([ADR-0038](../../docs/adr/0038-slack-sync-gap-backfill.md)):
+    #: when ``True`` (default), lowering the date floor (``sync_since`` /
+    #: per-channel ``since``) on a channel synced *after* the gap-backfill
+    #: feature landed triggers an automatic one-time backfill of the
+    #: newly-uncovered window ``(floor_new, low_water]`` on the next sync
+    #: (disjoint from the forward set, so no inbox inflation). Set ``False``
+    #: (or pass ``--no-backfill``) to suppress the auto-backfill — the
+    #: floor still bounds the forward fetch, but the past is not re-fetched
+    #: until re-enabled or ``opshub slack cursor backfill`` is run
+    #: explicitly. pre-feature channels never auto-backfill regardless
+    #: (their historical floor is unrecoverable, ADR-0038 §(e)).
+    backfill_on_floor_lower: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_flat_channels(cls, data: Any) -> Any:
+        """Hard-reject the pre-Phase-24 flat ``channels`` key (ADR-0041 §(c)).
+
+        opshub is pre-userbase, so the flat → workspaces flip ships no
+        compat shim: a TOML / env / init-arg payload still carrying
+        ``[connectors.slack] channels`` (including the
+        ``OPSHUB_CONNECTORS__SLACK__CHANNELS`` env var) fails loud with
+        a rewrite example rather than being silently ignored (the
+        default ``extra="ignore"`` posture would otherwise drop the key
+        and "successfully" sync zero channels — the silent-failure
+        pathology epic #530 targets).
+        """
+        if isinstance(data, dict) and "channels" in data:
+            raise ConfigError(_SLACK_FLAT_CONFIG_REWRITE_HINT)
+        # ``cast`` collapses pyright's ``Any | dict[Unknown, Unknown]``
+        # widen on the isinstance-narrowed branch; mypy sees Any → Any.
+        return cast("Any", data)
+
+    @field_validator("sync_since")
+    @classmethod
+    def _check_sync_since(cls, value: str | None) -> str | None:
         return _validate_slack_floor(value, field="[connectors.slack] sync_since")
 
     @field_validator("thread_activity_window", mode="before")
@@ -515,16 +705,21 @@ class SlackConnectorSettings(BaseModel):
         return _coerce_thread_activity_window(value)
 
     @model_validator(mode="after")
-    def _check_unique_channel_ids(self) -> SlackConnectorSettings:
-        """Reject duplicate channel ids — a copy-paste accident otherwise
-        silently double-syncs (and double-floors) a channel.
+    def _check_workspace_aliases(self) -> SlackConnectorSettings:
+        """Enforce the ADR-0041 §(a) alias grammar on every workspace key.
+
+        ``^[a-z0-9][a-z0-9_]*$`` — see :data:`SLACK_WORKSPACE_ALIAS_RE`
+        for why ``-`` is excluded (keyring env-var name injectivity).
         """
-        ids = [spec.id for spec in self.channels]
-        duplicates = sorted({cid for cid in ids if ids.count(cid) > 1})
-        if duplicates:
+        invalid = sorted(
+            alias for alias in self.workspaces if not SLACK_WORKSPACE_ALIAS_RE.match(alias)
+        )
+        if invalid:
             raise ConfigError(
-                f"[connectors.slack] channels has duplicate id(s): {duplicates}; "
-                "each channel id must appear at most once."
+                f"[connectors.slack.workspaces] alias(es) {invalid} are invalid; "
+                "aliases must match ^[a-z0-9][a-z0-9_]*$ (lowercase, '-' is not "
+                "allowed — it would collide with '_' in the keyring env "
+                "override name, ADR-0041 §(a))."
             )
         return self
 

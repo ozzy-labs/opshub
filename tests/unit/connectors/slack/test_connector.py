@@ -37,7 +37,9 @@ pytest.importorskip(
 from opshub.connectors.context import ConnectorContext
 from opshub.connectors.slack.connector import (
     SlackConnector,
+    SlackCursorEnvelope,
     SlackCursorState,
+    SlackWorkspaceSyncError,
     _dump_cursors,  # pyright: ignore[reportPrivateUsage]
     _floor_to_ts,  # pyright: ignore[reportPrivateUsage]
     _load_cursors,  # pyright: ignore[reportPrivateUsage]
@@ -50,6 +52,26 @@ from opshub.core.errors import ConfigError, ConnectorFailedError
 from opshub.core.time import now_utc, parse_since, since_to_ts
 
 # ---------------------------------------------------------------------- helpers
+
+
+#: Default workspace alias used by the single-workspace test fixtures
+#: (Phase 24-C, ADR-0041 — every config / cursor is per-alias now).
+_ALIAS = "acme"
+
+
+def _wrap(state: SlackCursorState, alias: str = _ALIAS) -> SlackCursorEnvelope:
+    """Nest one per-workspace cursor state in the Phase 24-C envelope."""
+    return {"workspaces": {alias: state}}
+
+
+def _dump_state(state: SlackCursorState, alias: str = _ALIAS) -> str:
+    """Serialise one workspace's state wrapped in the envelope."""
+    return _dump_cursors(_wrap(state, alias))
+
+
+def _load_state(value: str | None, alias: str = _ALIAS) -> SlackCursorState:
+    """Parse a persisted cursor and unwrap the given alias's state."""
+    return _load_cursors(value)["workspaces"][alias]
 
 
 class _RecordingSourceService:
@@ -157,12 +179,14 @@ def _context(
 def _patch_settings(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    channels: list[str | Any],
+    channels: list[str | Any] | None = None,
     sync_since: str | None = None,
     thread_activity_window: timedelta | None = None,
     backfill_on_floor_lower: bool = True,
+    workspaces: dict[str, list[str | Any]] | None = None,
+    sync_workspace_filter: str | None = None,
 ) -> None:
-    """Patch :class:`OpsHubSettings` so ``_resolve_slack_settings`` returns ``channels``.
+    """Patch :class:`OpsHubSettings` so ``_resolve_slack_settings`` sees the workspaces.
 
     The connector lazy-imports ``OpsHubSettings`` from
     ``opshub.core.config`` *inside* :meth:`_resolve_slack_settings`;
@@ -171,23 +195,37 @@ def _patch_settings(
     its defining module catches the lazy import via the usual
     monkeypatch lookup.
 
-    Bare id strings in ``channels`` are coerced to
-    :class:`SlackChannelSpec` (mirroring the pydantic before-validator)
-    so call sites that only care about ids stay terse; pass a
-    :class:`SlackChannelSpec` directly to exercise per-channel ``since``
-    (Phase 20, ADR-0036). ``sync_since`` sets the connector-wide floor.
-    ``thread_activity_window`` overrides the Phase 20-C late-reply
-    polling window (default = the production default 30d).
+    Phase 24-C (ADR-0041): config is per-workspace. ``channels`` (the
+    single-workspace shorthand most tests use) lands under the
+    :data:`_ALIAS` workspace; multi-workspace tests pass ``workspaces``
+    (``{alias: channels}``) instead. Bare id strings are coerced to
+    :class:`SlackChannelSpec` (mirroring the pydantic before-validator);
+    pass a :class:`SlackChannelSpec` directly to exercise per-channel
+    ``since`` (Phase 20, ADR-0036). ``sync_since`` sets the
+    connector-wide floor. ``thread_activity_window`` overrides the Phase
+    20-C late-reply polling window (default = the production default
+    30d). ``sync_workspace_filter`` mirrors the ``--workspace`` CLI shim.
     """
     from opshub.core.config import (
         SLACK_DEFAULT_THREAD_ACTIVITY_WINDOW,
         SlackChannelSpec,
+        SlackWorkspaceSettings,
     )
 
-    specs = [c if isinstance(c, SlackChannelSpec) else SlackChannelSpec(id=c) for c in channels]
+    if workspaces is None:
+        workspaces = {_ALIAS: channels if channels is not None else []}
+    workspace_models = {
+        alias: SlackWorkspaceSettings(
+            channels=[
+                c if isinstance(c, SlackChannelSpec) else SlackChannelSpec(id=c) for c in chans
+            ]
+        )
+        for alias, chans in workspaces.items()
+    }
     fake_settings = MagicMock()
-    fake_settings.connectors.slack.channels = specs
+    fake_settings.connectors.slack.workspaces = workspace_models
     fake_settings.connectors.slack.sync_since = sync_since
+    fake_settings.connectors.slack.sync_workspace_filter = sync_workspace_filter
     fake_settings.connectors.slack.thread_activity_window = (
         thread_activity_window
         if thread_activity_window is not None
@@ -286,62 +324,57 @@ def test_connector_name_is_slack() -> None:
 # ---------------------------------------------------------------------- cursor helpers
 
 
-def test_load_cursors_none_returns_empty_compound() -> None:
-    """First-sync (``cursor_value=None``) → empty compound (both axes empty).
+def test_load_cursors_none_returns_empty_envelope() -> None:
+    """First-sync (``cursor_value=None``) → empty Phase 24-C envelope.
 
-    Phase 20-B: ``_load_cursors`` always returns the compound shape
-    with both ``channels`` and ``threads`` keys present. An empty
-    compound tells the fetcher "no per-channel resume" (empty
-    ``channels`` axis) and tells the late-reply polling path (Phase
-    20-C) "no thread to poll" (empty ``threads`` axis).
+    No workspaces have synced yet, so the envelope carries no alias
+    entries; the sync loop creates each alias's empty 4-axis state on
+    demand (ADR-0041 §(d)).
     """
-    state = _load_cursors(None)
-    assert state == {"channels": {}, "backfill": {}, "threads": {}, "team_id": None}
-    # All three axes must be present and mutable for the sync path to
-    # mutate them in-place without raising KeyError (Phase 22-B added the
-    # ``backfill`` low-water axis, ADR-0038 §(a)).
-    assert "channels" in state
-    assert "backfill" in state
-    assert "threads" in state
+    assert _load_cursors(None) == {"workspaces": {}}
 
 
-def test_load_cursors_round_trips_compound_schema() -> None:
-    """``_dump → _load`` preserves the compound cursor exactly.
+def test_load_cursors_round_trips_envelope_schema() -> None:
+    """``_dump → _load`` preserves the per-alias nested cursor exactly.
 
     The serialised form is the only thing the projection persists, so
     losing data on the round-trip would silently re-fetch history /
     skip late replies on every resume. Pinning the symmetry locks the
-    Phase 20-B format.
+    Phase 24-C envelope (inner 4-axis shape unchanged from Phase
+    20-B/22-B/23-H, ADR-0041 §(d)).
     """
-    original: SlackCursorState = {
-        "channels": {
-            "C1": "1700000001.000100",
-            "C2": "1700000002.000200",
-        },
-        "backfill": {
-            "C1": "1699990000.000000",
-        },
-        "threads": {
-            "C1:1700000000.000000": "1700000003.000300",
-        },
-        "team_id": "T1",
+    original: SlackCursorEnvelope = {
+        "workspaces": {
+            "acme": {
+                "channels": {
+                    "C1": "1700000001.000100",
+                    "C2": "1700000002.000200",
+                },
+                "backfill": {
+                    "C1": "1699990000.000000",
+                },
+                "threads": {
+                    "C1:1700000000.000000": "1700000003.000300",
+                },
+                "team_id": "T1",
+            },
+            "oss": {
+                "channels": {"C1": "1700000009.000900"},
+                "backfill": {},
+                "threads": {},
+                "team_id": "T2",
+            },
+        }
     }
     serialised = _dump_cursors(original)
     assert _load_cursors(serialised) == original
 
 
 def test_load_cursors_accepts_empty_axes() -> None:
-    """Either axis may be empty — first sync, threads not yet populated, etc.
-
-    Pre-20-C the sync path always emits an empty ``threads`` axis, so
-    the parser must accept it without complaint. Symmetrically a
-    workspace whose first sync drained zero channels still emits an
-    empty ``channels`` axis — also valid.
-    """
-    # Empty channels, populated threads (hypothetical mid-state). The
-    # input omits ``backfill`` (pre-Phase-22 shape) — tolerated and
-    # defaulted to empty (ADR-0038 §(g)).
-    state_a = _load_cursors('{"channels":{}, "backfill": {},"threads":{"C1:t1":"ts-1"}}')
+    """Any axis may be empty — first sync, threads not yet populated, etc."""
+    state_a = _load_state(
+        '{"workspaces":{"acme":{"channels":{}, "backfill": {},"threads":{"C1:t1":"ts-1"}}}}'
+    )
     assert state_a == {
         "channels": {},
         "backfill": {},
@@ -349,40 +382,28 @@ def test_load_cursors_accepts_empty_axes() -> None:
         "team_id": None,
     }
 
-    # Populated channels, empty threads (the Phase 20-B steady state).
-    state_b = _load_cursors('{"channels":{"C1":"ts-1"}, "backfill": {},"threads":{}}')
+    state_b = _load_state('{"workspaces":{"acme":{"channels":{"C1":"ts-1"},"threads":{}}}}')
     assert state_b == {"channels": {"C1": "ts-1"}, "backfill": {}, "threads": {}, "team_id": None}
 
-    # Both empty (first sync, zero observed).
-    state_c = _load_cursors('{"channels":{}, "backfill": {},"threads":{}}')
-    assert state_c == {"channels": {}, "backfill": {}, "threads": {}, "team_id": None}
+    # Empty alias entry set (post-reset steady state).
+    assert _load_cursors('{"workspaces":{}}') == {"workspaces": {}}
 
 
 def test_load_cursors_accepts_null_values_per_axis() -> None:
-    """A channel / thread with a ``null`` value (never observed) round-trips.
-
-    A first-sync that found no messages in channel ``C-empty`` leaves
-    its entry as ``None`` so the next sync still passes the key to
-    the fetcher. Same applies to threads on the late-reply polling
-    path: a parent that has been registered but whose replies haven't
-    been observed yet sits at ``None``.
-    """
-    original: SlackCursorState = {
-        "channels": {"C1": "1700000001.000100", "C-empty": None},
-        "backfill": {"C1": "1699990000.000000", "C-empty": None},
-        "threads": {"C1:1700000000.000000": None},
-        "team_id": "T1",
-    }
+    """A channel / thread with a ``null`` value (never observed) round-trips."""
+    original: SlackCursorEnvelope = _wrap(
+        {
+            "channels": {"C1": "1700000001.000100", "C-empty": None},
+            "backfill": {"C1": "1699990000.000000", "C-empty": None},
+            "threads": {"C1:1700000000.000000": None},
+            "team_id": "T1",
+        }
+    )
     assert _load_cursors(_dump_cursors(original)) == original
 
 
 def test_load_cursors_rejects_malformed_json() -> None:
-    """Hand-edited / corrupt cursor → :class:`ConfigError`, not silent re-fetch.
-
-    A silently-truncated history (the only alternative) would loudly
-    mislead the operator. A hard error tells them to rebuild the
-    projection.
-    """
+    """Hand-edited / corrupt cursor → :class:`ConfigError`, not silent re-fetch."""
     with pytest.raises(ConfigError, match="not valid JSON"):
         _load_cursors("not-json")
 
@@ -396,115 +417,102 @@ def test_load_cursors_rejects_non_dict_root() -> None:
 def test_load_cursors_rejects_legacy_flat_dict_schema() -> None:
     """Pre-20-B flat shape (``{channel_id: ts}``) → ConfigError with reset prompt.
 
-    Phase 20-B is a hard schema flip ([epic #465](
-    https://github.com/ozzy-labs/opshub/issues/465)): the pre-20-B
-    flat ``{channel_id: ts}`` shape is rejected with a migration
-    prompt. Phase 23-A ([#531](
-    https://github.com/ozzy-labs/opshub/issues/531)) re-pointed the
-    prompt at ``opshub slack cursor reset --all`` (the working recovery)
-    — the older ``opshub projections rebuild`` prompt was a dead-end for
-    the flat dict (rebuild replays the flat-dict event payload). opshub
-    is pre-userbase so we do not silently coerce — coercion would lose
-    the operator-facing migration moment and would also be subtly
-    wrong (the legacy ``ts`` was the per-channel max including
-    thread replies *that were never observed*, so a 1:1 lift into the
-    new ``channels`` axis breaks Phase 20-C's increment semantics).
+    Phase 24-C is a hard schema flip (ADR-0041 §(d)): every pre-24
+    shape — the pre-20-B flat dict included — lacks the ``workspaces``
+    nest and is rejected with the same prompt steering at the working
+    recovery, ``opshub slack cursor reset --all`` (Phase 23-A #531
+    posture: ``opshub projections rebuild`` is a dead-end because
+    replay restores the same payload).
     """
     legacy = '{"C1":"1700000001.000100","C2":"1700000002.000200"}'
     with pytest.raises(ConfigError, match="opshub slack cursor reset --all"):
         _load_cursors(legacy)
 
 
-def test_load_cursors_rejects_legacy_message_mentions_pre_phase_20b() -> None:
-    """The rejection message names the schema flip so the operator can grep ADRs.
+def test_load_cursors_rejects_legacy_phase23_compound_schema() -> None:
+    """The Phase 20-B/23-H top-level compound (no workspaces nest) rejects too.
 
-    Pinning the wording (substring match) keeps the error message
-    discoverable from the ADR / epic side — an operator who reads
-    ``docs/upgrading.md`` or the epic body looking for the rebuild
-    prompt should find the same phrase here.
+    The pre-24 single-workspace compound carries no alias, so a silent
+    lift would have to invent one — and the ADR-0041 §(e) upgrade path
+    is a DB re-init regardless (the Phase 24-B external_id re-key
+    orphans pre-24 rows).
     """
-    legacy = '{"C1":"ts-1"}'
-    with pytest.raises(ConfigError, match="pre-Phase-20-B"):
+    legacy = '{"channels":{"C1":"ts-1"},"backfill":{},"threads":{},"team_id":"T1"}'
+    with pytest.raises(ConfigError, match="opshub slack cursor reset --all"):
         _load_cursors(legacy)
 
 
 def test_load_cursors_legacy_message_matches_canonical_doc_text() -> None:
-    """Reject text matches the canonical doc string (Phase 20-E / 23-A audit).
+    """Reject text is stable and names the Phase 24 schema + recovery.
 
-    ``docs/troubleshooting.md`` §3.12 and ``docs/upgrading.md`` §Phase 20
-    each render the error string verbatim as the "typical error" the
-    operator will grep against. Phase 20-E
-    ([#478](https://github.com/ozzy-labs/opshub/issues/478)) aligned the
-    implementation to the documented spelling; Phase 23-A
-    ([#531](https://github.com/ozzy-labs/opshub/issues/531)) re-pointed
-    the recovery command at ``opshub slack cursor reset --all`` (the old
-    ``opshub projections rebuild`` prompt was a dead-end for the flat
-    dict). Both files are the SSOT for the message ("doc is canonical");
-    this test pins both the individual fragments and the underlying
-    operator surface so a future paraphrase has to update the docs first.
+    ``docs/troubleshooting.md`` / ``docs/upgrading.md`` ship this string
+    for grep-based discovery (Phase 24-E), so the fragments are pinned
+    here: the schema marker, the working recovery command, the upgrade
+    path, and the pre-userbase no-silent-migration stance. The dead-end
+    ``opshub projections rebuild`` must NOT be the steered recovery
+    (Phase 23-A #531).
     """
     legacy = '{"C1":"ts-1"}'
     with pytest.raises(ConfigError) as excinfo:
         _load_cursors(legacy)
     message = str(excinfo.value)
-    # Fragments lifted directly from the doc surface.
-    assert "Slack cursor envelope is pre-Phase-20-B (flat dict)." in message
+    assert "Slack cursor predates the Phase 24 per-workspace schema" in message
+    assert '{"workspaces": {"<alias>": {...}}}' in message
+    assert "ADR-0041" in message
     assert "`opshub slack cursor reset --all`" in message
-    # The dead-end command must NOT be the steered recovery (Phase 23-A).
     assert "opshub projections rebuild" not in message
-    assert '{"channels": ..., "threads": ...} ' in message
-    assert "compound schema" in message
+    assert "DB re-init" in message
     assert "opshub is pre-userbase and ships no silent migration" in message
-    # ADR cross-reference so operators can grep ADR-0030 from the error.
-    assert "ADR-0030" in message
 
 
-def test_load_cursors_rejects_missing_channels_axis() -> None:
-    """Compound schema requires the ``channels`` axis — drop → ConfigError.
-
-    A cursor missing ``channels`` (or ``threads``) trips the same
-    legacy-shape branch as the pre-20-B flat dict, so the recovery prompt
-    is the working ``opshub slack cursor reset --all`` (Phase 23-A #531),
-    not the dead-end ``opshub projections rebuild``.
-    """
-    with pytest.raises(ConfigError, match="opshub slack cursor reset --all"):
-        _load_cursors('{"threads":{}}')
+def test_load_cursors_rejects_missing_inner_axes() -> None:
+    """Each alias entry requires the ``channels`` / ``threads`` axes."""
+    with pytest.raises(ConfigError, match="lacks the required"):
+        _load_cursors('{"workspaces":{"acme":{"threads":{}}}}')
+    with pytest.raises(ConfigError, match="lacks the required"):
+        _load_cursors('{"workspaces":{"acme":{"channels":{}}}}')
 
 
-def test_load_cursors_rejects_missing_threads_axis() -> None:
-    """Compound schema requires the ``threads`` axis — drop → ConfigError."""
-    with pytest.raises(ConfigError, match="opshub slack cursor reset --all"):
-        _load_cursors('{"channels":{}}')
+def test_load_cursors_rejects_non_object_workspaces_nest() -> None:
+    """The ``workspaces`` nest and each alias entry must be JSON objects."""
+    with pytest.raises(ConfigError, match="'workspaces' nest must be a JSON object"):
+        _load_cursors('{"workspaces":["acme"]}')
+    with pytest.raises(ConfigError, match="must be a JSON object"):
+        _load_cursors('{"workspaces":{"acme":"oops"}}')
+
+
+def test_load_cursors_rejects_empty_alias_key() -> None:
+    """A hand-edited empty alias key is rejected (would be unreachable by CLI)."""
+    with pytest.raises(ConfigError, match="non-empty strings"):
+        _load_cursors('{"workspaces":{"":{"channels":{},"threads":{}}}}')
 
 
 def test_load_cursors_rejects_non_object_axis() -> None:
     """Each axis must be a JSON object — list / scalar reject."""
     with pytest.raises(ConfigError, match="'channels' axis must be a JSON object"):
-        _load_cursors('{"channels":["C1"],"threads":{}}')
+        _load_cursors('{"workspaces":{"acme":{"channels":["C1"],"threads":{}}}}')
     with pytest.raises(ConfigError, match="'threads' axis must be a JSON object"):
-        _load_cursors('{"channels":{}, "backfill": {},"threads":"oops"}')
+        _load_cursors('{"workspaces":{"acme":{"channels":{},"threads":"oops"}}}')
 
 
 def test_load_cursors_rejects_non_string_values_per_axis() -> None:
     """Values must be ``str | None``; int / bool reject as hand-edit accident."""
     with pytest.raises(ConfigError, match="'channels' axis values must be"):
-        _load_cursors('{"channels":{"C1":42}, "backfill": {},"threads":{}}')
+        _load_cursors('{"workspaces":{"acme":{"channels":{"C1":42},"threads":{}}}}')
     with pytest.raises(ConfigError, match="'threads' axis values must be"):
-        _load_cursors('{"channels":{}, "backfill": {},"threads":{"C1:t1":true}}')
+        _load_cursors('{"workspaces":{"acme":{"channels":{},"threads":{"C1:t1":true}}}}')
 
 
 def test_load_cursors_tolerates_missing_backfill_axis() -> None:
-    """Phase 22-B: a pre-Phase-22 cursor (no ``backfill`` axis) is accepted.
+    """Inside an alias entry, a missing ``backfill`` axis defaults to empty.
 
-    The ``backfill`` low-water axis ([ADR-0038](
-    https://github.com/ozzy-labs/opshub/issues/516) §(a)) is **additive**:
-    a 2-axis cursor persisted before Phase 22 lacks it. Unlike the
-    pre-20-B flat dict, a missing ``backfill`` key is unambiguous, and
-    ``opshub projections rebuild`` does NOT reset the cursor (ADR-0038
-    §Context), so a ConfigError migration prompt would be a dead-end.
-    We default the absent axis to empty rather than raising.
+    The ``backfill`` low-water axis (ADR-0038 §(a)) stays
+    additive-tolerated inside the per-alias nest — unlike the missing
+    ``workspaces`` nest, the absent axis is unambiguous (ADR-0038 §(g)).
     """
-    state = _load_cursors('{"channels":{"C1":"ts-1"}, "backfill": {},"threads":{"C1:t1":"ts-r1"}}')
+    state = _load_state(
+        '{"workspaces":{"acme":{"channels":{"C1":"ts-1"},"threads":{"C1:t1":"ts-r1"}}}}'
+    )
     assert state == {
         "channels": {"C1": "ts-1"},
         "backfill": {},
@@ -515,25 +523,27 @@ def test_load_cursors_tolerates_missing_backfill_axis() -> None:
 
 def test_load_cursors_round_trips_backfill_axis() -> None:
     """A populated ``backfill`` axis survives ``_dump → _load`` (incl. null)."""
-    original: SlackCursorState = {
-        "channels": {"C1": "1700000001.000100"},
-        "backfill": {"C1": "1699990000.000000", "C-cold": None},
-        "threads": {},
-        "team_id": "T1",
-    }
+    original: SlackCursorEnvelope = _wrap(
+        {
+            "channels": {"C1": "1700000001.000100"},
+            "backfill": {"C1": "1699990000.000000", "C-cold": None},
+            "threads": {},
+            "team_id": "T1",
+        }
+    )
     assert _load_cursors(_dump_cursors(original)) == original
 
 
 def test_load_cursors_rejects_non_object_backfill_axis() -> None:
     """The ``backfill`` axis, when present, must be a JSON object."""
     with pytest.raises(ConfigError, match="'backfill' axis must be a JSON object"):
-        _load_cursors('{"channels":{},"threads":{},"backfill":["C1"]}')
+        _load_cursors('{"workspaces":{"acme":{"channels":{},"threads":{},"backfill":["C1"]}}}')
 
 
 def test_load_cursors_rejects_non_string_backfill_values() -> None:
     """``backfill`` axis values must be ``str | None`` (reject int / bool)."""
     with pytest.raises(ConfigError, match="'backfill' axis values must be"):
-        _load_cursors('{"channels":{},"threads":{},"backfill":{"C1":42}}')
+        _load_cursors('{"workspaces":{"acme":{"channels":{},"threads":{},"backfill":{"C1":42}}}}')
 
 
 def test_max_ts_returns_candidate_when_prior_is_none() -> None:
@@ -619,63 +629,73 @@ def test_max_ts_returns_candidate_when_candidate_non_numeric_but_prior_numeric()
 
 
 def test_dump_cursors_is_deterministic() -> None:
-    """``sort_keys=True`` → identical compound inputs produce identical output strings.
+    """``sort_keys=True`` → identical envelope inputs produce identical strings.
 
     Determinism matters because the projection row's ``cursor_value``
     becomes a meaningful diff in operator dashboards — a non-stable
     ordering would mark every sync run as "changed" even when no new
-    messages arrived. The Phase 20-B compound shape recurses into both
-    axes, so this test pins both top-level (``channels`` before
-    ``threads``) and per-axis (``C1`` before ``C2``) ordering.
+    messages arrived. ``sort_keys`` recurses through the workspaces
+    nest, every alias key, the per-alias axes and per-axis entries; the
+    per-workspace checkpoint also relies on this determinism to skip
+    redundant writes (Phase 24-C).
     """
-    a: SlackCursorState = {
-        "team_id": None,
-        "channels": {"C2": "ts-2", "C1": "ts-1"},
-        "backfill": {"C2": "ts-b2", "C1": "ts-b1"},
-        "threads": {"C2:t2": "ts-r2", "C1:t1": "ts-r1"},
+    a: SlackCursorEnvelope = {
+        "workspaces": {
+            "oss": {
+                "team_id": None,
+                "channels": {"C2": "ts-2", "C1": "ts-1"},
+                "backfill": {"C2": "ts-b2", "C1": "ts-b1"},
+                "threads": {"C2:t2": "ts-r2", "C1:t1": "ts-r1"},
+            },
+            "acme": {"team_id": "T1", "channels": {}, "backfill": {}, "threads": {}},
+        }
     }
-    b: SlackCursorState = {
-        "team_id": None,
-        "channels": {"C1": "ts-1", "C2": "ts-2"},
-        "backfill": {"C1": "ts-b1", "C2": "ts-b2"},
-        "threads": {"C1:t1": "ts-r1", "C2:t2": "ts-r2"},
+    b: SlackCursorEnvelope = {
+        "workspaces": {
+            "acme": {"team_id": "T1", "channels": {}, "backfill": {}, "threads": {}},
+            "oss": {
+                "team_id": None,
+                "channels": {"C1": "ts-1", "C2": "ts-2"},
+                "backfill": {"C1": "ts-b1", "C2": "ts-b2"},
+                "threads": {"C1:t1": "ts-r1", "C2:t2": "ts-r2"},
+            },
+        }
     }
     assert _dump_cursors(a) == _dump_cursors(b)
 
 
-def test_dump_cursors_emits_sorted_top_level_axes() -> None:
-    """Phase 20-B: top-level keys are emitted alphabetically (channels, threads).
+def test_dump_cursors_emits_sorted_keys_inside_envelope() -> None:
+    """Pin the exact serialised shape (alias nest + sorted axes).
 
-    Pins the exact serialised shape so a downstream consumer (operator
-    dashboard, ``opshub projections inspect``) can diff JSON values
-    textually without re-parsing. Drift on the top-level order would
-    silently invalidate textual diffs across runs.
+    A downstream consumer (operator dashboard, ``opshub slack status
+    --verbose``) can diff JSON values textually without re-parsing.
+    Drift on the ordering would silently invalidate textual diffs
+    across runs.
     """
-    state: SlackCursorState = {
-        "team_id": None,
-        "channels": {"C1": "ts-1"},
-        "backfill": {"C1": "ts-b1"},
-        "threads": {"C1:t1": "ts-r1"},
-    }
-    # ``sort_keys=True`` orders top-level keys alphabetically:
-    # backfill < channels < team_id < threads (Phase 23-H #538 adds team_id).
-    assert _dump_cursors(state) == (
-        '{"backfill":{"C1":"ts-b1"},"channels":{"C1":"ts-1"},"team_id":null,'
-        '"threads":{"C1:t1":"ts-r1"}}'
+    envelope: SlackCursorEnvelope = _wrap(
+        {
+            "team_id": None,
+            "channels": {"C1": "ts-1"},
+            "backfill": {"C1": "ts-b1"},
+            "threads": {"C1:t1": "ts-r1"},
+        }
+    )
+    # backfill < channels < team_id < threads inside the alias entry.
+    assert _dump_cursors(envelope) == (
+        '{"workspaces":{"acme":{"backfill":{"C1":"ts-b1"},"channels":{"C1":"ts-1"},'
+        '"team_id":null,"threads":{"C1:t1":"ts-r1"}}}}'
     )
 
 
-def test_dump_cursors_emits_empty_compound_envelope() -> None:
-    """First-sync (no observations yet) still emits the schema marker.
+def test_dump_cursors_emits_empty_envelope() -> None:
+    """A reset cursor still emits the schema marker.
 
-    Phase 20-B writes the compound envelope even when both axes are
-    empty so subsequent ``_load_cursors`` calls see a valid schema
-    (and the ``connector_cursors`` row advances out of the legacy /
-    NULL state on the first successful sync).
+    Persisting the empty envelope (rather than NULL / ``{}``) is what
+    lets ``cursor reset --all`` recover any legacy shape: even
+    ``opshub projections rebuild`` replays the reset event's empty
+    envelope rather than regenerating the legacy payload (#531).
     """
-    assert _dump_cursors({"team_id": None, "channels": {}, "backfill": {}, "threads": {}}) == (
-        '{"backfill":{},"channels":{},"team_id":null,"threads":{}}'
-    )
+    assert _dump_cursors({"workspaces": {}}) == '{"workspaces":{}}'
 
 
 def test_max_ts_works_on_threads_axis_keys() -> None:
@@ -778,7 +798,7 @@ def test_sync_observes_each_yielded_message(monkeypatch: pytest.MonkeyPatch) -> 
 
     # New cursor encodes the latest ts per channel under the compound schema.
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor) == {
+    assert _load_state(result.new_cursor) == {
         "team_id": "T-test",
         "channels": {"C1": "1700000002.000200"},
         "backfill": {},
@@ -800,7 +820,7 @@ def test_sync_resumes_from_persisted_cursor(monkeypatch: pytest.MonkeyPatch) -> 
     _patch_auth(monkeypatch)
     _, captured = _patch_fetcher(monkeypatch, yields=[])
 
-    prior_cursor = _dump_cursors(
+    prior_cursor = _dump_state(
         {
             "channels": {"C1": "1700000001.000100", "C2": None},
             "backfill": {},
@@ -870,7 +890,7 @@ def test_sync_persists_max_ts_when_yield_order_regresses(
     # issue #339 inbox inflation. Wrapped in the Phase 20-B compound
     # envelope.
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor) == {
+    assert _load_state(result.new_cursor) == {
         "team_id": "T-test",
         "channels": {"C1": "1700000002.000200"},
         "backfill": {},
@@ -895,7 +915,7 @@ def test_sync_advances_cursor_per_channel(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert result.observed_count == 2
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor) == {
+    assert _load_state(result.new_cursor) == {
         "team_id": "T-test",
         "channels": {"C1": "ts-c1-new", "C2": "ts-c2-new"},
         "backfill": {},
@@ -938,7 +958,7 @@ def test_sync_floor_is_inert_when_cursor_is_newer(
     _patch_auth(monkeypatch)
     _, captured = _patch_fetcher(monkeypatch, yields=[])
 
-    prior = _dump_cursors(
+    prior = _dump_state(
         {"team_id": None, "channels": {"C1": "1700000000.000000"}, "backfill": {}, "threads": {}}
     )  # year 2023 ≫ floor 2000
     SlackConnector().sync(_context(_RecordingSourceService(), cursor_value=prior))
@@ -993,20 +1013,18 @@ def test_sync_relative_floor_is_evaluated_at_sync_time(
 # ---------------------------------------------------------------------- sync: empty channels
 
 
-def test_sync_with_empty_channels_warns_and_returns_no_op(
+def test_sync_with_no_workspaces_warns_and_returns_no_op(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Empty channel config → structured warning + cursor preserved.
+    """Zero workspace tables → structured warning + cursor preserved verbatim.
 
-    The connector must not crash here — an operator who hasn't
-    populated ``channels`` yet should see a CLI-level warning, not a
-    stack trace. The prior cursor is preserved so flipping
-    ``channels = ["C1"]`` and re-running picks up exactly where the
-    last sync left off.
+    The connector must not crash here — an operator who hasn't added a
+    ``[connectors.slack.workspaces.<alias>]`` table yet should see a
+    CLI-level warning, not a stack trace. The prior cursor is preserved
+    byte-for-byte (the short-circuit runs before cursor parsing, so even
+    a legacy-shaped leftover does not raise on this path).
     """
-    _patch_settings(monkeypatch, channels=[])
-    # No fetcher patch — the connector must short-circuit before
-    # touching it. A pollution check confirms the short-circuit:
+    _patch_settings(monkeypatch, workspaces={})
     fetcher_cls = MagicMock(side_effect=AssertionError("fetcher must not be constructed"))
     monkeypatch.setattr("opshub.connectors.slack.connector.SlackFetcher", fetcher_cls)
     auth_cls = MagicMock(side_effect=AssertionError("auth must not be constructed"))
@@ -1019,7 +1037,39 @@ def test_sync_with_empty_channels_warns_and_returns_no_op(
     assert result.observed_count == 0
     assert result.new_cursor == "{}"
     assert service.calls == []
-    # Warning was emitted via the structured logger.
+    ctx.logger.warning.assert_called_once()
+
+
+def test_sync_with_empty_workspace_channels_warns_and_returns_no_op(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A workspace with an empty channel list is skipped with a warning.
+
+    Per-workspace degraded-but-not-failing posture (Phase 24-C): the
+    sync still exits cleanly (no aggregate failure) and never
+    constructs auth / fetcher for the empty workspace.
+    """
+    _patch_settings(monkeypatch, channels=[])
+    fetcher_cls = MagicMock(side_effect=AssertionError("fetcher must not be constructed"))
+    monkeypatch.setattr("opshub.connectors.slack.connector.SlackFetcher", fetcher_cls)
+    auth_cls = MagicMock(side_effect=AssertionError("auth must not be constructed"))
+    monkeypatch.setattr("opshub.connectors.slack.connector.SlackAuth", auth_cls)
+
+    service = _RecordingSourceService()
+    ctx = _context(service, cursor_value='{"workspaces":{}}')
+    result = SlackConnector().sync(ctx)
+
+    assert result.observed_count == 0
+    # The alias's (empty) state entry is materialised in the envelope —
+    # harmless bookkeeping; no axis carries data and team_id stays unbound.
+    assert result.new_cursor is not None
+    assert _load_state(result.new_cursor) == {
+        "channels": {},
+        "backfill": {},
+        "threads": {},
+        "team_id": None,
+    }
+    assert service.calls == []
     ctx.logger.warning.assert_called_once()
 
 
@@ -1076,7 +1126,7 @@ def test_sync_skips_excluded_channel_but_advances_cursor(
     assert service.calls[0]["external_id"] == "T-test:C1:ts-1"
     # Both channels' cursors advance (skip-but-advance contract).
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor) == {
+    assert _load_state(result.new_cursor) == {
         "team_id": "T-test",
         "channels": {"C1": "ts-1", "C-secret": "ts-2"},
         "backfill": {},
@@ -1110,7 +1160,7 @@ def test_sync_skips_excluded_sender_but_advances_cursor(
     assert result.observed_count == 1
     assert service.calls[0]["external_id"] == "T-test:C1:ts-human"
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor) == {
+    assert _load_state(result.new_cursor) == {
         "team_id": "T-test",
         "channels": {"C1": "ts-human"},
         "backfill": {},
@@ -1132,7 +1182,7 @@ def test_sync_with_no_yields_preserves_cursor(monkeypatch: pytest.MonkeyPatch) -
     # Already bound to this workspace (team_id="T-test", matching _patch_auth),
     # so the Phase 23-H guard is a no-op and the no-yields sync preserves the
     # cursor byte-for-byte.
-    prior_cursor = _dump_cursors(
+    prior_cursor = _dump_state(
         {"channels": {"C1": "ts-old"}, "backfill": {}, "threads": {}, "team_id": "T-test"}
     )
     service = _RecordingSourceService()
@@ -1246,7 +1296,7 @@ def test_sync_checkpoints_partial_cursor_on_mid_iteration_failure(
     # crash, wrapped in the Phase 20-B compound envelope (channels
     # axis advanced, threads axis preserved empty — pre-fix this
     # would have been missing entirely).
-    assert _load_cursors(call["value"]) == {
+    assert _load_state(call["value"]) == {
         "team_id": "T-test",
         "channels": {"C1": "1700000002.000200"},
         "backfill": {},
@@ -1254,18 +1304,20 @@ def test_sync_checkpoints_partial_cursor_on_mid_iteration_failure(
     }
 
 
-def test_sync_no_checkpoint_when_failure_yields_nothing(
+def test_sync_bind_only_checkpoint_when_failure_yields_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Failure with zero observed messages → no checkpoint event noise.
+    """Failure with zero yields still checkpoints the fresh team_id bind.
 
-    The ``finally`` arm guards on ``cursors != cursors_at_entry``
-    so a fetcher that raises before yielding anything (e.g.
-    ``invalid_auth`` on the first ``conversations.history`` call)
-    does not emit a redundant ``ConnectorSyncStarted`` event with a
-    no-op cursor value. The CLI driver's ``record_sync_failure``
-    arm is still responsible for the audit trail; we just stay out
-    of its way.
+    Phase 24-C: the per-workspace bind guard runs before the fetch, so
+    even a fetcher that raises on its first call (e.g. ``invalid_auth``)
+    leaves *one* piece of new state — the alias's bound ``team_id``.
+    The checkpoint compares the serialised envelope against the last
+    persisted value, so the bind is persisted (it is exactly what the
+    next sync's guard verifies) while a *repeat* failure on an
+    already-bound cursor emits nothing (see the companion test below).
+    The original failure still aggregates into
+    :class:`SlackWorkspaceSyncError` for the CLI's audit trail.
     """
     from opshub.core.errors import ConnectorFailedError
 
@@ -1278,12 +1330,44 @@ def test_sync_no_checkpoint_when_failure_yields_nothing(
     )
 
     service = _RecordingSourceService()
-    with pytest.raises(ConnectorFailedError):
+    with pytest.raises(SlackWorkspaceSyncError):
         SlackConnector().sync(_context(service, cursor_value=None))
 
-    # No observes (fetcher raised on its first call) and no
-    # cursor_set noise — the connector cleanly delegates the failure
-    # to the CLI driver.
+    assert service.calls == []
+    assert len(service.cursor_set_calls) == 1
+    assert _load_state(service.cursor_set_calls[0]["value"]) == {
+        "channels": {},
+        "backfill": {},
+        "threads": {},
+        "team_id": "T-test",
+    }
+
+
+def test_sync_no_checkpoint_when_bound_failure_yields_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeat failure on an already-bound cursor → no checkpoint event noise.
+
+    With the team_id already bound and zero yields, the serialised
+    envelope is byte-identical to the persisted value, so the
+    per-workspace checkpoint skips the redundant write — repeated
+    failing syncs do not accumulate ``ConnectorSyncStarted`` noise.
+    """
+    from opshub.core.errors import ConnectorFailedError
+
+    _patch_settings(monkeypatch, channels=["C1"])
+    _patch_auth(monkeypatch)
+    _patch_fetcher_with_mid_iteration_error(
+        monkeypatch,
+        yields_before_error=[],
+        error=ConnectorFailedError("Slack fetch failed for channel C1: invalid_auth"),
+    )
+
+    prior = _dump_state({"channels": {}, "backfill": {}, "threads": {}, "team_id": "T-test"})
+    service = _RecordingSourceService()
+    with pytest.raises(SlackWorkspaceSyncError):
+        SlackConnector().sync(_context(service, cursor_value=prior))
+
     assert service.calls == []
     assert service.cursor_set_calls == []
 
@@ -1331,7 +1415,7 @@ def test_sync_no_checkpoint_when_failure_yields_only_excluded_messages(
     assert len(service.cursor_set_calls) == 1
     call = service.cursor_set_calls[0]
     assert call["sync_started"] is True
-    assert _load_cursors(call["value"]) == {
+    assert _load_state(call["value"]) == {
         "team_id": "T-test",
         "channels": {"C-secret": "1700000001.000100"},
         "backfill": {},
@@ -1371,7 +1455,7 @@ def test_sync_no_checkpoint_on_normal_completion(
     # under the Phase 20-B compound envelope.
     assert result.observed_count == 1
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor) == {
+    assert _load_state(result.new_cursor) == {
         "team_id": "T-test",
         "channels": {"C1": "1700000001.000100"},
         "backfill": {},
@@ -1408,7 +1492,7 @@ def test_sync_checkpoints_partial_progress_on_keyboard_interrupt(
     # BaseException-derived interrupt.
     assert len(service.cursor_set_calls) == 1
     call = service.cursor_set_calls[0]
-    assert _load_cursors(call["value"]) == {
+    assert _load_state(call["value"]) == {
         "team_id": "T-test",
         "channels": {"C1": "1700000001.000100"},
         "backfill": {},
@@ -1446,7 +1530,7 @@ def test_sync_checkpoint_preserves_prior_cursor_for_unprocessed_channels(
         error=ConnectorFailedError("Slack fetch failed for channel B: rate_limited"),
     )
 
-    prior_cursor = _dump_cursors(
+    prior_cursor = _dump_state(
         {"team_id": None, "channels": {"A": "ts-a-prior", "B": None}, "backfill": {}, "threads": {}}
     )
     service = _RecordingSourceService()
@@ -1459,7 +1543,7 @@ def test_sync_checkpoint_preserves_prior_cursor_for_unprocessed_channels(
     # 20-B schema.
     assert len(service.cursor_set_calls) == 1
     call = service.cursor_set_calls[0]
-    assert _load_cursors(call["value"]) == {
+    assert _load_state(call["value"]) == {
         "team_id": "T-test",
         "channels": {"A": "ts-a-prior", "B": "ts-b-new"},
         "backfill": {},
@@ -1582,7 +1666,7 @@ def test_sync_lowered_floor_triggers_gap_backfill(monkeypatch: pytest.MonkeyPatc
         gap_yields=[("C1", gap_msg, gap_ts)],
     )
 
-    prior = _dump_cursors(
+    prior = _dump_state(
         {
             "team_id": None,
             "channels": {"C1": high_water},
@@ -1601,7 +1685,7 @@ def test_sync_lowered_floor_triggers_gap_backfill(monkeypatch: pytest.MonkeyPatc
     # The gap message was observed (and nothing else — the forward set is
     # not re-fetched, so no inbox inflation on the already-covered region).
     assert [c["external_id"] for c in service.calls] == [f"T-test:C1:{gap_ts}"]
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     # Low-water advanced down to the new floor; high-water unchanged (the
     # older gap ts never rewinds the forward cursor).
     assert parsed["backfill"] == {"C1": floor_ts}
@@ -1625,7 +1709,7 @@ def test_sync_relative_floor_does_not_trigger_gap_backfill(
     high_water = since_to_ts(now_utc() - timedelta(days=1))
     _, captured = _patch_fetcher_with_gap(monkeypatch, forward_yields=[])
 
-    prior = _dump_cursors(
+    prior = _dump_state(
         {
             "team_id": None,
             "channels": {"C1": high_water},
@@ -1640,7 +1724,7 @@ def test_sync_relative_floor_does_not_trigger_gap_backfill(
     assert captured["gap"] is None
     assert service.calls == []
     # Low-water unchanged.
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     assert parsed["backfill"] == {"C1": low_water}
 
 
@@ -1664,7 +1748,7 @@ def test_sync_gap_backfill_suppressed_when_toggle_off(
     high_water = since_to_ts(parse_since("2026-06-01"))
     _, captured = _patch_fetcher_with_gap(monkeypatch, forward_yields=[])
 
-    prior = _dump_cursors(
+    prior = _dump_state(
         {
             "team_id": None,
             "channels": {"C1": high_water},
@@ -1678,7 +1762,7 @@ def test_sync_gap_backfill_suppressed_when_toggle_off(
     assert captured["gap"] is None
     assert service.calls == []
     # Low-water is left where it was (no backfill performed).
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     assert parsed["backfill"] == {"C1": low_water}
 
 
@@ -1697,14 +1781,14 @@ def test_sync_pre_feature_channel_does_not_auto_backfill(
 
     # Pre-feature cursor: ``channels`` present, ``backfill`` axis absent
     # entirely (the connector tolerates the missing axis, Phase 22-B).
-    prior = '{"channels":{"C1":"1800000000.000000"},"threads":{}}'
+    prior = '{"workspaces":{"acme":{"channels":{"C1":"1800000000.000000"},"threads":{}}}}'
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=prior))
 
     assert captured["gap"] is None
     assert service.calls == []
     # The axis stays absent (≡ epoch low-water, no auto-backfill).
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     assert parsed["backfill"] == {}
 
 
@@ -1732,7 +1816,7 @@ def test_sync_floored_cold_start_records_low_water(
 
     # Cold-start → no gap pass, but the low-water is recorded at the floor.
     assert captured["gap"] is None
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     assert parsed["backfill"] == {"C1": floor_ts}
     assert parsed["channels"]["C1"] == head_msg.ts
 
@@ -1757,7 +1841,7 @@ def test_sync_no_floor_cold_start_leaves_backfill_absent(
     result = SlackConnector().sync(_context(service, cursor_value=None))
 
     assert captured["gap"] is None
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     assert parsed["backfill"] == {}
 
 
@@ -1797,7 +1881,7 @@ def test_sync_gap_parent_seeds_threads_axis(monkeypatch: pytest.MonkeyPatch) -> 
         gap_yields=[("C1", gap_parent, parent_ts)],
     )
 
-    prior = _dump_cursors(
+    prior = _dump_state(
         {
             "team_id": None,
             "channels": {"C1": high_water},
@@ -1808,7 +1892,7 @@ def test_sync_gap_parent_seeds_threads_axis(monkeypatch: pytest.MonkeyPatch) -> 
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=prior))
 
-    parsed = _load_cursors(result.new_cursor)
+    parsed = _load_state(result.new_cursor)
     # The gap parent registered its thread at ``latest_reply``.
     assert parsed["threads"] == {f"C1:{parent_ts}": latest_reply_ts}
 
@@ -1859,7 +1943,7 @@ def test_sync_mid_gap_crash_does_not_advance_low_water(
 
     _patch_fetcher_with_gap(monkeypatch, forward_yields=[], gap_yields=_crashing_gap())
 
-    prior = _dump_cursors(
+    prior = _dump_state(
         {
             "team_id": None,
             "channels": {"C1": high_water},
@@ -1877,7 +1961,7 @@ def test_sync_mid_gap_crash_does_not_advance_low_water(
     assert len(service.cursor_set_calls) == 1
     checkpoint = service.cursor_set_calls[0]
     assert checkpoint["sync_started"] is True
-    parsed = _load_cursors(checkpoint["value"])
+    parsed = _load_state(checkpoint["value"])
     # Threads progress is checkpointed...
     assert parsed["threads"] == {f"C1:{parent_ts}": reply_ts}
     # ...but the low-water is NOT advanced (the gap did not fully drain) —
@@ -1899,7 +1983,7 @@ def test_sync_binds_team_id_on_first_sync(monkeypatch: pytest.MonkeyPatch) -> No
     result = SlackConnector().sync(_context(service, cursor_value=None))
 
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor)["team_id"] == "T-WS1"
+    assert _load_state(result.new_cursor)["team_id"] == "T-WS1"
 
 
 def test_sync_passes_when_team_id_matches(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1907,7 +1991,7 @@ def test_sync_passes_when_team_id_matches(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_settings(monkeypatch, channels=["C1"])
     _patch_auth(monkeypatch, team_id="T-WS1")
     _patch_fetcher(monkeypatch, yields=[])
-    prior = _dump_cursors(
+    prior = _dump_state(
         {"channels": {"C1": "1.0"}, "backfill": {}, "threads": {}, "team_id": "T-WS1"}
     )
     service = _RecordingSourceService()
@@ -1915,26 +1999,51 @@ def test_sync_passes_when_team_id_matches(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert result.observed_count == 0
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor)["team_id"] == "T-WS1"
+    assert _load_state(result.new_cursor)["team_id"] == "T-WS1"
 
 
 def test_sync_rejects_team_id_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A token swapped to a different workspace is rejected before any fetch."""
+    """A token swapped to a different workspace is rejected before any fetch.
+
+    Phase 24-C: the per-alias guard's :class:`ConfigError` is isolated
+    like any other per-workspace failure and aggregates into
+    :class:`SlackWorkspaceSyncError` naming the alias (the actionable
+    recovery text rides on the structured per-alias log warning).
+    """
     _patch_settings(monkeypatch, channels=["C1"])
     _patch_auth(monkeypatch, team_id="T-OTHER")
     _patch_fetcher(
         monkeypatch, yields=[("C1", _raw_message(channel_id="C1", ts="1.0", text="x"), "1.0")]
     )
-    prior = _dump_cursors(
+    prior = _dump_state(
         {"channels": {"C1": "1.0"}, "backfill": {}, "threads": {}, "team_id": "T-WS1"}
     )
     service = _RecordingSourceService()
-    with pytest.raises(ConfigError, match="cursor reset --all"):
+    with pytest.raises(SlackWorkspaceSyncError, match="acme") as excinfo:
         SlackConnector().sync(_context(service, cursor_value=prior))
 
+    assert excinfo.value.failed_aliases == ["acme"]
     # The guard runs before any fetch → no foreign-workspace message was
-    # observed (the load-bearing reason external_id stays workspace-wide-unique).
+    # observed (the load-bearing reason external_id stays workspace-unique).
     assert service.calls == []
+
+
+def test_bind_guard_mismatch_message_names_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The per-alias guard's own error names the alias-scoped recovery verbs."""
+    from opshub.connectors.slack.connector import (
+        _bind_or_check_workspace,  # pyright: ignore[reportPrivateUsage]
+        _empty_state,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    state = _empty_state()
+    state["team_id"] = "T-WS1"
+    with pytest.raises(ConfigError) as excinfo:
+        _bind_or_check_workspace(state, current_team="T-OTHER", alias="acme")
+    message = str(excinfo.value)
+    assert "bound to team_id 'T-WS1'" in message
+    assert "resolves to 'T-OTHER'" in message
+    assert "opshub slack auth set --workspace acme" in message
+    assert "opshub slack cursor reset --workspace acme --all" in message
 
 
 def test_sync_rebinds_after_reset(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1944,37 +2053,38 @@ def test_sync_rebinds_after_reset(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_fetcher(
         monkeypatch, yields=[("C1", _raw_message(channel_id="C1", ts="1.0", text="x"), "1.0")]
     )
-    prior = _dump_cursors({"channels": {}, "backfill": {}, "threads": {}, "team_id": None})
+    prior = _dump_state({"channels": {}, "backfill": {}, "threads": {}, "team_id": None})
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=prior))
 
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor)["team_id"] == "T-WS2"
+    assert _load_state(result.new_cursor)["team_id"] == "T-WS2"
 
 
-def test_sync_legacy_cursor_without_team_id_binds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A pre-23-H compound cursor (no team_id key) parses to None then binds."""
+def test_sync_workspace_entry_without_team_id_binds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An alias entry lacking the team_id key parses to None then binds."""
     _patch_settings(monkeypatch, channels=["C1"])
     _patch_auth(monkeypatch, team_id="T-WS1")
     _patch_fetcher(
         monkeypatch, yields=[("C1", _raw_message(channel_id="C1", ts="1.0", text="x"), "1.0")]
     )
-    prior = '{"channels":{"C1":"0.5"},"backfill":{},"threads":{}}'
+    prior = '{"workspaces":{"acme":{"channels":{"C1":"0.5"},"backfill":{},"threads":{}}}}'
     service = _RecordingSourceService()
     result = SlackConnector().sync(_context(service, cursor_value=prior))
 
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor)["team_id"] == "T-WS1"
+    assert _load_state(result.new_cursor)["team_id"] == "T-WS1"
 
 
-def test_sync_empty_team_id_is_config_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``auth.test`` returning no team_id hard-fails before any fetch (Phase 24-B).
+def test_sync_empty_team_id_hard_fails_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``auth.test`` returning no team_id hard-fails the workspace before any fetch.
 
-    Reverses the Phase 23-H warn-and-proceed pin: ``team_id`` is now a
-    constituent of every ``external_id``
-    (``f"{team_id}:{channel_id}:{ts}"``, ADR-0041 §(i)), so proceeding
-    without one would mint malformed natural keys. The guard runs before
-    any fetch, so nothing is observed.
+    Phase 24-B reversed the 23-H warn-and-proceed arm: ``team_id`` is a
+    constituent of every ``external_id`` (ADR-0041 §(i)), so proceeding
+    without one would mint malformed natural keys. Phase 24-C isolates
+    the failure per workspace (aggregate raise). The load-bearing
+    assertion is "no fetch, no observe" — the guard fires before the
+    fetcher is ever consulted.
     """
     _patch_settings(monkeypatch, channels=["C1"])
     _patch_auth(monkeypatch, team_id="")
@@ -1982,12 +2092,11 @@ def test_sync_empty_team_id_is_config_error(monkeypatch: pytest.MonkeyPatch) -> 
         monkeypatch, yields=[("C1", _raw_message(channel_id="C1", ts="1.0", text="x"), "1.0")]
     )
     service = _RecordingSourceService()
-    with pytest.raises(ConfigError, match="no team_id"):
+    with pytest.raises(SlackWorkspaceSyncError, match="acme"):
         SlackConnector().sync(_context(service, cursor_value=None))
 
-    # Hard ConfigError before any fetch → nothing observed, no cursor write.
+    # Hard failure before any fetch → nothing observed.
     assert service.calls == []
-    assert service.cursor_set_calls == []
 
 
 # -------------------------------------------------- backfill_channel bind guard
@@ -2042,6 +2151,7 @@ def test_backfill_channel_binds_team_id_on_unbound_cursor(
     service = _RecordingSourceService()
     result = SlackConnector().backfill_channel(
         _context(service, cursor_value=None),
+        alias=_ALIAS,
         channel_id="C1",
         since_ts="1.000000",
         until_ts="2.000000",
@@ -2049,7 +2159,7 @@ def test_backfill_channel_binds_team_id_on_unbound_cursor(
 
     assert fetcher_cls.call_args.kwargs["team_id"] == "T-WS1"
     assert result.new_cursor is not None
-    assert _load_cursors(result.new_cursor)["team_id"] == "T-WS1"
+    assert _load_state(result.new_cursor)["team_id"] == "T-WS1"
     assert [c["external_id"] for c in service.calls] == ["T-WS1:C1:1.5"]
 
 
@@ -2062,13 +2172,14 @@ def test_backfill_channel_rejects_team_id_mismatch(
         monkeypatch,
         yields=[("C1", _raw_message(channel_id="C1", ts="1.5"), "1.5")],
     )
-    prior = _dump_cursors(
+    prior = _dump_state(
         {"channels": {"C1": "2.0"}, "backfill": {}, "threads": {}, "team_id": "T-WS1"}
     )
     service = _RecordingSourceService()
-    with pytest.raises(ConfigError, match="cursor reset --all"):
+    with pytest.raises(ConfigError, match="cursor reset --workspace acme --all"):
         SlackConnector().backfill_channel(
             _context(service, cursor_value=prior),
+            alias=_ALIAS,
             channel_id="C1",
             since_ts="1.000000",
             until_ts="2.000000",
@@ -2089,8 +2200,289 @@ def test_backfill_channel_empty_team_id_is_config_error(
     with pytest.raises(ConfigError, match="no team_id"):
         SlackConnector().backfill_channel(
             _context(service, cursor_value=None),
+            alias=_ALIAS,
             channel_id="C1",
             since_ts="1.000000",
             until_ts="2.000000",
         )
     assert service.calls == []
+
+
+# ----- Phase 24-C multi-workspace sync loop (ADR-0041 §(a)/(b)/(j)) ------
+
+
+def _patch_multi_auth(monkeypatch: pytest.MonkeyPatch, *, teams: dict[str, str]) -> None:
+    """Patch :class:`SlackAuth` so each alias resolves its own team_id.
+
+    ``teams`` maps alias → team_id; the fake constructor records the
+    alias it was built for and ``test_token`` reports that alias's
+    workspace identity — the per-alias resolution the Phase 24-C sync
+    loop performs (one ``auth.test`` per workspace per sync).
+    """
+
+    class _FakeAuth:
+        def __init__(self, alias: str) -> None:
+            self.alias = alias
+            self.token = "xoxb-fake"
+
+        def test_token(self) -> dict[str, str]:
+            return {
+                "team": self.alias,
+                "team_id": teams[self.alias],
+                "user": "u",
+                "user_id": "U1",
+                "principal": "bot",
+            }
+
+    monkeypatch.setattr("opshub.connectors.slack.connector.SlackAuth", _FakeAuth)
+
+
+def _patch_multi_fetcher(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    yields_by_team: dict[str, list[tuple[str, RawSlackMessage, str | None]]],
+    errors_by_team: dict[str, BaseException] | None = None,
+) -> None:
+    """Patch :class:`SlackFetcher` routing per-workspace yields by ``team_id``.
+
+    The sync loop constructs one fetcher per workspace (with the
+    bind-guard-resolved ``team_id``); the fake routes each
+    construction's ``fetch_messages`` to that team's scripted yields,
+    optionally raising ``errors_by_team[team_id]`` after the yields
+    drain (the per-workspace error-isolation failure shape).
+    """
+    errors = errors_by_team or {}
+
+    class _FakeFetcher:
+        def __init__(self, _auth: Any, *, channels: list[str], team_id: str) -> None:
+            self._channels = channels
+            self._team_id = team_id
+
+        def fetch_messages(self, **_kw: Any) -> Iterator[tuple[str, RawSlackMessage, str | None]]:
+            yield from yields_by_team.get(self._team_id, [])
+            error = errors.get(self._team_id)
+            if error is not None:
+                raise error
+
+        def fetch_thread_replies(self, **_kw: Any) -> Iterator[RawSlackMessage]:
+            return iter(())
+
+    monkeypatch.setattr("opshub.connectors.slack.connector.SlackFetcher", _FakeFetcher)
+
+
+def test_sync_two_workspaces_error_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Workspace 1 succeeds + workspace 2 fails → 1's cursor is checkpointed.
+
+    The epic #552 acceptance scenario for ADR-0041 §(b): the CLI driver
+    only persists the terminal cursor on a normal return, so without the
+    per-workspace checkpoint the succeeding workspace's progress would be
+    rolled back by the aggregate raise. The checkpoint
+    (``cursor_set(sync_started=True)``) fires after each workspace, the
+    failed alias rides on the aggregate error (stderr trail) and on
+    ``failure_event_detail`` (the ``ConnectorSyncFailed`` supplement).
+    """
+    _patch_settings(monkeypatch, workspaces={"acme": ["C1"], "oss": ["C1"]})
+    _patch_multi_auth(monkeypatch, teams={"acme": "T-ACME", "oss": "T-OSS"})
+    msg = _raw_message(team_id="T-ACME", channel_id="C1", ts="1.5", text="ok")
+    _patch_multi_fetcher(
+        monkeypatch,
+        yields_by_team={"T-ACME": [("C1", msg, "1.5")], "T-OSS": []},
+        errors_by_team={"T-OSS": ConnectorFailedError("rate_limited")},
+    )
+
+    service = _RecordingSourceService()
+    with pytest.raises(SlackWorkspaceSyncError) as excinfo:
+        SlackConnector().sync(_context(service, cursor_value=None))
+
+    # The failed alias is observable on every reporting surface.
+    assert excinfo.value.failed_aliases == ["oss"]
+    assert "oss (ConnectorFailedError)" in str(excinfo.value)
+    assert excinfo.value.failure_event_detail == "failed workspace(s): oss"
+
+    # acme's message was observed and its cursor progress was
+    # checkpointed (visible to the next sync via the started-event
+    # reducer) despite the aggregate failure.
+    assert [c["external_id"] for c in service.calls] == ["T-ACME:C1:1.5"]
+    assert len(service.cursor_set_calls) >= 1
+    final = _load_cursors(service.cursor_set_calls[-1]["value"])
+    assert final["workspaces"]["acme"]["channels"] == {"C1": "1.5"}
+    assert final["workspaces"]["acme"]["team_id"] == "T-ACME"
+    # oss got its attempt and bound its team before failing.
+    assert final["workspaces"]["oss"]["team_id"] == "T-OSS"
+
+
+def test_sync_first_workspace_failure_does_not_block_second(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure in the first (alphabetical) workspace still syncs the second."""
+    _patch_settings(monkeypatch, workspaces={"acme": ["C1"], "oss": ["C2"]})
+    _patch_multi_auth(monkeypatch, teams={"acme": "T-ACME", "oss": "T-OSS"})
+    msg = _raw_message(team_id="T-OSS", channel_id="C2", ts="2.5", text="late")
+    _patch_multi_fetcher(
+        monkeypatch,
+        yields_by_team={"T-ACME": [], "T-OSS": [("C2", msg, "2.5")]},
+        errors_by_team={"T-ACME": ConnectorFailedError("invalid_auth")},
+    )
+
+    service = _RecordingSourceService()
+    with pytest.raises(SlackWorkspaceSyncError) as excinfo:
+        SlackConnector().sync(_context(service, cursor_value=None))
+
+    assert excinfo.value.failed_aliases == ["acme"]
+    assert [c["external_id"] for c in service.calls] == ["T-OSS:C2:2.5"]
+    final = _load_cursors(service.cursor_set_calls[-1]["value"])
+    assert final["workspaces"]["oss"]["channels"] == {"C2": "2.5"}
+
+
+def test_sync_duplicate_team_id_across_aliases_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two aliases resolving to the same workspace → loud rejection (ADR-0041 §(a)).
+
+    Double-registering one workspace would double-sync its channels and
+    corrupt cursor / digest semantics, so the second alias fails with a
+    ConfigError naming both aliases (aggregated per the isolation loop).
+    """
+    _patch_settings(monkeypatch, workspaces={"acme": ["C1"], "dup": ["C1"]})
+    _patch_multi_auth(monkeypatch, teams={"acme": "T-SAME", "dup": "T-SAME"})
+    _patch_multi_fetcher(monkeypatch, yields_by_team={"T-SAME": []})
+
+    service = _RecordingSourceService()
+    with pytest.raises(SlackWorkspaceSyncError) as excinfo:
+        SlackConnector().sync(_context(service, cursor_value=None))
+
+    assert excinfo.value.failed_aliases == ["dup"]
+    # The underlying per-alias failure names both aliases + the team id
+    # on the structured log; here we pin the guard unit directly too.
+    assert service.calls == []
+
+
+def test_sync_channel_id_collision_across_workspaces_separates_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same channel id in two workspaces yields two distinct sources.
+
+    Channel ids are only workspace-unique; the Phase 24-B team_id prefix
+    keeps ``external_id`` install-unique, and the per-alias cursor nest
+    keeps the resume points independent (epic #552 channel-collision
+    scenario).
+    """
+    _patch_settings(monkeypatch, workspaces={"acme": ["C1"], "oss": ["C1"]})
+    _patch_multi_auth(monkeypatch, teams={"acme": "T-ACME", "oss": "T-OSS"})
+    msg_a = _raw_message(team_id="T-ACME", channel_id="C1", ts="1.1", text="a")
+    msg_b = _raw_message(team_id="T-OSS", channel_id="C1", ts="2.2", text="b")
+    _patch_multi_fetcher(
+        monkeypatch,
+        yields_by_team={"T-ACME": [("C1", msg_a, "1.1")], "T-OSS": [("C1", msg_b, "2.2")]},
+    )
+
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=None))
+
+    assert result.observed_count == 2
+    assert sorted(c["external_id"] for c in service.calls) == [
+        "T-ACME:C1:1.1",
+        "T-OSS:C1:2.2",
+    ]
+    envelope = _load_cursors(result.new_cursor)
+    assert envelope["workspaces"]["acme"]["channels"] == {"C1": "1.1"}
+    assert envelope["workspaces"]["oss"]["channels"] == {"C1": "2.2"}
+
+
+def test_sync_workspace_filter_narrows_to_one_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``sync_workspace_filter`` (the ``--workspace`` shim) syncs only that alias."""
+    _patch_settings(
+        monkeypatch,
+        workspaces={"acme": ["C1"], "oss": ["C2"]},
+        sync_workspace_filter="oss",
+    )
+    _patch_multi_auth(monkeypatch, teams={"acme": "T-ACME", "oss": "T-OSS"})
+    msg = _raw_message(team_id="T-OSS", channel_id="C2", ts="2.5", text="x")
+    _patch_multi_fetcher(
+        monkeypatch,
+        yields_by_team={"T-ACME": [("C1", _raw_message(), "9.9")], "T-OSS": [("C2", msg, "2.5")]},
+    )
+
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=None))
+
+    assert [c["external_id"] for c in service.calls] == ["T-OSS:C2:2.5"]
+    envelope = _load_cursors(result.new_cursor)
+    assert "acme" not in envelope["workspaces"]
+
+
+def test_sync_unknown_workspace_filter_is_config_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unknown filter alias fails loud before the loop (no aggregate wrap)."""
+    _patch_settings(monkeypatch, workspaces={"acme": ["C1"]}, sync_workspace_filter="typo")
+    service = _RecordingSourceService()
+    with pytest.raises(ConfigError, match="unknown Slack workspace alias 'typo'"):
+        SlackConnector().sync(_context(service, cursor_value=None))
+    assert service.calls == []
+
+
+def test_sync_preserves_unconfigured_alias_cursor_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cursor entry for an alias no longer configured is preserved verbatim.
+
+    An operator who removes a workspace table and re-adds it later
+    resumes where they left off (ADR-0041 §(d)); explicit cleanup is
+    ``opshub slack cursor reset --workspace <alias> --all``.
+    """
+    _patch_settings(monkeypatch, workspaces={"acme": ["C1"]})
+    _patch_multi_auth(monkeypatch, teams={"acme": "T-ACME"})
+    _patch_multi_fetcher(monkeypatch, yields_by_team={"T-ACME": []})
+
+    stale_state: SlackCursorState = {
+        "channels": {"C9": "9.9"},
+        "backfill": {},
+        "threads": {},
+        "team_id": "T-GONE",
+    }
+    prior = _dump_cursors(
+        {
+            "workspaces": {
+                "gone": stale_state,
+                "acme": {"channels": {}, "backfill": {}, "threads": {}, "team_id": "T-ACME"},
+            }
+        }
+    )
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=prior))
+
+    envelope = _load_cursors(result.new_cursor)
+    assert envelope["workspaces"]["gone"] == stale_state
+
+
+def test_sync_applies_workspace_scoped_excludes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``<alias>/C...`` excludes apply only in that workspace (ADR-0041 §(j)).
+
+    The same channel id excluded as ``acme/C1`` is dropped in acme but
+    still observed in oss; a bare entry would drop it everywhere (pinned
+    separately in ``tests/unit/core/test_excludes.py``).
+    """
+    _patch_excludes_yaml(monkeypatch, tmp_path, body="channels:\n  - acme/C1\n")
+    _patch_settings(monkeypatch, workspaces={"acme": ["C1"], "oss": ["C1"]})
+    _patch_multi_auth(monkeypatch, teams={"acme": "T-ACME", "oss": "T-OSS"})
+    msg_a = _raw_message(team_id="T-ACME", channel_id="C1", ts="1.1", text="hidden")
+    msg_b = _raw_message(team_id="T-OSS", channel_id="C1", ts="2.2", text="visible")
+    _patch_multi_fetcher(
+        monkeypatch,
+        yields_by_team={"T-ACME": [("C1", msg_a, "1.1")], "T-OSS": [("C1", msg_b, "2.2")]},
+    )
+
+    service = _RecordingSourceService()
+    result = SlackConnector().sync(_context(service, cursor_value=None))
+
+    # Only the oss copy is observed; the acme cursor still advances
+    # (skip-but-advance contract).
+    assert [c["external_id"] for c in service.calls] == ["T-OSS:C1:2.2"]
+    envelope = _load_cursors(result.new_cursor)
+    assert envelope["workspaces"]["acme"]["channels"] == {"C1": "1.1"}
+    assert result.observed_count == 1

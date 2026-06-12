@@ -11,7 +11,7 @@ twists:
    :class:`slack_sdk.WebClient` instead so the real fetcher's
    buffer-then-sort logic is exercised end-to-end.
 2. The Slack OAuth access token is injected through the
-   ``OPSHUB_CONNECTOR_SLACK_TOKEN`` env var override so the
+   per-alias ``OPSHUB_CONNECTOR_SLACK_ACME_TOKEN`` env var override so the
    ``[secrets]`` keyring backend is never consulted (matches the
    Phase 3 GitHub precedent and keeps CI hermetic). Per ADR-0018
    the test uses a User Token (``xoxp-``) — the first-class
@@ -162,17 +162,19 @@ def _patch_slack_fetcher(
 def slack_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Inject the Slack OAuth access token + channel list the connector requires.
 
-    * The token override (``OPSHUB_CONNECTOR_SLACK_TOKEN``) keeps
-      :class:`SlackAuth` away from the keyring so the test is
-      hermetic on dev machines without ``[secrets]`` installed.
-      Per ADR-0018 the value is a User Token (``xoxp-``); Bot Tokens
-      (``xoxb-``) are accepted equivalently.
-    * The channel list (``OPSHUB_CONNECTORS__SLACK__CHANNELS``) is
-      a JSON-encoded list per :mod:`pydantic_settings` conventions for
-      nested list overrides.
+    * The per-alias token override (``OPSHUB_CONNECTOR_SLACK_ACME_TOKEN``,
+      Phase 24-C ADR-0041 §(a)) keeps :class:`SlackAuth` away from the
+      keyring so the test is hermetic on dev machines without
+      ``[secrets]`` installed. Per ADR-0018 the value is a User Token
+      (``xoxp-``); Bot Tokens (``xoxb-``) are accepted equivalently.
+    * The channel list
+      (``OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__CHANNELS``) is a
+      JSON-encoded list per :mod:`pydantic_settings` conventions for
+      nested list overrides — the single configured ``acme`` workspace
+      table.
     """
-    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_TOKEN", "xoxp-test")
-    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '["C1"]')
+    monkeypatch.setenv("OPSHUB_CONNECTOR_SLACK_ACME_TOKEN", "xoxp-test")
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__CHANNELS", '["C1"]')
     # Phase 23-H (#538, ADR-0039): the sync hot path resolves the workspace
     # ``team_id`` via ``auth.test`` for the single-workspace bind guard. Stub
     # it so the hermetic test does not hit the network; the guard binds
@@ -1021,12 +1023,13 @@ def test_slack_sync_records_failure_event_on_fetcher_error(
 
     The fetcher's ``invalid_auth`` / ``channel_not_found`` /
     rate-limit-budget-exhausted paths all funnel through
-    :class:`ConnectorFailedError`. The CLI driver catches it,
-    records a :class:`ConnectorSyncFailed` event with the sanitised
-    exception type name (per :mod:`opshub.cli._connector_common` —
-    ``type(exc).__name__`` rather than ``str(exc)`` so a Slack
-    error message that echoed a token would be filtered out
-    automatically), and exits 1.
+    :class:`ConnectorFailedError`; Phase 24-C wraps the per-workspace
+    failure into the aggregate :class:`SlackWorkspaceSyncError`
+    (ADR-0041 §(b)). The CLI driver catches it, records a
+    :class:`ConnectorSyncFailed` event with the sanitised exception
+    type name plus the connector-vouched ``failure_event_detail``
+    naming the failed alias (operator-chosen config label, never a
+    secret), and exits 1.
     """
     _patch_slack_fetcher(
         monkeypatch,
@@ -1036,14 +1039,14 @@ def test_slack_sync_records_failure_event_on_fetcher_error(
     runner = CliRunner()
     result = runner.invoke(app, ["slack", "sync"])
     assert result.exit_code == 1
-    # CLI exception path: only the type name reaches stderr (the
-    # message is intentionally not echoed because it could carry
-    # connector-supplied detail; the type alone is enough for an
-    # operator to map back to the docs).
-    assert "ConnectorFailedError" in result.stderr
+    # CLI exception path: the aggregate type + sanitised message reach
+    # stderr; the failed alias is named so the operator knows which
+    # workspace to fix.
+    assert "SlackWorkspaceSyncError" in result.stderr
+    assert "acme" in result.stderr
 
     # The event log must carry a single ConnectorSyncFailed row with
-    # the sanitised message (the type name).
+    # the sanitised message (type name + failed-alias supplement).
     engine = create_engine_for_sqlite(isolated_env["db_path"])
     try:
         from sqlalchemy import text
@@ -1060,11 +1063,13 @@ def test_slack_sync_records_failure_event_on_fetcher_error(
             ]
         assert len(failed_rows) == 1
         # Payload is JSON-serialised on disk; the sanitised
-        # ``error_message`` field is the exception type name. We
-        # check via substring so a future schema bump that adds
-        # surrounding JSON keys doesn't break the test.
+        # ``error_message`` field is the aggregate type name plus the
+        # ``failure_event_detail`` alias supplement (Phase 24-C,
+        # ADR-0041 §(b)). We check via substring so a future schema
+        # bump that adds surrounding JSON keys doesn't break the test.
         payload = failed_rows[0]["payload"]
-        assert "ConnectorFailedError" in payload
+        assert "SlackWorkspaceSyncError" in payload
+        assert "failed workspace(s): acme" in payload
         assert "rate_limited" not in payload  # raw message is NOT persisted
     finally:
         engine.dispose()
@@ -1416,13 +1421,18 @@ def test_slack_sync_persists_compound_cursor_with_channels_monotonic(
         import json
 
         parsed_first = json.loads(cursor_after_first)
+        # Phase 24-C (ADR-0041 §(d)): the persisted shape is the per-alias
+        # envelope; the inner 4-axis compound is unchanged. The first sync
+        # binds the workspace team_id (the slack_env stub reports T-int).
         assert parsed_first == {
-            "channels": {"C1": "1700000002.000200"},
-            "backfill": {},
-            "threads": {},
-            # Phase 23-H (#538, ADR-0039): the first sync binds the workspace
-            # team_id (the slack_env stub reports T-int) and persists it.
-            "team_id": "T-int",
+            "workspaces": {
+                "acme": {
+                    "channels": {"C1": "1700000002.000200"},
+                    "backfill": {},
+                    "threads": {},
+                    "team_id": "T-int",
+                }
+            }
         }
 
         # Second sync with no new yields: cursor is byte-identical
@@ -2599,7 +2609,7 @@ def test_slack_sync_phase20c_polling_exhausts_retries_then_raises(
         second = runner.invoke(app, ["slack", "sync"])
         assert second.exit_code == 1, second.stdout
         # CLI driver sanitises to the type name only (R3 / ADR-0027).
-        assert "ConnectorFailedError" in second.stderr
+        assert "SlackWorkspaceSyncError" in second.stderr
 
         # The connector recorded ``ConnectorSyncFailed`` with the
         # sanitised type-name payload.
@@ -2613,7 +2623,11 @@ def test_slack_sync_phase20c_polling_exhausts_retries_then_raises(
                 ).mappings()
             ]
         assert len(failed_rows) == 1
-        assert "ConnectorFailedError" in failed_rows[0]["payload"]
+        # Phase 24-C: the aggregate type + failed-alias supplement
+        # (ADR-0041 §(b)); the per-alias detail (incl. the underlying
+        # ConnectorFailedError) rides on the structured log only.
+        assert "SlackWorkspaceSyncError" in failed_rows[0]["payload"]
+        assert "failed workspace(s): acme" in failed_rows[0]["payload"]
         # The raw "rate_limited" reason must NOT appear in the
         # persisted payload (sanitisation contract).
         assert "rate_limited" not in failed_rows[0]["payload"]
@@ -2713,7 +2727,8 @@ def test_slack_sync_phase20c_thread_cursor_pruned_when_channel_excluded(
     recent_reply_ts = since_to_ts(now_dt - timedelta(days=1))
     parent_ts = since_to_ts(now_dt - timedelta(days=2))
     seeded_cursor = (
-        f'{{"channels":{{"C1":"{parent_ts}"}},"threads":{{"C1:{parent_ts}":"{recent_reply_ts}"}}}}'
+        f'{{"workspaces":{{"acme":{{"channels":{{"C1":"{parent_ts}"}},'
+        f'"threads":{{"C1:{parent_ts}":"{recent_reply_ts}"}}}}}}}}'
     )
 
     import datetime as dt

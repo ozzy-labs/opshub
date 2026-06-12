@@ -34,7 +34,7 @@ from opshub.core.ids import new_ulid
 from opshub.db.engine import create_engine_for_sqlite
 from opshub.domain.events import DomainEvent, SourceObserved, TaskCreated
 from opshub.projections.slack_demand_digest import (
-    SELF_USER_ID_ENV_VAR,
+    SELF_USER_ID_ENV_PREFIX,
     SlackDemandDigestProjection,
     slack_demand_digest_table,
 )
@@ -42,6 +42,10 @@ from opshub.projections.sources import SourcesProjection, sources_table
 
 _SELF_USER_ID = "U_SELF"
 _OTHER_USER_ID = "U_OTHER"
+#: The workspace every single-workspace fixture event belongs to (the
+#: ``_slack_observed`` default ``team_id`` — Phase 24-C keys the self-id
+#: map on team_id, ADR-0041 §(g)).
+_TEAM_ID = "T-test"
 
 
 @pytest.fixture
@@ -136,7 +140,7 @@ def _slack_observed(
 
 def test_mention_in_public_channel_inserts_mention_row(engine: Engine) -> None:
     """A body that contains ``<@self>`` upserts a ``mention`` row."""
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = _slack_observed(
         channel_id="C123ABC",
         ts="1700000000.000100",
@@ -166,7 +170,7 @@ def test_mention_in_public_channel_inserts_mention_row(engine: Engine) -> None:
 
 def test_mention_for_other_user_does_not_insert_row(engine: Engine) -> None:
     """A ``<@other>`` literal in a public channel must not produce a row."""
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = _slack_observed(
         channel_id="C123ABC",
         ts="1700000001.000100",
@@ -183,7 +187,7 @@ def test_mention_for_other_user_does_not_insert_row(engine: Engine) -> None:
 
 def test_mention_in_private_channel_records_private_type(engine: Engine) -> None:
     """``G...`` channel ids round-trip as ``private`` (ADR-0033 §Decision (b))."""
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = _slack_observed(
         channel_id="G987PRIV",
         ts="1700000002.000200",
@@ -205,7 +209,7 @@ def test_mention_in_private_channel_records_private_type(engine: Engine) -> None
 
 def test_dm_channel_inserts_dm_row(engine: Engine) -> None:
     """A ``D...`` channel id upserts a ``dm`` row, even without ``<@self>``."""
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = _slack_observed(
         channel_id="D111CDE",
         ts="1700000003.000300",
@@ -225,7 +229,7 @@ def test_dm_channel_inserts_dm_row(engine: Engine) -> None:
 
 def test_dm_with_self_mention_writes_both_rows(engine: Engine) -> None:
     """A DM body containing ``<@self>`` produces both ``dm`` and ``mention`` rows."""
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = _slack_observed(
         channel_id="D222EFG",
         ts="1700000004.000400",
@@ -259,13 +263,16 @@ def test_dm_path_works_without_self_user_id(
     return ``None`` so the projection falls into the "self id
     unavailable" branch, then assert the DM row still lands.
     """
-    monkeypatch.delenv(SELF_USER_ID_ENV_VAR, raising=False)
-    # Force the auth.test cascade to fail so the projection treats
-    # the self user id as unavailable. The module is loaded at import
-    # time so we patch the resolver function the projection imports.
+
+    # Force the per-alias cascade to resolve nothing: no configured
+    # workspaces means no env vars and no auth calls are consulted, so
+    # the projection treats every workspace's self id as unavailable.
+    def _no_aliases() -> list[str]:
+        return []
+
     monkeypatch.setattr(
-        "opshub.projections.slack_demand_digest._resolve_self_user_id_from_auth",
-        lambda: None,
+        "opshub.projections.slack_demand_digest._configured_workspace_aliases",
+        _no_aliases,
     )
 
     projection = SlackDemandDigestProjection()  # no explicit id
@@ -293,7 +300,7 @@ def test_self_authored_dm_is_suppressed(engine: Engine) -> None:
     demand on them. When ``author_id == self_user_id`` the event is
     dropped before any row is written.
     """
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = _slack_observed(
         channel_id="D444SELF",
         ts="1700000040.000400",
@@ -316,7 +323,7 @@ def test_self_authored_mention_is_suppressed(engine: Engine) -> None:
     message. Without the author guard this would self-trigger a mention
     row.
     """
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = _slack_observed(
         channel_id="C444SELF",
         ts="1700000041.000400",
@@ -340,7 +347,7 @@ def test_self_reply_does_not_overwrite_peer_demand(engine: Engine) -> None:
     replace the peer's actionable excerpt / permalink. Suppressing
     self-authored events keeps the row pinned to the peer's ping.
     """
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     peer_ping = _slack_observed(
         channel_id="D555PEER",
         ts="1700000050.000500",
@@ -375,10 +382,13 @@ def test_dm_without_self_user_id_still_records_author(
     the suppression guard is a no-op (the DM still lands) — but the
     peer's author id is still persisted for the FROM column.
     """
-    monkeypatch.delenv(SELF_USER_ID_ENV_VAR, raising=False)
+
+    def _no_aliases() -> list[str]:
+        return []
+
     monkeypatch.setattr(
-        "opshub.projections.slack_demand_digest._resolve_self_user_id_from_auth",
-        lambda: None,
+        "opshub.projections.slack_demand_digest._configured_workspace_aliases",
+        _no_aliases,
     )
     projection = SlackDemandDigestProjection()  # no explicit id
     event = _slack_observed(
@@ -408,7 +418,7 @@ def test_dm_channel_name_resolves_to_peer_display_name(engine: Engine) -> None:
     the peer name out of the title prefix so the operator sees "alice"
     rather than "D777PEER".
     """
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = _slack_observed(
         channel_id="D777PEER",
         ts="1700000070.000700",
@@ -431,7 +441,7 @@ def test_dm_channel_name_resolves_to_peer_display_name(engine: Engine) -> None:
 
 def test_upsert_idempotent_same_ts(engine: Engine) -> None:
     """Applying the same event twice produces exactly one row, unchanged."""
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = _slack_observed(
         channel_id="C444KLM",
         ts="1700000006.000600",
@@ -450,7 +460,7 @@ def test_upsert_idempotent_same_ts(engine: Engine) -> None:
 
 def test_newer_ts_overwrites_existing_row(engine: Engine) -> None:
     """A second mention with a strictly newer ts replaces the persisted row."""
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     older = _slack_observed(
         channel_id="C555MNO",
         ts="1700000007.000700",
@@ -476,7 +486,7 @@ def test_newer_ts_overwrites_existing_row(engine: Engine) -> None:
 
 def test_older_ts_does_not_overwrite_newer_row(engine: Engine) -> None:
     """A replayed older event must not clobber the latest demand timestamp."""
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     newer = _slack_observed(
         channel_id="C666PQR",
         ts="1700000010.001000",
@@ -501,22 +511,120 @@ def test_older_ts_does_not_overwrite_newer_row(engine: Engine) -> None:
 # ---- env-var fallback for self user id ------------------------------------
 
 
-def test_self_user_id_resolved_from_env_var(
+def test_self_user_id_resolved_from_per_alias_env_var(
     engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The OPSHUB_SLACK_SELF_USER_ID env var feeds the mention literal."""
-    monkeypatch.setenv(SELF_USER_ID_ENV_VAR, "U_FROM_ENV")
-    # Make sure the auth fallback is never consulted in this path.
-    monkeypatch.setattr(
-        "opshub.projections.slack_demand_digest._resolve_self_user_id_from_auth",
-        lambda: None,
-    )
+    """``OPSHUB_SLACK_SELF_USER_ID__<ALIAS>`` (team-qualified) feeds the literal.
 
-    projection = SlackDemandDigestProjection()  # no explicit id
+    Phase 24-C (ADR-0041 §(g)): the env override is per workspace alias
+    and the value carries ``team_id:user_id`` — the team binding is what
+    keys the self-id map when Slack is unreachable (CI / headless).
+    """
+
+    def _acme_alias() -> list[str]:
+        return ["acme"]
+
+    monkeypatch.setattr(
+        "opshub.projections.slack_demand_digest._configured_workspace_aliases",
+        _acme_alias,
+    )
+    monkeypatch.setenv(f"{SELF_USER_ID_ENV_PREFIX}ACME", f"{_TEAM_ID}:U_FROM_ENV")
+
+    projection = SlackDemandDigestProjection()  # no explicit map
     event = _slack_observed(
         channel_id="C777STU",
         ts="1700000011.001100",
         body="hi <@U_FROM_ENV> please review",
+    )
+
+    with engine.begin() as conn:
+        _apply(projection, conn, event)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(slack_demand_digest_table)).mappings().one()
+    assert row["demand_kind"] == "mention"
+
+
+def test_per_alias_env_var_without_team_qualifier_is_ignored(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare ``U...`` env value (the pre-24 spelling) is rejected with a warning.
+
+    Without a team qualifier the entry cannot key the per-team map, so
+    the override is ignored (and the auth fallback — absent here — would
+    be tried). Mention detection therefore stays off rather than
+    guessing a workspace.
+    """
+
+    def _acme_alias() -> list[str]:
+        return ["acme"]
+
+    monkeypatch.setattr(
+        "opshub.projections.slack_demand_digest._configured_workspace_aliases",
+        _acme_alias,
+    )
+
+    def _auth_unreachable(alias: str) -> tuple[str, str] | None:
+        del alias
+        return None
+
+    monkeypatch.setattr(
+        "opshub.projections.slack_demand_digest._self_id_from_auth",
+        _auth_unreachable,
+    )
+    monkeypatch.setenv(f"{SELF_USER_ID_ENV_PREFIX}ACME", "U_BARE")
+
+    projection = SlackDemandDigestProjection()
+    event = _slack_observed(
+        channel_id="C777STU",
+        ts="1700000012.001100",
+        body="hi <@U_BARE> please review",
+    )
+
+    with engine.begin() as conn:
+        _apply(projection, conn, event)
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(slack_demand_digest_table)).all()
+    assert rows == []
+
+
+def test_self_user_ids_resolved_per_alias_from_auth(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The auth fallback builds the ``{team_id: user_id}`` map per alias.
+
+    Two configured workspaces resolve two independent self ids; the
+    memoised map serves both teams' events (epic #552 digest scenario —
+    see ``test_two_workspaces_self_ids_are_independent`` for the
+    end-to-end independence assertions).
+    """
+
+    def _two_aliases() -> list[str]:
+        return ["acme", "oss"]
+
+    monkeypatch.setattr(
+        "opshub.projections.slack_demand_digest._configured_workspace_aliases",
+        _two_aliases,
+    )
+    by_alias: dict[str, tuple[str, str]] = {
+        "acme": ("T-test", "U_SELF"),
+        "oss": ("T-OSS", "U_ME2"),
+    }
+
+    def _auth_by_alias(alias: str) -> tuple[str, str] | None:
+        return by_alias[alias]
+
+    monkeypatch.setattr(
+        "opshub.projections.slack_demand_digest._self_id_from_auth",
+        _auth_by_alias,
+    )
+
+    projection = SlackDemandDigestProjection()
+    event = _slack_observed(
+        channel_id="C777STU",
+        ts="1700000013.001100",
+        body="hi <@U_SELF> please review",
     )
 
     with engine.begin() as conn:
@@ -532,7 +640,7 @@ def test_self_user_id_resolved_from_env_var(
 
 def test_non_slack_source_observed_is_ignored(engine: Engine) -> None:
     """Source events from other connectors must not produce digest rows."""
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = SourceObserved(
         aggregate_id=new_ulid(),
         occurred_at=datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC),
@@ -555,7 +663,7 @@ def test_non_slack_source_observed_is_ignored(engine: Engine) -> None:
 
 def test_unrelated_event_types_are_ignored(engine: Engine) -> None:
     """Task / decision / inbox events must never touch the digest table."""
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = TaskCreated(
         aggregate_id=new_ulid(),
         occurred_at=datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC),
@@ -574,7 +682,7 @@ def test_unrelated_event_types_are_ignored(engine: Engine) -> None:
 
 def test_malformed_external_id_is_ignored(engine: Engine) -> None:
     """An external_id without ``"<team>:<channel>:<ts>"`` shape is dropped silently."""
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = SourceObserved(
         aggregate_id=new_ulid(),
         occurred_at=datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC),
@@ -607,7 +715,7 @@ def test_legacy_two_token_external_id_is_dropped(engine: Engine) -> None:
     drop **explicit** — a future change that silently re-accepts 2-token
     events should have to flip this test consciously.
     """
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     event = SourceObserved(
         aggregate_id=new_ulid(),
         occurred_at=datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC),
@@ -631,12 +739,17 @@ def test_legacy_two_token_external_id_is_dropped(engine: Engine) -> None:
 
 
 def test_parse_slack_external_id_three_token_shape() -> None:
-    """``_parse_slack_external_id`` reads the channel from the middle token."""
+    """``_parse_slack_external_id`` splits into ``(team_id, channel_id, ts)``.
+
+    Phase 24-C consumes the leading ``team_id`` token for the
+    per-workspace self-id lookup (ADR-0041 §(g)).
+    """
     from opshub.projections.slack_demand_digest import (
         _parse_slack_external_id,  # pyright: ignore[reportPrivateUsage]
     )
 
     assert _parse_slack_external_id("T0ACME:C123ABC:1700000000.000100") == (
+        "T0ACME",
         "C123ABC",
         1700000000.000100,
     )
@@ -655,7 +768,7 @@ def test_parse_slack_external_id_three_token_shape() -> None:
 
 def test_reset_empties_table(engine: Engine) -> None:
     """``reset(conn)`` deletes every row so the rebuild driver can replay."""
-    projection = SlackDemandDigestProjection(self_user_id=_SELF_USER_ID)
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
     with engine.begin() as conn:
         for i in range(3):
             event = _slack_observed(
@@ -671,3 +784,90 @@ def test_reset_empties_table(engine: Engine) -> None:
     with engine.connect() as conn:
         remaining = conn.execute(select(slack_demand_digest_table)).all()
     assert remaining == []
+
+
+# ---- per-workspace self-id independence (Phase 24-C, ADR-0041 §(g)) -------
+
+
+def test_two_workspaces_self_ids_are_independent(engine: Engine) -> None:
+    """Mention detection + self-suppression are team-scoped, not install-wide.
+
+    The epic #552 acceptance scenario: the operator is ``U_ME_A`` in
+    workspace T-A and ``U_ME_B`` in workspace T-B. Each workspace's
+    mention literal only fires for its own events, and self-suppression
+    only drops events authored by *that workspace's* self id — even when
+    the raw ``U...`` strings collide across workspaces.
+    """
+    projection = SlackDemandDigestProjection(self_user_ids={"T-A": "U_ME_A", "T-B": "U_ME_B"})
+
+    # A mention of U_ME_A in T-A fires...
+    mention_a = _slack_observed(
+        team_id="T-A",
+        channel_id="C100",
+        ts="1700000100.000100",
+        body="ping <@U_ME_A> please",
+    )
+    # ...but the same literal in T-B does NOT (U_ME_A is someone else there).
+    foreign_literal = _slack_observed(
+        team_id="T-B",
+        channel_id="C200",
+        ts="1700000200.000200",
+        body="ping <@U_ME_A> please",
+    )
+    # Self-suppression is team-scoped too: a T-B DM authored by U_ME_B
+    # is suppressed, while a T-A DM authored by U_ME_B (a peer there) lands.
+    self_dm_b = _slack_observed(
+        team_id="T-B",
+        channel_id="D300",
+        ts="1700000300.000300",
+        body="my own reply",
+        author_id="U_ME_B",
+    )
+    peer_dm_a = _slack_observed(
+        team_id="T-A",
+        channel_id="D400",
+        ts="1700000400.000400",
+        body="hello from someone who shares my other-workspace id",
+        author_id="U_ME_B",
+    )
+
+    with engine.begin() as conn:
+        _apply(projection, conn, mention_a)
+        _apply(projection, conn, foreign_literal)
+        _apply(projection, conn, self_dm_b)
+        _apply(projection, conn, peer_dm_a)
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(slack_demand_digest_table)).mappings().all()
+    by_channel = {row["channel_id"]: row["demand_kind"] for row in rows}
+    assert by_channel == {"C100": "mention", "D400": "dm"}
+
+
+def test_event_from_unresolved_team_keeps_dm_but_skips_mention(engine: Engine) -> None:
+    """An event whose team_id is not in the map degrades gracefully.
+
+    DM detection (channel prefix) still works; mention detection and
+    self-suppression are skipped for that workspace only.
+    """
+    projection = SlackDemandDigestProjection(self_user_ids={"T-KNOWN": "U_SELF"})
+
+    unknown_mention = _slack_observed(
+        team_id="T-UNKNOWN",
+        channel_id="C900",
+        ts="1700000900.000900",
+        body="ping <@U_SELF>",
+    )
+    unknown_dm = _slack_observed(
+        team_id="T-UNKNOWN",
+        channel_id="D901",
+        ts="1700000901.000900",
+        body="direct ping",
+    )
+
+    with engine.begin() as conn:
+        _apply(projection, conn, unknown_mention)
+        _apply(projection, conn, unknown_dm)
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(slack_demand_digest_table)).mappings().all()
+    assert [(row["channel_id"], row["demand_kind"]) for row in rows] == [("D901", "dm")]

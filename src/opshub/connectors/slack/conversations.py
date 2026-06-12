@@ -268,7 +268,8 @@ class SlackConversation:
     id:
         The Slack conversation id (``"C..."`` for public, ``"G..."`` for
         legacy private / mpim, ``"D..."`` for im). Pasted verbatim into
-        ``opshub.toml``'s ``[connectors.slack] channels = [...]`` list.
+        ``opshub.toml``'s ``[connectors.slack.workspaces.<alias>]``
+        ``channels = [...]`` list.
     type:
         One of :data:`CONVERSATION_TYPES`. Lets the CLI / TOML / JSON
         formatters branch on conversation kind without re-inspecting

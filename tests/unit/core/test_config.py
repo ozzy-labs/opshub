@@ -16,8 +16,10 @@ from opshub.core.config import (
     OpsHubSettings,
     SlackChannelSpec,
     SlackConnectorSettings,
+    SlackWorkspaceSettings,
     default_config_dir,
     default_data_dir,
+    resolve_slack_thread_activity_window,
 )
 from opshub.core.errors import ConfigError
 
@@ -599,39 +601,92 @@ def test_config_dir_field_uses_xdg_by_default(
     assert settings.config_dir == xdg_opshub_dir
 
 
-# --------------------------------------------------- Slack date floor (Phase 20, ADR-0036)
+# ------------------- Slack workspaces + date floor (Phase 20 ADR-0036 / Phase 24-C ADR-0041)
+
+
+def _ws(payload: object) -> SlackConnectorSettings:
+    """Build a single-workspace ``SlackConnectorSettings`` from a channels payload."""
+    return SlackConnectorSettings.model_validate({"workspaces": {"acme": {"channels": payload}}})
+
+
+def test_slack_workspaces_table_parses() -> None:
+    """The Phase 24-C ``[connectors.slack.workspaces.<alias>]`` table form parses."""
+    settings = SlackConnectorSettings.model_validate(
+        {
+            "workspaces": {
+                "acme": {"channels": ["C1", "C2"], "sync_since": "30d"},
+                "oss": {"channels": ["C9"]},
+            },
+            "sync_since": "90d",
+        }
+    )
+    assert sorted(settings.workspaces) == ["acme", "oss"]
+    assert [c.id for c in settings.workspaces["acme"].channels] == ["C1", "C2"]
+    assert settings.workspaces["acme"].sync_since == "30d"
+    assert settings.workspaces["oss"].sync_since is None
+    assert settings.sync_since == "90d"
+
+
+def test_slack_workspace_alias_with_hyphen_rejected() -> None:
+    """ADR-0041 §(a): ``-`` collides with ``_`` in the keyring env name."""
+    with pytest.raises(ConfigError, match=r"my-ws.*\^\[a-z0-9\]\[a-z0-9_\]\*\$"):
+        SlackConnectorSettings.model_validate({"workspaces": {"my-ws": {"channels": ["C1"]}}})
+
+
+def test_slack_workspace_alias_uppercase_rejected() -> None:
+    with pytest.raises(ConfigError, match="invalid"):
+        SlackConnectorSettings.model_validate({"workspaces": {"Acme": {"channels": ["C1"]}}})
+
+
+def test_slack_workspace_alias_underscore_and_digits_accepted() -> None:
+    settings = SlackConnectorSettings.model_validate(
+        {"workspaces": {"acme_dev2": {"channels": ["C1"]}}}
+    )
+    assert list(settings.workspaces) == ["acme_dev2"]
+
+
+def test_slack_flat_channels_rejected_with_rewrite_hint() -> None:
+    """The pre-Phase-24 flat ``channels`` key fails loud with a rewrite example."""
+    with pytest.raises(ConfigError, match=r"\[connectors\.slack\.workspaces\.main\]") as exc:
+        SlackConnectorSettings.model_validate({"channels": ["C1"]})
+    message = str(exc.value)
+    assert "no longer accepts a flat `channels` key" in message
+    assert "opshub slack auth set --workspace" in message
+
+
+def test_slack_flat_channels_rejected_even_when_empty() -> None:
+    """An empty flat ``channels = []`` (the pre-24 starter config) also rejects."""
+    with pytest.raises(ConfigError, match="multi-workspace"):
+        SlackConnectorSettings.model_validate({"channels": []})
 
 
 def test_slack_channels_string_array_coerced_to_specs() -> None:
     """The historical ``channels = ["C1", "C2"]`` string-array form keeps working.
 
     This is the shape ``opshub slack conversations --format=toml`` emits,
-    so it must stay valid alongside the new table form (ADR-0036 §(b)).
+    so it must stay valid alongside the table form (ADR-0036 §(b)), now
+    nested under the workspace table (ADR-0041 §(c)).
     """
-    # ``model_validate`` (untyped ``obj``) mirrors how TOML / env config
-    # actually reaches the model — a list of raw strings, not pre-built
-    # ``SlackChannelSpec`` instances.
-    settings = SlackConnectorSettings.model_validate({"channels": ["C1", "C2"]})
-    assert [c.id for c in settings.channels] == ["C1", "C2"]
-    assert all(c.since is None for c in settings.channels)
+    settings = _ws(["C1", "C2"])
+    channels = settings.workspaces["acme"].channels
+    assert [c.id for c in channels] == ["C1", "C2"]
+    assert all(c.since is None for c in channels)
 
 
 def test_slack_channels_table_form_with_since() -> None:
-    settings = SlackConnectorSettings.model_validate(
-        {"channels": [{"id": "C1", "since": "30d"}, {"id": "C2", "since": "all"}]},
-    )
-    assert settings.channels[0].id == "C1"
-    assert settings.channels[0].since == "30d"
-    assert settings.channels[1].since == "all"
+    settings = _ws([{"id": "C1", "since": "30d"}, {"id": "C2", "since": "all"}])
+    channels = settings.workspaces["acme"].channels
+    assert channels[0].id == "C1"
+    assert channels[0].since == "30d"
+    assert channels[1].since == "all"
 
 
 def test_slack_channels_mixed_string_and_table() -> None:
-    settings = SlackConnectorSettings.model_validate(
-        {"channels": ["C1", {"id": "C2", "since": "2026-01-01"}]},
-    )
-    assert [c.id for c in settings.channels] == ["C1", "C2"]
-    assert settings.channels[0].since is None
-    assert settings.channels[1].since == "2026-01-01"
+    settings = _ws(["C1", {"id": "C2", "since": "2026-01-01"}])
+    channels = settings.workspaces["acme"].channels
+    assert [c.id for c in channels] == ["C1", "C2"]
+    assert channels[0].since is None
+    assert channels[1].since == "2026-01-01"
 
 
 def test_slack_sync_since_accepts_relative_and_iso_and_all() -> None:
@@ -646,9 +701,16 @@ def test_slack_sync_since_invalid_raises_config_error() -> None:
         SlackConnectorSettings(sync_since="not-a-date")
 
 
+def test_slack_workspace_sync_since_validated() -> None:
+    """The per-workspace floor override shares the floor grammar."""
+    assert SlackWorkspaceSettings.model_validate({"sync_since": "30d"}).sync_since == "30d"
+    with pytest.raises(ConfigError, match=r"workspaces\.<alias>\] sync_since"):
+        SlackWorkspaceSettings.model_validate({"sync_since": "not-a-date"})
+
+
 def test_slack_channel_since_invalid_raises_config_error() -> None:
-    with pytest.raises(ConfigError, match=r"\[connectors\.slack\] channels"):
-        SlackConnectorSettings.model_validate({"channels": [{"id": "C1", "since": "5h"}]})
+    with pytest.raises(ConfigError, match=r"workspaces\.<alias>\] channels"):
+        _ws([{"id": "C1", "since": "5h"}])
 
 
 def test_slack_channel_since_keeps_raw_string_for_runtime_eval() -> None:
@@ -659,7 +721,44 @@ def test_slack_channel_since_keeps_raw_string_for_runtime_eval() -> None:
 
 def test_slack_duplicate_channel_ids_rejected() -> None:
     with pytest.raises(ConfigError, match="duplicate id"):
-        SlackConnectorSettings.model_validate({"channels": ["C1", "C1"]})
+        _ws(["C1", "C1"])
+
+
+def test_slack_duplicate_channel_id_across_workspaces_accepted() -> None:
+    """Channel ids may collide *across* workspaces (the namespaces are disjoint)."""
+    settings = SlackConnectorSettings.model_validate(
+        {"workspaces": {"acme": {"channels": ["C1"]}, "oss": {"channels": ["C1"]}}}
+    )
+    assert [c.id for c in settings.workspaces["acme"].channels] == ["C1"]
+    assert [c.id for c in settings.workspaces["oss"].channels] == ["C1"]
+
+
+def test_slack_thread_activity_window_workspace_override_two_step() -> None:
+    """ADR-0041 §(c): workspace window wins; ``None`` inherits; ``all`` disables."""
+    from datetime import timedelta
+
+    connector = SlackConnectorSettings.model_validate(
+        {
+            "workspaces": {
+                "acme": {"channels": ["C1"], "thread_activity_window": "7d"},
+                "oss": {"channels": ["C2"]},
+                "club": {"channels": ["C3"], "thread_activity_window": "all"},
+            },
+            "thread_activity_window": "30d",
+        }
+    )
+    assert resolve_slack_thread_activity_window(
+        connector.workspaces["acme"], connector
+    ) == timedelta(days=7)
+    assert resolve_slack_thread_activity_window(
+        connector.workspaces["oss"], connector
+    ) == timedelta(days=30)
+    assert resolve_slack_thread_activity_window(connector.workspaces["club"], connector) is None
+
+
+def test_slack_workspace_thread_activity_window_invalid_rejected() -> None:
+    with pytest.raises(ConfigError, match="thread_activity_window"):
+        SlackWorkspaceSettings.model_validate({"thread_activity_window": "5h"})
 
 
 def test_slack_backfill_on_floor_lower_defaults_true() -> None:
@@ -683,16 +782,38 @@ def test_slack_backfill_on_floor_lower_can_be_disabled() -> None:
 def test_slack_channels_env_override_json_table_form(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The table form round-trips through the JSON env override."""
+    """The table form round-trips through the JSON env override (nest form)."""
     _isolate_xdg(monkeypatch, tmp_path)
-    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '[{"id": "C1", "since": "30d"}]')
+    monkeypatch.setenv(
+        "OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__CHANNELS",
+        '[{"id": "C1", "since": "30d"}]',
+    )
     monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__SYNC_SINCE", "90d")
 
     settings = OpsHubSettings()
 
-    assert [c.id for c in settings.connectors.slack.channels] == ["C1"]
-    assert settings.connectors.slack.channels[0].since == "30d"
+    workspace = settings.connectors.slack.workspaces["acme"]
+    assert [c.id for c in workspace.channels] == ["C1"]
+    assert workspace.channels[0].since == "30d"
     assert settings.connectors.slack.sync_since == "90d"
+
+
+def test_slack_env_alias_is_lowercased_from_env_segment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ADR-0041 §(c): the env nest segment lands as the lowercase alias.
+
+    pydantic-settings folds env keys case-insensitively, so
+    ``...__WORKSPACES__ACME__...`` must resolve to the ``acme`` alias —
+    if the upper-case segment leaked through as the literal table key, the
+    alias-grammar validator would reject it.
+    """
+    _isolate_xdg(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__CHANNELS", "C1")
+
+    settings = OpsHubSettings()
+
+    assert list(settings.connectors.slack.workspaces) == ["acme"]
 
 
 def test_slack_channels_env_override_json_string_array(
@@ -700,12 +821,13 @@ def test_slack_channels_env_override_json_string_array(
 ) -> None:
     """The legacy string-array env form still works (integration suite relies on it)."""
     _isolate_xdg(monkeypatch, tmp_path)
-    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", '["C1"]')
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__CHANNELS", '["C1"]')
 
     settings = OpsHubSettings()
 
-    assert [c.id for c in settings.connectors.slack.channels] == ["C1"]
-    assert settings.connectors.slack.channels[0].since is None
+    workspace = settings.connectors.slack.workspaces["acme"]
+    assert [c.id for c in workspace.channels] == ["C1"]
+    assert workspace.channels[0].since is None
 
 
 def test_slack_channels_env_override_comma_separated(
@@ -715,14 +837,17 @@ def test_slack_channels_env_override_comma_separated(
 
     ``NoDecode`` stops pydantic-settings from JSON-forcing the env value,
     so the natural ``C1,C2`` form is the primary input — no JSON quoting.
+    Phase 24-C verifies it still holds under the workspaces nest
+    (ADR-0041 §(c) open question, resolved here).
     """
     _isolate_xdg(monkeypatch, tmp_path)
-    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", "C1,C2,C3")
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__CHANNELS", "C1,C2,C3")
 
     settings = OpsHubSettings()
 
-    assert [c.id for c in settings.connectors.slack.channels] == ["C1", "C2", "C3"]
-    assert all(c.since is None for c in settings.connectors.slack.channels)
+    workspace = settings.connectors.slack.workspaces["acme"]
+    assert [c.id for c in workspace.channels] == ["C1", "C2", "C3"]
+    assert all(c.since is None for c in workspace.channels)
 
 
 def test_slack_channels_env_comma_form_trims_whitespace_and_empties(
@@ -730,14 +855,25 @@ def test_slack_channels_env_comma_form_trims_whitespace_and_empties(
 ) -> None:
     """Spaces around commas and a trailing comma do not synthesise blank ids."""
     _isolate_xdg(monkeypatch, tmp_path)
-    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", " C1 , C2 ,,")
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__CHANNELS", " C1 , C2 ,,")
 
     settings = OpsHubSettings()
 
-    assert [c.id for c in settings.connectors.slack.channels] == ["C1", "C2"]
+    assert [c.id for c in settings.connectors.slack.workspaces["acme"].channels] == ["C1", "C2"]
+
+
+def test_slack_flat_channels_env_var_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The pre-24 flat env var fails loud too (not silently ignored)."""
+    _isolate_xdg(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__CHANNELS", "C1,C2")
+
+    with pytest.raises(ConfigError, match="multi-workspace"):
+        OpsHubSettings()
 
 
 def test_slack_channels_comma_string_via_model_validate() -> None:
     """A bare comma string is accepted by the field validator directly too."""
-    settings = SlackConnectorSettings.model_validate({"channels": "C1,C2"})
+    settings = SlackWorkspaceSettings.model_validate({"channels": "C1,C2"})
     assert [c.id for c in settings.channels] == ["C1", "C2"]

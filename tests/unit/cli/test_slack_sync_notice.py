@@ -44,8 +44,14 @@ def _info_level_root_logger() -> Iterator[None]:  # pyright: ignore[reportUnused
         root.setLevel(saved)
 
 
-def _settings(*, enabled: bool, channels: list[str]) -> OpsHubSettings:
-    slack = SlackConnectorSettings(enabled=enabled, channels=channels)  # type: ignore[arg-type]
+def _settings(*, enabled: bool, workspaces: dict[str, list[str]]) -> OpsHubSettings:
+    """Build settings with ``{alias: channel_ids}`` workspace tables (Phase 24-C)."""
+    slack = SlackConnectorSettings.model_validate(
+        {
+            "enabled": enabled,
+            "workspaces": {alias: {"channels": ids} for alias, ids in workspaces.items()},
+        }
+    )
     return OpsHubSettings(connectors=ConnectorSettings(slack=slack))
 
 
@@ -61,7 +67,9 @@ def test_disabled_with_channels_warns_but_is_not_noop(
     (that would wrongly suppress the post-sync hint and imply 0 items).
     """
     monkeypatch.setattr(
-        opshub_config, "OpsHubSettings", lambda: _settings(enabled=False, channels=["C1"])
+        opshub_config,
+        "OpsHubSettings",
+        lambda: _settings(enabled=False, workspaces={"acme": ["C1"]}),
     )
 
     is_noop = slack_cli._emit_slack_sync_notice()  # pyright: ignore[reportPrivateUsage]
@@ -78,24 +86,25 @@ def test_empty_channels_is_noop_regardless_of_enabled(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Empty channels is the genuine no-op even when enabled = false."""
+    """Every workspace's channels empty is the genuine no-op even when enabled = false."""
     monkeypatch.setattr(
-        opshub_config, "OpsHubSettings", lambda: _settings(enabled=False, channels=[])
+        opshub_config, "OpsHubSettings", lambda: _settings(enabled=False, workspaces={"acme": []})
     )
 
     is_noop = slack_cli._emit_slack_sync_notice()  # pyright: ignore[reportPrivateUsage]
 
     assert is_noop is True
     err = capsys.readouterr().err
-    assert "channels is empty" in err
+    assert "channels" in err and "is empty" in err
 
 
-def test_notice_fires_when_channels_empty(
+def test_no_workspace_tables_is_noop(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """Phase 24-C: zero ``[connectors.slack.workspaces.<alias>]`` tables is a no-op."""
     monkeypatch.setattr(
-        opshub_config, "OpsHubSettings", lambda: _settings(enabled=True, channels=[])
+        opshub_config, "OpsHubSettings", lambda: _settings(enabled=True, workspaces={})
     )
 
     is_noop = slack_cli._emit_slack_sync_notice()  # pyright: ignore[reportPrivateUsage]
@@ -103,7 +112,24 @@ def test_notice_fires_when_channels_empty(
     assert is_noop is True
     err = capsys.readouterr().err
     assert "notice:" in err
-    assert "channels is empty" in err
+    assert "[connectors.slack.workspaces] has no workspace tables" in err
+    assert "docs/slack-setup.md" in err
+
+
+def test_notice_fires_when_channels_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        opshub_config, "OpsHubSettings", lambda: _settings(enabled=True, workspaces={"acme": []})
+    )
+
+    is_noop = slack_cli._emit_slack_sync_notice()  # pyright: ignore[reportPrivateUsage]
+
+    assert is_noop is True
+    err = capsys.readouterr().err
+    assert "notice:" in err
+    assert "every [connectors.slack.workspaces.<alias>] channels" in err
     assert "opshub slack conversations --format=toml" in err
     assert "docs/slack-setup.md" in err
 
@@ -113,7 +139,9 @@ def test_notice_silent_when_properly_configured(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        opshub_config, "OpsHubSettings", lambda: _settings(enabled=True, channels=["C1"])
+        opshub_config,
+        "OpsHubSettings",
+        lambda: _settings(enabled=True, workspaces={"acme": ["C1"]}),
     )
 
     is_noop = slack_cli._emit_slack_sync_notice()  # pyright: ignore[reportPrivateUsage]
@@ -133,7 +161,7 @@ def test_notice_suppressed_by_quiet_level(
     """
     logging.getLogger().setLevel(logging.WARNING)
     monkeypatch.setattr(
-        opshub_config, "OpsHubSettings", lambda: _settings(enabled=True, channels=[])
+        opshub_config, "OpsHubSettings", lambda: _settings(enabled=True, workspaces={"acme": []})
     )
 
     is_noop = slack_cli._emit_slack_sync_notice()  # pyright: ignore[reportPrivateUsage]

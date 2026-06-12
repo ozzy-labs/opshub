@@ -154,6 +154,10 @@ def run_connector_sync(name: str) -> None:
     * ``SourceService.record_sync_failure`` records a
       ``ConnectorSyncFailed`` event with the exception **type name only**
       — never the message — so secrets / PII never reach the event log.
+      One sanctioned supplement: a connector-vouched
+      ``failure_event_detail`` attribute is appended when present
+      (Phase 24-C, ADR-0041 §(b); see
+      :func:`opshub.core.sanitise.failure_event_message`).
     * The CLI exits with code 1.
 
     Unknown connector → exit code 2 with a list of available names
@@ -218,7 +222,17 @@ def run_connector_sync(name: str) -> None:
             # operator's audit trail; growing its token surface there
             # would defeat the redaction stance even if the live
             # terminal is locked down.
-            source.record_sync_failure(name, error_message=type(exc).__name__)
+            #
+            # Phase 24-C (ADR-0041 §(b)): a connector may attach a
+            # ``failure_event_detail`` attribute carrying a known-safe
+            # supplement (the Slack multi-workspace sync names the
+            # failed aliases — operator-chosen labels, never secrets).
+            # Without it, a multi-workspace failure event would only say
+            # ``SlackWorkspaceSyncError`` and the operator could not
+            # tell *which* workspace needs fixing from the audit trail.
+            from opshub.core.sanitise import failure_event_message
+
+            source.record_sync_failure(name, error_message=failure_event_message(exc))
             # Phase 23-B (#532): surface the sanitised message body on the
             # **default** failure trail. sync is the path operators hit
             # most (scope / token / rate-limit / legacy-cursor errors) and

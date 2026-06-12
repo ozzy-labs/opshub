@@ -219,7 +219,7 @@ class SlackFetcher:
     def __init__(self, auth: SlackAuth, *, channels: list[str], team_id: str) -> None:
         if not channels:
             # Empty channel list almost certainly means an operator typo
-            # in the config (``[connectors.slack] channels = []``). Failing
+            # in the config (``[connectors.slack.workspaces.<alias>] channels = []``). Failing
             # at construction time gives an actionable error instead of a
             # silently-no-op sync that misleads the operator into thinking
             # Slack is configured.

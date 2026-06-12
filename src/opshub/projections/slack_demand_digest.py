@@ -12,30 +12,43 @@ stream emitted by the Phase 7 Slack connector — no new fetcher /
 mapper / event is introduced (ADR-0033 §Decision (a), event-sourced
 architecture remains the single source of truth, ADR-0002).
 
-Self user id resolution
------------------------
+Self user id resolution (per workspace)
+---------------------------------------
 
 The mention path needs the operator's Slack ``U...`` id to spot the
-``<@U...>`` literal in the message body. We resolve it once at
-construction time via the Phase 7 Slack auth helper
-(:meth:`opshub.connectors.slack.auth.SlackAuth.test_token`) and cache
-it for the lifetime of the projection instance (ADR-0033 §Decision
-(f) — never hit Slack's ``auth.test`` per event).
+``<@U...>`` literal in the message body. ``U...`` ids are
+**workspace-local** — the same human has a different id in every
+workspace — so Phase 24-C ([ADR-0041](
+../../../docs/adr/0041-slack-multi-workspace.md) §(g)) replaces the
+former install-wide single id with a ``{team_id: self_user_id}`` map.
+The map is resolved lazily on the first Slack event and memoised for
+the projection lifetime (ADR-0033 §Decision (f) — never hit Slack's
+``auth.test`` per event): for each configured
+``[connectors.slack.workspaces.<alias>]`` table the resolver consults,
+in order,
 
-Operators / tests that want to drive the projection without a real
-Slack token can either:
+1. the per-alias env override
+   ``OPSHUB_SLACK_SELF_USER_ID__<ALIAS>`` (alias upper-cased; the
+   alias grammar bans ``-`` so the mapping is injective). The value
+   must be ``"T...:U..."`` — **team-qualified** — because the env path
+   exists precisely for hosts where Slack is unreachable (CI /
+   headless docker), and without a live ``auth.test`` there is nothing
+   else to bind the alias to its ``team_id``. A bare ``U...`` value is
+   rejected with a warning naming the expected shape.
+2. :meth:`opshub.connectors.slack.auth.SlackAuth.test_token` for the
+   alias (production path; one call per alias per projection
+   lifetime), which yields both the ``team_id`` and the ``user_id``.
 
-* pass an explicit ``self_user_id`` to the constructor (preferred for
-  unit tests), or
-* set the ``OPSHUB_SLACK_SELF_USER_ID`` environment variable (handy
-  for ``opshub projections rebuild`` in CI when the keyring is
-  unavailable but the operator already knows their Slack id).
+Tests / embedded callers can bypass the cascade entirely by passing an
+explicit ``self_user_ids`` mapping (``{team_id: user_id}``) to the
+constructor.
 
-When neither is configured **and** ``auth.test`` is not reachable,
-the projection logs a single warning and silently skips every Slack
-event — the rebuild driver fans every event out to every projection
-and we must not crash the whole replay just because the Slack
-projection cannot find a self id.
+Per-alias failures are fail-soft: the alias is skipped with a warning
+and the remaining workspaces still resolve. When **no** workspace
+resolves, the projection logs a single warning and skips mention
+detection (DM detection still works) — the rebuild driver fans every
+event out to every projection and we must not crash the whole replay
+just because the Slack projection cannot find a self id.
 
 Demand detection
 ----------------
@@ -110,6 +123,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -136,7 +150,7 @@ from opshub.domain.events import DomainEvent, SourceObserved
 __all__ = [
     "CHANNEL_TYPES",
     "DEMAND_KINDS",
-    "SELF_USER_ID_ENV_VAR",
+    "SELF_USER_ID_ENV_PREFIX",
     "SlackDemandDigestProjection",
     "slack_demand_digest_table",
 ]
@@ -169,14 +183,18 @@ DEMAND_KINDS: tuple[str, ...] = ("mention", "dm")
 CHANNEL_TYPES: tuple[str, ...] = ("im", "mpim", "private", "public")
 
 
-#: Environment variable consulted by :class:`SlackDemandDigestProjection`
-#: when the constructor receives neither an explicit ``self_user_id``
-#: nor a reachable Slack auth. Operators can export
-#: ``OPSHUB_SLACK_SELF_USER_ID=U123ABC`` to drive
-#: ``opshub projections rebuild`` in environments where the keyring is
-#: not available (CI, headless docker, ...). Documented in
-#: ``docs/troubleshooting.md`` §Slack demand digest.
-SELF_USER_ID_ENV_VAR = "OPSHUB_SLACK_SELF_USER_ID"
+#: Per-alias environment override prefix consulted by
+#: :class:`SlackDemandDigestProjection` (Phase 24-C, ADR-0041 §(g)).
+#: Operators export ``OPSHUB_SLACK_SELF_USER_ID__<ALIAS>=T0123ABC:U123ABC``
+#: (one per configured workspace alias, upper-cased; the value is
+#: team-qualified — see the module docstring) to drive
+#: ``opshub projections rebuild`` in environments where the keyring /
+#: Slack API is not available (CI, headless docker, ...). The
+#: pre-Phase-24 install-wide ``OPSHUB_SLACK_SELF_USER_ID`` variable is
+#: gone (hard flip — a single id cannot be correct across N
+#: workspaces). Documented in ``docs/troubleshooting.md`` §Slack
+#: demand digest.
+SELF_USER_ID_ENV_PREFIX = "OPSHUB_SLACK_SELF_USER_ID__"
 
 
 # ---------------------------------------------------------------- table shape
@@ -273,55 +291,54 @@ class SlackDemandDigestProjection:
       The rebuild driver fans every event out to every projection, so
       this reducer must remain a no-op for non-target events.
 
-    Self user id resolution
-    -----------------------
+    Self user id resolution (per workspace)
+    ---------------------------------------
 
-    The constructor accepts the self user id via three paths, checked
-    in order (first non-empty wins):
+    Phase 24-C ([ADR-0041](../../../docs/adr/0041-slack-multi-workspace.md)
+    §(g)): the operator's ``U...`` id is workspace-local, so the
+    projection holds a ``{team_id: self_user_id}`` map. The constructor
+    accepts an explicit ``self_user_ids`` mapping (tests, embedded
+    callers); otherwise the map is resolved lazily on the first Slack
+    event, per configured workspace alias, via the per-alias env
+    override (``OPSHUB_SLACK_SELF_USER_ID__<ALIAS>=T...:U...``) falling
+    back to a per-alias
+    :meth:`opshub.connectors.slack.auth.SlackAuth.test_token` call —
+    see the module docstring for the full cascade.
 
-    1. explicit ``self_user_id`` keyword argument (tests, embedded
-       callers),
-    2. ``OPSHUB_SLACK_SELF_USER_ID`` environment variable (CI / headless),
-    3. lazy :meth:`opshub.connectors.slack.auth.SlackAuth.test_token`
-       call (production path, requires a valid Slack token).
-
-    If all three fail the projection logs a single WARNING and skips
-    every Slack event for the rest of its lifetime. We deliberately
-    do NOT raise — the rebuild driver applies every event to every
-    projection, and a missing Slack token must not crash unrelated
-    projection writes (tasks / inbox / sources / ...). Operators see
-    the warning in the rebuild log and can re-run after fixing auth.
+    If no workspace resolves, the projection logs a single WARNING and
+    skips mention detection / self-suppression for the rest of its
+    lifetime (DM detection still works). We deliberately do NOT raise —
+    the rebuild driver applies every event to every projection, and a
+    missing Slack token must not crash unrelated projection writes
+    (tasks / inbox / sources / ...). Operators see the warning in the
+    rebuild log and can re-run after fixing auth.
     """
 
     name = "slack_demand_digest"
 
-    def __init__(self, *, self_user_id: str | None = None) -> None:
-        """Construct the projection with an optional explicit self id.
+    def __init__(self, *, self_user_ids: Mapping[str, str] | None = None) -> None:
+        """Construct the projection with an optional explicit self-id map.
 
         Parameters
         ----------
-        self_user_id:
-            Operator's Slack ``U...`` id. ``None`` (default) defers
-            resolution to the env-var → ``auth.test`` cascade
-            described in the class docstring.
+        self_user_ids:
+            ``{team_id: U... id}`` map of the operator's per-workspace
+            Slack ids. ``None`` (default) defers resolution to the
+            per-alias env-var → ``auth.test`` cascade described in the
+            class docstring. When provided, the map is used verbatim
+            (no env / auth consultation) so tests stay hermetic.
         """
-        self._explicit_self_user_id = self_user_id
-        # ``_resolved_self_user_id`` is filled on first :meth:`apply`
+        self._explicit_self_user_ids = dict(self_user_ids) if self_user_ids is not None else None
+        # ``_resolved_self_user_ids`` is filled on first :meth:`apply`
         # so the constructor stays I/O-free (the registry materialises
         # the projection list at CLI cold start; calling Slack
         # auth.test up-front would inflate ``opshub --help`` past the
-        # ADR-0001 300ms budget).
-        self._resolved_self_user_id: str | None = None
-        self._resolution_attempted: bool = False
-        # Once True the projection swallows every Slack event for the
-        # rest of its lifetime. Flipped only when the user id cascade
-        # exhausts every option without success — see class docstring
-        # for the fail-soft rationale.
-        self._self_user_id_unavailable: bool = False
-        # Pre-compute the literal we look for in message bodies; the
-        # ``<@>`` framing is Slack-stable and identical across
-        # surfaces.  Set when :meth:`_self_user_id` first resolves.
-        self._mention_literal: str | None = None
+        # ADR-0001 300ms budget). ``None`` = cascade not yet run.
+        self._resolved_self_user_ids: dict[str, str] | None = None
+        # Pre-computed ``{team_id: "<@U...>"}`` literals we look for in
+        # message bodies; the ``<@>`` framing is Slack-stable and
+        # identical across surfaces. Filled in lock-step with the map.
+        self._mention_literals: dict[str, str] = {}
 
     # ----------------------------------------------------- Projection protocol
 
@@ -353,14 +370,18 @@ class SlackDemandDigestProjection:
         parsed = _parse_slack_external_id(event.external_id)
         if parsed is None:
             return
-        channel_id, ts_value = parsed
+        team_id, channel_id, ts_value = parsed
 
-        self_user_id = self._self_user_id()
+        self_user_id = self._self_user_id_for(team_id)
         # ``self_user_id`` is required for the mention path; the DM
         # path is independent of it (the channel id prefix is enough).
-        # When the cascade has exhausted every option, the mention
-        # path is silently skipped but DM detection still works for
-        # operators who only care about that signal.
+        # When the cascade resolves nothing for this event's workspace
+        # (team_id), the mention path is silently skipped but DM
+        # detection still works for operators who only care about that
+        # signal. Phase 24-C: the lookup is **team-scoped** — workspace
+        # A's self id never matches (or suppresses) workspace B's
+        # messages, even when the raw ``U...`` strings collide across
+        # workspaces (ADR-0041 §(g)).
 
         # Phase 23-D (issue #534): the message author's Slack ``U...`` id
         # now rides on :attr:`SourceObserved.author_id` (threaded by the
@@ -379,11 +400,11 @@ class SlackDemandDigestProjection:
             return
 
         is_dm = _is_dm_channel(channel_id)
-        # ``_self_user_id`` resolution fills ``_mention_literal`` in
-        # lock-step (see :meth:`_self_user_id`), so the ``is not None``
-        # narrowing here matches the runtime invariant. The narrowed
-        # form keeps strict pyright happy without an extra ``cast``.
-        mention_literal = self._mention_literal
+        # ``_self_user_id_for`` resolution fills ``_mention_literals``
+        # in lock-step, so the ``is not None`` narrowing here matches
+        # the runtime invariant. The narrowed form keeps strict pyright
+        # happy without an extra ``cast``.
+        mention_literal = self._mention_literals.get(team_id)
         # epic #470 / issue #481: ``SourceObserved.body`` is required +
         # non-empty (``min_length=1``) so the previous ``event.body or
         # ""`` fallback is gone — read ``event.body`` directly.
@@ -450,52 +471,56 @@ class SlackDemandDigestProjection:
 
     # ------------------------------------------------------------------ helpers
 
-    def _self_user_id(self) -> str | None:
-        """Return the resolved operator self user id, or ``None``.
+    def _self_user_id_for(self, team_id: str) -> str | None:
+        """Return the operator's self user id in workspace ``team_id``, or ``None``.
 
-        Resolution cascade (first non-empty wins):
-
-        1. explicit constructor argument,
-        2. ``OPSHUB_SLACK_SELF_USER_ID`` env var,
-        3. :meth:`SlackAuth.test_token` (Slack API call).
-
-        Result is memoised across the projection lifetime. A
-        successfully-resolved id also fills :attr:`_mention_literal`
-        for the body-substring check.
+        Runs the per-workspace resolution cascade once (memoised across
+        the projection lifetime — ADR-0033 §Decision (f)) and looks the
+        event's ``team_id`` up in the resulting map. A successfully
+        resolved workspace also fills its :attr:`_mention_literals`
+        entry for the body-substring check.
         """
-        if self._resolved_self_user_id is not None:
-            return self._resolved_self_user_id
-        if self._self_user_id_unavailable:
-            return None
-        if self._resolution_attempted:
-            # ``_resolution_attempted`` is True but neither cache
-            # branch fired — re-running auth.test on every event
-            # would be wasteful, so we treat the second-attempt path
-            # as unavailable.
-            return None
-        self._resolution_attempted = True
+        ids = self._resolved_self_user_ids
+        if ids is None:
+            ids = self._resolve_self_user_ids()
+            self._resolved_self_user_ids = ids
+            self._mention_literals = {team: f"<@{uid}>" for team, uid in ids.items()}
+            if not ids:
+                _LOGGER.warning(
+                    "slack_demand_digest: cannot resolve any workspace's "
+                    "operator self user id (no explicit map, no %s<ALIAS> "
+                    "env vars, no reachable Slack tokens). Mention "
+                    "detection will be skipped for the duration of this "
+                    "rebuild; DM detection still works.",
+                    SELF_USER_ID_ENV_PREFIX,
+                )
+        return ids.get(team_id)
 
-        candidate = self._explicit_self_user_id
-        if not candidate:
-            env_value = os.environ.get(SELF_USER_ID_ENV_VAR)
-            candidate = env_value.strip() if env_value else None
-        if not candidate:
-            candidate = _resolve_self_user_id_from_auth()
+    def _resolve_self_user_ids(self) -> dict[str, str]:
+        """Build the ``{team_id: self_user_id}`` map (Phase 24-C, ADR-0041 §(g)).
 
-        if not candidate:
-            _LOGGER.warning(
-                "slack_demand_digest: cannot resolve operator self user id "
-                "(no explicit id, no %s env var, no reachable Slack token). "
-                "Mention detection will be skipped for the duration of this "
-                "rebuild; DM detection still works.",
-                SELF_USER_ID_ENV_VAR,
-            )
-            self._self_user_id_unavailable = True
-            return None
+        Explicit constructor map wins verbatim. Otherwise each
+        configured ``[connectors.slack.workspaces.<alias>]`` table is
+        resolved independently: per-alias env override first
+        (``OPSHUB_SLACK_SELF_USER_ID__<ALIAS>``, team-qualified
+        ``"T...:U..."`` value), then a per-alias
+        :meth:`SlackAuth.test_token` call. Per-alias failures are
+        fail-soft (warning + skip) so one unreachable workspace never
+        blinds the others' mention detection.
+        """
+        if self._explicit_self_user_ids is not None:
+            return dict(self._explicit_self_user_ids)
 
-        self._resolved_self_user_id = candidate
-        self._mention_literal = f"<@{candidate}>"
-        return candidate
+        resolved: dict[str, str] = {}
+        for alias in _configured_workspace_aliases():
+            entry = _self_id_from_env(alias)
+            if entry is None:
+                entry = _self_id_from_auth(alias)
+            if entry is None:
+                continue
+            team_id, user_id = entry
+            resolved[team_id] = user_id
+        return resolved
 
     def _upsert_row(
         self,
@@ -557,19 +582,18 @@ class SlackDemandDigestProjection:
 # ---------------------------------------------------------------- module-level helpers
 
 
-def _parse_slack_external_id(external_id: str) -> tuple[str, float] | None:
+def _parse_slack_external_id(external_id: str) -> tuple[str, str, float] | None:
     """Split a Slack ``external_id`` (``"{team_id}:{channel_id}:{ts}"``).
 
-    Returns ``(channel_id, ts_float)`` on success, ``None`` on any
-    parse failure. Defensive parsing is justified by the rebuild
+    Returns ``(team_id, channel_id, ts_float)`` on success, ``None`` on
+    any parse failure. Defensive parsing is justified by the rebuild
     driver: a malformed event must not crash the whole replay.
 
     Phase 24-B ([ADR-0041](docs/adr/0041-slack-multi-workspace.md)
     §(a) §(g)): the natural key gained a leading ``team_id`` token.
-    The digest row key stays ``(channel_id, demand_kind)`` until the
-    Phase 24-D ``(team_id, channel)`` re-key, so this parser still
-    returns the 2-tuple — it just reads the channel from the middle
-    token now.
+    Phase 24-C consumes it for the per-workspace self-id lookup; the
+    digest row key stays ``(channel_id, demand_kind)`` until the Phase
+    24-D ``(team_id, channel)`` re-key.
 
     Legacy 2-token events (``"{channel_id}:{ts}"``, pre-Phase-24
     ingest) deliberately return ``None`` — i.e. they are **dropped**
@@ -596,7 +620,7 @@ def _parse_slack_external_id(external_id: str) -> tuple[str, float] | None:
         ts_value = float(tail)
     except (TypeError, ValueError):
         return None
-    return channel_id, ts_value
+    return team_id, channel_id, ts_value
 
 
 def _is_dm_channel(channel_id: str) -> bool:
@@ -733,13 +757,62 @@ def _build_excerpt(event: SourceObserved) -> str | None:
     return body[: SUMMARY_MAX_CHARS - 1] + "…"
 
 
-def _resolve_self_user_id_from_auth() -> str | None:
-    """Call ``SlackAuth.test_token`` to fetch the operator's self id.
+def _configured_workspace_aliases() -> list[str]:
+    """Return the configured Slack workspace aliases (fail-soft).
 
-    Returns ``None`` on any failure (no token configured, SDK extras
-    missing, network error, Slack ``ok: false``). The callers treat
-    ``None`` as "self id unavailable for this projection lifetime" and
-    skip mention detection accordingly.
+    Reads ``[connectors.slack.workspaces]`` from the settings. Any
+    failure (config parse error, settings unavailable in an embedded
+    context) degrades to an empty list — the projection must never
+    crash the rebuild fan-out over a Slack config problem.
+    """
+    try:
+        from opshub.core.config import OpsHubSettings
+
+        return sorted(OpsHubSettings().connectors.slack.workspaces)
+    except Exception:
+        return []
+
+
+def _self_id_from_env(alias: str) -> tuple[str, str] | None:
+    """Parse the per-alias env override into ``(team_id, user_id)``.
+
+    Phase 24-C (ADR-0041 §(g)): the value of
+    ``OPSHUB_SLACK_SELF_USER_ID__<ALIAS>`` must be team-qualified
+    (``"T0123ABC:U0123456"``) because the env path exists for hosts
+    where Slack is unreachable — without a live ``auth.test`` there is
+    nothing else to bind the alias to its ``team_id`` (the digest map
+    is keyed on the ``team_id`` each event's ``external_id`` carries).
+    A bare ``U...`` value (the pre-Phase-24 single-workspace spelling)
+    is rejected with a warning naming the expected shape; returning
+    ``None`` lets the auth fallback try instead.
+    """
+    raw = os.environ.get(f"{SELF_USER_ID_ENV_PREFIX}{alias.upper()}")
+    if not raw or not raw.strip():
+        return None
+    team_id, sep, user_id = raw.strip().partition(":")
+    if not sep or not team_id or not user_id:
+        _LOGGER.warning(
+            "slack_demand_digest: %s%s=%r is not team-qualified; expected "
+            "'<team_id>:<user_id>' (e.g. 'T0123ABC:U0123456'). Ignoring the "
+            "override for workspace %r.",
+            SELF_USER_ID_ENV_PREFIX,
+            alias.upper(),
+            raw,
+            alias,
+        )
+        return None
+    return team_id, user_id
+
+
+def _self_id_from_auth(alias: str) -> tuple[str, str] | None:
+    """Call ``SlackAuth(alias).test_token`` for ``(team_id, user_id)``.
+
+    Returns ``None`` on any failure (no token stored for the alias, SDK
+    extras missing, network error, Slack ``ok: false``). The caller
+    treats ``None`` as "this workspace's self id is unavailable for
+    this projection lifetime" and skips its mention detection while the
+    other workspaces still resolve (per-alias fail-soft, ADR-0041
+    §(g)).
 
     The import is deferred to avoid pulling :mod:`opshub.connectors.slack`
     onto the CLI cold-start path (ADR-0001) when the registry simply
@@ -752,11 +825,14 @@ def _resolve_self_user_id_from_auth() -> str | None:
         return None
 
     try:
-        auth = SlackAuth()
+        auth = SlackAuth(alias)
         result: dict[str, Any] = dict(auth.test_token())
     except ConfigError:
         return None
     except Exception:  # last-resort fail-soft, see module docstring
         return None
-    value = result.get("user_id") or ""
-    return value or None
+    team_id = result.get("team_id") or ""
+    user_id = result.get("user_id") or ""
+    if not team_id or not user_id:
+        return None
+    return team_id, user_id

@@ -342,11 +342,14 @@ def test_starter_config_has_disabled_slack_section(
     """Phase 23-E (#535): the starter ships a real disabled Slack section.
 
     Previously every Slack line was commented out, so enabling the
-    connector meant uncommenting. The starter now carries a live
-    ``[connectors.slack]`` table with ``enabled = false`` + an empty
-    ``channels`` array, so the operator flips one boolean and pastes the
-    discovered ids — no uncommenting. This pins that the section parses
-    and lands as the disabled-but-present state.
+    connector meant uncommenting. The starter carries a live
+    ``[connectors.slack]`` table with ``enabled = false``; the
+    per-workspace ``[connectors.slack.workspaces.<alias>]`` example is
+    commented (Phase 24-C, ADR-0041 §(c) — an uncommented empty alias
+    table would emit a per-workspace empty-channels warning on first
+    sync). The operator flips one boolean and pastes the discovered
+    ``conversations --format=toml`` block. This pins that the section
+    parses and lands as the disabled-but-present, zero-workspace state.
     """
     _isolate_env(monkeypatch, tmp_path)
     _patch_install_command(monkeypatch)
@@ -364,4 +367,7 @@ def test_starter_config_has_disabled_slack_section(
 
     settings = OpsHubSettings()
     assert settings.connectors.slack.enabled is False
-    assert settings.connectors.slack.channels == []
+    assert settings.connectors.slack.workspaces == {}
+    # The workspace-table example (the Phase 24 config shape) is present
+    # as a commented template the toml emit / docs reference.
+    assert "[connectors.slack.workspaces.main]" in STARTER_CONFIG_TOML

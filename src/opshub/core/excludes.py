@@ -14,9 +14,13 @@ File shape
 ```yaml
 # ~/.config/opshub/excludes.yaml
 channels:           # Slack channel ids the connector must skip
-  - C0SECRET01
+  - C0SECRET01      # bare id = excluded in every Slack workspace
+  - acme/C0SECRET02 # <alias>/<id> = excluded only in the 'acme' workspace
+                    # (Phase 24-C, ADR-0041 §(j) — channel ids can collide
+                    # across workspaces)
 senders:            # author / sender identifiers (email, slack user id)
   - assistant@example.com
+  - acme/U0BOT01    # workspace-qualified Slack sender (same rule as channels)
 repos:              # GitHub "owner/repo" the connector must skip
   - acme/secret-vault
 paths:              # fnmatch / gitignore-style globs (box_drive, OneDrive…)
@@ -122,6 +126,46 @@ class ExcludeRules:
     def excludes_sender(self, sender: str | None) -> bool:
         """Return ``True`` when ``sender`` is in the configured sender set."""
         return sender is not None and sender in self.senders
+
+    def scoped_to_workspace(self, alias: str) -> ExcludeRules:
+        """Resolve workspace-qualified Slack entries for one workspace alias.
+
+        Phase 24-C ([ADR-0041](../../docs/adr/0041-slack-multi-workspace.md)
+        §(j)): ``channels`` / ``senders`` entries may carry an
+        ``<alias>/`` qualifier (``acme/C123`` = exclude ``C123`` only in
+        the ``acme`` workspace) alongside the bare form (``C123`` =
+        exclude in **every** workspace — kept as the "kill this id
+        everywhere" intent). Slack channel / user ids can collide across
+        workspaces, so the qualifier lets the operator scope an exclude
+        precisely.
+
+        Returns a new :class:`ExcludeRules` whose ``channels`` /
+        ``senders`` contain the bare entries plus the matching
+        alias-qualified entries with the qualifier stripped — i.e. a
+        view the per-workspace Slack sync can keep matching with the
+        existing exact-match :meth:`excludes_channel` /
+        :meth:`excludes_sender`. Entries qualified for *other* aliases
+        are dropped from the view. ``repos`` / ``paths`` pass through
+        untouched (they have no workspace dimension).
+        """
+
+        def _scope(values: frozenset[str]) -> frozenset[str]:
+            scoped: set[str] = set()
+            prefix = f"{alias}/"
+            for value in values:
+                if "/" in value:
+                    if value.startswith(prefix) and len(value) > len(prefix):
+                        scoped.add(value[len(prefix) :])
+                else:
+                    scoped.add(value)
+            return frozenset(scoped)
+
+        return ExcludeRules(
+            channels=_scope(self.channels),
+            senders=_scope(self.senders),
+            repos=self.repos,
+            paths=self.paths,
+        )
 
     def excludes_repo(self, repo: str | None) -> bool:
         """Return ``True`` when ``repo`` is in the configured repo set."""
