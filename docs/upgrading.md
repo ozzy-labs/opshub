@@ -685,12 +685,12 @@ The rebuild is idempotent and replay-order-independent (`last_demand_ts < exclud
 
 ### Self user id resolution
 
-The projection needs the operator's Slack `U...` id to spot the `<@self_user_id>` literal in message bodies. Resolution order (first non-empty wins):
+The projection needs the operator's Slack `U...` id to spot the `<@self_user_id>` literal in message bodies. Since Phase 24 ([ADR-0041](adr/0041-slack-multi-workspace.md) §(g)) the id is resolved **per workspace** — a `U...` id is workspace-specific, so the projection holds a `{team_id: self_user_id}` map and looks up each event's id via the `team_id` it parses from `external_id` (`f"{team_id}:{channel_id}:{ts}"`). Per-alias resolution order (first non-empty wins):
 
-1. The Slack `auth.test()` cache — succeeds for any operator who has run `opshub slack auth set` + `opshub slack auth test` previously.
-2. The `OPSHUB_SLACK_SELF_USER_ID` environment variable — useful for CI / headless docker / WSL2 sandboxes where the keyring is not reachable but the operator already knows their Slack id.
+1. The per-alias `OPSHUB_SLACK_SELF_USER_ID__<ALIAS>` environment variable — **team-qualified**, value `T...:U...` — useful for CI / headless docker / WSL2 sandboxes where the keyring is not reachable but the operator already knows their Slack id. The alias is upper-cased into the env name (`__ACME`); the value must carry both halves because the digest keys rows on `team_id`.
+2. The Slack `auth.test()` cascade — `SlackAuth(alias).test_token()` per configured workspace, succeeds for any operator who has run `opshub slack auth set --workspace <alias>` previously.
 
-If neither resolves, the projection logs a single warning and skips mention detection for the remainder of the rebuild; DM detection (which only needs the channel id prefix) still works. See [`docs/troubleshooting.md`](troubleshooting.md) §3.11 for the diagnostic recipe.
+The pre-Phase-24 install-wide `OPSHUB_SLACK_SELF_USER_ID` variable is **no longer read** (replaced by the per-alias form above). If neither source resolves for a workspace, the projection logs a single warning and skips mention detection for that workspace's events for the remainder of the rebuild; DM detection (which only needs the channel id prefix) still works. See [`docs/troubleshooting.md`](troubleshooting.md) §3.11 for the diagnostic recipe.
 
 ### Debug CLI: `opshub slack mentions list`
 
@@ -987,8 +987,8 @@ After Phase 20:
    `conversations.history` parent whose payload carries `latest_reply` triggers
    a single `conversations.replies(channel, ts=thread_ts)` call. `messages[0]`
    is the parent itself and is dropped (the
-   `external_id = f"{channel_id}:{ts}"` UNIQUE constraint would also reject it
-   idempotently). Children are yielded as additional `slack_message` rows. The
+   `external_id = f"{team_id}:{channel_id}:{ts}"` UNIQUE constraint would also reject it
+   idempotently; Phase 24-B re-keyed `external_id` with the `team_id` prefix — see §Phase 24). Children are yielded as additional `slack_message` rows. The
    cursor element on each reply yield is the **parent's `ts`** (not the reply
    ts) so reply timestamps do not skip past the gap between parents.
 2. **Phase 2 — late-reply polling.** Known threads stored on the new `threads`
@@ -1678,3 +1678,79 @@ Phase 23-G は `--sort`（活動軸）と `--since`（日付 filter）を**直�
 **暗黙 90d cutoff の可視化:** `--sort=last_self_post|last_activity` を `--since` なしで指定したときの暗黙 90d cutoff（ADR-0035 §(e)）は維持しつつ、解決済み cutoff 日付を出力にも刻む（TOML/table の `# activity window: since YYYY-MM-DD (90d default; pass --since to widen)`）。従来の stderr notice も維持。
 
 pre-userbase につき compat shim なし（ADR-0035 §(d) を反転、§(e) を改訂。[ADR-0034](adr/0034-slack-engagement-axis.md) / [ADR-0026](adr/0026-cli-progress-reporting.md) / [ADR-0027](adr/0027-observability-and-troubleshooting-logging.md) は pointer 注記のみ）。
+
+## Phase 24: Slack multi-workspace (`1 install = N workspaces`) — **BREAKING CHANGE** ([ADR-0041](adr/0041-slack-multi-workspace.md), epic [#552](https://github.com/ozzy-labs/opshub/issues/552))
+
+Phase 24 ([ADR-0041](adr/0041-slack-multi-workspace.md), supersedes the single-workspace non-goal [ADR-0039](adr/0039-slack-single-workspace-non-goal.md)) makes **one opshub install ingest N Slack workspaces** first-class. Each workspace is named by an operator-chosen **alias** (the operation-layer key — config tables, `--workspace`, keyring slot) and bound to its Slack `team_id` (the immutable data-layer key — the `external_id` prefix). This is a hard flip with **no compat shim** (pre-userbase posture): the config shape, keyring slot, cursor shape, and `external_id` all change, and the only supported upgrade path is a DB re-init + full re-sync (see below).
+
+### 正規 upgrade path: DB 再 init + 全 connector re-sync
+
+> **既存の opshub install を Phase 24 に上げるには、DB を作り直して全 connector を re-sync する。** これが唯一サポートされる経路で、re-key migration は提供しない。
+
+理由: Phase 24-B で `external_id` を `f"{channel_id}:{ts}"` から **`f"{team_id}:{channel_id}:{ts}"`** の 3-token に re-key した（ADR-0041 §(a)）。既存の un-prefixed 行（`C123:1612...`）と新形式（`T999:C123:1612...`）は同一 message でも別 source になるため、cursor を reset して全量 re-fetch すると旧形式行と**重複する**。pre-userbase の posture どおり自動 re-key migration は作らず、event store ごと作り直す:
+
+```bash
+# 1. DB ファイルを退避 / 削除して作り直す（event store ごと）
+#    既定パスは $XDG_DATA_HOME/opshub/db/opshub.sqlite
+#    (= ~/.local/share/opshub/db/opshub.sqlite)
+DB="${XDG_DATA_HOME:-$HOME/.local/share}/opshub/db/opshub.sqlite"
+mv "$DB" "$DB.pre-phase24.bak"                                  # 退避（任意）
+opshub init                                                     # 空 DB を再作成
+
+# 2. config を Phase 24 形式に書き換える（下記「config 形状の変更」）
+
+# 3. 全 connector を re-sync（Slack だけでなく全 connector が再取得になる）
+opshub slack sync
+opshub github sync
+opshub box sync
+# … 設定している connector すべて
+opshub projections rebuild                                      # 念のため全 projection を流し直す
+```
+
+> **Slack 以外の connector データも再取得になる**点に注意。event store ごと作り直すため、Box / GitHub / MS365 / Google など全 connector が cold-start し直す（それぞれの `sync` を再実行する必要がある）。この一括 re-sync コストが、re-key migration を書かず DB 再 init を正規路にする pre-userbase trade-off（ADR-0041 §(e) / §Negative）。
+
+### config 形状の変更（hard flip）
+
+- 旧 flat 形式 `[connectors.slack] channels = [...]` は **`ConfigError` で reject** される（書き換え例をエラー本文に同梱）。`channels` は **`[connectors.slack.workspaces.<alias>]` table の下**に移す。単一 workspace 構成でも workspace table 必須（暗黙 default workspace の特例コードパスは作らない、ADR-0041 §(c)）:
+
+  ```toml
+  # 旧 (Phase 23 まで)                # 新 (Phase 24)
+  [connectors.slack]                  [connectors.slack]
+  enabled = true                      enabled = true
+  channels = ["C0123"]
+  sync_since = "90d"                  sync_since = "90d"               # connector-wide default のまま
+
+                                      [connectors.slack.workspaces.acme]
+                                      channels = ["C0123"]
+                                      sync_since = "30d"               # per-workspace override 可（3 段解決）
+  ```
+
+- **alias の文法**: `^[a-z0-9][a-z0-9_]*$`（lowercase / digits / `_`、`-` は不許可）。`-` を許すと keyring env override 名 `OPSHUB_CONNECTOR_SLACK_<ALIAS>_TOKEN` が `_` と衝突するため（ADR-0041 §(a)）。
+- **floor 解決は 3 段**に拡張（per-channel `since` → per-workspace `sync_since` → connector-wide `sync_since`）。`thread_activity_window` も per-workspace override 可（2 段、floor と対称）。
+- **env override** は nested-config path に alias が入る: `OPSHUB_CONNECTORS__SLACK__WORKSPACES__<ALIAS>__CHANNELS`（comma 形式も JSON 形式も可）。
+
+### keyring slot の変更
+
+- token slot が install-wide `connector:slack:token` から **per-alias `connector:slack:<alias>:token`** に変わった（ADR-0041 §(a)、ADR-0014 拡張）。`opshub slack auth set --workspace <alias>` で各 alias の token を保存し直す。env override も per-alias: `OPSHUB_CONNECTOR_SLACK_<ALIAS>_TOKEN`。
+
+### cursor shape の変更
+
+- compound cursor が 4 軸 shape（`channels` / `backfill` / `threads` / `team_id`）ごと **per-alias nest** `{"workspaces": {"<alias>": {...}}}` の内側に移った（ADR-0041 §(d)、軸の意味は不変）。旧 Phase 23-H top-level shape は silent migration せず `ConfigError` で `opshub slack cursor reset --all` を案内する。DB 再 init 経路ではそもそも cursor が空なので発火しない。
+
+### CLI surface の変更
+
+- `slack auth set` / `auth test` / `conversations` / `cursor backfill` / `cursor reset --channel` が `--workspace <alias>` を受理。default 解決規則: **1 workspace → 省略可、0 / 複数 → 必須**（channel id が workspace 跨ぎで衝突しうるため曖昧解決はしない、ADR-0041 §(f)）。
+- `slack sync`（flag なし）は **全 workspace を直列 sync**（per-workspace error isolation: 1 workspace の失敗が他の進捗を巻き込まず、失敗 alias を stderr に列挙して非ゼロ exit）。`--workspace` で絞り込み。
+- `slack status` は per-workspace block で全 workspace を表示（各 alias の bound `team_id` を含む）。`--workspace` で絞り込み。
+- MCP `connector.sync` は同じ `sync()` を駆動するため **常に全 workspace**（filter なし、tool description に明記）。MCP `slack.demand.list` の出力に workspace field（team_id + alias）を追加。
+
+### demand digest の per-workspace self-id
+
+- `slack_demand_digest` の natural key を `(team_id, channel_id, demand_kind)` に widen（migration `0033_rekey_slack_demand_digest_team_id`、DB 再 init で自動適用）。self user id は per-workspace 解決に変わり、env override は **team-qualified** `OPSHUB_SLACK_SELF_USER_ID__<ALIAS>=T...:U...`（install-wide `OPSHUB_SLACK_SELF_USER_ID` は読まれなくなった）。詳細は §「Self user id resolution」を参照。
+
+### Phase 24 specifics
+
+- **DB migration**: `0033_rekey_slack_demand_digest_team_id`（digest natural key widen）。`sources` / cursor は新規 init で空から作るため touch なし。
+- **MCP surface 不変**（19 tools）。skill catalog 不変（14、`test_skills_install_only_writes_14_assistant_skills` green）。
+- **scope SSOT 不変**: `FEATURE_SCOPES`（ADR-0040）は workspace 非依存のまま。`auth test` の readiness は per-workspace token で評価（`--workspace`）。
+- **スコープ外**: Enterprise Grid の cross-workspace ingestion / Slack 以外の connector の multi-account 化 / 旧データの自動 re-key migration / MCP `slack.demand.list` の workspace filter param（出力 field のみ先行）。
