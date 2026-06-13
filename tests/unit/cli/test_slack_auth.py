@@ -395,3 +395,67 @@ def test_slack_auth_set_writes_per_alias_slots_independently(
 
     assert get_secret(slack_token_secret_key("acme")) == "xoxp-a"
     assert get_secret(slack_token_secret_key("oss")) == "xoxb-b"
+
+
+# ----- auth test --workspace default resolution (Phase 24-C, ADR-0041 §(f)) -
+# ``auth test`` shares ``resolve_workspace_alias`` with ``auth set`` but the
+# 0/1/N matrix was only pinned for ``auth set``; these cover the ``auth test``
+# entry point so the implicit-resolution path (slack.py) is exercised directly.
+
+
+def test_slack_auth_test_defaults_to_single_configured_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One configured workspace → ``--workspace`` is optional for ``auth test``
+    too (ADR-0041 §(f), symmetric with ``auth set``); the lone alias is resolved
+    implicitly and handed to ``SlackAuth``."""
+    import opshub.connectors.slack.auth as slack_auth
+
+    _patch_settings_workspaces(monkeypatch, ["acme"])
+    seen: list[str] = []
+
+    class _FakeSlackAuth:
+        def __init__(self, alias: str) -> None:
+            seen.append(alias)
+
+        def test_token(self) -> dict[str, str]:
+            return {
+                "team": "Acme",
+                "team_id": "T1",
+                "user": "alice",
+                "user_id": "U1",
+                "principal": "user",
+                "scopes": "channels:history,channels:read,users:read",
+            }
+
+    monkeypatch.setattr(slack_auth, "SlackAuth", _FakeSlackAuth)
+
+    result = CliRunner().invoke(app, ["slack", "auth", "test"])
+
+    assert result.exit_code == 0, result.stdout
+    assert seen == ["acme"], "single configured workspace must be resolved implicitly"
+
+
+def test_slack_auth_test_with_zero_workspaces_requires_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero configured workspaces → ``auth test`` cannot guess and says so."""
+    _patch_settings_workspaces(monkeypatch, [])
+    result = CliRunner().invoke(app, ["slack", "auth", "test"])
+
+    assert result.exit_code == 1
+    assert "no Slack workspaces configured" in result.stderr
+    assert "--workspace" in result.stderr
+
+
+def test_slack_auth_test_with_multiple_workspaces_requires_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multiple workspaces → ``auth test`` ambiguity is loud and lists aliases."""
+    _patch_settings_workspaces(monkeypatch, ["acme", "oss"])
+    result = CliRunner().invoke(app, ["slack", "auth", "test"])
+
+    assert result.exit_code == 1
+    assert "multiple Slack workspaces configured" in result.stderr
+    assert "acme" in result.stderr
+    assert "oss" in result.stderr

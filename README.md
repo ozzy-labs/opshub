@@ -191,14 +191,14 @@ opshub handoff close <handoff-id> --note "merged"
 # Connectors (Phase 3 + Phase 7, ADR-0010 / ADR-0014)
 opshub github auth set                      # store GitHub PAT in OS keychain
 opshub github sync                          # incremental sync (OPSHUB_CONNECTOR_GITHUB_REPO=owner/repo)
-opshub slack auth set             # store Slack OAuth token in OS keychain (User Token preferred, Bot Token also accepted — ADR-0018; full walkthrough: docs/slack-setup.md)
-opshub slack conversations                                    # complete paste-ready [connectors.slack] block / name order (default; ADR-0035, #535)
+opshub slack auth set --workspace acme       # store Slack OAuth token per workspace alias (User/Bot Token — ADR-0018; multi-workspace since ADR-0041; full walkthrough: docs/slack-setup.md)
+opshub slack conversations                                    # complete paste-ready [connectors.slack.workspaces.<alias>] block / name order (default; ADR-0035 / ADR-0041, #535)
 opshub slack conversations --sort=last_self_post --since 30d  # channels you posted in within 30d (engagement axis; requires search:read User Token; #537)
 opshub slack conversations --sort=last_self_post              # descending by your last post (implicit --since 90d cutoff, stamped in output + stderr notice; ADR-0035 §(e))
 opshub slack conversations --sort=last_activity --since 30d   # descending by any-author last activity within 30 days
 #  note: --since needs an activity --sort; `conversations --since 30d` alone (name sort) is rejected (Phase 23-G #537)
 opshub slack conversations --format=table                     # pre-19-D default rendering (eyeball / script use; ADR-0035 §(a))
-opshub slack sync                           # incremental sync ([connectors.slack] channels; sync_since date floor — ADR-0036)
+opshub slack sync                           # incremental sync of all workspaces ([connectors.slack.workspaces.<alias>] channels; per-workspace error isolation; sync_since date floor — ADR-0036 / ADR-0041)
 opshub slack status                         # sync status: 3-axis cursor in human terms (daily view; --verbose for raw — #536)
 opshub ms365 auth set             # OAuth paste-code (Microsoft Graph Calendar / OneDrive / Outlook)
 opshub ms365 sync                           # incremental sync per endpoint

@@ -862,6 +862,37 @@ def test_slack_channels_env_comma_form_trims_whitespace_and_empties(
     assert [c.id for c in settings.connectors.slack.workspaces["acme"].channels] == ["C1", "C2"]
 
 
+def test_slack_workspace_scalar_fields_env_nest_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ADR-0041 §(c): per-workspace scalar fields are overridable via env nest.
+
+    The ``CHANNELS`` nest is covered above; this pins the two scalar
+    fields (``sync_since`` / ``thread_activity_window``) under the same
+    ``...__WORKSPACES__<ALIAS>__<FIELD>`` delimiter path, so the
+    per-workspace floor + thread-window can be set from CI / containers
+    without a TOML file (the delimiter mechanism is shared with
+    ``CHANNELS`` but the scalar path was previously unexercised).
+    """
+    _isolate_xdg(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__CHANNELS", "C1")
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__SYNC_SINCE", "30d")
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__THREAD_ACTIVITY_WINDOW", "7d")
+    # connector-wide defaults differ, so the assertions prove the per-workspace
+    # env values win over (not merely echo) the connector-wide fallback.
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__SYNC_SINCE", "90d")
+
+    settings = OpsHubSettings()
+
+    workspace = settings.connectors.slack.workspaces["acme"]
+    # The fields land as the raw grammar strings (resolution to timedelta is a
+    # separate concern via resolve_slack_thread_activity_window); the point here
+    # is that the env nest delimiter reaches the per-workspace scalar fields.
+    assert workspace.sync_since == "30d"
+    assert workspace.thread_activity_window == "7d"
+    assert settings.connectors.slack.sync_since == "90d"
+
+
 def test_slack_flat_channels_env_var_rejected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
