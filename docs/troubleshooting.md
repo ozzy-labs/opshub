@@ -234,15 +234,15 @@ sqlite3 ~/.local/share/opshub/db/opshub.sqlite \
 - [`src/opshub/services/search_service.py`](../src/opshub/services/search_service.py) — `_MIN_FTS_QUERY_CHARS = 3` 閾値と `_search_like_fallback` 実装
 - [`src/opshub/db/migrations/versions/0028_rebuild_sources_fts_trigram.py`](../src/opshub/db/migrations/versions/0028_rebuild_sources_fts_trigram.py) — tokenizer 物理張り替え + back-fill + trigger 再作成
 
-### 3.7 Slack の channel ID が分からない / `[connectors.slack] channels` に何を書けばよいか
+### 3.7 Slack の channel ID が分からない / `[connectors.slack.workspaces.<alias>]` に何を書けばよいか
 
-Slack connector を有効化するには `opshub.toml` の `[connectors.slack] channels = ["C012345...", ...]` に **channel ID** を列挙する必要がある。Slack Web UI から「リンクをコピー → URL 末尾」を読む手作業はチャネル数が多いワークスペースで現実的でない。
+Slack connector を有効化するには `opshub.toml` の **`[connectors.slack.workspaces.<alias>] channels = ["C012345...", ...]`** に **channel ID** を列挙する必要がある (Phase 24 [ADR-0041](adr/0041-slack-multi-workspace.md) で workspace alias 必須化。旧 flat `[connectors.slack] channels = [...]` は `ConfigError` で reject され、書き換え例がエラー本文に出る。`<alias>` は operator が付ける workspace の別名で文法 `^[a-z0-9][a-z0-9_]*$`、単一 workspace 構成でも table 必須)。Slack Web UI から「リンクをコピー → URL 末尾」を読む手作業はチャネル数が多いワークスペースで現実的でない。
 
 **手順** (Phase 14.x [#341](https://github.com/ozzy-labs/opshub/issues/341) で初出、Phase 15+ [#366](https://github.com/ozzy-labs/opshub/issues/366) で `channels` → `conversations` 刷新 = `users.conversations` 切替 + DM/MPIM 統合 + 進捗表示、[#374](https://github.com/ozzy-labs/opshub/issues/374) で type 別固定ソート + `--since` activity フィルター追加、Phase 19-B [ADR-0034](adr/0034-slack-engagement-axis.md) で engagement 軸 = 自分が発言した channel を導入、Phase 19-D [ADR-0035](adr/0035-slack-sort-axis-consolidation.md) で `--activity` flag を `--sort=name|last_self_post|last_activity` に統合 + default `--format=toml` 切替):
 
 ```bash
-opshub slack auth set                                       # 既存。User Token (`xoxp-`) 推奨
-opshub slack conversations                                  # default: TOML 出力 / `--sort=name` (display_name 昇順) / probe なし
+opshub slack auth set --workspace acme                      # alias acme の User Token (`xoxp-`) を keyring へ (1 workspace 構成なら --workspace 省略可)
+opshub slack conversations --workspace acme                 # default: TOML 出力 / `--sort=name` (display_name 昇順) / probe なし (1 workspace 構成なら省略可、複数なら必須)
 opshub slack conversations --format=table                   # pre-19-D 表形式 (eyeball / script 互換)
 opshub slack conversations --filter eng                     # name / participant に "eng" を含む conversation のみ
 opshub slack conversations --types public,private           # public / private channel のみ (DM/MPIM を除外)
@@ -255,9 +255,9 @@ opshub slack conversations --sort=last_self_post --since 2026-05-01 --format=tom
 #  Phase 23-G (#537): --since は activity --sort と併用必須。`conversations --since 30d` 単独 (name 順) は ConfigError exit 1 で拒否される
 ```
 
-default `--format=toml` の出力は `[connectors.slack]` ヘッダ + `enabled = true` + `channels = [...]` を含む**完結ブロック**なので (Phase 23-E [#535](https://github.com/ozzy-labs/opshub/issues/535))、`~/.config/opshub/config.toml` にそのまま貼り、不要行を消すだけで sync 対象が確定する (旧仕様の bare `channels = [...]` 配列は section 外に落ちて壊れる罠があった)。初回 setup の全手順は [`docs/slack-setup.md`](slack-setup.md) を参照。`--since` 指定時 / `--sort=last_*` 指定時は TOML コメントにも `# <name> (public, last post 2026-05-30)` (engagement 軸) / `# <name> (public, last 2026-05-30)` (any 軸) 形式で activity 日付が付くので、レビュアが「最近動いている channel か」を一目で判断できる。
+default `--format=toml` の出力は `[connectors.slack.workspaces.<alias>]` ヘッダ + `channels = [...]` を含む**完結ブロック**なので (Phase 24 [ADR-0041](adr/0041-slack-multi-workspace.md)、emit 先 alias は `--workspace` の default 解決規則に従う)、`~/.config/opshub/config.toml` にそのまま貼り、不要行を消すだけで sync 対象が確定する。初回 setup の全手順は [`docs/slack-setup.md`](slack-setup.md) §9 (複数 workspace 手順) を参照。`--since` 指定時 / `--sort=last_*` 指定時は TOML コメントにも `# <name> (public, last post 2026-05-30)` (engagement 軸) / `# <name> (public, last 2026-05-30)` (any 軸) 形式で activity 日付が付くので、レビュアが「最近動いている channel か」を一目で判断できる。
 
-**sync の取得範囲を絞る (Phase 20 / [ADR-0036](adr/0036-slack-sync-date-floor.md))**: ボリュームの大きい channel で初回 sync が重い場合、`[connectors.slack] sync_since` で日付 floor を設定すると、それより古いメッセージを `opshub slack sync` が取得しなくなる。相対 (`"90d"` / `"4w"`、sync 実行時点で評価) でも ISO 絶対日付 (`"2026-01-01"`) でも指定でき、未設定なら従来どおり全件バックフィルする。特定 channel だけ全件取りたい場合は table 形式で `[[connectors.slack.channels]] id=... / since="all"` と書く (貼り付けた `channels = ["C..."]` 文字列配列もそのまま有効)。
+**sync の取得範囲を絞る (Phase 20 / [ADR-0036](adr/0036-slack-sync-date-floor.md))**: ボリュームの大きい channel で初回 sync が重い場合、`[connectors.slack] sync_since` (connector-wide 既定) または `[connectors.slack.workspaces.<alias>] sync_since` (per-workspace 上書き、Phase 24 で floor 解決は per-channel → per-workspace → connector-wide の 3 段) で日付 floor を設定すると、それより古いメッセージを `opshub slack sync` が取得しなくなる。相対 (`"90d"` / `"4w"`、sync 実行時点で評価) でも ISO 絶対日付 (`"2026-01-01"`) でも指定でき、未設定なら従来どおり全件バックフィルする。特定 channel だけ全件取りたい場合は workspace table 下で channel を table 形式 `[[connectors.slack.workspaces.<alias>.channels]] id=... / since="all"` と書く (`channels = ["C..."]` 文字列配列形式もそのまま有効)。
 
 floor 関連の挙動でよくある質問:
 

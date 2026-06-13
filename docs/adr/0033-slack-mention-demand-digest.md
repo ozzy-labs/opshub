@@ -70,6 +70,7 @@ event を消費する **専用 projection + 専用 MCP tool** として最小実
 方針を pin する。
 
 > **改訂 (Phase 23-D、[issue #534](https://github.com/ozzy-labs/opshub/issues/534))**: 当初の §(a)「connector / fetcher / mapper / event schema には触れない」前提を一部見直した。本 projection の致命的な誤報 = 「自分が返信し終えた DM / mention が最上位に出る」は **message author の identity が event に乗っていない** ことが根因で、projection 内では抑制できない (`title` の display 名は曖昧で id ではない)。そのため以下を着地させた:
+>
 > 1. **author id 貫通** — Slack mapper が `raw.user_id` を `SourceObserved.author_id` (新 optional field、`fingerprint` と同じ後方互換追加で `schema_version` は 1 のまま) に貫通させ、projection が `author_id == self_user_id` の行を demand から除外する。過去 event は `author_id=NULL` のため遡及不能で、全 channel に効かせるには full re-sync が必要 (`docs/upgrading.md` §Phase 23-D)。
 > 2. **epoch → ISO 8601** — MCP 出力 `last_demand_ts` (raw Slack epoch float) を `last_demand_at` (ISO 8601 UTC) に統一 (他 read tool と方言を揃える)。`since_ts` *filter* 入力は epoch のまま。
 > 3. **名前解決** — DM 行は相手の表示名、channel 行は `#name` を `channel_name` に解決 (opaque `D...` id 露出を解消、§不変条件 #4 強化)。
@@ -409,5 +410,14 @@ epic [#426](https://github.com/ozzy-labs/opshub/issues/426) で 3 PR に分割�
   表記は `--sort=last_self_post` に rename される。demand 軸 (本 ADR) と engagement
   軸 (ADR-0034 / ADR-0035) の orthogonal 共存は完全継承され、本 ADR の demand 軸
   projection 経路には影響なし
+- [ADR-0041: Slack Multi-Workspace](0041-slack-multi-workspace.md) — Phase 24 §(g)
+  で本 ADR の `slack_demand_digest` を multi-workspace 対応に拡張する: natural key を
+  `(channel_id, demand_kind)` から **`(team_id, channel_id, demand_kind)`** へ widen
+  (migration `0033`、workspace 跨ぎの channel id 衝突を team_id で分離) し、本 ADR が
+  install-wide 単一で解決していた operator self user id を **`{team_id: self_user_id}`
+  の per-workspace map** に置換する (env override も team-qualified
+  `OPSHUB_SLACK_SELF_USER_ID__<ALIAS>=T...:U...`、旧 install-wide
+  `OPSHUB_SLACK_SELF_USER_ID` は撤去)。`demand_kind` の 3 値→2 値化 (`mpim` 撤去) は
+  Phase 23-D migration `0032` で別途実施済
 - Phase 18 epic [#426](https://github.com/ozzy-labs/opshub/issues/426) — 本 ADR の
   起票元、3 PR 分割 (18-A / 18-B / 18-C) と Scope 外項目の SSOT
