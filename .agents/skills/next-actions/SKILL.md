@@ -51,7 +51,7 @@ input:
   order: "last_demand_desc"
 ```
 
-戻り値の `items[]` は Slack の `<@self>` mention と DM 相手の最終発言を新しい順に返す (`channel_id` / `channel_type` / `channel_name` / `demand_kind` / `last_demand_at` / `last_demand_user_id` / `last_demand_excerpt` / `last_demand_permalink` / `last_source_id` を持つ)。`last_demand_at` は ISO 8601 UTC 文字列 (Phase 23-D / issue #534)、`channel_name` は DM なら相手の表示名 / channel なら `#name`、`last_demand_user_id` は相手 (= 自分以外) の Slack `U...` id。自分が最後に発言した DM / mention は demand から除外済み (Phase 23-D)。これは「自分が放置している ping」= operator 視点で読むべき未処理 signal なので、task 列と並べる際の priority を以下のように扱うのが推奨:
+戻り値の `items[]` は Slack の `<@self>` mention と DM 相手の最終発言を新しい順に返す (`workspace` (`team_id` + `alias`、Phase 24-D / ADR-0041) / `channel_id` / `channel_type` / `channel_name` / `demand_kind` / `last_demand_at` / `last_demand_user_id` / `last_demand_excerpt` / `last_demand_permalink` / `last_source_id` を持つ)。複数 Slack workspace 構成では同じ `channel_id` が workspace ごとに 1 行ずつ現れうるので、行の同定には `workspace.team_id` + `channel_id` を使う (`workspace.alias` は operator が config で命名した label、未 bind なら null)。`last_demand_at` は ISO 8601 UTC 文字列 (Phase 23-D / issue #534)、`channel_name` は DM なら相手の表示名 / channel なら `#name`、`last_demand_user_id` は相手 (= 自分以外) の Slack `U...` id。自分が最後に発言した DM / mention は demand から除外済み (Phase 23-D)。これは「自分が放置している ping」= operator 視点で読むべき未処理 signal なので、task 列と並べる際の priority を以下のように扱うのが推奨:
 
 - `demand_kind=dm` の最新行 → 「DM が来ている」最上位 (個人宛、context は会話ログ全体)
 - `demand_kind=mention` の最新行 → 「自分宛 mention」、channel context に依存して priority 判断

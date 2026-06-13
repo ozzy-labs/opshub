@@ -16,13 +16,17 @@ against the SQLite file.
 Output shape
 ------------
 
-* ``table`` — six columns: ``CHANNEL`` / ``TYPE`` / ``KIND`` /
-  ``LAST_DEMAND`` / ``FROM`` / ``EXCERPT``. ``LAST_DEMAND`` renders
-  as ``YYYY-MM-DD HH:MM:SS`` UTC so an operator can compare against
-  Slack's own timestamps without timezone arithmetic.
-* ``json`` — full row schema (every column plus ``last_source_id``),
+* ``table`` — seven columns: ``WORKSPACE`` / ``CHANNEL`` / ``TYPE`` /
+  ``KIND`` / ``LAST_DEMAND`` / ``FROM`` / ``EXCERPT``. ``WORKSPACE``
+  (Phase 24-D, ADR-0041 §(g)) renders the configured alias when the
+  row's ``team_id`` is bound in the Slack cursor, falling back to the
+  raw ``team_id``. ``LAST_DEMAND`` renders as ``YYYY-MM-DD HH:MM:SS``
+  UTC so an operator can compare against Slack's own timestamps
+  without timezone arithmetic.
+* ``json`` — full row schema (every column plus ``last_source_id``;
+  Phase 24-D adds ``team_id`` + the best-effort ``workspace_alias``),
   suitable for piping into ``jq``.
-* ``md`` — GitHub-flavoured Markdown table; same six columns as the
+* ``md`` — GitHub-flavoured Markdown table; same seven columns as the
   table view so a digest snippet pasted into a PR description renders
   legibly.
 
@@ -42,9 +46,9 @@ Sort
 ----
 
 Always ``last_demand_ts DESC`` so the most recent demand sits at the
-top of the listing. Tiebreaker = ``channel_id ASC`` so the order is
-deterministic across runs even when two channels share a
-millisecond-precision ts.
+top of the listing. Tiebreaker = ``team_id ASC, channel_id ASC``
+(the full Phase 24-D natural-key prefix) so the order is deterministic
+across runs even when two rows share a millisecond-precision ts.
 """
 
 from __future__ import annotations
@@ -61,6 +65,7 @@ from opshub.projections.slack_demand_digest import (
     CHANNEL_TYPES,
     DEMAND_KINDS,
     slack_demand_digest_table,
+    team_alias_map,
 )
 
 __all__ = [
@@ -85,12 +90,30 @@ DEFAULT_LIMIT = 50
 
 # --------------------------------------------------------------- column widths
 
+_WORKSPACE_WIDTH = 14  # alias (operator-named, short) or raw T... id (11 char)
 _CHANNEL_WIDTH = 32  # channel id (11 char) + "#" + short name truncation
 _TYPE_WIDTH = 7  # max len("private")
 _KIND_WIDTH = 7  # max len("mention")
 _LAST_DEMAND_WIDTH = 19  # "YYYY-MM-DD HH:MM:SS"
 _FROM_WIDTH = 16
 _EXCERPT_WIDTH = 60
+
+
+def _format_workspace_column(row: dict[str, Any]) -> str:
+    """Render ``WORKSPACE`` cell — configured alias, else the raw team_id.
+
+    Phase 24-D (ADR-0041 §(g)): operators think in the alias they named
+    under ``[connectors.slack.workspaces.<alias>]``; the digest stores
+    the stable ``team_id``. The renderer stitches the best-effort
+    ``workspace_alias`` onto each row (resolved from the Slack cursor
+    binding via :func:`team_alias_map`) and this cell prefers it,
+    degrading to the ``team_id`` when the binding is unavailable (fresh
+    DB, cursor reset, alias removed from config).
+    """
+    alias = row.get("workspace_alias")
+    if alias:
+        return str(alias)
+    return str(row["team_id"])
 
 
 def _format_channel_column(row: dict[str, Any]) -> str:
@@ -143,6 +166,12 @@ def _format_excerpt_column(row: dict[str, Any]) -> str:
 # Single source of truth for the human-readable view (``table`` / ``md``).
 _DISPLAY_COLUMNS: list[Column] = [
     Column(
+        header="WORKSPACE",
+        accessor=_format_workspace_column,
+        width=_WORKSPACE_WIDTH,
+        json_key="workspace",
+    ),
+    Column(
         header="CHANNEL",
         accessor=_format_channel_column,
         width=_CHANNEL_WIDTH,
@@ -185,6 +214,16 @@ _DISPLAY_COLUMNS: list[Column] = [
 # columns the table view collapses (channel id vs. name, source id for
 # join-back into the ``sources`` projection).
 _JSON_COLUMNS: list[Column] = [
+    Column(
+        header="Team ID",
+        accessor=lambda row: row["team_id"],
+        json_key="team_id",
+    ),
+    Column(
+        header="Workspace Alias",
+        accessor=lambda row: row.get("workspace_alias"),
+        json_key="workspace_alias",
+    ),
     Column(
         header="Channel ID",
         accessor=lambda row: row["channel_id"],
@@ -356,13 +395,20 @@ def _fetch_rows(
 ) -> list[dict[str, Any]]:
     """Read the digest table, optionally filtered by type / kind.
 
-    Sort order pins the contract: ``last_demand_ts DESC, channel_id
-    ASC``. The ``ix_slack_demand_digest_last_demand_ts`` index covers
-    the primary sort key; the ``channel_id`` tiebreaker keeps the row
-    order deterministic across runs.
+    Sort order pins the contract: ``last_demand_ts DESC, team_id ASC,
+    channel_id ASC``. The ``ix_slack_demand_digest_last_demand_ts``
+    index covers the primary sort key; the natural-key-prefix
+    tiebreaker keeps the row order deterministic across runs (Phase
+    24-D: two workspaces can legitimately carry the same channel id,
+    so ``channel_id`` alone no longer breaks every tie).
+
+    Each returned row additionally carries ``workspace_alias`` — the
+    best-effort alias label resolved from the Slack cursor binding
+    (``None`` when the row's ``team_id`` is not currently bound).
     """
     statement = select(slack_demand_digest_table).order_by(
         slack_demand_digest_table.c.last_demand_ts.desc(),
+        slack_demand_digest_table.c.team_id.asc(),
         slack_demand_digest_table.c.channel_id.asc(),
     )
     if types is not None:
@@ -373,4 +419,5 @@ def _fetch_rows(
 
     with engine.connect() as conn:
         result = conn.execute(statement).mappings().all()
-    return [dict(row) for row in result]
+    aliases = team_alias_map(engine)
+    return [{**row, "workspace_alias": aliases.get(row["team_id"])} for row in result]

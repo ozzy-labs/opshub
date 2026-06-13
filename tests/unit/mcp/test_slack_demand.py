@@ -14,8 +14,13 @@ Pins the contract for the new read tool added by ADR-0033 §決定 (c):
    (``truncated`` / ``next_offset``) follows the ADR-0022 §(d)
    envelope.
 6. Order is fixed at ``last_demand_desc`` (newest first) per
-   ADR-0033 §決定 (e); the secondary ``channel_id ASC`` keeps
-   deterministic ordering on ties.
+   ADR-0033 §決定 (e); the secondary ``team_id ASC, channel_id ASC``
+   (Phase 24-D natural-key prefix) keeps deterministic ordering on
+   ties.
+7. Phase 24-D (ADR-0041 §(g), issue #556): every item carries a
+   ``workspace`` object (``team_id`` + best-effort ``alias`` resolved
+   from the Slack cursor binding), and rows are keyed per workspace so
+   the same channel id may appear once per ``team_id``.
 
 The handler queries the projection table directly (not the rebuild
 driver), so the tests seed the rows with ``insert(...)`` instead of
@@ -74,6 +79,7 @@ def _seed_row(
     channel_type: str,
     demand_kind: str,
     last_demand_ts: float,
+    team_id: str = "T0TEST",
     channel_name: str | None = None,
     last_demand_user_id: str | None = None,
     last_demand_excerpt: str | None = None,
@@ -84,6 +90,7 @@ def _seed_row(
     with engine.begin() as conn:
         conn.execute(
             insert(slack_demand_digest_table).values(
+                team_id=team_id,
                 channel_id=channel_id,
                 channel_type=channel_type,
                 channel_name=channel_name,
@@ -329,10 +336,12 @@ async def test_handler_orders_by_last_demand_ts_desc(engine: Engine) -> None:
 
 
 async def test_handler_secondary_order_is_channel_id_ascending(engine: Engine) -> None:
-    """Tie-breaker on equal ``last_demand_ts`` is ``channel_id ASC``.
+    """Tie-breaker on equal ``last_demand_ts`` is ``team_id, channel_id ASC``.
 
     Two rows with the same ts must appear in a deterministic order
-    so pagination boundaries do not flip between calls.
+    so pagination boundaries do not flip between calls. (Same
+    ``team_id`` here — the cross-workspace arm of the tiebreaker is
+    pinned by ``test_handler_same_channel_id_across_workspaces...``.)
     """
     _seed_row(
         engine,
@@ -414,6 +423,10 @@ async def test_handler_item_shape_includes_all_projection_columns(engine: Engine
     # rendered as an ISO 8601 UTC string ``last_demand_at`` so the read
     # tool speaks the same timestamp dialect as ``task.list`` etc.
     assert row == {
+        # Phase 24-D (ADR-0041 §(g)): the workspace object carries the
+        # stable team_id; ``alias`` is ``None`` here because the test
+        # DB has no Slack cursor binding to resolve it from.
+        "workspace": {"team_id": "T0TEST", "alias": None},
         "channel_id": "D100DMA",
         "channel_type": "im",
         "channel_name": "alice",
@@ -481,3 +494,101 @@ async def test_handler_unknown_type_filter_values_are_silently_dropped(engine: E
     payload = _parse(await handler({"types": ["unknown_type"]}))
     assert payload["items"] == []
     assert payload["total"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 9. Workspace axis (Phase 24-D, ADR-0041 §(g), issue #556)
+# ---------------------------------------------------------------------------
+
+
+async def test_handler_same_channel_id_across_workspaces_yields_two_items(
+    engine: Engine,
+) -> None:
+    """The same channel id under two workspaces produces two distinct items.
+
+    Channel ids are only unique within one Slack workspace; the Phase
+    24-D ``(team_id, channel_id, demand_kind)`` re-key keeps the two
+    conversations apart. The tie on ``last_demand_ts`` also pins the
+    cross-workspace arm of the tiebreaker (``team_id ASC``).
+    """
+    _seed_row(
+        engine,
+        channel_id="C0COLLIDE",
+        channel_type="public",
+        demand_kind="mention",
+        last_demand_ts=1700000060.0,
+        team_id="T_BBB",
+    )
+    _seed_row(
+        engine,
+        channel_id="C0COLLIDE",
+        channel_type="public",
+        demand_kind="mention",
+        last_demand_ts=1700000060.0,
+        team_id="T_AAA",
+    )
+
+    handler = build_slack_demand_list_handler(engine)
+    payload = _parse(await handler({}))
+    items = cast("list[dict[str, Any]]", payload["items"])
+    assert [(row["workspace"]["team_id"], row["channel_id"]) for row in items] == [
+        ("T_AAA", "C0COLLIDE"),
+        ("T_BBB", "C0COLLIDE"),
+    ]
+
+
+async def test_handler_workspace_alias_resolved_from_cursor_binding(engine: Engine) -> None:
+    """``workspace.alias`` resolves through the Slack cursor's per-alias binding.
+
+    The Phase 24-C cursor envelope binds each configured alias to its
+    workspace ``team_id``; the handler translates the stored stable id
+    back into the operator-facing label. A team_id with no binding
+    (cursor reset / alias removed) degrades to ``alias=null``.
+    """
+    from opshub.projections.connector_cursors import connector_cursors_table
+
+    connector_cursors_table.create(engine)
+    cursor_json = json.dumps(
+        {
+            "workspaces": {
+                "acme": {
+                    "channels": {},
+                    "backfill": {},
+                    "threads": {},
+                    "team_id": "T_ACME",
+                }
+            }
+        }
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            insert(connector_cursors_table).values(
+                connector_name="slack",
+                cursor_value=cursor_json,
+                updated_at=_NOW,
+                last_synced_at=_NOW,
+            )
+        )
+
+    _seed_row(
+        engine,
+        channel_id="C0BOUND",
+        channel_type="public",
+        demand_kind="mention",
+        last_demand_ts=1700000070.0,
+        team_id="T_ACME",
+    )
+    _seed_row(
+        engine,
+        channel_id="C0ORPHAN",
+        channel_type="public",
+        demand_kind="mention",
+        last_demand_ts=1700000060.0,
+        team_id="T_GONE",
+    )
+
+    handler = build_slack_demand_list_handler(engine)
+    payload = _parse(await handler({}))
+    items = cast("list[dict[str, Any]]", payload["items"])
+    assert items[0]["workspace"] == {"team_id": "T_ACME", "alias": "acme"}
+    assert items[1]["workspace"] == {"team_id": "T_GONE", "alias": None}

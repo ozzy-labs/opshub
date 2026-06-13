@@ -173,6 +173,10 @@ def test_slack_demand_digest_rejects_mpim_demand_kind(tmp_path: Path) -> None:
     Issue #534: the dead ``'mpim'`` value is removed from the CHECK
     constraint. ``'mention'`` / ``'dm'`` insert fine; ``'mpim'`` now
     violates the constraint.
+
+    Phase 24-D (migration 0033, issue #556): the table is re-keyed on
+    ``(team_id, channel_id, demand_kind)`` — the trailing assertions
+    pin the per-workspace PK semantics at head.
     """
     db_path = tmp_path / "demand_kind_check.sqlite"
     cfg = _make_alembic_config(db_path)
@@ -180,15 +184,21 @@ def test_slack_demand_digest_rejects_mpim_demand_kind(tmp_path: Path) -> None:
 
     engine = create_engine_for_sqlite(db_path)
 
-    def _insert(channel_id: str, demand_kind: str) -> None:
+    def _insert(channel_id: str, demand_kind: str, team_id: str = "T0TEST") -> None:
         with engine.begin() as conn:
             conn.execute(
                 text(
                     "INSERT INTO slack_demand_digest "
-                    "(channel_id, channel_type, demand_kind, last_demand_ts, updated_at) "
-                    "VALUES (:cid, 'im', :kind, 1700000000.0, :ts)"
+                    "(team_id, channel_id, channel_type, demand_kind, "
+                    " last_demand_ts, updated_at) "
+                    "VALUES (:tid, :cid, 'im', :kind, 1700000000.0, :ts)"
                 ),
-                {"cid": channel_id, "kind": demand_kind, "ts": datetime.now(UTC)},
+                {
+                    "tid": team_id,
+                    "cid": channel_id,
+                    "kind": demand_kind,
+                    "ts": datetime.now(UTC),
+                },
             )
 
     try:
@@ -198,6 +208,13 @@ def test_slack_demand_digest_rejects_mpim_demand_kind(tmp_path: Path) -> None:
         # The removed ``mpim`` value now violates the CHECK constraint.
         with pytest.raises(IntegrityError):
             _insert("G000CCC", "mpim")
+        # Phase 24-D (migration 0033): the natural key is
+        # ``(team_id, channel_id, demand_kind)`` — the same channel id
+        # under a *different* workspace inserts fine, while an exact
+        # natural-key duplicate violates the PK.
+        _insert("D000AAA", "dm", team_id="T1OTHER")
+        with pytest.raises(IntegrityError):
+            _insert("D000AAA", "dm")
     finally:
         engine.dispose()
 

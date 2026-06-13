@@ -1,7 +1,8 @@
 """``slack_demand_digest`` read-model projection (Phase 18-B, ADR-0033).
 
-Materialises a per-channel x per-demand-kind digest of the most recent
-Slack message that **demands** the operator's attention:
+Materialises a per-workspace x per-channel x per-demand-kind digest of
+the most recent Slack message that **demands** the operator's
+attention:
 
 * a body that mentions the operator by ``<@self_user_id>`` literal
   (``demand_kind = "mention"``), or
@@ -11,6 +12,22 @@ The projection consumes the existing :class:`SourceObserved` event
 stream emitted by the Phase 7 Slack connector — no new fetcher /
 mapper / event is introduced (ADR-0033 §Decision (a), event-sourced
 architecture remains the single source of truth, ADR-0002).
+
+Workspace axis (Phase 24-D)
+---------------------------
+
+The row natural key is ``(team_id, channel_id, demand_kind)``
+([ADR-0041](../../../docs/adr/0041-slack-multi-workspace.md) §(g),
+issue #556). Channel ids are only unique *within* one Slack
+workspace, so the pre-Phase-24 ``(channel_id, demand_kind)`` key
+would have merged demands across workspaces once the Phase 24-C flip
+allowed N configured workspaces. The ``team_id`` comes for free from
+the Phase 24-B 3-token ``external_id``
+(``"{team_id}:{channel_id}:{ts}"``); :func:`team_alias_map` lets the
+read surfaces (MCP ``slack.demand.list`` / ``opshub slack mentions
+list``) translate the stored ``team_id`` back into the operator's
+configured workspace alias best-effort (the binding lives in the
+Slack connector cursor, written on first sync per alias).
 
 Self user id resolution (per workspace)
 ---------------------------------------
@@ -72,8 +89,8 @@ For a public-channel message that mentions self, only the
 ``"mention"`` row is upserted. For a DM that mentions self, both
 ``"mention"`` AND ``"dm"`` rows are upserted (the channel demand and
 the self-mention are independent signals and the operator might
-filter on either). The two rows share ``channel_id`` but differ on
-``demand_kind``, so the natural-key PK keeps them distinct.
+filter on either). The two rows share ``(team_id, channel_id)`` but
+differ on ``demand_kind``, so the natural-key PK keeps them distinct.
 
 Self-authored suppression (Phase 23-D, issue #534)
 --------------------------------------------------
@@ -104,7 +121,7 @@ Idempotency / replay
 --------------------
 
 Every apply is an INSERT-ON-CONFLICT-DO-UPDATE keyed on
-``(channel_id, demand_kind)``. The UPDATE arm is guarded by a
+``(team_id, channel_id, demand_kind)``. The UPDATE arm is guarded by a
 ``WHERE last_demand_ts < excluded.last_demand_ts`` clause so a replay
 that re-encounters an older message never overwrites the latest one
 — the projection is therefore replay-order-independent (two
@@ -121,11 +138,12 @@ analogue lives in a separate projection (ADR-0033 §Consequences
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import (
     CheckConstraint,
@@ -138,9 +156,10 @@ from sqlalchemy import (
     Table,
     Text,
     delete,
+    select,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, Engine
 
 from opshub.connectors.slack.mapper import SOURCE_TYPE as SLACK_SOURCE_TYPE
 from opshub.connectors.slack.mapper import SUMMARY_MAX_CHARS
@@ -153,6 +172,7 @@ __all__ = [
     "SELF_USER_ID_ENV_PREFIX",
     "SlackDemandDigestProjection",
     "slack_demand_digest_table",
+    "team_alias_map",
 ]
 
 
@@ -203,6 +223,7 @@ SELF_USER_ID_ENV_PREFIX = "OPSHUB_SLACK_SELF_USER_ID__"
 slack_demand_digest_table: Table = Table(
     "slack_demand_digest",
     metadata,
+    Column("team_id", Text(), primary_key=True),
     Column("channel_id", Text(), primary_key=True),
     Column("channel_type", Text(), nullable=False),
     Column("channel_name", Text(), nullable=True),
@@ -244,8 +265,11 @@ slack_demand_digest_table: Table = Table(
 
 Created by migration ``0029_create_slack_demand_digest``; the
 ``demand_kind`` CHECK constraint was tightened to ``('mention', 'dm')``
-by migration ``0032_drop_mpim_demand_kind`` (Phase 23-D, issue #534),
-so this metadata-only ``Table`` reflects the post-0032 2-value enum.
+by migration ``0032_drop_mpim_demand_kind`` (Phase 23-D, issue #534)
+and the natural key widened to ``(team_id, channel_id, demand_kind)``
+by migration ``0033_rekey_slack_demand_digest_team_id`` (Phase 24-D,
+ADR-0041 §(g)), so this metadata-only ``Table`` reflects the post-0033
+3-column primary key.
 
 The index ordering here intentionally drops the DESC qualifier the
 migration uses on the physical index — SQLAlchemy 2.x does not surface
@@ -435,6 +459,7 @@ class SlackDemandDigestProjection:
         if is_dm:
             self._upsert_row(
                 conn,
+                team_id=team_id,
                 channel_id=channel_id,
                 channel_type=channel_type,
                 channel_name=channel_name,
@@ -449,6 +474,7 @@ class SlackDemandDigestProjection:
         if is_mention:
             self._upsert_row(
                 conn,
+                team_id=team_id,
                 channel_id=channel_id,
                 channel_type=channel_type,
                 channel_name=channel_name,
@@ -526,6 +552,7 @@ class SlackDemandDigestProjection:
         self,
         conn: Connection,
         *,
+        team_id: str,
         channel_id: str,
         channel_type: str,
         channel_name: str | None,
@@ -537,7 +564,7 @@ class SlackDemandDigestProjection:
         last_source_id: str,
         updated_at: datetime,
     ) -> None:
-        """Upsert a single ``(channel_id, demand_kind)`` digest row.
+        """Upsert a single ``(team_id, channel_id, demand_kind)`` digest row.
 
         The UPDATE arm only fires when the inbound ``last_demand_ts``
         is **strictly newer** than the persisted one — without that
@@ -551,6 +578,7 @@ class SlackDemandDigestProjection:
         where=...)``.
         """
         stmt = sqlite_insert(slack_demand_digest_table).values(
+            team_id=team_id,
             channel_id=channel_id,
             channel_type=channel_type,
             channel_name=channel_name,
@@ -563,7 +591,7 @@ class SlackDemandDigestProjection:
             updated_at=updated_at,
         )
         stmt = stmt.on_conflict_do_update(
-            index_elements=["channel_id", "demand_kind"],
+            index_elements=["team_id", "channel_id", "demand_kind"],
             set_={
                 "channel_type": stmt.excluded.channel_type,
                 "channel_name": stmt.excluded.channel_name,
@@ -582,6 +610,66 @@ class SlackDemandDigestProjection:
 # ---------------------------------------------------------------- module-level helpers
 
 
+def team_alias_map(engine: Engine) -> dict[str, str]:
+    """Best-effort ``{team_id: alias}`` from the Slack connector cursor.
+
+    Phase 24-D ([ADR-0041](../../../docs/adr/0041-slack-multi-workspace.md)
+    §(g), issue #556). The digest rows are keyed on the **stable**
+    workspace ``team_id`` (data layer), but operators think in the
+    **alias** they configured under
+    ``[connectors.slack.workspaces.<alias>]`` (operation layer). The
+    alias ⇄ team_id binding lives in the Slack connector's per-alias
+    cursor envelope (written by the bind guard on each alias's first
+    sync), so the read surfaces — MCP ``slack.demand.list`` and
+    ``opshub slack mentions list`` — resolve the label through this
+    helper against the same SQLite engine they already hold.
+
+    Strictly decorative and therefore fail-soft: any problem (cursor
+    row absent on a fresh DB, ``connector_cursors`` table missing, a
+    legacy pre-24-C cursor shape, malformed JSON) degrades to an empty
+    map and the callers fall back to showing the raw ``team_id``. The
+    helper deliberately parses the JSON itself instead of delegating to
+    the connector's ``_load_cursors`` — that parser raises a loud
+    ``ConfigError`` on legacy shapes (correct for the sync path), while
+    a *listing* must keep working even when the cursor needs operator
+    surgery.
+    """
+    try:
+        from opshub.projections.connector_cursors import connector_cursors_table
+
+        with engine.connect() as conn:
+            raw = conn.execute(
+                select(connector_cursors_table.c.cursor_value).where(
+                    connector_cursors_table.c.connector_name == "slack"
+                )
+            ).scalar_one_or_none()
+        if not raw:
+            return {}
+        parsed: Any = json.loads(raw)
+        if not isinstance(parsed, dict):
+            return {}
+        # JSON object keys are always ``str`` (json.loads guarantee);
+        # the value-side stays ``Any`` and is isinstance-guarded below.
+        envelope = cast("dict[str, Any]", parsed)
+        workspaces_raw: Any = envelope.get("workspaces")
+        if not isinstance(workspaces_raw, dict):
+            return {}
+        workspaces = cast("dict[str, Any]", workspaces_raw)
+        result: dict[str, str] = {}
+        for alias, entry_raw in workspaces.items():
+            if not isinstance(entry_raw, dict):
+                continue
+            entry = cast("dict[str, Any]", entry_raw)
+            team_id = entry.get("team_id")
+            if isinstance(team_id, str) and team_id:
+                result[team_id] = alias
+        return result
+    except Exception:
+        # Alias resolution is label sugar — never fail a read surface
+        # over it (mirrors ``_channel_names`` in ``cli._slack_status``).
+        return {}
+
+
 def _parse_slack_external_id(external_id: str) -> tuple[str, str, float] | None:
     """Split a Slack ``external_id`` (``"{team_id}:{channel_id}:{ts}"``).
 
@@ -591,9 +679,9 @@ def _parse_slack_external_id(external_id: str) -> tuple[str, str, float] | None:
 
     Phase 24-B ([ADR-0041](docs/adr/0041-slack-multi-workspace.md)
     §(a) §(g)): the natural key gained a leading ``team_id`` token.
-    Phase 24-C consumes it for the per-workspace self-id lookup; the
-    digest row key stays ``(channel_id, demand_kind)`` until the Phase
-    24-D ``(team_id, channel)`` re-key.
+    Phase 24-C consumes it for the per-workspace self-id lookup;
+    Phase 24-D (issue #556) additionally keys the digest row on it
+    (``(team_id, channel_id, demand_kind)``).
 
     Legacy 2-token events (``"{channel_id}:{ts}"``, pre-Phase-24
     ingest) deliberately return ``None`` — i.e. they are **dropped**

@@ -45,7 +45,8 @@ def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 def _seed_digest_rows(db_path: Path) -> None:
     """Seed the digest table with three rows spanning channel types + kinds.
 
-    Row inventory:
+    Row inventory (all in workspace ``T0TEST`` — Phase 24-D keys the
+    digest on ``(team_id, channel_id, demand_kind)``):
 
     * public mention (``C100AAA``, ts 1700000200)
     * private mention (``G200BBB``, ts 1700000100)
@@ -62,6 +63,7 @@ def _seed_digest_rows(db_path: Path) -> None:
                 insert(slack_demand_digest_table).values(
                     [
                         {
+                            "team_id": "T0TEST",
                             "channel_id": "C100AAA",
                             "channel_type": "public",
                             "channel_name": "general",
@@ -74,6 +76,7 @@ def _seed_digest_rows(db_path: Path) -> None:
                             "updated_at": now,
                         },
                         {
+                            "team_id": "T0TEST",
                             "channel_id": "G200BBB",
                             "channel_type": "private",
                             "channel_name": "leadership",
@@ -86,6 +89,7 @@ def _seed_digest_rows(db_path: Path) -> None:
                             "updated_at": now,
                         },
                         {
+                            "team_id": "T0TEST",
                             "channel_id": "D300CCC",
                             "channel_type": "im",
                             "channel_name": None,
@@ -146,10 +150,14 @@ def test_list_table_default_shows_all_rows_sorted_desc(
     result = runner.invoke(app, ["slack", "mentions", "list"])
     assert result.exit_code == 0, result.stdout
     # Header columns
+    assert "WORKSPACE" in result.stdout
     assert "CHANNEL" in result.stdout
     assert "TYPE" in result.stdout
     assert "KIND" in result.stdout
     assert "LAST_DEMAND" in result.stdout
+    # Phase 24-D: no cursor binding in this DB → the WORKSPACE cell
+    # degrades to the raw team_id.
+    assert "T0TEST" in result.stdout
     # The DM row has the newest ts; it should appear before the public mention.
     dm_pos = result.stdout.find("D300CCC")
     public_pos = result.stdout.find("C100AAA")
@@ -274,6 +282,9 @@ def test_list_format_json_returns_full_row_schema(
     # Each row carries every column documented in the JSON schema —
     # operator + automation alike rely on this stable shape.
     expected_keys = {
+        # Phase 24-D (ADR-0041 §(g)): workspace axis fields.
+        "team_id",
+        "workspace_alias",
         "channel_id",
         "channel_type",
         "channel_name",
@@ -287,6 +298,10 @@ def test_list_format_json_returns_full_row_schema(
     }
     for entry in payload:
         assert expected_keys.issubset(entry.keys())
+        assert entry["team_id"] == "T0TEST"
+        # No Slack cursor binding exists in this DB, so the alias label
+        # degrades to ``null`` (the table view falls back to team_id).
+        assert entry["workspace_alias"] is None
     # Sort order is preserved in the JSON output (DM first).
     assert payload[0]["channel_id"] == "D300CCC"
 
@@ -366,3 +381,63 @@ def test_list_limit_caps_row_count(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
     payload = json.loads(result.stdout)
     assert len(payload) == 1
     assert payload[0]["channel_id"] == "D300CCC"
+
+
+# ---- workspace label (Phase 24-D, ADR-0041 §(g)) ---------------------------
+
+
+def test_list_workspace_column_resolves_alias_from_cursor_binding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The WORKSPACE cell prefers the configured alias over the raw team_id.
+
+    The alias ⇄ team_id binding lives in the Slack connector cursor
+    (written on first sync per alias); seeding that row makes the CLI
+    render ``acme`` instead of ``T0TEST`` in both the table and the
+    JSON ``workspace_alias`` field.
+    """
+    db_path = _isolate_env(monkeypatch, tmp_path)
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["init"])
+    assert init_result.exit_code == 0, init_result.stdout
+
+    _seed_digest_rows(db_path)
+
+    from opshub.projections.connector_cursors import connector_cursors_table
+
+    cursor_json = json.dumps(
+        {
+            "workspaces": {
+                "acme": {
+                    "channels": {},
+                    "backfill": {},
+                    "threads": {},
+                    "team_id": "T0TEST",
+                }
+            }
+        }
+    )
+    engine = create_engine_for_sqlite(db_path)
+    try:
+        with engine.begin() as conn:
+            now = datetime(2026, 6, 3, 12, 0, 0, tzinfo=UTC)
+            conn.execute(
+                insert(connector_cursors_table).values(
+                    connector_name="slack",
+                    cursor_value=cursor_json,
+                    updated_at=now,
+                    last_synced_at=now,
+                )
+            )
+    finally:
+        engine.dispose()
+
+    table_result = runner.invoke(app, ["slack", "mentions", "list"])
+    assert table_result.exit_code == 0, table_result.stdout
+    assert "acme" in table_result.stdout
+
+    json_result = runner.invoke(app, ["slack", "mentions", "list", "--format", "json"])
+    assert json_result.exit_code == 0, json_result.stdout
+    payload: list[dict[str, object]] = json.loads(json_result.stdout)
+    assert all(entry["workspace_alias"] == "acme" for entry in payload)

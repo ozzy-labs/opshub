@@ -7,7 +7,8 @@ directly to the event store, runs
 registry, and pins:
 
 * the digest table is populated with one row per
-  ``(channel_id, demand_kind)`` natural key,
+  ``(team_id, channel_id, demand_kind)`` natural key (Phase 24-D,
+  ADR-0041 §(g) — migration 0033),
 * DM detection (``D...`` channel id) yields ``demand_kind="dm"``,
 * mention detection (``<@self_user_id>`` body literal) yields
   ``demand_kind="mention"``,
@@ -79,6 +80,7 @@ def _slack_observed(
     channel_id: str,
     ts: str,
     body: str,
+    team_id: str = "T-int",
     title: str = "alice in #general: ...",
     occurred_at: datetime | None = None,
     author_id: str | None = None,
@@ -97,7 +99,7 @@ def _slack_observed(
         actor="connector:slack",
         connector_name="slack",
         # Phase 24-B (ADR-0041 §(a)): 3-token natural key.
-        external_id=f"T-int:{channel_id}:{ts}",
+        external_id=f"{team_id}:{channel_id}:{ts}",
         source_type="slack_message",
         title=title,
         url=f"https://example.slack.com/archives/{channel_id}/p{ts.replace('.', '')}",
@@ -137,6 +139,7 @@ def _read_digest_rows(engine: Engine) -> list[dict[str, Any]]:
         rows = (
             conn.execute(
                 select(slack_demand_digest_table).order_by(
+                    slack_demand_digest_table.c.team_id.asc(),
                     slack_demand_digest_table.c.channel_id.asc(),
                     slack_demand_digest_table.c.demand_kind.asc(),
                 )
@@ -313,3 +316,62 @@ def test_rebuild_with_no_slack_events_produces_no_digest_rows(
 
     rebuild_all(migrated_engine, store, _build_projections(_SELF_USER_ID))
     assert _read_digest_rows(migrated_engine) == []
+
+
+def test_rebuild_keys_rows_per_workspace(migrated_engine: Engine) -> None:
+    """Same channel id in two workspaces → two rows; rebuild stays idempotent.
+
+    Phase 24-D ([ADR-0041](../../docs/adr/0041-slack-multi-workspace.md)
+    §(g), issue #556): the digest natural key is ``(team_id,
+    channel_id, demand_kind)``, exercised here through the migrated
+    schema (migration 0033) + the full event-store replay path. The
+    older workspace-B demand must survive next to the newer
+    workspace-A one (pre-re-key, the shared ``(channel_id, kind)``
+    key's high-water guard would have swallowed it).
+    """
+    store = SqlAlchemyEventStore(migrated_engine)
+    base = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
+    store.append(
+        _slack_observed(
+            team_id="T-int",
+            channel_id="D700COLLIDE",
+            ts="1700000200.000200",
+            body="ping in workspace A",
+            occurred_at=base,
+        )
+    )
+    store.append(
+        _slack_observed(
+            team_id="T-int2",
+            channel_id="D700COLLIDE",
+            ts="1700000100.000100",
+            body="ping in workspace B",
+            occurred_at=base + timedelta(minutes=1),
+        )
+    )
+
+    projections: list[Projection] = []
+    for projection in all_projections():
+        if isinstance(projection, SlackDemandDigestProjection):
+            projections.append(
+                SlackDemandDigestProjection(
+                    self_user_ids={"T-int": _SELF_USER_ID, "T-int2": "U_SELF_INT2"}
+                )
+            )
+        else:
+            projections.append(projection)
+
+    rebuild_all(migrated_engine, store, projections)
+    first = _read_digest_rows(migrated_engine)
+
+    assert sorted((row["team_id"], row["channel_id"], row["demand_kind"]) for row in first) == [
+        ("T-int", "D700COLLIDE", "dm"),
+        ("T-int2", "D700COLLIDE", "dm"),
+    ]
+    keyed = {row["team_id"]: row["last_demand_ts"] for row in first}
+    assert keyed["T-int"] == pytest.approx(1700000200.000200)  # pyright: ignore[reportUnknownMemberType]
+    assert keyed["T-int2"] == pytest.approx(1700000100.000100)  # pyright: ignore[reportUnknownMemberType]
+
+    # Replay equivalence: a second rebuild converges to the same rows.
+    rebuild_all(migrated_engine, store, projections)
+    assert _read_digest_rows(migrated_engine) == first

@@ -508,7 +508,11 @@ def build_tool_specs(
                 "Run the named connector's sync against the SaaS. Hits the external "
                 "API (rate limit / audit log applies); host should confirm with the "
                 "operator before invoking. Credentials are resolved from the keyring "
-                "inside opshub and never accepted as tool arguments."
+                "inside opshub and never accepted as tool arguments. For "
+                "multi-workspace connectors (Slack, ADR-0041) the sync always covers "
+                "every configured workspace — there is no per-workspace filter on "
+                "this tool; use the CLI (`opshub slack sync --workspace <alias>`) to "
+                "narrow a run."
             ),
             input_schema={
                 "type": "object",
@@ -885,10 +889,14 @@ def build_tool_specs(
                 " and ``since_ts`` (Slack epoch lower bound on the last demand)."
                 " Rows the operator themselves last authored are excluded"
                 " (Phase 23-D / issue #534). Each row carries ``last_demand_at``"
-                " (ISO 8601 UTC). Order is fixed at ``last_demand_desc`` (newest"
-                " first). Read-only over local SQLite — no Slack API round-trip;"
-                " the digest is rebuilt from already-stored ``SourceObserved``"
-                " events by the projection."
+                " (ISO 8601 UTC) and a ``workspace`` object (``team_id`` plus"
+                " the configured alias when resolvable — Phase 24-D, ADR-0041:"
+                " rows are keyed per workspace, so the same channel id may"
+                " appear once per workspace). No workspace filter argument yet"
+                " (output field only). Order is fixed at ``last_demand_desc``"
+                " (newest first). Read-only over local SQLite — no Slack API"
+                " round-trip; the digest is rebuilt from already-stored"
+                " ``SourceObserved`` events by the projection."
             ),
             input_schema={
                 "type": "object",

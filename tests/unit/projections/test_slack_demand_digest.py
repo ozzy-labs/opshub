@@ -871,3 +871,70 @@ def test_event_from_unresolved_team_keeps_dm_but_skips_mention(engine: Engine) -
     with engine.connect() as conn:
         rows = conn.execute(select(slack_demand_digest_table)).mappings().all()
     assert [(row["channel_id"], row["demand_kind"]) for row in rows] == [("D901", "dm")]
+
+
+# ---- (team_id, channel, kind) row key (Phase 24-D, ADR-0041 §(g)) ---------
+
+
+def test_same_channel_id_across_workspaces_produces_separate_rows(engine: Engine) -> None:
+    """Channel-id collision across workspaces never merges digest rows.
+
+    Channel ids are only unique within one Slack workspace; the Phase
+    24-D ``(team_id, channel_id, demand_kind)`` natural key keeps the
+    two conversations apart (issue #556). Before the re-key, the older
+    T-B demand would have been swallowed by the high-water guard on the
+    shared ``(channel_id, demand_kind)`` key.
+    """
+    projection = SlackDemandDigestProjection(self_user_ids={"T-A": "U_ME_A", "T-B": "U_ME_B"})
+
+    newer_in_a = _slack_observed(
+        team_id="T-A",
+        channel_id="D0COLLIDE",
+        ts="1700000200.000200",
+        body="ping in workspace A",
+    )
+    older_in_b = _slack_observed(
+        team_id="T-B",
+        channel_id="D0COLLIDE",
+        ts="1700000100.000100",
+        body="ping in workspace B",
+    )
+
+    with engine.begin() as conn:
+        _apply(projection, conn, newer_in_a)
+        _apply(projection, conn, older_in_b)
+
+    with engine.connect() as conn:
+        rows = (
+            conn.execute(
+                select(slack_demand_digest_table).order_by(slack_demand_digest_table.c.team_id)
+            )
+            .mappings()
+            .all()
+        )
+    assert [(row["team_id"], row["channel_id"], row["demand_kind"]) for row in rows] == [
+        ("T-A", "D0COLLIDE", "dm"),
+        ("T-B", "D0COLLIDE", "dm"),
+    ]
+    # Each row keeps its own workspace's demand (no cross-workspace
+    # high-water interference).
+    by_team = {row["team_id"]: row["last_demand_ts"] for row in rows}
+    assert by_team["T-A"] == pytest.approx(1700000200.0002)  # pyright: ignore[reportUnknownMemberType]
+    assert by_team["T-B"] == pytest.approx(1700000100.0001)  # pyright: ignore[reportUnknownMemberType]
+
+
+def test_digest_row_records_team_id(engine: Engine) -> None:
+    """Every upserted row carries the event's workspace ``team_id``."""
+    projection = SlackDemandDigestProjection(self_user_ids={_TEAM_ID: _SELF_USER_ID})
+    event = _slack_observed(
+        channel_id="C123TEAM",
+        ts="1700000500.000500",
+        body=f"hey <@{_SELF_USER_ID}>",
+    )
+
+    with engine.begin() as conn:
+        _apply(projection, conn, event)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(slack_demand_digest_table)).mappings().one()
+    assert row["team_id"] == _TEAM_ID
