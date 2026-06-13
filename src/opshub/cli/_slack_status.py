@@ -69,7 +69,7 @@ def _ts_to_date(ts: str | None) -> str | None:
         return ts
 
 
-def _channel_names(engine_factory: Any) -> dict[str, str]:
+def _channel_names(engine_factory: Any, team_id: str | None) -> dict[str, str]:
     """Best-effort ``{channel_id: channel_name}`` from the demand digest.
 
     Offline, optional sugar so ``status`` can print ``#general`` next to the
@@ -77,11 +77,16 @@ def _channel_names(engine_factory: Any) -> dict[str, str]:
     digest, so a missing entry is normal — the caller falls back to the id.
     Any error (table absent on a fresh DB, etc.) degrades to an empty map.
 
-    Phase 24-C note: the digest row key is still bare ``channel_id`` (the
-    ``(team_id, channel)`` re-key is Phase 24-D scope), so a channel id that
-    collides across workspaces may resolve to the other workspace's name —
-    cosmetic only; the 24-D re-key adds the team filter.
+    Phase 24-D ([ADR-0041](../../docs/adr/0041-slack-multi-workspace.md)
+    §(g), issue #556): the digest row key is ``(team_id, channel_id,
+    demand_kind)``, so the lookup filters on the workspace block's bound
+    ``team_id`` — a channel id that collides across workspaces can no
+    longer resolve to the *other* workspace's name. An unbound workspace
+    (``team_id is None`` — never synced) has no digest rows by
+    construction, so the lookup short-circuits to an empty map.
     """
+    if team_id is None:
+        return {}
     try:
         from sqlalchemy import select
 
@@ -94,7 +99,7 @@ def _channel_names(engine_factory: Any) -> dict[str, str]:
                     select(
                         slack_demand_digest_table.c.channel_id,
                         slack_demand_digest_table.c.channel_name,
-                    )
+                    ).where(slack_demand_digest_table.c.team_id == team_id)
                 ).all()
         finally:
             engine.dispose()
@@ -208,7 +213,9 @@ def _build_rows(
     )
     floors = _resolve_floors(specs, default_since)
     backfill_enabled = slack.backfill_on_floor_lower
-    names = _channel_names(build_engine)
+    # Phase 24-D: name lookup is scoped to this workspace's bound
+    # team_id (None = never synced = no digest rows to consult).
+    names = _channel_names(build_engine, state["team_id"] if state is not None else None)
 
     channels_axis: dict[str, str | None] = state["channels"] if state is not None else {}
     backfill_axis: dict[str, str | None] = state["backfill"] if state is not None else {}

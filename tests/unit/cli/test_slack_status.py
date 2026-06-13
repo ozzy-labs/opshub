@@ -66,7 +66,7 @@ def _patch_config(
     monkeypatch.setattr("opshub.core.config.OpsHubSettings", lambda: fake)
 
 
-def _names_empty(_factory: object) -> dict[str, str]:
+def _names_empty(_factory: object, _team_id: str | None) -> dict[str, str]:
     return {}
 
 
@@ -290,7 +290,7 @@ def test_status_channel_name_resolution(monkeypatch: pytest.MonkeyPatch) -> None
     _patch_source(monkeypatch, source)
     _patch_config(monkeypatch, channels=["C1"])
 
-    def _names_general(_factory: object) -> dict[str, str]:
+    def _names_general(_factory: object, _team_id: str | None) -> dict[str, str]:
         return {"C1": "general"}
 
     monkeypatch.setattr("opshub.cli._slack_status._channel_names", _names_general)
@@ -449,3 +449,73 @@ def test_cli_cursor_show_removed() -> None:
     # `cursor show` was promoted to `slack status`; the subcommand is gone.
     result = CliRunner().invoke(app, ["slack", "cursor", "show"])
     assert result.exit_code != 0
+
+
+# ----- channel-name lookup is team-scoped (Phase 24-D, ADR-0041 §(g)) -----
+
+
+def test_channel_names_filters_by_team_id(tmp_path: object) -> None:
+    """``_channel_names`` only returns the requested workspace's labels.
+
+    Phase 24-D re-keys the demand digest on ``(team_id, channel_id,
+    demand_kind)``; the status name-resolution sugar filters on the
+    block's bound team_id so a channel id that collides across
+    workspaces can no longer pick up the *other* workspace's name.
+    """
+    from pathlib import Path
+
+    from sqlalchemy import insert
+
+    from opshub.cli._slack_status import (
+        _channel_names,  # pyright: ignore[reportPrivateUsage]
+    )
+    from opshub.db.engine import create_engine_for_sqlite
+    from opshub.projections.slack_demand_digest import slack_demand_digest_table
+    from opshub.projections.sources import sources_table
+
+    assert isinstance(tmp_path, Path)
+    engine = create_engine_for_sqlite(tmp_path / "digest.sqlite")
+    try:
+        sources_table.create(engine)
+        slack_demand_digest_table.create(engine)
+        from datetime import UTC, datetime
+
+        now = datetime(2026, 6, 13, 12, 0, 0, tzinfo=UTC)
+        with engine.begin() as conn:
+            conn.execute(
+                insert(slack_demand_digest_table).values(
+                    [
+                        {
+                            "team_id": "T-A",
+                            "channel_id": "C1",
+                            "channel_type": "public",
+                            "channel_name": "general-a",
+                            "demand_kind": "mention",
+                            "last_demand_ts": 1700000000.0,
+                            "updated_at": now,
+                        },
+                        {
+                            "team_id": "T-B",
+                            "channel_id": "C1",
+                            "channel_type": "public",
+                            "channel_name": "general-b",
+                            "demand_kind": "mention",
+                            "last_demand_ts": 1700000001.0,
+                            "updated_at": now,
+                        },
+                    ]
+                )
+            )
+
+        # NOTE: ``_channel_names`` disposes the engine it builds; hand it
+        # a factory returning a fresh engine per call so each lookup is
+        # self-contained (mirrors the production ``build_engine`` shape).
+        def _factory() -> object:
+            return create_engine_for_sqlite(tmp_path / "digest.sqlite")
+
+        assert _channel_names(_factory, "T-A") == {"C1": "general-a"}
+        assert _channel_names(_factory, "T-B") == {"C1": "general-b"}
+        # Unbound workspace (never synced) → short-circuit empty map.
+        assert _channel_names(_factory, None) == {}
+    finally:
+        engine.dispose()

@@ -790,7 +790,8 @@ def build_slack_demand_list_handler(engine: Engine) -> ToolHandler:
     Phase 18-C (ADR-0033 §決定 (c)) — read-only query against the
     ``slack_demand_digest`` projection materialised by Phase 18-B
     ([ADR-0033](../../docs/adr/0033-slack-mention-demand-digest.md)).
-    Returns the per-channel x per-demand-kind digest rows that the
+    Returns the per-workspace x per-channel x per-demand-kind digest
+    rows (Phase 24-D key, ADR-0041 §(g)) that the
     assistant skills (``next-actions`` / ``personal-brief`` /
     ``inbox-triage``) use to surface Slack ``<@self>`` mentions and
     DM activity as "next to read" signals.
@@ -821,7 +822,14 @@ def build_slack_demand_list_handler(engine: Engine) -> ToolHandler:
     mirrors the projection columns (``channel_id`` / ``channel_type``
     / ``channel_name`` / ``demand_kind`` / ``last_demand_at`` /
     ``last_demand_user_id`` / ``last_demand_excerpt`` /
-    ``last_demand_permalink`` / ``last_source_id``). ``total`` is the
+    ``last_demand_permalink`` / ``last_source_id``) plus the Phase
+    24-D ``workspace`` object (``{"team_id": "T...", "alias": "acme" |
+    null}`` — [ADR-0041](../../docs/adr/0041-slack-multi-workspace.md)
+    §(g)): the digest row key carries the stable workspace ``team_id``
+    and the ``alias`` label is resolved best-effort from the Slack
+    cursor binding (``null`` when unbound). There is deliberately no
+    workspace *filter* argument yet — output field only, the filter
+    waits for real demand (epic #552 §スコープ外). ``total`` is the
     item count in the response page (not the full table size); the
     pagination hint pair signals whether more rows exist behind the
     cap.
@@ -842,6 +850,7 @@ def build_slack_demand_list_handler(engine: Engine) -> ToolHandler:
             CHANNEL_TYPES,
             DEMAND_KINDS,
             slack_demand_digest_table,
+            team_alias_map,
         )
 
         raw_types = arguments.get("types")
@@ -880,6 +889,7 @@ def build_slack_demand_list_handler(engine: Engine) -> ToolHandler:
         _order: str = str(arguments.get("order", "last_demand_desc"))
 
         stmt = select(
+            slack_demand_digest_table.c.team_id,
             slack_demand_digest_table.c.channel_id,
             slack_demand_digest_table.c.channel_type,
             slack_demand_digest_table.c.channel_name,
@@ -897,19 +907,32 @@ def build_slack_demand_list_handler(engine: Engine) -> ToolHandler:
         if since_ts is not None:
             stmt = stmt.where(slack_demand_digest_table.c.last_demand_ts >= since_ts)
         # Stable order: ``last_demand_ts DESC`` is the demand signal
-        # primary; the secondary ``channel_id ASC`` keeps page
-        # boundaries deterministic when multiple rows share a ts (rare
-        # but possible after a rebuild).
+        # primary; the secondary ``team_id ASC, channel_id ASC``
+        # (the Phase 24-D natural-key prefix) keeps page boundaries
+        # deterministic when multiple rows share a ts (rare but
+        # possible after a rebuild — and two workspaces can carry the
+        # same channel id, so ``channel_id`` alone is not enough).
         stmt = stmt.order_by(
             slack_demand_digest_table.c.last_demand_ts.desc(),
+            slack_demand_digest_table.c.team_id.asc(),
             slack_demand_digest_table.c.channel_id.asc(),
         ).limit(limit)
 
         with engine.connect() as conn:
             rows = conn.execute(stmt).all()
 
+        # Phase 24-D (ADR-0041 §(g)): label each row's stable
+        # ``team_id`` with the operator-configured workspace alias,
+        # resolved best-effort from the Slack cursor binding (one
+        # SQLite read per call; fail-soft to ``null`` aliases).
+        aliases = team_alias_map(engine)
+
         items = [
             {
+                "workspace": {
+                    "team_id": row.team_id,
+                    "alias": aliases.get(row.team_id),
+                },
                 "channel_id": row.channel_id,
                 "channel_type": row.channel_type,
                 "channel_name": row.channel_name,
