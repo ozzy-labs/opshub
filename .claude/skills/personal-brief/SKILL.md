@@ -116,7 +116,7 @@ input:
 
 Phase 18-C ([ADR-0033 §決定 (c)](../../adr/0033-slack-mention-demand-digest.md)) で追加された `slack.demand.list` は Phase 18-B `slack_demand_digest` projection を読み、`<@self>` mention と DM 相手の最終発言 (operator 視点で「自分が放置している ping」) を新しい順に返す。「今日のまとめ」「今週どうなってる」のような問い合わせでは、これを「期間内に自分宛に来た Slack」セクションとして含めると situation awareness が大きく向上する。
 
-戻り値の `items[]` (`channel_id` / `channel_type` / `channel_name` / `demand_kind` / `last_demand_at` / `last_demand_user_id` / `last_demand_excerpt` / `last_demand_permalink` / `last_source_id`) を期間内 (`since_ts` でフィルタ) で表示。`last_demand_at` は ISO 8601 UTC 文字列 (Phase 23-D / issue #534)、`channel_name` は DM なら相手の表示名 / channel なら `#name` (None の場合のみ `channel_id` を fall back 表示)、`last_demand_user_id` は相手の Slack `U...` id。自分が最後に発言した DM / mention は除外済み (Phase 23-D)。`last_demand_permalink` を付けると operator が直接 Slack UI に飛べる。
+戻り値の `items[]` (`workspace` (`team_id` + `alias`、Phase 24-D / ADR-0041) / `channel_id` / `channel_type` / `channel_name` / `demand_kind` / `last_demand_at` / `last_demand_user_id` / `last_demand_excerpt` / `last_demand_permalink` / `last_source_id`) を期間内 (`since_ts` でフィルタ) で表示。複数 Slack workspace 構成では同じ `channel_id` が workspace ごとに 1 行ずつ現れうるので、行の同定には `workspace.team_id` + `channel_id` を使う (`workspace.alias` は operator が config で命名した label、未 bind なら null)。`last_demand_at` は ISO 8601 UTC 文字列 (Phase 23-D / issue #534)、`channel_name` は DM なら相手の表示名 / channel なら `#name` (None の場合のみ `channel_id` を fall back 表示)、`last_demand_user_id` は相手の Slack `U...` id。自分が最後に発言した DM / mention は除外済み (Phase 23-D)。`last_demand_permalink` を付けると operator が直接 Slack UI に飛べる。
 
 `slack.demand.list` は read-only / `readOnlyHint=true` / `openWorldHint=false` (local SQLite のみ、Slack API 不発火)。Slack への投稿 / reaction は本 skill から行わない (ADR-0010 §禁止事項 7)。
 
