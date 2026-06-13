@@ -877,9 +877,7 @@ def test_slack_workspace_scalar_fields_env_nest_override(
     _isolate_xdg(monkeypatch, tmp_path)
     monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__CHANNELS", "C1")
     monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__SYNC_SINCE", "30d")
-    monkeypatch.setenv(
-        "OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__THREAD_ACTIVITY_WINDOW", "7d"
-    )
+    monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__WORKSPACES__ACME__THREAD_ACTIVITY_WINDOW", "7d")
     # connector-wide defaults differ, so the assertions prove the per-workspace
     # env values win over (not merely echo) the connector-wide fallback.
     monkeypatch.setenv("OPSHUB_CONNECTORS__SLACK__SYNC_SINCE", "90d")
