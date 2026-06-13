@@ -648,19 +648,19 @@ Error: multiple Slack workspaces configured (acme, oss); pass --workspace <alias
 #### B. token mismatch (alias 配下の token を別 workspace に差し替えた)
 
 ```text
-Error: Slack workspace alias 'acme' cursor is bound to team_id 'T-AAA' but the
-stored token now resolves to 'T-BBB'. ...
+Error: Slack workspace 'acme' is bound to team_id 'T-AAA' but its stored token
+now resolves to 'T-BBB'. ...
 ```
 
-- **別 workspace の token を誤って貼った** → その alias 本来の workspace の token に戻す。
-- **意図的に workspace を切り替えたい** → `opshub slack cursor reset --workspace acme` (または `--all`) で当該 alias の bind を解除してから `opshub slack sync`。**旧 workspace の取り込み済み source は残る**ため手動 purge が必要 (unsupported path)。
+- **別 workspace の token を誤って貼った** → `opshub slack auth set --workspace acme` でその alias 本来の workspace の token に戻す。
+- **意図的に workspace を切り替えたい** → エラー本文の誘導どおり `opshub slack cursor reset --workspace acme --all` で当該 alias の bind を解除してから `opshub slack sync` (全 alias を巻き込んで unbind するなら `--all` 単独)。**旧 workspace の取り込み済み source は残る**ため手動 purge が必要 (unsupported path; sanctioned path は ADR-0041 §(e) の DB 再 init)。
 - mismatch は **fetch 前**に検出されるため、別 workspace のメッセージが DB に入ることはない (`external_id = f"{team_id}:{channel_id}:{ts}"` の 3-token 化で workspace-wide 一意性は保たれる)。
 - **live と bound の見方**: `opshub slack auth test --workspace acme` は token が**今**属する workspace (live)、`opshub slack status` は cursor が **bind 済みの** workspace (bound) を per-alias block で表示する。両者の食い違いが次回 sync で止まる状態。
 
 #### C. 重複 `team_id` (2 つの alias が同じ workspace に解決)
 
 ```text
-Error: Slack workspace aliases 'acme' and 'acme2' both resolve to team_id 'T-AAA'; ...
+Error: Slack workspaces 'acme' and 'acme2' both resolve to team_id 'T-AAA'; ...
 ```
 
 - 同一 workspace を 2 つの alias で二重登録すると cursor / digest の意味が壊れるため `ConfigError` で拒否する (ADR-0041 §(a))。片方の alias 設定を削除する。
@@ -670,8 +670,9 @@ Error: Slack workspace aliases 'acme' and 'acme2' both resolve to team_id 'T-AAA
 Phase 24 の cursor は per-alias nest (`{"workspaces": {"<alias>": {...}}}`、ADR-0041 §(d))。Phase 23-H の top-level `{"channels": ..., "team_id": ...}` shape は silent migration せず `ConfigError` で reject する。
 
 ```text
-Error: Slack cursor is in the pre-Phase-24 shape; reset it with
-`opshub slack cursor reset --all`. ...
+Error: Slack cursor predates the Phase 24 per-workspace schema
+({"workspaces": {"<alias>": {...}}}, ADR-0041). Run
+`opshub slack cursor reset --all` to drop it and cold-start ...
 ```
 
 - 誘導通り `opshub slack cursor reset --all` で空 envelope に hard-drop してから `opshub slack sync` で cold-start する (rebuild は cursor をリセットしないので回復経路にならない、Phase 20-B / 23-A の posture 継承)。

@@ -370,10 +370,11 @@ multiple workspaces it prints one block per alias (Phase 24-D, ADR-0041 §(f)).
 **Recovery / surgery — `opshub slack cursor`** (Phase 22-E,
 [ADR-0038](adr/0038-slack-sync-gap-backfill.md) §(f)):
 
-- `opshub slack cursor reset [--channel C1,C2 [--workspace acme] | --all]`
+- `opshub slack cursor reset [--channel C1,C2 [--workspace acme] | --all [--workspace acme]]`
   — drop cursor entries so the selected channels cold-start on the next
-  sync. `--all` resets **every** workspace's channels and **unbinds**
-  every alias's `team_id`; `--channel` follows the §(f) default rule (one
+  sync. `--all` alone resets **every** workspace's channels and **unbinds**
+  every alias's `team_id`; `--all --workspace acme` narrows the drop (incl.
+  unbind) to one alias. `--channel` follows the §(f) default rule (one
   workspace → implicit, multiple → `--workspace` required, since the same
   channel id can exist in two workspaces).
 - `opshub slack cursor backfill --channel <id> --since <new> [--until <old>] [--workspace acme]`
