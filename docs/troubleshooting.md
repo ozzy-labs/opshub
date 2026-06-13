@@ -443,14 +443,14 @@ Error: ConfigError: [embedding] backend "grok" is not a valid choice
 
 Phase 18-B ([ADR-0033](adr/0033-slack-mention-demand-digest.md)) で導入された `slack_demand_digest` projection が空のままになる、`opshub slack mentions list` が想定行を返さない、`<@self>` mention が hit していないように見えるケース。
 
-**前提**: 本 projection は新 fetch を持たず、`opshub slack sync` が append した既存 `SourceObserved` event を消費する純粋な下流追加。Self user id (Slack `U...` id) は projection 初期化時に Slack `auth.test()` 経由で 1 度だけ解決し cache する ([ADR-0033 §決定 (f)](adr/0033-slack-mention-demand-digest.md))。
+**前提**: 本 projection は新 fetch を持たず、`opshub slack sync` が append した既存 `SourceObserved` event を消費する純粋な下流追加。Self user id (Slack `U...` id) は **workspace ごとに** 解決される (Phase 24-D、[ADR-0041 §(g)](adr/0041-slack-multi-workspace.md))。projection は `{team_id: self_user_id}` map を保持し、各 event の `external_id` (`f"{team_id}:{channel_id}:{ts}"`) から `team_id` を取り出して per-alias の self id を引く。`U...` id は workspace ごとに別物なので install-wide な単一 id では他 workspace の mention 検出 / 自己発言抑制が全 miss する (これが per-workspace 化の動機)。
 
 **症状別の切り分け**:
 
 | 症状 | 確認手順 |
 |---|---|
 | `opshub slack mentions list` が空 | (1) `opshub slack sync` を実行済みか確認 / (2) sync 後に `opshub projections rebuild` を実行 (新 projection 登録後は **既存 event を流し直す必要がある**) |
-| DM だけ出て mention が hit しない | `auth.test` が失敗していて self user id が解決できていない可能性。`opshub slack auth test` で確認。一時的な workaround として `OPSHUB_SLACK_SELF_USER_ID=U12345` を export してから `opshub projections rebuild` 実行 (CI / headless 用、本番でも有効) |
+| DM だけ出て mention が hit しない | 該当 workspace の `auth.test` が失敗していて self user id が解決できていない可能性。`opshub slack auth test --workspace <alias>` で確認。一時的な workaround として **team-qualified** な `OPSHUB_SLACK_SELF_USER_ID__<ALIAS>=T12345:U12345` を export してから `opshub projections rebuild` 実行 (CI / headless 用、本番でも有効)。alias は大文字化して env 名に入る (`__ACME`); 値は `T...:U...` 両方を含めること (digest は `team_id` で row を引くため、ADR-0041 §(g)) |
 | 一部 channel が `private` でなく `public` に classify されている | `SourceObserved` event は raw payload を持たないため、projection は channel id prefix (`C` / `G` / `D`) で type を判定する ([ADR-0033 §決定 (b)](adr/0033-slack-mention-demand-digest.md))。`G...` channel は全て `private` に collapse (mpim は body の `<@self>` 経路で別途検知される) |
 | `FROM` 列が `-`、または自分が返信済みの DM が出続ける | Phase 23-D ([issue #534](https://github.com/ozzy-labs/opshub/issues/534)) 以前に sync された event は `author_id` を持たない (mapper が貫通させ始めたのが本 Phase から)。`opshub projections rebuild` 単独では過去 event の author は復元できない (event は immutable)。誤報抑制 + FROM 列充填を全 channel に効かせるには Slack の full re-sync が必要 (`opshub slack cursor backfill` / `reset` → `opshub slack sync` → `opshub projections rebuild`、[`docs/upgrading.md`](upgrading.md) §Phase 23-D)。bot / system message は元々 author id を持たず `-` のまま |
 | MPIM の demand が出ない | MPIM 自体は `dm` row として出ない (Slack DM = `D...` のみ)。MPIM 内の `<@self>` mention は `demand_kind=mention` で hit する (body 経路)。`demand_kind=mpim` は Phase 23-D で削除済み (apply が書かない死に値だった) |
@@ -468,7 +468,7 @@ opshub slack mentions list --format json | jq .  # JSON 出力 (full row schema)
 
 **典型エラー**:
 
-- 出力に `slack_demand_digest: cannot resolve operator self user id` warning が出る → `opshub slack auth set` で User Token (`xoxp-`) を保存し、`opshub slack auth test` で `user_id` を確認、`opshub projections rebuild` を再実行する。または `OPSHUB_SLACK_SELF_USER_ID=U...` を export してから rebuild する
+- 出力に `slack_demand_digest: cannot resolve operator self user id` warning が出る → 該当 workspace の alias で `opshub slack auth set --workspace <alias>` に User Token (`xoxp-`) を保存し、`opshub slack auth test --workspace <alias>` で `user_id` を確認、`opshub projections rebuild` を再実行する。または team-qualified な `OPSHUB_SLACK_SELF_USER_ID__<ALIAS>=T...:U...` を export してから rebuild する (Phase 24-D、ADR-0041 §(g))
 - mention 行の channel が `private` でなく `public` で表示される → ADR-0033 §決定 (b) の channel id prefix-based classification によるもの。private と mpim の区別が必要なら `opshub slack conversations` 出力と突き合わせる
 
 **関連**:
@@ -630,20 +630,68 @@ cdp_endpoint = "http://localhost:9222"
 - [docs/upgrading.md §Phase 21](upgrading.md) — `[browser]` / `[connectors.web]` config + extras + `playwright install chromium` 手順
 - Phase 21 実装 PR: 21-A [#510](https://github.com/ozzy-labs/opshub/pull/510) / 21-B [#511](https://github.com/ozzy-labs/opshub/pull/511) / 21-C [#513](https://github.com/ozzy-labs/opshub/pull/513) / 21-D [#512](https://github.com/ozzy-labs/opshub/pull/512)
 
-### 3.14 `opshub slack sync` が `team_id` mismatch の `ConfigError` で落ちる (Phase 23-H / [#538](https://github.com/ozzy-labs/opshub/issues/538))
+### 3.14 Slack multi-workspace の `ConfigError` 集 (Phase 24 / [ADR-0041](adr/0041-slack-multi-workspace.md))
 
-opshub は **1 install = 1 Slack workspace** を前提とする ([ADR-0039](adr/0039-slack-single-workspace-non-goal.md))。cursor は初回 sync で workspace の `team_id` を bind し、以降の sync は **fetch 前に** 保存された token が今どの workspace に解決するかを照合する。
+opshub は Phase 24 で **1 install = N Slack workspace** を first-class でサポートする ([ADR-0041](adr/0041-slack-multi-workspace.md)、Phase 23-H の single-workspace non-goal ([ADR-0039](adr/0039-slack-single-workspace-non-goal.md)) を supersede)。workspace は operator が付ける **alias** (操作層 key) と Slack の `team_id` (不変なデータ層 key) の二層で識別する。各 alias の cursor entry は初回 sync で自分の `team_id` を bind し、以降の sync は **fetch 前に** その alias の token が今どの workspace に解決するかを照合する。
+
+#### A. `--workspace` の default 解決でエラーになる
+
+`auth set` / `auth test` / `conversations` / `cursor backfill` / `cursor reset --channel` は **単一 workspace なら flag 省略可**、**0 / 複数なら `--workspace <alias>` 必須**。
 
 ```text
-Error: Slack cursor is bound to workspace team_id 'T-AAA' but the stored token
-now resolves to 'T-BBB'. opshub supports one Slack workspace per install
-(ADR-0039: single-workspace is an explicit non-goal). ...
+Error: multiple Slack workspaces configured (acme, oss); pass --workspace <alias> to pick one.
 ```
 
-- **別 workspace の token を誤って貼った** → 元の workspace の token に戻す。
-- **意図的に workspace を切り替えたい** → `opshub slack cursor reset --all` で bind を解除してから `opshub slack sync`。**旧 workspace の取り込み済み source は残る**ため手動 purge が必要 (unsupported path)。複数 workspace を同時に扱うことは非対応 (ADR-0039)。
-- **live と bound の見方**: `opshub slack auth test` は token が**今**属する workspace (live)、`opshub slack status` は cursor が **bind 済みの** workspace (bound) を表示する。両者の食い違いが次回 sync で止まる状態。
-- mismatch は **fetch 前**に検出されるため、別 workspace のメッセージが DB に入ることはない (`external_id` の workspace-wide 一意性は保たれる)。
+- channel id は workspace 跨ぎで衝突しうるため、曖昧な場合に opshub は推測せず loud に止める (ADR-0041 §(f))。`--workspace <alias>` を明示する。
+- `slack sync` (全 workspace 直列) と `slack status` (全 workspace 表示) はこの default 規則を使わず、flag なしで全 workspace を回す。`--workspace` は絞り込み。
+
+#### B. token mismatch (alias 配下の token を別 workspace に差し替えた)
+
+```text
+Error: Slack workspace alias 'acme' cursor is bound to team_id 'T-AAA' but the
+stored token now resolves to 'T-BBB'. ...
+```
+
+- **別 workspace の token を誤って貼った** → その alias 本来の workspace の token に戻す。
+- **意図的に workspace を切り替えたい** → `opshub slack cursor reset --workspace acme` (または `--all`) で当該 alias の bind を解除してから `opshub slack sync`。**旧 workspace の取り込み済み source は残る**ため手動 purge が必要 (unsupported path)。
+- mismatch は **fetch 前**に検出されるため、別 workspace のメッセージが DB に入ることはない (`external_id = f"{team_id}:{channel_id}:{ts}"` の 3-token 化で workspace-wide 一意性は保たれる)。
+- **live と bound の見方**: `opshub slack auth test --workspace acme` は token が**今**属する workspace (live)、`opshub slack status` は cursor が **bind 済みの** workspace (bound) を per-alias block で表示する。両者の食い違いが次回 sync で止まる状態。
+
+#### C. 重複 `team_id` (2 つの alias が同じ workspace に解決)
+
+```text
+Error: Slack workspace aliases 'acme' and 'acme2' both resolve to team_id 'T-AAA'; ...
+```
+
+- 同一 workspace を 2 つの alias で二重登録すると cursor / digest の意味が壊れるため `ConfigError` で拒否する (ADR-0041 §(a))。片方の alias 設定を削除する。
+
+#### D. 旧 cursor shape の reject
+
+Phase 24 の cursor は per-alias nest (`{"workspaces": {"<alias>": {...}}}`、ADR-0041 §(d))。Phase 23-H の top-level `{"channels": ..., "team_id": ...}` shape は silent migration せず `ConfigError` で reject する。
+
+```text
+Error: Slack cursor is in the pre-Phase-24 shape; reset it with
+`opshub slack cursor reset --all`. ...
+```
+
+- 誘導通り `opshub slack cursor reset --all` で空 envelope に hard-drop してから `opshub slack sync` で cold-start する (rebuild は cursor をリセットしないので回復経路にならない、Phase 20-B / 23-A の posture 継承)。
+
+#### E. sync 失敗 alias の読み方 (per-workspace error isolation)
+
+`opshub slack sync` は全 workspace を直列に回し、1 workspace の失敗が他の進捗を巻き込まない (ADR-0041 §(b))。失敗があると **非ゼロ exit** + stderr に失敗 alias を列挙する。
+
+```text
+Error: slack sync failed for 1 of 2 workspace(s): oss (ConnectorFailedError).
+Succeeded workspaces' cursors were checkpointed; fix the failing workspace(s)
+and re-run `opshub slack sync`.
+```
+
+- 成功した workspace の cursor は checkpoint 済みなので、失敗 alias を直して再 sync すれば二重取り込みは起きない。
+- `ConnectorSyncFailed` event の `error_message` も型名 + 失敗 alias (`failed workspace(s): oss`) を持つ (raw メッセージは redaction される、ADR-0027)。生の失敗理由は `--debug` 時の structured log にのみ出る。
+
+#### F. alias rename の影響 (cursor 喪失 + 冪等 re-fetch)
+
+cursor は alias key で nest するため、**alias を rename すると当該 workspace の cursor を失う** → 次回 sync は floor から re-fetch する。ただし `external_id` は `team_id` ベース (alias 非依存) なので、re-fetch は **冪等 upsert** に落ち source は重複しない。コストは API 取得分のみ (ADR-0041 §(a))。意図せず rename すると「なぜか full re-fetch している」状態になるので、`opshub slack status` で当該 alias の cursor が空 (cold-start 予定) になっていないか確認する。
 
 ### 3.15 `auth test` の feature が `MISSING` と出る / `READY` なのに `not_in_channel` で取れない (Phase 23-I / [#539](https://github.com/ozzy-labs/opshub/issues/539))
 

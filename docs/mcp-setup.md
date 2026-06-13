@@ -96,7 +96,7 @@ Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1 + Phase 18-C
 | read  | `slack.demand.list`           | List Slack `<@self>` mention / DM digest rows (Phase 18-C, ADR-0033) |
 | write | `task.create`                 | Create a new task                                                 |
 | write | `inbox.add`                   | Add an inbox item                                                 |
-| write | `connector.sync`              | Trigger a registered connector's sync                             |
+| write | `connector.sync`              | Trigger a registered connector's sync (Slack: always all workspaces — ADR-0041 §(f)) |
 | write | `propose.generate`            | Generate next-action / reply-draft candidates (HITL apply)        |
 | write | `propose.apply`               | Apply a proposal candidate (HITL, idempotent, Phase 12 H1)        |
 | write | `browser.fetch`               | Render a Web page with headless Chromium, return extracted text + title (HITL, network egress, no persist, Phase 21-D, ADR-0037) |
@@ -110,7 +110,7 @@ Step 1 widening (post Phase 10) added the 7 new read tools and the HITL write `p
 
 Phase 18-C ([ADR-0033 §決定 (c)](adr/0033-slack-mention-demand-digest.md), `ReadCategory.SLACK_DEMAND_LIST`) added one new read tool:
 
-* **`slack.demand.list` (read, Phase 18-C)** — list rows from the Phase 18-B `slack_demand_digest` projection, optionally filtered by `types` (channel kinds `im` / `mpim` / `private` / `public`), `demand_kinds` (`mention` / `dm` / `mpim`), and `since_ts` (Slack epoch lower bound). Read-only over local SQLite — no Slack API round-trip; the projection consumes already-stored `SourceObserved` events. Order is fixed at `last_demand_desc` (newest first); the `order` argument is reserved for forward compatibility. Used by `next-actions` (priority signal), `personal-brief` (period summary), and `inbox-triage` (auxiliary priority).
+* **`slack.demand.list` (read, Phase 18-C)** — list rows from the Phase 18-B `slack_demand_digest` projection, optionally filtered by `types` (channel kinds `im` / `mpim` / `private` / `public`), `demand_kinds` (`mention` / `dm` / `mpim`), and `since_ts` (Slack epoch lower bound). Read-only over local SQLite — no Slack API round-trip; the projection consumes already-stored `SourceObserved` events. Order is fixed at `last_demand_desc` (newest first); the `order` argument is reserved for forward compatibility. **Phase 24-D ([ADR-0041](adr/0041-slack-multi-workspace.md) §(g)):** each row now carries a `workspace` object (`{"team_id": "T...", "alias": "acme" | null}`) — the digest row key is keyed on the stable workspace `team_id` and the `alias` label is resolved best-effort from the configured workspaces. There is no workspace *filter* argument yet (output field only; the filter is deferred until there is demand). Used by `next-actions` (priority signal), `personal-brief` (period summary), and `inbox-triage` (auxiliary priority).
 
 Phase 21-D ([ADR-0037 §決定 (e)](adr/0037-browser-read-layer-playwright.md) + [ADR-0022 §決定 (g)](adr/0022-mcp-server-surface.md), `WriteCategory.BROWSER_FETCH`) added one new **write** tool, bringing the surface to 19 tools (13 read + 6 write):
 
@@ -182,7 +182,7 @@ opshub's MCP server enforces three security boundaries on the server side. The a
 
 Tool input schemas never accept tokens. Connector credentials are resolved inside `opshub` via the keyring path (ADR-0014) and never leak into tool arguments, tool results, or the agent's transcript.
 
-If you store new connector tokens, use `opshub <connector> auth set` (e.g. `opshub slack auth set`, `opshub github auth set`; Phase 17 ADR-0031) — the agent never sees the token.
+If you store new connector tokens, use `opshub <connector> auth set` (e.g. `opshub slack auth set --workspace <alias>`, `opshub github auth set`; Phase 17 ADR-0031, Slack per-workspace since Phase 24 ADR-0041 §(a)) — the agent never sees the token.
 
 ### Read tools are safe to auto-approve, writes are not (ADR-0022 §(c))
 
@@ -346,7 +346,7 @@ Tool arguments and tool outputs are deliberately **not** logged — they may con
 | `MCP extras missing. Install with: uv sync --extra mcp`  | `mcp` extras not installed.                                               |
 | Agent host shows zero tools after connecting             | `opshub init` not run yet (the engine wiring opens the SQLite store).     |
 | `recall.search` fails with a ConfigError                 | No embedder backend configured. See `[embedding]` in `opshub.toml`.       |
-| `connector.sync` fails with `ConnectorSyncFailed`        | Connector credentials missing. Run `opshub <connector> auth set` (e.g. `opshub slack auth set`).    |
+| `connector.sync` fails with `ConnectorSyncFailed`        | Connector credentials missing. Run `opshub <connector> auth set` (e.g. `opshub slack auth set --workspace <alias>`). Slack multi-workspace: the message names the failed alias(es) — fix those and re-run (ADR-0041 §(b)). |
 | `unknown connector` error from `connector.sync`          | Connector extras not installed (`--extra connectors-<name>`).             |
 | `connector.sync google_workspace` fails with `ConfigError: ... client_id`| Google OAuth client not configured. Set `[connectors.google_workspace] client_id` / `client_secret` (see `docs/google-workspace-setup.md`) and re-run `opshub google_workspace auth set`. |
 
