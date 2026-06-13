@@ -1,7 +1,7 @@
 # 0010. Connector Contract
 
 - Status: Accepted (revised 2026-06-07 for Phase 21 Sub-issue A)
-- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外); 2026-05-31 (Phase 11 改訂: Teams 追加 + 本文抽出契約 + delta-link cursor + User Token principal); 2026-05-31 (Phase 13 改訂: Google Workspace 追加 + Drive `changes.list` cursor + TTL fallback + Workspace export 本文抽出契約 + Google Refresh Token principal = MS365 / Box pattern 明文化); 2026-05-31 (Phase 14 改訂: Gmail + Google Calendar 追加 + delta-cursor 型 connector 全般 への TTL fallback 一般化 + Outlook 流本文抽出契約を Gmail / Calendar に拡張); 2026-06-07 (Phase 21 改訂: web connector 追加 + delta API なし connector の fingerprint 変更検知契約を web に適用 + crawler 非該当 posture)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外); 2026-05-31 (Phase 11 改訂: Teams 追加 + 本文抽出契約 + delta-link cursor + User Token principal); 2026-05-31 (Phase 13 改訂: Google Workspace 追加 + Drive `changes.list` cursor + TTL fallback + Workspace export 本文抽出契約 + Google Refresh Token principal = MS365 / Box pattern 明文化); 2026-05-31 (Phase 14 改訂: Gmail + Google Calendar 追加 + delta-cursor 型 connector 全般 への TTL fallback 一般化 + Outlook 流本文抽出契約を Gmail / Calendar に拡張); 2026-06-07 (Phase 21 改訂: web connector 追加 + delta API なし connector の fingerprint 変更検知契約を web に適用 + crawler 非該当 posture); 2026-06-13 (issue #522 追記: 責務 5 の inbox enqueue が `source_ref` で冪等化される invariant を §不変条件 7 に明文化 — PR #529 が「ADR-0002 / ADR-0010 の延長」と位置づけた決定の記録漏れを是正)
 - Deciders: ozzy
 - Related: [ADR-0036](0036-slack-sync-date-floor.md) — Slack sync の date floor (`[connectors.slack] sync_since` / per-channel `since`) は本 contract の cursor checkpoint の上に `oldest = max(cursor, floor)` で乗る (cursor authoritative、既存 sync 済み channel に無影響); [ADR-0037](0037-browser-read-layer-playwright.md) — Phase 21 で新設する web connector (Playwright browser read 層) は本 contract の Connector Protocol + 責務 1-6 + 禁止事項 1-7 をそのまま適用する (§Phase 21 改訂 (n)-(o)); [ADR-0041](0041-slack-multi-workspace.md) — Phase 24 で Slack connector の cursor schema (per-alias nest) と `external_id` 規約 (`f"{team_id}:{channel_id}:{ts}"` 3-token re-key) を改める。connector instance は `name = "slack"` 単一のまま (multi-instance 化は不採用)、本 contract の Connector Protocol + 責務 1-6 + 禁止事項 1-7 は不変
 
@@ -39,6 +39,8 @@ Connector の **責務**:
 Connector の **不変条件** (epic #470 / issue #481 で追加):
 
 **不変条件 6. `SourceObserved.body` は必ず非空文字列** — Phase 10 当時 Optional だった `body` は epic #470 (pre-userbase compat shim cleanup) で `str = Field(min_length=1)` に格上げされた (ADR-0020 §(d') 参照)。metadata-only / stat-only path (`box_drive` の `content_extraction=False` / Google Workspace `google_workspace_file` catch-all / MS365 OneDrive metadata / Box web-API events / GitHub notifications 等) は `body = summary` を emit することで契約を満たす。summary を持たない event 形は連続して `title` を fallback として使う (e.g. Slack の `channel_join` event)。`SourceObserved` 構築時に Pydantic `ValidationError` で fail-fast し、`NULL` write は projection 層でも `sources.body NOT NULL` 制約で拒否される (migration `0030_enforce_sources_body_not_null`)
+
+**不変条件 7. inbox enqueue は `source_ref` で冪等** (issue [#522](https://github.com/ozzy-labs/opshub/issues/522)) — 責務 5 の inbox item 作成は `SourceService.observe` が `SourceObserved` と atomic に append する `ItemEnqueued` (`source_ref = f"{connector_name}:{external_id}"`) を通る。同一 source の再観測は ADR-0002 §"every observation is a new event" に従い毎回新 ULID の `ItemEnqueued` を生むため、`inbox` projection は partial unique index `uq_inbox_items_source_ref` (`WHERE source_ref IS NOT NULL`) + reducer の `ON CONFLICT(source_ref) DO NOTHING` で **`source_ref` ごとに 1 inbox 行** へ収束させる (first-observation wins; `iter_all` が `(recorded_at, id)` 順で replay するため rebuild 決定的)。これにより cursor rewind / reset / backfill ([ADR-0038](0038-slack-sync-gap-backfill.md)) や delta API なし connector (`box_drive` / `web`) の fingerprint 変更による**意図的再観測**でも inbox 行は二重化しない (旧 #339 cascade と同型の膨張を断つ)。triaged 済み source の再観測は `DO NOTHING` が解決行を温存し再オープンしない (fingerprint 変更による「再 triage」が要るなら別 signal で扱う、本不変条件の副作用にはしない)。`source_ref IS NULL` の手動 / source-less enqueue (`InboxService.enqueue` / workspace front-matter 無記載) は自然キーを持たず partial index 対象外で one-row-per-event を保つ。これは §責務 4 の `SourceObserved` を `sources` projection が `(connector_name, external_id)` で冪等化するのと**対称**で、append-only な event log から「再観測しても 1 source = 1 inbox 行」を両 projection で成立させる。実装は `src/opshub/projections/inbox.py` + migration `0031_add_inbox_items_source_ref_unique_index`
 
 Connector の **禁止事項**:
 
@@ -226,7 +228,7 @@ fallback_window_days = 30  # default 30; 0 = disable fallback (非推奨)
 
 - **Graph delta query の TTL 失効を構造的に吸収** — Microsoft Graph の delta link は documented TTL (公式は 30 日前後だが実値は変動) を持ち、long-tail で失効する。失効を手当てしないと operator が sync を再起動するまで「Teams chat が取り込まれない」状態が継続する
 - **fallback で抜けを最小化** — 直近 N 日 full-pass で「失効中に発生したメッセージ」を最大限拾い直す
-- **重複は append-only で吸収** — SourceObserved の dedup は projection 側で `external_id` (vendor message id) によって行われるため、fallback で同 message が再 append されても projection 側で 1 row に収束する (本 ADR §責務 4 と整合)
+- **重複は append-only で吸収** — SourceObserved の dedup は projection 側で `external_id` (vendor message id) によって行われるため、fallback で同 message が再 append されても projection 側で 1 row に収束する。対で append される `ItemEnqueued` も `source_ref` 冪等 (§不変条件 7、issue #522) で inbox 側 1 行へ収束するため、fallback の再 append は inbox を二重化しない (本 ADR §責務 4 / 不変条件 7 と整合)
 - **fallback_window_days 上書きで運用調整** — 1 年以上の長期 outage 後の re-onboarding 等で `fallback_window_days = 365` 等の一時設定が可能
 
 本契約 §(c) は Graph delta query を持つ全 connector (Phase 7 ms365 outlook / onedrive / Phase 11 teams) に適用される。Phase 7 既存 connector への適用は Phase 11 で **forward-compat** に追加 (既存 cursor 値は opaque string として扱われ、TTL 失効を検知した時点で fallback が起動する、breaking change なし)。
@@ -320,7 +322,7 @@ fallback_window_days = 30  # default 30; 0 = disable fallback (非推奨)
 
 - **Drive API `changes.list` の token 失効を構造的に吸収** — Drive API の start page token は documented TTL (公式は 30 日前後、実値は変動) を持ち、long-tail で失効する。失効を手当てしないと operator が sync を再起動するまで「Google Workspace 文書が取り込まれない」状態が継続する
 - **Phase 11 改訂 (c) と完全同型** — Microsoft Graph delta query と Drive `changes.list` は別 API だが cursor 戦略 (opaque token + TTL + full-pass fallback) は構造的に同型。Phase 11 改訂 (c) の cursor 運用を Google Workspace にもそのまま適用することで operator のメンタルモデルを 1 つに保つ
-- **重複は append-only で吸収** — SourceObserved の dedup は projection 側で `external_id` (Drive file id) によって行われるため、fallback で同 file が再 append されても projection 側で 1 row に収束する (本 ADR §責務 4 と整合)
+- **重複は append-only で吸収** — SourceObserved の dedup は projection 側で `external_id` (Drive file id) によって行われるため、fallback で同 file が再 append されても projection 側で 1 row に収束する。対で append される `ItemEnqueued` も `source_ref` 冪等 (§不変条件 7、issue #522) で inbox 側 1 行へ収束するため、fallback の再 append は inbox を二重化しない (本 ADR §責務 4 / 不変条件 7 と整合)
 - **fallback_window_days 上書きで運用調整** — 1 年以上の長期 outage 後の re-onboarding 等で `fallback_window_days = 365` 等の一時設定が可能
 
 本契約 §(g) は Drive API `changes.list` を持つ全 connector (Phase 13 google_workspace、将来追加され得る Google Drive 系 connector) に適用される。
