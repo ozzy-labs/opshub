@@ -14,6 +14,13 @@ dependency direction).
 from opshub.services.agent_run_service import AgentRunRow, AgentRunService
 from opshub.services.auto_embed_hook import AutoEmbedHook
 from opshub.services.briefings import Briefing, BriefingService
+from opshub.services.catchup import (
+    CatchupCommitment,
+    CatchupDemand,
+    CatchupDigest,
+    CatchupService,
+    CatchupSource,
+)
 from opshub.services.commitments import (
     Commitment,
     CommitmentScanService,
@@ -53,6 +60,11 @@ __all__ = [
     "AutoEmbedHook",
     "Briefing",
     "BriefingService",
+    "CatchupCommitment",
+    "CatchupDemand",
+    "CatchupDigest",
+    "CatchupService",
+    "CatchupSource",
     "Commitment",
     "CommitmentScanService",
     "DecisionService",

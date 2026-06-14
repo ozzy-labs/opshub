@@ -52,6 +52,9 @@ from tools.skill_scan import parse_frontmatter, scan_skill_file
 # skills (``inbox-triage`` / ``source-extract`` /
 # ``meeting-followup``) that all route through ``propose.generate``
 # (with mode dispatch) + ``propose.apply`` (ADR-0016 改訂 §決定 (l)(b)).
+#
+# Phase 25-E (epic #566) adds ``catchup`` — the seen-marker-rooted "what
+# changed since I last looked?" read skill (pair of ``personal-brief``).
 _REQUIRED_SKILLS: tuple[str, ...] = (
     "personal-brief",
     "next-actions",
@@ -63,6 +66,7 @@ _REQUIRED_SKILLS: tuple[str, ...] = (
     "inbox-triage",
     "source-extract",
     "meeting-followup",
+    "catchup",
 )
 
 # Phase 12 H4 HITL write skills — the three new skills introduced in

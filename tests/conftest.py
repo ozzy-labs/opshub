@@ -23,7 +23,7 @@ mirror never leaks into commits, and the directory is materially
 distinct from the (forbidden) hand-edited ``src/opshub/skills/``
 that :mod:`tests.unit.skills.test_core_boundary` already pins.
 
-Phase 16-C (#384) — ``opshub init`` now writes the 14 assistant skills
+Phase 16-C (#384) — ``opshub init`` now writes the 15 assistant skills
 to ``~/.claude/skills/`` and ``~/.agents/skills/`` by default
 (non-interactive default = install per ADR-0029 §決定 (d), as
 explained in :func:`opshub.cli.init._should_install_skills`).
@@ -60,7 +60,7 @@ def _mirror_assistant_skill_bundle() -> None:  # pyright: ignore[reportUnusedFun
     file left over from a previous ``uv build``) cannot make the test
     suite false-green. The mirror is destructive on purpose:
     :func:`shutil.rmtree` followed by :func:`shutil.copytree` is
-    cheap for the ~110 KB / 14-file payload and keeps the semantics
+    cheap for the ~110 KB / 15-file payload and keeps the semantics
     crystal clear ("after this fixture runs, ``_skills/`` is byte-equal
     to ``docs/skills/``").
     """
@@ -87,7 +87,7 @@ def _isolate_home_for_skill_install(  # pyright: ignore[reportUnusedFunction]
 ) -> None:
     """Redirect ``HOME`` / ``USERPROFILE`` to a per-test sandbox.
 
-    Phase 16-C (#384) wired ``opshub init`` to also install the 14
+    Phase 16-C (#384) wired ``opshub init`` to also install the 15
     assistant skills via
     :func:`opshub.cli.init._should_install_skills` (non-interactive
     default = install, per ADR-0029 §決定 (d)). The wide swath of
