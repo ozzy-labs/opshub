@@ -25,6 +25,11 @@ one-way dependency rule in ADR-0004).
 from opshub.projections.agent_runs import AgentRunsProjection, agent_runs_table
 from opshub.projections.base import Projection
 from opshub.projections.briefings import BriefingsProjection, briefings_table
+from opshub.projections.commitment_scan_cursor import (
+    CommitmentScanCursorProjection,
+    commitment_scan_cursor_table,
+)
+from opshub.projections.commitments import CommitmentsProjection, commitments_table
 from opshub.projections.connector_cursors import (
     ConnectorCursorsProjection,
     connector_cursors_table,
@@ -58,6 +63,8 @@ __all__ = [
     "LINK_TYPES_MVP",
     "AgentRunsProjection",
     "BriefingsProjection",
+    "CommitmentScanCursorProjection",
+    "CommitmentsProjection",
     "ConnectorCursorsProjection",
     "DecisionsProjection",
     "HandoffsProjection",
@@ -76,6 +83,8 @@ __all__ = [
     "agent_runs_table",
     "all_projections",
     "briefings_table",
+    "commitment_scan_cursor_table",
+    "commitments_table",
     "connector_cursors_table",
     "decisions_table",
     "handoffs_table",

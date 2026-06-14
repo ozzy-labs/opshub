@@ -18,6 +18,8 @@ from __future__ import annotations
 from opshub.projections.agent_runs import AgentRunsProjection
 from opshub.projections.base import Projection
 from opshub.projections.briefings import BriefingsProjection
+from opshub.projections.commitment_scan_cursor import CommitmentScanCursorProjection
+from opshub.projections.commitments import CommitmentsProjection
 from opshub.projections.connector_cursors import ConnectorCursorsProjection
 from opshub.projections.decisions import DecisionsProjection
 from opshub.projections.handoffs import HandoffsProjection
@@ -63,6 +65,16 @@ def all_projections() -> list[Projection]:
         # correctness — persons is listed first for readability.
         PersonsProjection(),
         PersonIdentitiesProjection(),
+        # Phase 25-C (ADR-0042): commitment ledger. ``CommitmentsProjection``
+        # reads no other projection's table at apply time (the
+        # ``source_ref`` is a logical join, not an FK), so its order
+        # relative to ``sources`` / ``persons`` is immaterial for
+        # correctness — listed after them for readability since the scan
+        # *service* depends on both. ``CommitmentScanCursorProjection`` owns
+        # the singleton scan checkpoint (symmetric with
+        # ``ConnectorCursorsProjection``).
+        CommitmentsProjection(),
+        CommitmentScanCursorProjection(),
         # Phase 18-B (ADR-0033): Slack mention / DM demand digest.
         # Consumes existing ``SourceObserved`` events (connector_name =
         # "slack") — no new fetcher / mapper / event. Registered last

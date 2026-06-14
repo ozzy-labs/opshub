@@ -41,6 +41,7 @@ from opshub.cli.agent import agent_app
 from opshub.cli.box import box_app
 from opshub.cli.box_drive import box_drive_app
 from opshub.cli.brief import register as register_brief
+from opshub.cli.commitment import commitment_app
 from opshub.cli.connectors import connectors_app
 from opshub.cli.decision import decision_app
 from opshub.cli.embedder import embedder_app
@@ -116,6 +117,8 @@ app.add_typer(propose_app)
 app.add_typer(link_app)
 app.add_typer(graph_app)
 app.add_typer(person_app)
+# Phase 25-C (ADR-0042): two-way commitment ledger (旗艦 of 秘書化 v1).
+app.add_typer(commitment_app)
 app.add_typer(mcp_app)
 app.add_typer(skills_app)
 register_recall(app)
