@@ -1102,31 +1102,23 @@ def build_tool_specs(
             title="Summarise the 'since last seen' diff",
             description=(
                 "Summarise everything since the operator last caught up — new"
-                " sources, overdue commitments (ADR-0042) and unhandled Slack"
-                " demand — priority-ordered (Phase 25-E, ADR-0015 応用)."
-                " Read-only over local SQLite. The surface is registered in"
-                " Phase 25-D; the concrete digest body lands in Phase 25-E"
-                " (#570) once the seen-marker projection exists, so an"
-                " invocation before then returns a clean"
-                " 'not yet implemented' error."
+                " sources, overdue/open commitments (ADR-0042) and unhandled"
+                " Slack demand — priority-ordered (Phase 25-E, ADR-0015 応用)."
+                " Read-only over local SQLite: the diff is bounded at the"
+                " stored seen-marker but this tool does NOT advance it (a"
+                " repeated call returns the same digest). Advancing"
+                " 'ここまで見た' is an explicit write via the ``opshub"
+                " catchup`` CLI."
             ),
             input_schema={
                 "type": "object",
                 "properties": {
-                    "since_last_seen": {
-                        "type": "boolean",
-                        "default": True,
-                        "description": (
-                            "Bound the diff at the stored seen-marker (the last"
-                            " catchup). When ``false`` the digest covers the"
-                            " whole window the handler chooses (Phase 25-E)."
-                        ),
-                    },
                     "limit": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 200,
                         "default": 50,
+                        "description": "Per-section cap on the returned items.",
                     },
                 },
                 "additionalProperties": False,

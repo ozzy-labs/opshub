@@ -246,16 +246,34 @@ async def test_person_list_is_idempotent_across_calls(initialised_env: Path) -> 
     assert second["total"] == 1
 
 
-# ---- catchup (stub until Phase 25-E) --------------------------------------
+# ---- catchup --------------------------------------------------------------
 
 
-async def test_catchup_handler_is_not_yet_implemented(initialised_env: Path) -> None:
+async def test_catchup_handler_returns_digest(initialised_env: Path) -> None:
+    # Empty DB: a clean digest, not the old "not implemented" error.
     handler = build_catchup_handler(_engine(initialised_env))
-    with pytest.raises(OpsHubError) as excinfo:
-        await handler({})
-    # The error must name the next sub-issue so an operator who calls it
-    # early gets a clear signal rather than a misleading empty digest.
-    assert "25-E" in str(excinfo.value) or "#570" in str(excinfo.value)
+    empty = _parse(await handler({}))
+    assert empty["new_sources_total"] == 0
+    assert empty["open_commitments_total"] == 0
+    assert empty["new_demand_total"] == 0
+    assert empty["since"] is None
+
+    # Seeded source surfaces in the diff.
+    _seed_source(initialised_env, connector="github", external_id="7", handle="u", display="U")
+    payload = _parse(await handler({}))
+    assert payload["new_sources_total"] == 1
+
+
+async def test_catchup_mcp_handler_does_not_advance_marker(initialised_env: Path) -> None:
+    # The tool is read-classified: previewing the diff must NOT move the
+    # seen marker, so repeated calls are idempotent (advancing is the
+    # ``opshub catchup`` CLI's job, a write).
+    _seed_source(initialised_env, connector="github", external_id="7", handle="u", display="U")
+    handler = build_catchup_handler(_engine(initialised_env))
+    first = _parse(await handler({}))
+    second = _parse(await handler({}))
+    assert first["advanced_to"] is None
+    assert second == first
 
 
 # ---- commitment.resolve / dismiss -----------------------------------------

@@ -410,3 +410,60 @@ def _is_overdue(due: str | None, as_of_iso: str) -> bool:
     if not (head[:4].isdigit() and head[5:7].isdigit() and head[8:10].isdigit()):
         return False
     return head < as_of_iso
+
+
+def digest_to_dict(digest: CatchupDigest) -> dict[str, object]:
+    """Render a :class:`CatchupDigest` to a JSON-serialisable dict.
+
+    Single source of truth for the catchup wire shape — both the
+    ``opshub catchup --format json`` CLI and the MCP ``catchup`` read tool
+    serialise through here so the two surfaces never drift (the kind of
+    cross-surface gap the parallel Phase 25-D / 25-E split produced).
+    """
+
+    def _iso(value: datetime | None) -> str | None:
+        return value.isoformat() if value is not None else None
+
+    return {
+        "since": _iso(digest.since),
+        "advanced_to": _iso(digest.advanced_to),
+        "new_sources_total": digest.new_sources_total,
+        "new_sources": [
+            {
+                "id": s.id,
+                "connector_name": s.connector_name,
+                "source_type": s.source_type,
+                "title": s.title,
+                "url": s.url,
+                "observed_at": _iso(s.observed_at),
+            }
+            for s in digest.new_sources
+        ],
+        "open_commitments_total": digest.open_commitments_total,
+        "overdue_commitments_total": digest.overdue_commitments_total,
+        "open_commitments": [
+            {
+                "id": c.id,
+                "direction": c.direction,
+                "counterparty": c.counterparty,
+                "due": c.due,
+                "text": c.text,
+                "overdue": c.overdue,
+            }
+            for c in digest.open_commitments
+        ],
+        "new_demand_total": digest.new_demand_total,
+        "new_demand": [
+            {
+                "team_id": d.team_id,
+                "channel_id": d.channel_id,
+                "channel_name": d.channel_name,
+                "demand_kind": d.demand_kind,
+                "last_demand_user_id": d.last_demand_user_id,
+                "last_demand_excerpt": d.last_demand_excerpt,
+                "last_demand_permalink": d.last_demand_permalink,
+                "last_demand_at": _iso(d.last_demand_at),
+            }
+            for d in digest.new_demand
+        ],
+    }
