@@ -533,6 +533,15 @@ def test_h4_propose_apply_annotation_is_not_read_only() -> None:
         "slack.demand.list",
         # Phase 21-D (ADR-0037 §決定 (e) + ADR-0022 改訂): browser fetch.
         "browser.fetch",
+        # Phase 25-D (epic #566, ADR-0042 / ADR-0043): 秘書化 v1 surface.
+        "commitment.list",
+        "person.list",
+        "catchup",
+        "commitment.scan",
+        "commitment.resolve",
+        "commitment.dismiss",
+        "person.merge",
+        "person.split",
     )
     handlers: dict[str, object] = dict.fromkeys(handler_names, _noop)
 
@@ -594,6 +603,15 @@ def test_h4_propose_generate_schema_includes_mode_enum() -> None:
         "slack.demand.list",
         # Phase 21-D (ADR-0037 §決定 (e) + ADR-0022 改訂): browser fetch.
         "browser.fetch",
+        # Phase 25-D (epic #566, ADR-0042 / ADR-0043): 秘書化 v1 surface.
+        "commitment.list",
+        "person.list",
+        "catchup",
+        "commitment.scan",
+        "commitment.resolve",
+        "commitment.dismiss",
+        "person.merge",
+        "person.split",
     )
     handlers: dict[str, object] = dict.fromkeys(handler_names, _noop)
 

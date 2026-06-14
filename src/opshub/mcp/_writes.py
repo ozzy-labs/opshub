@@ -38,8 +38,13 @@ if TYPE_CHECKING:
 
 __all__ = [
     "build_browser_fetch_handler",
+    "build_commitment_dismiss_handler",
+    "build_commitment_resolve_handler",
+    "build_commitment_scan_handler",
     "build_connector_sync_handler",
     "build_inbox_add_handler",
+    "build_person_merge_handler",
+    "build_person_split_handler",
     "build_propose_apply_handler",
     "build_propose_generate_handler",
     "build_task_create_handler",
@@ -650,6 +655,204 @@ def build_browser_fetch_handler(engine: Engine) -> ToolHandler:
                 # projection. The host should run the ``web`` connector
                 # for durable ingestion (ADR-0037 §決定 (e)).
                 "persisted": False,
+            }
+        )
+
+    return handler
+
+
+# --------------------------------------------------------------- commitment.scan
+
+
+def build_commitment_scan_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``commitment.scan`` (Phase 25-D).
+
+    Open-world HITL write (ADR-0042). Funnels through
+    :class:`~opshub.services.commitments.CommitmentScanService` — the same
+    path as ``opshub commitment scan`` — so the LLM extraction, the
+    durable ``CommitmentExtracted`` events, and the bracketed scan cursor
+    all behave identically to the CLI. The actor is stamped
+    ``mcp:commitment.scan`` so the event log records the boundary.
+
+    ``[llm] backend = "disabled"`` surfaces as a :class:`ConfigError`
+    (the ``NoOpLLMClient`` raises inside ``scan``) which the server
+    wrapper renders as an MCP ``isError`` response. Credentials are never
+    accepted as arguments — the LLM client resolves its key from the
+    keyring inside opshub.
+
+    ``engine`` is accepted for symmetry; ``build_commitment_scan_service``
+    owns its own engine + backend resolution.
+    """
+    _ = engine
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from opshub.cli._wiring import build_commitment_scan_service
+
+        max_sources: int = int(arguments.get("max_sources", 200))
+
+        service = build_commitment_scan_service(actor="mcp:commitment.scan")
+        summary = service.scan(max_sources=max_sources)
+        return _json_dump(
+            {
+                "ok": True,
+                "sources_scanned": summary.sources_scanned,
+                "commitments_extracted": summary.commitments_extracted,
+                "cursor_value": summary.cursor_value,
+            }
+        )
+
+    return handler
+
+
+# ------------------------------------------------------------ commitment.resolve
+
+
+def build_commitment_resolve_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``commitment.resolve``.
+
+    Phase 25-D (ADR-0042). Operator-driven state transition over local
+    SQLite only — no LLM, no network. Funnels through
+    :meth:`~opshub.services.commitments.CommitmentScanService.resolve`
+    (actor ``mcp:commitment.resolve``), which fail-fasts (``OpsHubError``)
+    when the commitment is missing or already resolved; the server wrapper
+    renders that as an MCP ``isError`` response.
+
+    ``engine`` is accepted for symmetry; the service builder owns its own
+    engine resolution.
+    """
+    _ = engine
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from opshub.cli._wiring import build_commitment_scan_service
+
+        commitment_id: str = arguments["commitment_id"]
+
+        service = build_commitment_scan_service(actor="mcp:commitment.resolve")
+        service.resolve(commitment_id)
+        return _json_dump(
+            {
+                "ok": True,
+                "commitment_id": commitment_id,
+                "state": "resolved",
+            }
+        )
+
+    return handler
+
+
+# ------------------------------------------------------------ commitment.dismiss
+
+
+def build_commitment_dismiss_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``commitment.dismiss``.
+
+    Phase 25-D (ADR-0042). Operator-driven state transition (local SQLite
+    only) marking a commitment a false positive, with an optional
+    free-form ``reason`` for the audit log. Funnels through
+    :meth:`~opshub.services.commitments.CommitmentScanService.dismiss`
+    (actor ``mcp:commitment.dismiss``), which fail-fasts when the
+    commitment is missing or already dismissed.
+
+    ``engine`` is accepted for symmetry; the service builder owns its own
+    engine resolution.
+    """
+    _ = engine
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from opshub.cli._wiring import build_commitment_scan_service
+
+        commitment_id: str = arguments["commitment_id"]
+        reason: str | None = arguments.get("reason")
+
+        service = build_commitment_scan_service(actor="mcp:commitment.dismiss")
+        service.dismiss(commitment_id, reason=reason)
+        return _json_dump(
+            {
+                "ok": True,
+                "commitment_id": commitment_id,
+                "state": "dismissed",
+            }
+        )
+
+    return handler
+
+
+# ----------------------------------------------------------------- person.merge
+
+
+def build_person_merge_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``person.merge`` (Phase 25-D).
+
+    Operator-driven HITL merge (ADR-0043, local SQLite only). Funnels
+    through :meth:`~opshub.services.persons.PersonResolutionService.merge`
+    (actor ``mcp:person.merge``); the lexicographically-smaller id
+    survives so the result is deterministic regardless of argument order.
+    Raises (``ValidationError`` / ``NotFoundError``, both ``OpsHubError``
+    subclasses) when the two ids are equal or either person is missing;
+    the server wrapper renders that as an MCP ``isError`` response.
+
+    ``engine`` is accepted for symmetry; ``build_person_service`` owns its
+    own engine resolution.
+    """
+    _ = engine
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from opshub.cli._wiring import build_person_service
+
+        person_a: str = arguments["person_a"]
+        person_b: str = arguments["person_b"]
+
+        service = build_person_service(actor="mcp:person.merge")
+        survivor = service.merge(person_a, person_b)
+        return _json_dump(
+            {
+                "ok": True,
+                "survivor_id": survivor,
+                "merged_a": person_a,
+                "merged_b": person_b,
+            }
+        )
+
+    return handler
+
+
+# ----------------------------------------------------------------- person.split
+
+
+def build_person_split_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``person.split`` (Phase 25-D).
+
+    Operator-driven HITL split (ADR-0043, local SQLite only) detaching one
+    ``(connector, handle)`` identity into a freshly-minted person, undoing
+    an over-eager merge. Funnels through
+    :meth:`~opshub.services.persons.PersonResolutionService.split` (actor
+    ``mcp:person.split``); raises ``NotFoundError`` when the identity is
+    not currently bound.
+
+    Unlike the ``opshub person split`` CLI (which takes a single
+    ``<connector>:<handle>`` argument and parses the colon), the MCP
+    schema takes ``connector`` + ``handle`` as separate fields so an email
+    handle embedding a colon never needs disambiguation at the boundary.
+
+    ``engine`` is accepted for symmetry; ``build_person_service`` owns its
+    own engine resolution.
+    """
+    _ = engine
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from opshub.cli._wiring import build_person_service
+
+        connector: str = arguments["connector"]
+        handle: str = arguments["handle"]
+
+        service = build_person_service(actor="mcp:person.split")
+        new_id = service.split(connector, handle)
+        return _json_dump(
+            {
+                "ok": True,
+                "new_person_id": new_id,
+                "connector": connector,
+                "handle": handle,
             }
         )
 

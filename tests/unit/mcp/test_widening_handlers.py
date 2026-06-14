@@ -346,6 +346,18 @@ def specs() -> list[Any]:
         # KeyError; its dedicated handler / policy pins live in
         # ``test_browser_fetch_handler`` / ``test_registry_policy``.
         "browser.fetch",
+        # Phase 25-D (epic #566, ADR-0042 / ADR-0043): 秘書化 v1 surface is
+        # likewise materialised here so ``build_tool_specs`` does not
+        # KeyError; its dedicated handler / policy pins live in
+        # ``test_phase25_handlers`` / ``test_registry_policy``.
+        "commitment.list",
+        "person.list",
+        "catchup",
+        "commitment.scan",
+        "commitment.resolve",
+        "commitment.dismiss",
+        "person.merge",
+        "person.split",
     )
     handlers = {name: _stub_handler() for name in tool_names}
     return build_tool_specs(handlers=handlers)

@@ -437,14 +437,18 @@ def test_phase10_assistant_lifecycle(
         specs_by_name = {spec.name: spec for spec in specs}
 
         # Sanity: the Phase 10 C2 baseline + Step 1 widening + Phase 12
-        # H1 widening + Phase 18-C widening + Phase 21-D widening
-        # advertises 19 tools (13 read, 6 write). A regression that drops
-        # one would surface here. Phase 12 H1 (ADR-0022 改訂) added
-        # ``search`` (FTS5 read) and ``propose.apply`` (HITL write,
-        # idempotent). Phase 18-C (ADR-0033 §決定 (c)) added
+        # H1 widening + Phase 18-C widening + Phase 21-D widening +
+        # Phase 25-D widening advertises 27 tools (16 read, 11 write). A
+        # regression that drops one would surface here. Phase 12 H1
+        # (ADR-0022 改訂) added ``search`` (FTS5 read) and ``propose.apply``
+        # (HITL write, idempotent). Phase 18-C (ADR-0033 §決定 (c)) added
         # ``slack.demand.list`` (read). Phase 21-D (ADR-0037 §決定 (e) +
         # ADR-0022 改訂) added ``browser.fetch`` (write, network egress,
-        # no persist).
+        # no persist). Phase 25-D (epic #566, ADR-0042 / ADR-0043) added
+        # the 秘書化 v1 surface: read +3 (``commitment.list`` /
+        # ``person.list`` / ``catchup``) + write +5 (``commitment.scan`` /
+        # ``commitment.resolve`` / ``commitment.dismiss`` /
+        # ``person.merge`` / ``person.split``).
         assert set(specs_by_name) == {
             # Phase 10 C2 baseline.
             "recall.search",
@@ -471,6 +475,15 @@ def test_phase10_assistant_lifecycle(
             "slack.demand.list",
             # Phase 21-D widening (ADR-0037 §決定 (e) + ADR-0022 改訂).
             "browser.fetch",
+            # Phase 25-D widening (epic #566, ADR-0042 / ADR-0043).
+            "commitment.list",
+            "person.list",
+            "catchup",
+            "commitment.scan",
+            "commitment.resolve",
+            "commitment.dismiss",
+            "person.merge",
+            "person.split",
         }
 
         # ---- 4. personal-brief script (read-only tool calls) --------------

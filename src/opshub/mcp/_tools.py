@@ -41,12 +41,15 @@ if TYPE_CHECKING:
 
 __all__ = [
     "build_brief_handler",
+    "build_catchup_handler",
+    "build_commitment_list_handler",
     "build_decision_list_handler",
     "build_embeddings_find_duplicates_handler",
     "build_graph_expand_handler",
     "build_graph_related_handler",
     "build_graph_trace_handler",
     "build_inbox_list_handler",
+    "build_person_list_handler",
     "build_recall_search_handler",
     "build_search_handler",
     "build_slack_demand_list_handler",
@@ -1008,6 +1011,165 @@ def build_embeddings_find_duplicates_handler(engine: Engine) -> ToolHandler:
                 ],
                 **_pagination_hint(item_count=len(pairs), limit=limit),
             }
+        )
+
+    return handler
+
+
+# -------------------------------------------------------------- commitment.list
+
+
+def build_commitment_list_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``commitment.list``.
+
+    Phase 25-D (epic #566, ADR-0042). Reads the two-way commitment
+    ledger via :class:`~opshub.services.commitments.CommitmentScanService`
+    (the read-only ``list_commitments`` path — **no LLM call**, ADR-0042
+    §閲覧 LLM 不要). The skills (``next-actions`` / ``personal-brief``)
+    use ``direction=owed_to_me`` + ``state=open`` to surface the
+    waiting-on-others / overdue backlog as a priority signal.
+
+    ``due`` is the free-form text the model read (e.g. "金曜まで" or
+    "2026-06-20"); it is **not** a structured date, so there is no
+    ``due_before`` filter argument — a lexicographic comparison over
+    free-form text would be unreliable. Hosts that need overdue triage
+    read ``due`` and decide per the operator's locale / today.
+
+    ``engine`` is accepted for symmetry; the service builder owns its
+    own engine resolution (so a config change takes effect next call).
+    """
+    _ = engine
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from opshub.cli._wiring import build_commitment_scan_service
+
+        direction: str | None = arguments.get("direction")
+        state: str | None = arguments.get("state")
+        person: str | None = arguments.get("person")
+        limit: int = int(arguments.get("limit", 50))
+
+        # Accept both ``<ulid>`` and ``person:<ulid>`` so a host can pass
+        # a ref straight from a prior ``commitment.list`` / ``person.list``
+        # response (mirrors the ``opshub commitment list --person`` CLI).
+        person_ref: str | None = None
+        if person is not None:
+            person_ref = person if person.startswith("person:") else f"person:{person}"
+
+        service = build_commitment_scan_service()
+        commitments = service.list_commitments(
+            direction=direction,
+            state=state,
+            person=person_ref,
+            limit=limit,
+        )
+        items = [
+            {
+                "id": c.id,
+                "source_id": c.source_id,
+                "source_type": c.source_type,
+                "direction": c.direction,
+                "counterparty": c.counterparty,
+                "due": c.due,
+                "text": _truncate(c.text),
+                "confidence": c.confidence,
+                "state": c.state,
+            }
+            for c in commitments
+        ]
+        return _json_dump(
+            {
+                "items": items,
+                "total": len(items),
+                **_pagination_hint(item_count=len(items), limit=limit),
+            }
+        )
+
+    return handler
+
+
+# ------------------------------------------------------------------ person.list
+
+
+def build_person_list_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``person.list``.
+
+    Phase 25-D (epic #566, ADR-0043). Resolves any not-yet-bound author
+    handles into persons (incremental + idempotent, ADR-0043) and lists
+    the resolved person graph via
+    :class:`~opshub.services.persons.PersonResolutionService`. Mirrors
+    ``opshub person list`` (which resolves before listing) — re-running
+    binds nothing new, so the call is safe to repeat. No LLM round-trip.
+
+    ``engine`` is accepted for symmetry; ``build_person_service`` owns
+    its own engine resolution.
+    """
+    _ = engine
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from opshub.cli._wiring import build_person_service
+
+        limit: int = int(arguments.get("limit", 50))
+
+        service = build_person_service(actor="mcp:person.list")
+        # Resolve first (binds unbound handles) then list — the same
+        # order as ``opshub person list``. ``resolve`` is idempotent.
+        service.resolve()
+        persons = service.list_persons(limit=limit)
+        items = [
+            {
+                "id": p.id,
+                "display_name": _truncate(p.display_name),
+                "is_operator": p.is_operator,
+                "identities": [
+                    {
+                        "connector": i.connector,
+                        "handle": i.handle,
+                        "display": _truncate(i.display) if i.display else None,
+                        "confidence": i.confidence,
+                    }
+                    for i in p.identities
+                ],
+            }
+            for p in persons
+        ]
+        return _json_dump(
+            {
+                "items": items,
+                "total": len(items),
+                **_pagination_hint(item_count=len(items), limit=limit),
+            }
+        )
+
+    return handler
+
+
+# ---------------------------------------------------------------------- catchup
+
+
+def build_catchup_handler(engine: Engine) -> ToolHandler:
+    """Return the handler bound to ``engine`` for ``catchup``.
+
+    Phase 25-D registers the ``catchup`` read tool on the MCP surface so
+    the count is stable for the assistant skill that lands in 25-E, but
+    the concrete "前回見て以降" diff digest depends on the seen-marker
+    projection + ``opshub catchup`` machinery that Phase 25-E (#570)
+    builds. Until that lands, an invocation fails loud with a clean
+    :class:`~opshub.core.errors.OpsHubError` (rendered through the MCP
+    ``isError`` path) rather than returning a misleading empty digest.
+    25-E replaces this body with the real seen-marker-aware query.
+
+    ``engine`` is accepted for symmetry with the other read builders.
+    """
+    _ = engine
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from opshub.core.errors import OpsHubError
+
+        _ = arguments
+        raise OpsHubError(
+            "catchup is not implemented yet (Phase 25-E / #570): the MCP"
+            " surface is registered but the seen-marker digest body lands"
+            " in the next sub-issue."
         )
 
     return handler

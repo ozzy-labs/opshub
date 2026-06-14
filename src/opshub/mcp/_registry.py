@@ -82,6 +82,19 @@ class ReadCategory(StrEnum):
     # no Slack API round-trip (the projection consumes already-stored
     # ``SourceObserved`` events).
     SLACK_DEMAND_LIST = "slack.demand.list"
+    # Phase 25-D (epic #566, ADR-0042 / ADR-0043 + ADR-0022 改訂):
+    # 秘書化 v1 read surface. ``commitment.list`` reads the two-way
+    # commitment ledger (i-owe / owed-to-me, ADR-0042); ``person.list``
+    # reads the resolved person-axis identity graph (ADR-0043). Both are
+    # pure SQLite reads over the projections their Phase 25-B/25-C
+    # services materialise — **no LLM call** (viewing the ledger /
+    # person graph is read-only, ADR-0042 §閲覧 LLM 不要). ``catchup`` is
+    # the read surface for the Phase 25-E "前回見て以降" diff digest; the
+    # registry registers the tool here (25-D) and 25-E (#570) wires the
+    # concrete handler body once the seen-marker projection lands.
+    COMMITMENT_LIST = "commitment.list"
+    PERSON_LIST = "person.list"
+    CATCHUP = "catchup"
 
 
 class WriteCategory(StrEnum):
@@ -142,6 +155,31 @@ class WriteCategory(StrEnum):
     # ReplyDraftApplied + ProposalApplied) only happens on the first
     # call, so the strict "destroys data" semantics do not apply.
     PROPOSE_APPLY = "propose.apply"
+    # Phase 25-D (epic #566, ADR-0042 / ADR-0043 + ADR-0022 改訂):
+    # 秘書化 v1 write surface (all HITL).
+    #
+    # ``commitment.scan`` is the旗艦 LLM extraction pass — it reads
+    # sources observed since the last scan and calls the configured LLM
+    # once per source to mine commitments (ADR-0042). It mints durable
+    # ``CommitmentExtracted`` events and the LLM round-trip leaves the
+    # local box, so it sits with ``connector.sync`` / ``propose.generate``
+    # in the open-world destructive bucket (host prompts the operator;
+    # cost dial held by the operator).
+    #
+    # ``commitment.resolve`` / ``commitment.dismiss`` /
+    # ``person.merge`` / ``person.split`` are operator-driven state
+    # transitions over local SQLite only (no LLM, no network) — they
+    # write durable events but ``open_world`` stays ``false``. They keep
+    # ``destructive=true``: each flips ledger / identity state and the
+    # service layer fail-fasts on a duplicate transition, so a second
+    # call is **not** an observable no-op (unlike ``propose.apply``).
+    # They are deliberately NOT placed in the ``propose.apply``
+    # non-destructive carve-out.
+    COMMITMENT_SCAN = "commitment.scan"
+    COMMITMENT_RESOLVE = "commitment.resolve"
+    COMMITMENT_DISMISS = "commitment.dismiss"
+    PERSON_MERGE = "person.merge"
+    PERSON_SPLIT = "person.split"
 
 
 # Either a read or a write category.
@@ -961,6 +999,143 @@ def build_tool_specs(
             handler=handlers["slack.demand.list"],
         ),
         # ------------------------------------------------------------------
+        # Phase 25-D (epic #566, ADR-0042 / ADR-0043 + ADR-0022 改訂) —
+        # 秘書化 v1 read surface (``commitment.list`` / ``person.list`` /
+        # ``catchup``). All three are read-only over local SQLite — no LLM
+        # call (viewing the ledger / person graph never re-extracts,
+        # ADR-0042 §閲覧 LLM 不要). ``catchup`` is registered here so the
+        # surface count is stable for 25-E; its handler body is wired by
+        # 25-E (#570) once the seen-marker projection lands.
+        # ------------------------------------------------------------------
+        ToolSpec(
+            name="commitment.list",
+            title="List commitment ledger rows",
+            description=(
+                "List rows from the two-way commitment ledger (ADR-0042) the"
+                " ``commitment.scan`` pass mines from already-ingested sources."
+                " Filterable by ``direction`` (``i_owe`` = the operator owes /"
+                " ``owed_to_me`` = waiting on someone else), ``state`` (``open``"
+                " / ``resolved`` / ``dismissed``) and ``person`` (a"
+                " ``person:<id>`` counterparty ref). Newest-first. Each row"
+                " carries ``id`` / ``source_id`` / ``source_type`` /"
+                " ``direction`` / ``counterparty`` / ``due`` (free-form text as"
+                " the model read it) / ``text`` / ``confidence`` / ``state``."
+                " Read-only over local SQLite — no LLM round-trip (viewing the"
+                " ledger never re-extracts)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["i_owe", "owed_to_me"],
+                        "description": (
+                            "Restrict to one direction. ``i_owe`` = commitments"
+                            " the operator made; ``owed_to_me`` = commitments"
+                            " someone else owes the operator (the 督促 candidates)."
+                        ),
+                    },
+                    "state": {
+                        "type": "string",
+                        "enum": ["open", "resolved", "dismissed"],
+                        "description": (
+                            "Restrict to one ledger state. Defaults to all"
+                            " states when omitted (pass ``open`` for the live"
+                            " backlog)."
+                        ),
+                    },
+                    "person": {
+                        "type": "string",
+                        "description": (
+                            "Restrict to a counterparty person ref"
+                            " (``person:<ulid>``; a bare ULID is accepted and"
+                            " prefixed)."
+                        ),
+                        "minLength": 1,
+                        "maxLength": 200,
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "default": 50,
+                    },
+                },
+                "additionalProperties": False,
+            },
+            policy=_policy_for_read(),
+            category=ReadCategory.COMMITMENT_LIST,
+            handler=handlers["commitment.list"],
+        ),
+        ToolSpec(
+            name="person.list",
+            title="List resolved persons",
+            description=(
+                "List the resolved person-axis identity graph (ADR-0043): one"
+                " node per human, bundling the connector-native handles they"
+                " appear under (Slack ``U...`` / email / GitHub login). Each row"
+                " carries ``id`` / ``display_name`` / ``is_operator`` and a"
+                " nested ``identities`` list (``connector`` / ``handle`` /"
+                " ``display`` / ``confidence``). Newest-first. Read-only — the"
+                " handler resolves any not-yet-bound author handles before"
+                " listing (incremental + idempotent, ADR-0043), so it is safe"
+                " to repeat; no LLM round-trip."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "default": 50,
+                    },
+                },
+                "additionalProperties": False,
+            },
+            policy=_policy_for_read(),
+            category=ReadCategory.PERSON_LIST,
+            handler=handlers["person.list"],
+        ),
+        ToolSpec(
+            name="catchup",
+            title="Summarise the 'since last seen' diff",
+            description=(
+                "Summarise everything since the operator last caught up — new"
+                " sources, overdue commitments (ADR-0042) and unhandled Slack"
+                " demand — priority-ordered (Phase 25-E, ADR-0015 応用)."
+                " Read-only over local SQLite. The surface is registered in"
+                " Phase 25-D; the concrete digest body lands in Phase 25-E"
+                " (#570) once the seen-marker projection exists, so an"
+                " invocation before then returns a clean"
+                " 'not yet implemented' error."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "since_last_seen": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": (
+                            "Bound the diff at the stored seen-marker (the last"
+                            " catchup). When ``false`` the digest covers the"
+                            " whole window the handler chooses (Phase 25-E)."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "default": 50,
+                    },
+                },
+                "additionalProperties": False,
+            },
+            policy=_policy_for_read(),
+            category=ReadCategory.CATCHUP,
+            handler=handlers["catchup"],
+        ),
+        # ------------------------------------------------------------------
         # Step 1 widening — HITL-boundary write tool (proposal generation).
         # ProposalGenerated lands on the durable event log; apply still
         # requires operator-driven ``opshub propose apply`` (ADR-0016 §(c)).
@@ -1145,6 +1320,194 @@ def build_tool_specs(
             policy=_policy_for_write(open_world=True),
             category=WriteCategory.BROWSER_FETCH,
             handler=handlers["browser.fetch"],
+        ),
+        # ------------------------------------------------------------------
+        # Phase 25-D (epic #566, ADR-0042 / ADR-0043 + ADR-0022 改訂) —
+        # 秘書化 v1 write surface (all HITL). ``commitment.scan`` is the
+        # open-world LLM extraction pass; the four state-transition tools
+        # (``commitment.resolve`` / ``commitment.dismiss`` /
+        # ``person.merge`` / ``person.split``) flip ledger / identity state
+        # over local SQLite only (closed world, no LLM). None are in the
+        # ``propose.apply`` non-destructive carve-out — each is a real
+        # state mutation the service fail-fasts on duplicates of.
+        # ------------------------------------------------------------------
+        ToolSpec(
+            name="commitment.scan",
+            title="Scan sources for commitments (HITL, LLM)",
+            description=(
+                "Run the旗艦 commitment-extraction pass (ADR-0042): read the"
+                " sources observed since the last scan (the stored"
+                " commitment-scan cursor) and call the configured LLM once per"
+                " source to mine two-way commitments. Mints durable"
+                " ``CommitmentExtracted`` events and advances the cursor on"
+                " success. Calls the LLM (open world / cost) and writes durable"
+                " state, so the host should confirm with the operator before"
+                " invoking. Requires an LLM backend — ``[llm] backend ="
+                " disabled`` surfaces a clean ConfigError. ``max_sources`` caps"
+                " the per-call cost (default 200); a large backlog drains"
+                " across several scans (the operator holds the dial)."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "max_sources": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 1000,
+                        "default": 200,
+                        "description": (
+                            "Cap on the number of sources read in this scan."
+                            " The next scan resumes from the watermark."
+                        ),
+                    },
+                },
+                "additionalProperties": False,
+            },
+            # LLM round-trip → open world; durable ``CommitmentExtracted``
+            # events make it a destructive write (host prompts the operator).
+            policy=_policy_for_write(open_world=True),
+            category=WriteCategory.COMMITMENT_SCAN,
+            handler=handlers["commitment.scan"],
+        ),
+        ToolSpec(
+            name="commitment.resolve",
+            title="Resolve a commitment (HITL)",
+            description=(
+                "Mark commitment ``commitment_id`` done (ADR-0042 §督促境界 —"
+                " the ledger is a read signal; no external nudge is sent)."
+                " Writes a ``CommitmentResolved`` event. Local SQLite only (no"
+                " LLM, no network); host should confirm with the operator"
+                " before invoking. Raises if the commitment is missing or"
+                " already resolved."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "commitment_id": {
+                        "type": "string",
+                        "description": "ULID of the commitment to resolve.",
+                        "minLength": 1,
+                        "maxLength": 200,
+                    },
+                },
+                "required": ["commitment_id"],
+                "additionalProperties": False,
+            },
+            policy=_policy_for_write(open_world=False),
+            category=WriteCategory.COMMITMENT_RESOLVE,
+            handler=handlers["commitment.resolve"],
+        ),
+        ToolSpec(
+            name="commitment.dismiss",
+            title="Dismiss a commitment (HITL)",
+            description=(
+                "Mark commitment ``commitment_id`` a false positive (ADR-0042)."
+                " Writes a ``CommitmentDismissed`` event with an optional"
+                " free-form ``reason`` for the audit log. Local SQLite only (no"
+                " LLM, no network); host should confirm with the operator"
+                " before invoking. Raises if the commitment is missing or"
+                " already dismissed."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "commitment_id": {
+                        "type": "string",
+                        "description": "ULID of the commitment to dismiss.",
+                        "minLength": 1,
+                        "maxLength": 200,
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": (
+                            "Optional free-form note for the audit log (<=1000 chars)."
+                        ),
+                        "maxLength": 1000,
+                    },
+                },
+                "required": ["commitment_id"],
+                "additionalProperties": False,
+            },
+            policy=_policy_for_write(open_world=False),
+            category=WriteCategory.COMMITMENT_DISMISS,
+            handler=handlers["commitment.dismiss"],
+        ),
+        ToolSpec(
+            name="person.merge",
+            title="Merge two persons (HITL)",
+            description=(
+                "Merge persons ``person_a`` + ``person_b`` into one"
+                " (operator HITL, ADR-0043 — display-name similarity is never"
+                " auto-merged). The lexicographically-smaller id survives so"
+                " the result is deterministic regardless of argument order;"
+                " writes an ``IdentityMerged`` event re-parenting the merged"
+                " person's identities onto the survivor. Local SQLite only;"
+                " host should confirm with the operator. Raises if the two ids"
+                " are equal or either person is missing. Returns the survivor"
+                " id."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "person_a": {
+                        "type": "string",
+                        "description": "First person id (ULID).",
+                        "minLength": 1,
+                        "maxLength": 200,
+                    },
+                    "person_b": {
+                        "type": "string",
+                        "description": "Second person id (ULID).",
+                        "minLength": 1,
+                        "maxLength": 200,
+                    },
+                },
+                "required": ["person_a", "person_b"],
+                "additionalProperties": False,
+            },
+            policy=_policy_for_write(open_world=False),
+            category=WriteCategory.PERSON_MERGE,
+            handler=handlers["person.merge"],
+        ),
+        ToolSpec(
+            name="person.split",
+            title="Split an identity into a fresh person (HITL)",
+            description=(
+                "Detach the ``connector`` + ``handle`` identity into a"
+                " freshly-minted person (operator HITL, ADR-0043 — undoes an"
+                " over-eager merge). Writes an ``IdentitySplit`` event"
+                " repointing the identity onto the new person. Local SQLite"
+                " only; host should confirm with the operator. Raises if the"
+                " identity is not currently bound. Returns the new person id."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "connector": {
+                        "type": "string",
+                        "description": (
+                            "Connector label of the identity to detach"
+                            " (e.g. 'slack', 'google_mail')."
+                        ),
+                        "minLength": 1,
+                        "maxLength": 100,
+                    },
+                    "handle": {
+                        "type": "string",
+                        "description": (
+                            "Connector-native handle of the identity to detach"
+                            " (e.g. 'U0123' or 'alice@example.com')."
+                        ),
+                        "minLength": 1,
+                        "maxLength": 320,
+                    },
+                },
+                "required": ["connector", "handle"],
+                "additionalProperties": False,
+            },
+            policy=_policy_for_write(open_world=False),
+            category=WriteCategory.PERSON_SPLIT,
+            handler=handlers["person.split"],
         ),
     ]
     return specs
