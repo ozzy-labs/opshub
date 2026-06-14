@@ -129,5 +129,5 @@ graph 拡張 (task / decision に紐づく source も拾う) は default で常�
 - ADR-0002 (Append-only Event Log、decision immutability)
 - Phase 10 plan §3-D (skill ↔ MCP tool マッピング)
 - Phase 12 plan (`docs/phase-12-plan.md` §3 H3)
-- docs/assistant-agent.md (Skill catalog SSOT、14 skills 責務マップ)
+- docs/assistant-agent.md (Skill catalog SSOT、15 skills 責務マップ)
 - pair: `docs/skills/personal-brief/SKILL.md` (自分向け)
