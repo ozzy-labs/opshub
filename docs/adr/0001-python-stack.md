@@ -303,8 +303,8 @@ not to depend on PyPI.
 ### v0.1.0 — release-please activation (2026-05-18)
 
 release-please (committed in §"配布チャネル" table as the planned release
-automation) is **now active** as of this update. `release-please-config.json`
-+ `.release-please-manifest.json` + `.github/workflows/release-please.yaml`
+automation) is **now active** as of this update. `release-please-config.json`,
+`.release-please-manifest.json`, and `.github/workflows/release-please.yaml`
 land together. Adopted pattern (sibling repo survey):
 
 - **`mcp-server-knowledge`** (closest functional analog: server CLI with
@@ -362,6 +362,10 @@ records `0.1.0`, so release-please treats it as the "previous release"
 and computes v0.2.0+ from commits landed *after* this update. The v0.1.0
 CHANGELOG entry remains the hand-written Phase 1-8 narrative; release-please
 will append v0.2.0+ entries below it without touching v0.1.0.
+
+### 2026-06-14 — 言語選定の再評価 ([ADR-0045](0045-language-reassessment-zero-base-architecture.md))
+
+本 ADR の Python 採用根拠 4 本柱を、Phase 24-25 時点の opshub の実態 (MCP 消費・all-TS 生態系・connector 厚み) で再採点した。結論: **Python の決定自体は維持** (24 phase 稼働・差は僅差・負けは外周のみ) だが、技術フィットを主張した 3/4 (sqlite-vec / Alembic / local embedding) は opshub 自身の設計 (event-sourced の projection 再構築・FTS-first・embedding サイドカー化) で軟化し、**ゼロベースなら TypeScript (Bun) が最適**。§配布チャネル表と §Open Questions は ADR-0045 §(g)(h) が更新する (Homebrew / PyInstaller core-only を drop、npm veneer / 単一バイナリ / Docker 全部入り / MCP registry を追加、移行 trigger を明記)。詳細・硬軟分析・不変条件 (in-process ML を持たない) は ADR-0045 を参照。
 
 ## 関連
 
