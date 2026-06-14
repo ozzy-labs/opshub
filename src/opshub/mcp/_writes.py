@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "build_browser_fetch_handler",
+    "build_catchup_handler",
     "build_commitment_dismiss_handler",
     "build_commitment_resolve_handler",
     "build_commitment_scan_handler",
@@ -855,5 +856,37 @@ def build_person_split_handler(engine: Engine) -> ToolHandler:
                 "handle": handle,
             }
         )
+
+    return handler
+
+
+def build_catchup_handler(engine: Engine) -> ToolHandler:
+    """Return the handler for ``catchup`` (Phase 25-E, epic #566).
+
+    Summarises the "since last seen" diff — new sources, overdue/open
+    commitments (25-C) and unhandled Slack demand (25-B) — by delegating to
+    :class:`~opshub.services.catchup.CatchupService`, then **advances** the
+    seen marker (``advance=True``) so the next catchup resumes from here.
+
+    That marker advance is a state mutation, which is why ``catchup`` is a
+    WriteCategory tool (non-destructive: advisory bookkeeping over local
+    SQLite, no data loss, no network). Advancing on the assistant path is
+    the point — it is what lets the host answer "前回見て以降どうなった"
+    incrementally. ``opshub catchup --no-advance`` is the CLI preview that
+    reads without writing.
+
+    ``engine`` is accepted for symmetry with the other builders; the
+    service resolves its own engine from settings.
+    """
+    _ = engine
+
+    async def handler(arguments: Mapping[str, Any]) -> str:
+        from opshub.cli._wiring import build_catchup_service
+        from opshub.services.catchup import digest_to_dict
+
+        limit = int(arguments.get("limit", 50))
+        service = build_catchup_service(actor="mcp:catchup")
+        digest = service.catchup(advance=True, limit=limit)
+        return _json_dump(digest_to_dict(digest))
 
     return handler

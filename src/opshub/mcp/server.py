@@ -76,7 +76,6 @@ def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
     from opshub.mcp._registry import build_tool_specs
     from opshub.mcp._tools import (
         build_brief_handler,
-        build_catchup_handler,
         build_commitment_list_handler,
         build_decision_list_handler,
         build_embeddings_find_duplicates_handler,
@@ -94,6 +93,7 @@ def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
     )
     from opshub.mcp._writes import (
         build_browser_fetch_handler,
+        build_catchup_handler,
         build_commitment_dismiss_handler,
         build_commitment_resolve_handler,
         build_commitment_scan_handler,

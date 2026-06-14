@@ -11,7 +11,7 @@ opshub は Phase 10 (アシスタントエージェント・プラットフォ�
 opshub 本体が提供するもの:
 
 1. **operational memory (①コア)** — events / projections / connectors / recall / propose / brief / graph
-2. **MCP サーバ (口)** — `opshub mcp serve` (stdio)。エージェント host が ①コアを叩く経路。Phase 12 H1 で `search` (FTS5) と `propose.apply` (HITL idempotent) と既存 4 read tools の physical column ベース時間フィルタを追加し、Phase 18-C で `slack.demand.list` (Slack mention / DM demand digest、ADR-0033) を、Phase 21-D で `browser.fetch` (ad-hoc な Web ページ render、ネットワークに出るため write-category / HITL、ADR-0037 §決定 (e) + ADR-0022 §決定 (g)) を、Phase 25-D で 秘書化 v1 の `commitment.*` / `person.*` / `catchup` (ADR-0042 / ADR-0043 + ADR-0022 §決定 (h)) を追加して計 **27 tools (read 16 + write 11)** を公開
+2. **MCP サーバ (口)** — `opshub mcp serve` (stdio)。エージェント host が ①コアを叩く経路。Phase 12 H1 で `search` (FTS5) と `propose.apply` (HITL idempotent) と既存 4 read tools の physical column ベース時間フィルタを追加し、Phase 18-C で `slack.demand.list` (Slack mention / DM demand digest、ADR-0033) を、Phase 21-D で `browser.fetch` (ad-hoc な Web ページ render、ネットワークに出るため write-category / HITL、ADR-0037 §決定 (e) + ADR-0022 §決定 (g)) を、Phase 25-D で 秘書化 v1 の `commitment.*` / `person.*` / `catchup` (ADR-0042 / ADR-0043 + ADR-0022 §決定 (h)) を追加して計 **27 tools (read 15 + write 12)** を公開
 3. **Agent Skills (手順書)** — SKILL.md 標準。本 doc が catalog する **14 Skill** (Phase 12 H2-H5 で 9 新規 + Phase 12 H1 で rename 2 を含む)。`docs/skills/<name>/SKILL.md` を opshub SSOT、配信機構は Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地)
 4. **skill security scan** — `tools/skill_scan.py` (4 カテゴリ + frontmatter 隠し命令検出)、`tests/unit/skills/test_skill_specs.py` が 15 skills 全てに対して per-skill MCP dispatch pin + scan を実行
 
@@ -134,9 +134,9 @@ generate 時の同一 source open-proposal warning など自動 dedup 対策は�
 
 ## 6. MCP tool 依存マップ
 
-15 skills × 27 MCP tools (read 16 + write 11) のマトリクス。各 skill が呼び出す MCP tool を列挙。✓ = primary 経路、(✓) = 補助経路 (Step 2 以降の optional 呼び出し)。表は読みやすさのため Phase 12 の 14 skill を列に保ち、Phase 25-E の `catchup` 列を末尾に追加する。`browser.fetch` (Phase 21-D、write-category) は 15 skills のいずれからも primary 経路として呼ばれない (操作系 Phase で `research` skill 組込みを再訪、ADR-0037 §Non-goals) ため §6.2 表の最終行で「呼ばれない」を明示する。Phase 25-D の `commitment.*` / `person.*` の write 系 (`commitment.scan` / `resolve` / `dismiss` / `person.merge` / `split`) は operator が CLI / host から直接叩く運用で、15 skills のいずれからも primary 経路として呼ばれない (§6.2 表の最終行で明示)。
+15 skills × 27 MCP tools (read 15 + write 12) のマトリクス。各 skill が呼び出す MCP tool を列挙。✓ = primary 経路、(✓) = 補助経路 (Step 2 以降の optional 呼び出し)。表は読みやすさのため Phase 12 の 14 skill を列に保ち、Phase 25-E の `catchup` 列を末尾に追加する。`browser.fetch` (Phase 21-D、write-category) は 15 skills のいずれからも primary 経路として呼ばれない (操作系 Phase で `research` skill 組込みを再訪、ADR-0037 §Non-goals) ため §6.2 表の最終行で「呼ばれない」を明示する。Phase 25-D の `commitment.*` / `person.*` の write 系 (`commitment.scan` / `resolve` / `dismiss` / `person.merge` / `split`) は operator が CLI / host から直接叩く運用で、15 skills のいずれからも primary 経路として呼ばれない (§6.2 表の最終行で明示)。
 
-### 6.1 Read tools (16)
+### 6.1 Read tools (15)
 
 | MCP tool | personal-brief | next-actions | reply-draft | pr-review | find-document | meeting-prep | research | external-brief | decision-rationale | handoff-draft | announcement-draft | inbox-triage | source-extract | meeting-followup | catchup |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -155,11 +155,12 @@ generate 時の同一 source open-proposal warning など自動 dedup 対策は�
 | `slack.demand.list` (Phase 18-C) | ✓ | ✓ |  |  |  |  |  |  |  |  |  | (✓) |  |  |  |
 | `commitment.list` (Phase 25-D) | ✓ | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `person.list` (Phase 25-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `catchup` (Phase 25-D/E) |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |
 
-`person.list` は 15 skills のいずれからも primary 経路として呼ばれない (Phase 25-D は MCP surface に登録するが、人軸 graph の閲覧は operator が CLI / host から直接叩く運用)。`catchup` は同名 skill の唯一の primary tool。
+`person.list` は 15 skills のいずれからも primary 経路として呼ばれない (Phase 25-D は MCP surface に登録するが、人軸 graph の閲覧は operator が CLI / host から直接叩く運用)。`catchup` tool は §6.2 (write、seen-marker を前進させる non-destructive write) に置く — `catchup` skill の唯一の primary tool。
 
-### 6.2 Write tools (11、HITL)
+### 6.2 Write tools (12)
+
+HITL は per-call 人確認を要する write。`catchup` だけは **non-destructive write** で host 自律呼び出し可 (seen-marker 前進は「catch me up」の consented な結果)。
 
 | MCP tool | personal-brief | next-actions | reply-draft | pr-review | find-document | meeting-prep | research | external-brief | decision-rationale | handoff-draft | announcement-draft | inbox-triage | source-extract | meeting-followup | catchup |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -174,8 +175,9 @@ generate 時の同一 source open-proposal warning など自動 dedup 対策は�
 | `commitment.dismiss` (Phase 25-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `person.merge` (Phase 25-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
 | `person.split` (Phase 25-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `catchup` (Phase 25-D/E、non-destructive) |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |
 
-`inbox.add` と `connector.sync` は 15 skills のいずれからも primary 経路として呼ばれない (host LLM の自律判断で呼ぶ余地は残す)。`embeddings.find_duplicates` も同様 (現状は CLI / operator が直接叩く用途)。`browser.fetch` (Phase 21-D、ADR-0037 §決定 (e)) も 15 skills のいずれからも呼ばれない — ad-hoc な Web ページ render は **ネットワークに egress する write-category tool** (HITL per call、`connector.sync` と同 bucket、`readOnlyHint=false` / `openWorldHint=true`) であり、durable な取り込みは Phase 21-C `web` connector の責務。`research` skill への組込みは操作系 (click / fill / submit) Phase とまとめて再訪する (ADR-0037 §Non-goals、SKILL.md は Phase 21 で不変)。Phase 25-D の `commitment.scan` (旗艦 LLM 抽出、open-world write) / `commitment.resolve` / `commitment.dismiss` / `person.merge` / `person.split` も 15 skills のいずれからも primary 経路として呼ばれない — コミットメント抽出 (`scan`) は operator がコストを握る手動オペレーションで、状態遷移 (`resolve` / `dismiss` / `merge` / `split`) は operator の明示 HITL 操作のため、skill から自動発火させない (ADR-0042 §督促境界 / ADR-0043 §決定 (c))。skill は `commitment.list` / `catchup` の **read 面** だけを利用する。
+`inbox.add` と `connector.sync` は 15 skills のいずれからも primary 経路として呼ばれない (host LLM の自律判断で呼ぶ余地は残す)。`embeddings.find_duplicates` も同様 (現状は CLI / operator が直接叩く用途)。`browser.fetch` (Phase 21-D、ADR-0037 §決定 (e)) も 15 skills のいずれからも呼ばれない — ad-hoc な Web ページ render は **ネットワークに egress する write-category tool** (HITL per call、`connector.sync` と同 bucket、`readOnlyHint=false` / `openWorldHint=true`) であり、durable な取り込みは Phase 21-C `web` connector の責務。`research` skill への組込みは操作系 (click / fill / submit) Phase とまとめて再訪する (ADR-0037 §Non-goals、SKILL.md は Phase 21 で不変)。Phase 25-D の `commitment.scan` (旗艦 LLM 抽出、open-world write) / `commitment.resolve` / `commitment.dismiss` / `person.merge` / `person.split` も 15 skills のいずれからも primary 経路として呼ばれない — コミットメント抽出 (`scan`) は operator がコストを握る手動オペレーションで、状態遷移 (`resolve` / `dismiss` / `merge` / `split`) は operator の明示 HITL 操作のため、skill から自動発火させない (ADR-0042 §督促境界 / ADR-0043 §決定 (c))。`commitment.list` の **read 面** は skill が利用し、`catchup` は同名 skill が利用する **非破壊 write** (seen-marker を前進させるが `destructiveHint=false`、marker 前進は「catch me up」の consented な結果なので host は自律呼び出ししてよい)。
 
 ### 6.3 Phase 11 / Phase 13 / Phase 14 source_type 列挙
 

@@ -35,11 +35,11 @@ from opshub.core.errors import OpsHubError
 from opshub.core.ids import new_ulid
 from opshub.db.engine import create_engine_for_sqlite
 from opshub.mcp._tools import (
-    build_catchup_handler,
     build_commitment_list_handler,
     build_person_list_handler,
 )
 from opshub.mcp._writes import (
+    build_catchup_handler,
     build_commitment_dismiss_handler,
     build_commitment_resolve_handler,
     build_person_merge_handler,
@@ -250,30 +250,24 @@ async def test_person_list_is_idempotent_across_calls(initialised_env: Path) -> 
 
 
 async def test_catchup_handler_returns_digest(initialised_env: Path) -> None:
-    # Empty DB: a clean digest, not the old "not implemented" error.
-    handler = build_catchup_handler(_engine(initialised_env))
-    empty = _parse(await handler({}))
-    assert empty["new_sources_total"] == 0
-    assert empty["open_commitments_total"] == 0
-    assert empty["new_demand_total"] == 0
-    assert empty["since"] is None
-
-    # Seeded source surfaces in the diff.
+    # A seeded source surfaces in the first catchup (since=None → all),
+    # and the handler returns a digest rather than the old stub error.
     _seed_source(initialised_env, connector="github", external_id="7", handle="u", display="U")
+    handler = build_catchup_handler(_engine(initialised_env))
     payload = _parse(await handler({}))
     assert payload["new_sources_total"] == 1
+    assert payload["since"] is None
 
 
-async def test_catchup_mcp_handler_does_not_advance_marker(initialised_env: Path) -> None:
-    # The tool is read-classified: previewing the diff must NOT move the
-    # seen marker, so repeated calls are idempotent (advancing is the
-    # ``opshub catchup`` CLI's job, a write).
-    _seed_source(initialised_env, connector="github", external_id="7", handle="u", display="U")
+async def test_catchup_mcp_handler_advances_marker(initialised_env: Path) -> None:
+    # catchup is a write: it advances the seen marker so the next catchup
+    # resumes from here. ``advanced_to`` is stamped on the first call, and
+    # the second call's ``since`` equals it (the marker moved).
     handler = build_catchup_handler(_engine(initialised_env))
     first = _parse(await handler({}))
+    assert first["advanced_to"] is not None
     second = _parse(await handler({}))
-    assert first["advanced_to"] is None
-    assert second == first
+    assert second["since"] == first["advanced_to"]
 
 
 # ---- commitment.resolve / dismiss -----------------------------------------

@@ -1,6 +1,6 @@
 ---
 name: catchup
-description: '「前回見て以降どうなった」「久しぶりに状況確認」「最後に見てから何が変わった」「差分だけ教えて」「catchup したい」「未読を消化したい」と聞かれたら、opshub MCP の catchup tool を叩いて前回 catchup 以降に積み上がった差分 (新規 source / 期日超過を含む open commitment / 新着 Slack demand) だけを優先度順に要約する。catchup は read 系で、実行すると seen-marker が前進し「ここまで見た」が記録される (次回 catchup はその先の差分だけを返す)。LLM 推論ループは外部ホスト (Claude Code 等) 側、本 skill は手順書のみで実処理を持たない。pair: personal-brief (期間ベースの総覧) に対し、catchup は seen-marker ベースの「前回以降の差分」に特化する。'
+description: '「前回見て以降どうなった」「久しぶりに状況確認」「最後に見てから何が変わった」「差分だけ教えて」「catchup したい」「未読を消化したい」と聞かれたら、opshub MCP の catchup tool を叩いて前回 catchup 以降に積み上がった差分 (新規 source / 期日超過を含む open commitment / 新着 Slack demand) だけを優先度順に要約する。catchup は seen-marker を前進させる非破壊 write tool で、実行すると「ここまで見た」が記録され「ここまで見た」が記録される (次回 catchup はその先の差分だけを返す)。LLM 推論ループは外部ホスト (Claude Code 等) 側、本 skill は手順書のみで実処理を持たない。pair: personal-brief (期間ベースの総覧) に対し、catchup は seen-marker ベースの「前回以降の差分」に特化する。'
 ---
 
 # catchup — 前回見て以降の差分だけを優先度順に返す
@@ -24,7 +24,7 @@ opshub MCP server (`opshub mcp serve`、ADR-0022) 経由で「前回 catchup し
 
 1. ユーザーが「前回見て以降どうなった」「久しぶりに状況確認」「差分だけ教えて」のような表現で問い合わせる
 2. 外部ホスト (Claude Code 等) が本 skill を発火させる
-3. ホストが opshub MCP の `catchup` tool を **read 系として** 1 回呼ぶ
+3. ホストが opshub MCP の `catchup` tool (非破壊 write) を 1 回呼ぶ
 4. 戻り値 (JSON) の 3 セクション (新規 source / open commitment / 新着 Slack demand) を集約し、ユーザー向けに要約する
 5. catchup の実行で seen-marker が前進する (次回 catchup はこの先の差分だけを返す)
 
@@ -89,7 +89,7 @@ input:
 
 ## 自律範囲
 
-- **自律 OK** — `catchup` は read 系 tool (`readOnlyHint=true`、ADR-0022 §(c))。確認なしで呼んでよい。
+- **自律 OK** — `catchup` は非破壊 write tool (`readOnlyHint=false` / `destructiveHint=false`、ADR-0022 §(c))。marker 前進は「catch me up」の consented な結果なので確認なしで呼んでよい。
 - ただし catchup は副作用として **seen-marker を前進させる** (durable state)。これは「次回 catchup の基準点を進める」だけの軽い前進で、external な送信や proposal の apply は伴わない。marker を動かしたくない (差分の二度見をしたい) ときは `advance: false` を指定する。
 - `commitment.resolve` / `commitment.dismiss` 等の状態遷移や `task.create` などの durable write は本 skill では呼ばない (operator の明示操作 / 別 skill の責務)。
 

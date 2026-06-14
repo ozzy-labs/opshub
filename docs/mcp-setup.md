@@ -77,7 +77,7 @@ opshub mcp tools -f json   # JSON form (matches the MCP annotations)
 
 The output reflects the policy-as-data registry in `src/opshub/mcp/_registry.py`. Read tools advertise `readOnlyHint=true`; write tools advertise `readOnlyHint=false` + `destructiveHint=true`. Hosts that honour the hints (Claude Code 等) will auto-approve reads and require human confirmation for writes (ADR-0022 §(c)).
 
-Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1 + Phase 18-C + Phase 21-D + Phase 25-D = **27 tools, 16 read + 11 write**):
+Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1 + Phase 18-C + Phase 21-D + Phase 25-D = **27 tools, 15 read + 12 write**):
 
 | Kind  | Name                          | Purpose                                                          |
 | ----- | ----------------------------- | ---------------------------------------------------------------- |
@@ -96,7 +96,7 @@ Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1 + Phase 18-C
 | read  | `slack.demand.list`           | List Slack `<@self>` mention / DM digest rows (Phase 18-C, ADR-0033) |
 | read  | `commitment.list`             | List two-way commitment ledger rows (`direction` / `state` / `person` filter, no LLM, Phase 25-D, ADR-0042) |
 | read  | `person.list`                 | List resolved person-axis identity graph (idempotent resolve then list, Phase 25-D, ADR-0043) |
-| read  | `catchup`                     | Summarise the "since last seen" diff, priority-ordered (Phase 25-D/E, ADR-0042) |
+| write | `catchup`                     | Summarise the "since last seen" diff, priority-ordered (Phase 25-D/E, ADR-0042) |
 | write | `task.create`                 | Create a new task                                                 |
 | write | `inbox.add`                   | Add an inbox item                                                 |
 | write | `connector.sync`              | Trigger a registered connector's sync (Slack: always all workspaces — ADR-0041 §(f)) |
@@ -124,11 +124,11 @@ Phase 21-D ([ADR-0037 §決定 (e)](adr/0037-browser-read-layer-playwright.md) +
 
 * **`browser.fetch` (write / HITL, Phase 21-D)** — render an `http` / `https` `url` with headless Chromium (the Playwright browser read layer, [ADR-0037](adr/0037-browser-read-layer-playwright.md)) and return the extracted post-render DOM text (200-char snippet, secret-redacted) plus the page `<title>`, `text_chars` (full length), `truncated` (browser core's 500K cap hit) and `persisted: false`. **Classified write-category even though it returns data**: the call **egresses the public network**, which the "read tool = local SQLite only" invariant reserves for the same HITL bucket as `connector.sync` (`readOnlyHint=false` / `destructiveHint=true` / `openWorldHint=true`). Nothing is persisted — durable ingestion is the `web` connector's job (`opshub web sync`). Requires the `browser` extra plus a one-time `playwright install chromium`; a `ConfigError` names the install command when Chromium is missing. The async MCP handler bridges to the sync browser core via `asyncio.to_thread` (Playwright's sync API cannot run inside the asyncio loop, ADR-0037 §決定 (h)). No assistant skill calls it as a primary path yet (the `research`-skill wiring is deferred to the operations phase, ADR-0037 §Non-goals).
 
-Phase 25-D ([ADR-0042](adr/0042-commitment-ledger.md) / [ADR-0043](adr/0043-cross-source-identity-resolution.md) + [ADR-0022 §決定 (h)](adr/0022-mcp-server-surface.md)) added the 秘書化 v1 surface — 3 read + 5 write tools, bringing the surface to **27 tools (16 read + 11 write)**:
+Phase 25-D ([ADR-0042](adr/0042-commitment-ledger.md) / [ADR-0043](adr/0043-cross-source-identity-resolution.md) + [ADR-0022 §決定 (h)](adr/0022-mcp-server-surface.md)) added the 秘書化 v1 surface — 2 read + 6 write tools (`catchup` advances the seen marker, so it is a non-destructive write, not a read), bringing the surface to **27 tools (15 read + 12 write)**:
 
 * **`commitment.list` (read, Phase 25-D)** — list rows from the two-way commitment ledger ([ADR-0042](adr/0042-commitment-ledger.md)), filterable by `direction` (`i_owe` / `owed_to_me`), `state`, and `person`. **No LLM call** — the read just reflects what a prior `commitment.scan` mined. `due_before` is deliberately **not** exposed (`due` is free-form text the model read, not a comparable date). Used by `next-actions` (priority signal) and `personal-brief` (period summary).
 * **`person.list` (read, Phase 25-D)** — resolve any unbound `(connector, handle)` (idempotent) then list the person-axis identity graph ([ADR-0043](adr/0043-cross-source-identity-resolution.md)), mirroring `opshub person list`. Read-only over local SQLite.
-* **`catchup` (read, Phase 25-D/E)** — summarise everything since the operator last caught up (new sources + overdue commitments + unhandled Slack demand), priority-ordered ([ADR-0042](adr/0042-commitment-ledger.md), ADR-0015 応用). `since_last_seen` (default `true`) bounds the diff at the stored seen-marker.
+* **`catchup` (write, non-destructive, Phase 25-D/E)** — summarise everything since the operator last caught up (new sources + overdue commitments + unhandled Slack demand), priority-ordered ([ADR-0042](adr/0042-commitment-ledger.md), ADR-0015 応用), then **advance** the seen marker so the next catchup resumes from here. Classified write (`readOnlyHint=false` / `destructiveHint=false`) because the marker advance is a state mutation; `opshub catchup --no-advance` is the CLI read-only preview.
 * **`commitment.scan` (write / HITL, Phase 25-D)** — the flagship LLM extraction pass: read the sources observed since the stored scan cursor and call the configured LLM once per source to mine two-way commitments, minting durable `CommitmentExtracted` events. **Open-world write** (the LLM round-trip egresses the network, same bucket as `connector.sync`); `[llm] backend = disabled` surfaces a clean `ConfigError`. `max_sources` caps the per-call cost (default 200; a large backlog drains across several scans).
 * **`commitment.resolve` / `commitment.dismiss` (write / HITL, Phase 25-D)** — closed-world destructive state transitions over local SQLite (mark a commitment done / a false positive). Not in the `propose.apply` non-destructive carve-out — each is a real mutation the service fail-fasts on duplicates of.
 * **`person.merge` / `person.split` (write / HITL, Phase 25-D)** — closed-world destructive identity-graph mutations (merge two persons / detach one identity to a new person). The resolver only auto-merges exact matches; fuzzy merges (and undoing an over-merge) are operator HITL via these tools ([ADR-0043](adr/0043-cross-source-identity-resolution.md) §決定 (c)).
@@ -155,7 +155,7 @@ The 15 skills are:
 | read | `decision-rationale` (Phase 12 H3) | "あの決定はなぜ" / "X を選んだ理由" |
 | read | `handoff-draft` (Phase 12 H5) | "引き継ぎ書作って" / "handoff 書く" |
 | read | `announcement-draft` (Phase 12 H5) | "リリース告知文書いて" / "announcement 作って" |
-| read | `catchup` (Phase 25-E) | "前回見て以降どうなった" / "久しぶりに状況確認" / "差分だけ教えて" |
+| write | `catchup` (Phase 25-E) | "前回見て以降どうなった" / "久しぶりに状況確認" / "差分だけ教えて" |
 | HITL write | `reply-draft` | "返信案考えて" / "下書き作って" |
 | HITL write | `inbox-triage` (Phase 12 H4) | "受信箱整理して" / "inbox 仕分けて" |
 | HITL write | `source-extract` (Phase 12 H4) | "この資料から task 抽出" / "<source_id> から候補を" |
