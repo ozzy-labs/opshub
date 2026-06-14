@@ -1,10 +1,10 @@
 """Read-only access to the bundled assistant skill payload.
 
-Phase 16-B (ADR-0029 §決定 (a)) — the 14 assistant skills (`personal-brief`,
+Phase 16-B (ADR-0029 §決定 (a)) — the 15 assistant skills (`personal-brief`,
 `next-actions`, `pr-review`, `find-document`, `meeting-prep`, `research`,
 `external-brief`, `decision-rationale`, `handoff-draft`,
 `announcement-draft`, `reply-draft`, `inbox-triage`, `source-extract`,
-`meeting-followup`) are bundled inside the opshub wheel under
+`meeting-followup`, `catchup`) are bundled inside the opshub wheel under
 ``opshub/_skills/<name>/...`` via ``[tool.hatch.build.force-include]``
 (copy of the ``docs/skills/`` SSOT, Phase 12 H1 / ADR-0004 §決定 (c)).
 This module exposes a small helper API on top of :mod:`importlib.resources`
@@ -29,14 +29,14 @@ Resolution strategy:
   writing the returned bytes through ``Path.write_bytes`` (see
   :func:`opshub.cli.skills.install`).
 
-The 14 assistant skill names are the authoritative catalogue. Tests
+The 15 assistant skill names are the authoritative catalogue. Tests
 (`tests/unit/test_package_resources.py`) pin that every name resolves
 to an `SKILL.md` file inside the bundle. The ecosystem-common skill
 names (drive / lint / commit / ...) are intentionally NOT in this list
 — they ship via the ``@ozzylabs/skills`` Renovate preset path
 (ADR-0029 §決定 (h) scope carve-out) and `opshub skills install` MUST
 NOT touch them. The disjoint-namespace invariant is pinned by
-`tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_14_assistant_skills`.
+`tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_15_assistant_skills`.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ __all__ = [
 ]
 
 
-# Canonical list of the 14 assistant skill identifiers. The order is
+# Canonical list of the 15 assistant skill identifiers. The order is
 # stable (matches `docs/assistant-agent.md` §1's mapping table) so that
 # ``opshub skills list`` output is deterministic across runs and across
 # operating systems (`os.scandir` order is filesystem-dependent and
@@ -90,6 +90,7 @@ ASSISTANT_SKILL_NAMES: tuple[str, ...] = (
     "inbox-triage",
     "source-extract",
     "meeting-followup",
+    "catchup",
 )
 
 
@@ -104,7 +105,7 @@ class SkillResourceError(RuntimeError):
        ``_skills/`` directory is then absent from the wheel; we raise
        so the CLI can render an actionable upgrade hint rather than
        silently install zero skills.
-    2. The bundled payload exists but is missing one of the 14
+    2. The bundled payload exists but is missing one of the 15
        expected skill names (caller asked for a skill that was added
        to :data:`ASSISTANT_SKILL_NAMES` but not yet authored under
        ``docs/skills/``). This is a packaging bug, not an operator
@@ -184,7 +185,7 @@ def _checkout_docs_skills() -> Path | None:
 
 
 def _skills_root() -> Traversable:
-    """Return the resource root for the 14 bundled assistant skills.
+    """Return the resource root for the 15 bundled assistant skills.
 
     Resolution order:
 
@@ -259,7 +260,7 @@ def iter_skill_files(skill_name: str) -> Iterator[SkillBundleEntry]:
     """
     if skill_name not in ASSISTANT_SKILL_NAMES:
         raise SkillResourceError(
-            f"{skill_name!r} is not one of the 14 assistant skills "
+            f"{skill_name!r} is not one of the 15 assistant skills "
             f"({', '.join(ASSISTANT_SKILL_NAMES)})"
         )
 
@@ -281,7 +282,7 @@ def iter_skill_files(skill_name: str) -> Iterator[SkillBundleEntry]:
 
 
 def iter_skills() -> Iterator[tuple[str, list[SkillBundleEntry]]]:
-    """Yield ``(skill_name, entries)`` for the 14 assistant skills.
+    """Yield ``(skill_name, entries)`` for the 15 assistant skills.
 
     Convenience wrapper: install / list both want to iterate every
     skill, and this materialises the per-skill file list eagerly so

@@ -1,6 +1,6 @@
 """Tests for ``opshub skills install`` / ``opshub skills list`` (Phase 16-B).
 
-ADR-0029 §決定 (a)〜(h) — the 14 assistant skills bundled inside the
+ADR-0029 §決定 (a)〜(h) — the 15 assistant skills bundled inside the
 opshub wheel under ``opshub/_skills/`` are distributed to the host
 agent loader directories (``~/.claude/skills/`` and
 ``~/.agents/skills/``) by ``opshub skills install``. Every test
@@ -223,18 +223,18 @@ def test_skills_install_creates_parent_dirs(
     assert (home / ".claude" / "skills" / "personal-brief").is_dir()
 
 
-def test_skills_install_only_writes_14_assistant_skills(
+def test_skills_install_only_writes_15_assistant_skills(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """**Critical regression guard** — install never clobbers ecosystem skills.
 
-    ADR-0029 §決定 (h) + §不変条件 2 — the 14 assistant skill names
+    ADR-0029 §決定 (h) + §不変条件 2 — the 15 assistant skill names
     must be disjoint from the ecosystem-common skill names
     (drive / lint / commit / ship / pr / review / health / implement /
     phase-issue / topics / commit-conventions / lint-rules / test).
     Pre-populating an ecosystem-common skill at the target before
     running install proves that ``opshub skills install`` leaves it
-    alone — the install only writes the 14 names listed in
+    alone — the install only writes the 15 names listed in
     :data:`ASSISTANT_SKILL_NAMES`.
     """
     home = _isolate_home(monkeypatch, tmp_path)
@@ -296,7 +296,7 @@ def test_skills_install_print_paths_outputs_targets(
     # Every printed line should be an absolute path under the target dir.
     # Filter out the summary line ("would install N skill(s) to ...").
     lines = [line for line in result.output.splitlines() if line.startswith(str(expected_root))]
-    # 14 skills x 1 SKILL.md per skill = 14 lines (current bundle has
+    # 15 skills x 1 SKILL.md per skill = 15 lines (current bundle has
     # no reference/ subdirs yet).
     assert len(lines) >= len(ASSISTANT_SKILL_NAMES)
     # Every assistant skill name appears in the printed paths.
@@ -496,7 +496,7 @@ def test_skills_install_emits_structured_log_category_skill_install(
     assert isinstance(kwargs["written"], int) and kwargs["written"] > 0, kwargs
     assert isinstance(kwargs["skipped"], int), kwargs
     assert isinstance(kwargs["overwritten"], int), kwargs
-    # ``distinct_skills`` (14 assistant skills) is emitted alongside
+    # ``distinct_skills`` (15 assistant skills) is emitted alongside
     # for dashboards that want a per-bundle count.
     assert kwargs["distinct_skills"] == len(ASSISTANT_SKILL_NAMES), kwargs
 
@@ -504,7 +504,7 @@ def test_skills_install_emits_structured_log_category_skill_install(
 def test_skills_install_host_all_scope_project_writes_both_roots(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``--host all --scope project`` writes 14 skills to both CWD roots.
+    """``--host all --scope project`` writes 15 skills to both CWD roots.
 
     ADR-0029 §決定 (f) — ``project`` scope rewrites both ``claude-code``
     and ``codex``/``copilot`` host roots into CWD-relative paths. The

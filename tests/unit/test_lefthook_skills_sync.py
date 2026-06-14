@@ -17,7 +17,7 @@ hook itself is the SSOT — abstracting would invite the helper and the
 hook to drift, defeating the test's purpose.
 
 If this test fails, inspect ``lefthook.yaml:44-64`` and the temporary
-fixture below for shape changes. The 14 assistant skill names listed
+fixture below for shape changes. The 15 assistant skill names listed
 in :data:`opshub._skills_resources.ASSISTANT_SKILL_NAMES` and the
 shell ``$assistant_skills`` variable in the hook must stay in sync —
 the test pins that invariant indirectly (a fresh skill name added to
@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-# The 14 assistant skill names — hard-coded from
+# The 15 assistant skill names — hard-coded from
 # ``opshub._skills_resources.ASSISTANT_SKILL_NAMES`` to keep this test
 # free of an import dependency on the source module (the hook itself
 # does not import opshub Python, by design).
@@ -52,6 +52,7 @@ _ASSISTANT_SKILL_NAMES: tuple[str, ...] = (
     "inbox-triage",
     "source-extract",
     "meeting-followup",
+    "catchup",
 )
 
 # Verbatim copy of the ``skills-sync-check`` hook body in
@@ -62,7 +63,7 @@ _ASSISTANT_SKILL_NAMES: tuple[str, ...] = (
 # equality the hook contract relies on. The lines are tagged ``noqa:
 # E501`` so the test stays a true SSOT mirror of ``lefthook.yaml``.
 _HOOK_SHELL = """\
-assistant_skills='personal-brief next-actions pr-review find-document meeting-prep research external-brief decision-rationale handoff-draft announcement-draft reply-draft inbox-triage source-extract meeting-followup'
+assistant_skills='personal-brief next-actions pr-review find-document meeting-prep research external-brief decision-rationale handoff-draft announcement-draft reply-draft inbox-triage source-extract meeting-followup catchup'
 drift=0
 for name in $assistant_skills; do
   for mirror in .claude/skills .agents/skills; do
@@ -81,7 +82,7 @@ fi
 
 
 def _seed_pristine_mirror(workdir: Path, repo_root: Path) -> None:
-    """Copy ``docs/skills/<14 names>/`` into both ``.claude/skills/`` and ``.agents/skills/``.
+    """Copy ``docs/skills/<15 names>/`` into both ``.claude/skills/`` and ``.agents/skills/``.
 
     Mirrors the post-`opshub skills install --scope project` state so
     the hook's ``diff -rq`` returns zero for every (skill, mirror)
@@ -186,7 +187,7 @@ def test_lefthook_skills_sync_check_detects_missing_mirror_dir(
 def test_lefthook_skills_sync_check_covers_every_assistant_skill(
     tmp_path: Path, skill_name: str
 ) -> None:
-    """The hook's ``$assistant_skills`` list covers all 14 names.
+    """The hook's ``$assistant_skills`` list covers all 15 names.
 
     Iterates every skill name in :data:`_ASSISTANT_SKILL_NAMES`, drifts
     one mirror copy at a time, and confirms the hook flags it. If a

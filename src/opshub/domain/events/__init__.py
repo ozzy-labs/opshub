@@ -77,6 +77,7 @@ from opshub.domain.events.proposal import (
     ReplyDraftCandidatePayload,
     TaskCandidatePayload,
 )
+from opshub.domain.events.seen_marker import SeenMarkerAdvanced
 from opshub.domain.events.source import (
     ProvenanceOrigin,
     ProvenanceTrust,
@@ -141,7 +142,8 @@ AllEvent = Annotated[
     | CommitmentExtracted
     | CommitmentResolved
     | CommitmentDismissed
-    | CommitmentReopened,
+    | CommitmentReopened
+    | SeenMarkerAdvanced,
     Field(discriminator="event_type"),
 ]
 
@@ -189,6 +191,7 @@ __all__ = [
     "ProvenanceOrigin",
     "ProvenanceTrust",
     "ReplyDraftCandidatePayload",
+    "SeenMarkerAdvanced",
     "SourceObserved",
     "SourceReferenced",
     "TaskActivated",

@@ -12,8 +12,8 @@ Phase 21 (epic #504、[ADR-0037](docs/adr/0037-browser-read-layer-playwright.md)
 
 スキル配信経路は 2 系統に分かれる:
 
-- **アシスタント 14 Skill** (`personal-brief` / `next-actions` / ... / `meeting-followup`) は opshub Python package に **同梱** され、`opshub skills install` または `opshub init` 経由で `.claude/skills/` (Claude Code 用) と `.agents/skills/` (Codex CLI / Copilot CLI 用) に展開される（Phase 16-A〜D、[ADR-0029](docs/adr/0029-distribute-assistant-skills-via-opshub-package.md)）。SSOT は `docs/skills/<name>/SKILL.md` (ADR-0004 §決定 (c))。
-- **ecosystem 共通スキル** (drive / lint / commit / ship / pr / review / health / implement / phase-issue / topics / commit-conventions / lint-rules / test) は [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) に置かれ、`@ozzylabs/skills` の Renovate preset 経由で配布される（handbook [ADR-0016](https://github.com/ozzy-labs/handbook/blob/main/adr/0016-create-skills-repo.md)）。両系統は名前空間 disjoint で、`opshub skills install` はアシスタント 14 skill のみを書き込み、ecosystem 共通 skill には触れない (test `test_skills_install_only_writes_14_assistant_skills` で pin)。
+- **アシスタント 15 Skill** (`personal-brief` / `next-actions` / ... / `meeting-followup` / `catchup`) は opshub Python package に **同梱** され、`opshub skills install` または `opshub init` 経由で `.claude/skills/` (Claude Code 用) と `.agents/skills/` (Codex CLI / Copilot CLI 用) に展開される（Phase 16-A〜D、[ADR-0029](docs/adr/0029-distribute-assistant-skills-via-opshub-package.md)）。SSOT は `docs/skills/<name>/SKILL.md` (ADR-0004 §決定 (c))。
+- **ecosystem 共通スキル** (drive / lint / commit / ship / pr / review / health / implement / phase-issue / topics / commit-conventions / lint-rules / test) は [`ozzy-labs/skills`](https://github.com/ozzy-labs/skills) に置かれ、`@ozzylabs/skills` の Renovate preset 経由で配布される（handbook [ADR-0016](https://github.com/ozzy-labs/handbook/blob/main/adr/0016-create-skills-repo.md)）。両系統は名前空間 disjoint で、`opshub skills install` はアシスタント 15 skill のみを書き込み、ecosystem 共通 skill には触れない (test `test_skills_install_only_writes_15_assistant_skills` で pin)。
 
 ### 開発作業用スキル
 
@@ -26,13 +26,13 @@ Phase 21 (epic #504、[ADR-0037](docs/adr/0037-browser-read-layer-playwright.md)
 - `/ship` — lint・コミット・PR 作成を一括実行
 - `/drive` — implement + ship + review loop（Issue から merge-ready な PR まで自律駆動）
 
-### アシスタントエージェント Skills (Phase 10 で 5 Skill 開始、Phase 12 で 14 Skill 体制に拡張、opshub MCP 経由)
+### アシスタントエージェント Skills (Phase 10 で 5 Skill 開始、Phase 12 で 14 Skill 体制に拡張、Phase 25-E で `catchup` を加えて 15 Skill、opshub MCP 経由)
 
-opshub は形A (ADR-0004) に基づきアシスタント **14 Skill** を提供する。SKILL.md の SSOT は `docs/skills/<name>/SKILL.md` に置く (Phase 12 H1 で opshub を SSOT に確定、ADR-0004 §決定 (c))。配信経路は Phase 16-A ([ADR-0029](docs/adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定し、Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で CLI が着地した (`opshub skills install` / `opshub skills list`、`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths` flag、詳細は [`docs/assistant-agent.md`](docs/assistant-agent.md) §8)。ecosystem 共通 skill (drive / lint / commit 等) は引き続き `@ozzylabs/skills` Renovate preset 経由で配布される (アシスタント 14 skill 経路と名前空間 disjoint、test `test_skills_install_only_writes_14_assistant_skills` で pin)。発火条件は自然文 (skill description) で表現されており、自分で叩く必要はない。
+opshub は形A (ADR-0004) に基づきアシスタント **15 Skill** を提供する。SKILL.md の SSOT は `docs/skills/<name>/SKILL.md` に置く (Phase 12 H1 で opshub を SSOT に確定、ADR-0004 §決定 (c))。配信経路は Phase 16-A ([ADR-0029](docs/adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定し、Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で CLI が着地した (`opshub skills install` / `opshub skills list`、`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths` flag、詳細は [`docs/assistant-agent.md`](docs/assistant-agent.md) §8)。ecosystem 共通 skill (drive / lint / commit 等) は引き続き `@ozzylabs/skills` Renovate preset 経由で配布される (アシスタント 15 skill 経路と名前空間 disjoint、test `test_skills_install_only_writes_15_assistant_skills` で pin)。発火条件は自然文 (skill description) で表現されており、自分で叩く必要はない。
 
 opshub repo 自身も Phase 16-D ([ADR-0029](docs/adr/0029-distribute-assistant-skills-via-opshub-package.md) §dogfood、[#385](https://github.com/ozzy-labs/opshub/issues/385)) で in-repo dogfood している。`.claude/skills/<assistant>/` (Claude Code 用) と `.agents/skills/<assistant>/` (Codex CLI / Copilot CLI 用) に 14 件分の SKILL.md が project scope で commit されており、opshub maintainer は worktree root で Claude Code / Codex CLI / Copilot CLI を起動するだけでアシスタント 14 Skill を発火できる (ecosystem 共通 skill 13 件 = `commit` / `commit-conventions` / `drive` / `health` / `implement` / `lint` / `lint-rules` / `phase-issue` / `pr` / `review` / `ship` / `test` / `topics` と名前空間 disjoint、合計 27 dir)。`docs/skills/<name>/SKILL.md` を編集したら `uv run opshub skills install --scope project` で `.claude/skills/<assistant>/` + `.agents/skills/<assistant>/` を再生成し、結果を commit すること。drift は `skills-sync-check` pre-commit lefthook hook (`lefthook.yaml`) が SSOT (`docs/skills/<name>/`) と mirror (`.claude/skills/<name>/` / `.agents/skills/<name>/`) を `diff -rq` で直接比較して検知する (`opshub skills` CLI を経由しない理由は `lefthook.yaml` のコメント参照: 直接比較で uv invocation round-trip を回避し hook を fast に保つ)。
 
-**read 自律 OK (10 件)**:
+**read 自律 OK (11 件)**:
 
 - `personal-brief` — 「今日のまとめ」「今週どうなってる」「先月の振り返り」「最近どうなってる」「状況教えて」
 - `next-actions` — 「次に何やる?」「やること教えて」「今週やること」「優先度高いのは?」
@@ -44,6 +44,7 @@ opshub repo 自身も Phase 16-D ([ADR-0029](docs/adr/0029-distribute-assistant-
 - `decision-rationale` (Phase 12 H3) — 「あの決定はなぜ」「X を選んだ理由」
 - `handoff-draft` (Phase 12 H5) — 「引き継ぎ書作って」「handoff 書く」 (text-only、persist なし)
 - `announcement-draft` (Phase 12 H5) — 「リリース告知文書いて」「announcement 作って」 (text-only、persist なし)
+- `catchup` (Phase 25-E) — 「前回見て以降どうなった」「久しぶりに状況確認」「差分だけ教えて」 (seen-marker を前進させる、pair = personal-brief)
 
 **HITL write (4 件)** (外送信なし、apply は HITL):
 

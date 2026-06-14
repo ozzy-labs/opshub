@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from opshub.services import (
         AgentRunService,
         BriefingService,
+        CatchupService,
         CommitmentScanService,
         DecisionService,
         DuplicateService,
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
 __all__ = [
     "build_agent_run_service",
     "build_briefing_service",
+    "build_catchup_service",
     "build_commitment_scan_service",
     "build_decision_service",
     "build_duplicate_service",
@@ -703,6 +705,33 @@ def build_commitment_scan_service(actor: str = "cli:commitment") -> CommitmentSc
     return CommitmentScanService(
         engine=engine,
         llm_client=build_llm_client(settings),
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(),
+        uow_factory=engine.begin,
+        actor=actor,
+    )
+
+
+def build_catchup_service(actor: str = "cli:catchup") -> CatchupService:
+    """Wire a :class:`CatchupService` for the configured database.
+
+    Phase 25-E (epic #566): the catchup diff surface. The service is
+    constructed with both the read-only :class:`Engine` (used by a dry
+    ``catchup(advance=False)``) and the writer triplet (:class:`EventStore`
+    + :class:`_PersistingProjector` + ``engine.begin`` UoW factory) the
+    marker-advance path needs. ``opshub catchup --since-last-seen`` advances
+    the seen marker, so the default path exercises the writer triplet; a
+    ``--no-advance`` preview reads without writing. **No LLM client** —
+    catchup is a pure read of the projections (any host-side summary is
+    applied by the catchup skill, ADR-0015 §brief).
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import CatchupService
+
+    engine = build_engine()
+    return CatchupService(
+        engine=engine,
         store=SqlAlchemyEventStore(engine),
         projector=_PersistingProjector(),
         uow_factory=engine.begin,

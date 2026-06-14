@@ -30,6 +30,7 @@ from opshub.projections.locks import LocksProjection
 from opshub.projections.person_identities import PersonIdentitiesProjection
 from opshub.projections.persons import PersonsProjection
 from opshub.projections.proposals import ProposalsProjection
+from opshub.projections.seen_markers import SeenMarkersProjection
 from opshub.projections.slack_demand_digest import SlackDemandDigestProjection
 from opshub.projections.sources import SourcesProjection
 from opshub.projections.tasks import TasksProjection
@@ -75,6 +76,13 @@ def all_projections() -> list[Projection]:
         # ``ConnectorCursorsProjection``).
         CommitmentsProjection(),
         CommitmentScanCursorProjection(),
+        # Phase 25-E (epic #566): catchup seen marker. A singleton
+        # checkpoint of "when the operator last caught up" (symmetric with
+        # ``CommitmentScanCursorProjection`` / ``ConnectorCursorsProjection``).
+        # Reads no other projection's table at apply time, so its order is
+        # immaterial for correctness — listed alongside the other Phase 25
+        # cursors for readability.
+        SeenMarkersProjection(),
         # Phase 18-B (ADR-0033): Slack mention / DM demand digest.
         # Consumes existing ``SourceObserved`` events (connector_name =
         # "slack") — no new fetcher / mapper / event. Registered last

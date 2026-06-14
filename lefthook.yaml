@@ -50,7 +50,7 @@ pre-commit:
         - ".claude/skills/**"
         - ".agents/skills/**"
       run: |
-        assistant_skills='personal-brief next-actions pr-review find-document meeting-prep research external-brief decision-rationale handoff-draft announcement-draft reply-draft inbox-triage source-extract meeting-followup'
+        assistant_skills='personal-brief next-actions pr-review find-document meeting-prep research external-brief decision-rationale handoff-draft announcement-draft reply-draft inbox-triage source-extract meeting-followup catchup'
         drift=0
         for name in $assistant_skills; do
           for mirror in .claude/skills .agents/skills; do

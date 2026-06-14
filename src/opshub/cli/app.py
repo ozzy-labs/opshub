@@ -41,6 +41,7 @@ from opshub.cli.agent import agent_app
 from opshub.cli.box import box_app
 from opshub.cli.box_drive import box_drive_app
 from opshub.cli.brief import register as register_brief
+from opshub.cli.catchup import register as register_catchup
 from opshub.cli.commitment import commitment_app
 from opshub.cli.connectors import connectors_app
 from opshub.cli.decision import decision_app
@@ -124,6 +125,8 @@ app.add_typer(skills_app)
 register_recall(app)
 register_search(app)
 register_brief(app)
+# Phase 25-E (epic #566): catchup diff digest ("what changed since I last looked?").
+register_catchup(app)
 
 
 def _version_callback(value: bool) -> None:
@@ -309,7 +312,7 @@ def init(
         None,
         "--install-skills/--no-install-skills",
         help=(
-            "Install the 14 bundled assistant skills to ~/.claude/skills/ + "
+            "Install the 15 bundled assistant skills to ~/.claude/skills/ + "
             "~/.agents/skills/ (Phase 16-C, ADR-0029). "
             "Default: prompt on TTY (default yes), install on non-TTY. "
             "Use --no-install-skills to skip; use `opshub skills install` "

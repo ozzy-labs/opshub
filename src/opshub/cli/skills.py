@@ -1,7 +1,7 @@
 """``opshub skills ...`` subcommands.
 
 Phase 16-B (ADR-0029) ships ``opshub skills install`` and
-``opshub skills list`` to distribute the 14 assistant skills (SSOT
+``opshub skills list`` to distribute the 15 assistant skills (SSOT
 ``docs/skills/<name>/SKILL.md``, Phase 12 H1 / ADR-0004 §決定 (c))
 bundled inside the opshub wheel under ``opshub/_skills/`` to the host
 agent's skill loader directories (``~/.claude/skills/`` for Claude
@@ -16,11 +16,11 @@ the structlog logger and the resource-loading helpers are imported
 inside each command callback. The ecosystem-common skill namespace
 (drive / lint / commit / ...) is disjoint from this command's payload
 (ADR-0029 §決定 (h)) — pinned by
-``tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_14_assistant_skills``.
+``tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_15_assistant_skills``.
 
 CLI surface:
 
-* ``opshub skills install`` — copy the 14 bundled assistant skills to
+* ``opshub skills install`` — copy the 15 bundled assistant skills to
   the host skill loader directory. Flags:
 
   * ``--host {claude-code,codex,copilot,all}`` (default ``all``) —
@@ -41,7 +41,7 @@ CLI surface:
     --print-paths | xargs ls``).
 
 * ``opshub skills list`` — read-only catalogue with install status
-  (``installed`` / ``missing`` / ``modified``) for the 14 skills under
+  (``installed`` / ``missing`` / ``modified``) for the 15 skills under
   every requested host / scope combination. Compares byte payloads
   against the bundled SSOT.
 
@@ -74,7 +74,7 @@ __all__ = ["install_command", "skills_app"]
 # inside the command callbacks below.
 skills_app = typer.Typer(
     name="skills",
-    help="Install or inspect the 14 bundled assistant skills (ADR-0029).",
+    help="Install or inspect the 15 bundled assistant skills (ADR-0029).",
     no_args_is_help=True,
 )
 
@@ -148,11 +148,11 @@ def _resolve_install_dirs(*, host: str, scope: str) -> list[Path]:
 
 
 def _format_target_count_line(*, action: str, target_dir: Path, count: int) -> str:
-    """Render a one-line summary for stdout, e.g. ``would install 14 skill(s) to ...``.
+    """Render a one-line summary for stdout, e.g. ``would install 15 skill(s) to ...``.
 
     Pulled out so install / list / dry-run share identical phrasing.
     The plural ``skill(s)`` form avoids a per-call branch and reads
-    fine in both the ``count == 1`` and ``count == 14`` cases (no
+    fine in both the ``count == 1`` and ``count == 15`` cases (no
     English plural specifically needed for a Japanese-leaning audience
     either — the parenthesised ``(s)`` is the standard CLI idiom).
     """
@@ -198,7 +198,7 @@ def install(
         help="Emit one target path per line on stdout (pipeline-friendly).",
     ),
 ) -> None:
-    """Install the 14 bundled assistant skills to the host loader directory.
+    """Install the 15 bundled assistant skills to the host loader directory.
 
     Thin Typer wrapper around :func:`install_command` — see that
     function's docstring for the full semantics. The wrapper exists so
@@ -224,7 +224,7 @@ def install_command(
     dry_run: bool = False,
     print_paths: bool = False,
 ) -> None:
-    """Install the 14 bundled assistant skills to the host loader directory.
+    """Install the 15 bundled assistant skills to the host loader directory.
 
     Reads bundled bytes from ``importlib.resources.files('opshub') /
     _skills/<name>/...`` (populated at build time by
@@ -234,16 +234,16 @@ def install_command(
     ``./.claude/skills/`` / ``./.agents/skills/`` (project scope).
 
     The ecosystem-common skill names (drive / lint / commit / ...) are
-    intentionally NOT touched — only the 14 assistant names listed in
+    intentionally NOT touched — only the 15 assistant names listed in
     :data:`opshub._skills_resources.ASSISTANT_SKILL_NAMES` are written
     (ADR-0029 §決定 (h) scope carve-out). A regression that adds any
     other name to that tuple would silently start clobbering
     ecosystem-common skills, so the disjoint invariant is pinned by
-    ``test_skills_install_only_writes_14_assistant_skills``.
+    ``test_skills_install_only_writes_15_assistant_skills``.
 
     Phase 16-C (#384) added :func:`opshub.cli.init.init_command` as an
     internal caller so the documented ``uv tool install ozzylabs-opshub[mcp]
-    && opshub init`` 2-step setup also installs the 14 assistant
+    && opshub init`` 2-step setup also installs the 15 assistant
     skills. The extraction from the Typer wrapper (:func:`install`)
     follows the same pattern as
     :func:`opshub.cli.init.init_command` / :func:`opshub.cli.db.migrate_command`:
@@ -345,7 +345,7 @@ def install_command(
     action = "would install" if dry_run else "installed"
     distinct_skills = len({path.parent for path in written_paths})
     for target_dir in install_dirs:
-        # Filter for paths under this target (so the "14 skill(s) to ..."
+        # Filter for paths under this target (so the "15 skill(s) to ..."
         # phrasing stays accurate per directory in the ``--host all``
         # case where the same payload is written to two roots).
         count = len({path.parent for path in written_paths if _is_under(path, target_dir)})
@@ -374,7 +374,7 @@ def list_skills(
         help="Scope: user (default) or project.",
     ),
 ) -> None:
-    """Show the 14 assistant skills with install status per host directory.
+    """Show the 15 assistant skills with install status per host directory.
 
     Each row prints the host directory + skill name + status:
 
