@@ -1,7 +1,7 @@
 # 0017. Knowledge Graph
 
-- Status: Accepted (revised 2026-06-07 for epic #470 — drop `expand_graph` opt-in flag)
-- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §決定 (b) revision: `reply_draft_replies_to` / `referenced_in_reply_draft` link_type 追加); 2026-06-07 (epic #470 §決定 (f) revision: `--expand-graph` opt-in 撤廃 + graph 1-hop 拡張を無条件 default に統一)
+- Status: Accepted (revised 2026-06-14 for Phase 25-B — `person:<id>` entity ref + `identifies` link_type)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §決定 (b) revision: `reply_draft_replies_to` / `referenced_in_reply_draft` link_type 追加); 2026-06-07 (epic #470 §決定 (f) revision: `--expand-graph` opt-in 撤廃 + graph 1-hop 拡張を無条件 default に統一); 2026-06-14 (Phase 25-B §改訂: 人軸 `person:<id>` entity ref + `identifies` link_type を `LINK_TYPES_MVP` に追加、[ADR-0043](0043-cross-source-identity-resolution.md))
 - Deciders: ozzy
 
 ## Context
@@ -80,6 +80,18 @@ manual path の `link_type` は free-form 文字列 (`--type` の値は自由) �
 - **`LinksProjector` の dispatch 表に 2 path 追加**: `ProposalApplied` 経路で `applied_entity_type == "reply_draft"` の場合 (ADR-0016 §決定 (i) の `reply_to_source_id` を candidate payload から復元) と `ProposalGenerated` 経路で reply_draft candidate が含まれる場合 (`<context_source>` 由来の link)。両 path は §決定 (a) の natural-key UPSERT で `projections rebuild` 冪等
 - **既存 5 link_type の semantics は不変**: `applied_to` は task / decision / reply_draft の 3 entity 種に拡張されるが、link_type 文字列としては従来通り (新 entity 種類が増えるだけ)
 - **manual path での自由度**: ADR-0017 §決定 (b) で manual link が free-form 文字列を許容する原則は不変。`reply_draft_replies_to` / `referenced_in_reply_draft` を manual で打つと auto-extracted と同じ enum 内なので warning は出ない (operator が `opshub link add` で意図的に reply_draft の provenance を手書きするのは想定される運用)
+
+> **Phase 25-B 改訂 (2026-06-14、[ADR-0043](0043-cross-source-identity-resolution.md))**: 人軸 (person) を knowledge graph に統合する。entity type 列は free-form Text (closed enum 無し) なので **`person:<id>` entity ref は schema 変更なしで成立**する (`LinkService.related` / `trace` が透過的に扱う)。以下の **1 link_type** を enum に昇格し、auto-extracted enum は 8 種類になる。
+
+| link_type (Phase 25-B 追加) | 発行経路 | 意味 |
+|---|---|---|
+| `identifies` | `opshub person` 経路 (manual `link add --type identifies` も含む) | `person:<id>` → `source:<id>` (この person がその source の author = identity edge) |
+
+要点:
+
+- **`person:<id>` は schema 変更不要**: `links.from_entity_type` / `to_entity_type` は Text なので `person` も既存 entity type と同様に格納・traversal できる。
+- **`identifies` を `LINK_TYPES_MVP` に追加**: manual `link add --type identifies` が「推奨 enum 外」warning を出さない (人軸 identity edge を operator が手書きするのは想定運用)。
+- **person aggregate の event / projection は ADR-0043 が pin**: `PersonIdentified` / `IdentityLinked` / `IdentityMerged` / `IdentitySplit` event + `persons` / `person_identities` projection は本 ADR scope 外 (ADR-0043 §決定 (a)(b)(f))。本 ADR は graph 統合面 (`person:<id>` ref + `identifies` link type) のみを改訂する。
 
 ### (c) 自動抽出 projector は新 event を発行しない (pure derived state)
 

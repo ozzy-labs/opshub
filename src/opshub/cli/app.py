@@ -58,6 +58,7 @@ from opshub.cli.lock import lock_app
 from opshub.cli.mcp import mcp_app
 from opshub.cli.ms365 import ms365_app
 from opshub.cli.onedrive_drive import onedrive_drive_app
+from opshub.cli.person import person_app
 from opshub.cli.projections import projections_app
 from opshub.cli.propose import propose_app
 from opshub.cli.recall import register as register_recall
@@ -114,6 +115,7 @@ app.add_typer(llm_app)
 app.add_typer(propose_app)
 app.add_typer(link_app)
 app.add_typer(graph_app)
+app.add_typer(person_app)
 app.add_typer(mcp_app)
 app.add_typer(skills_app)
 register_recall(app)

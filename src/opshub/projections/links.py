@@ -137,15 +137,16 @@ from opshub.domain.events import (
 __all__ = ["LINK_TYPES_MVP", "LinksProjector", "links_table"]
 
 
-# ADR-0017 §決定 (b): the 7 ``link_type`` values populated by automatic
+# ADR-0017 §決定 (b): the 8 ``link_type`` values populated by automatic
 # extraction (5 from Phase 8 B2, 2 added in Phase 10 step E2 for
-# reply-draft provenance — ADR-0017 §決定 (b) Phase 10 改訂). Manual
-# link CRUD via ``LinkCreated`` / ``LinkDeleted`` (Phase 8 B1 / D1)
-# may pass arbitrary strings — the CLI warns when the value falls
-# outside this enum but the projector writes the row through without
-# further validation. Captured here as a ``frozenset`` so consumers
-# (CLI warning helper / future graph rendering) can membership-test
-# without recomputing the literal set.
+# reply-draft provenance — ADR-0017 §決定 (b) Phase 10 改訂, 1 added in
+# Phase 25-B for the person-axis identity edge — ADR-0017 §改訂 /
+# ADR-0043). Manual link CRUD via ``LinkCreated`` / ``LinkDeleted``
+# (Phase 8 B1 / D1) may pass arbitrary strings — the CLI warns when the
+# value falls outside this enum but the projector writes the row through
+# without further validation. Captured here as a ``frozenset`` so
+# consumers (CLI warning helper / future graph rendering) can
+# membership-test without recomputing the literal set.
 LINK_TYPES_MVP: frozenset[str] = frozenset(
     {
         "applied_to",
@@ -156,6 +157,12 @@ LINK_TYPES_MVP: frozenset[str] = frozenset(
         # Phase 10 step E2 (ADR-0017 §決定 (b) Phase 10 改訂):
         "reply_draft_replies_to",
         "referenced_in_reply_draft",
+        # Phase 25-B (ADR-0017 §改訂 / ADR-0043): the person-axis identity
+        # edge from a ``person:<id>`` node to a ``source:<id>`` it authored.
+        # Listing it here keeps ``opshub person`` / ``opshub link add
+        # --type identifies`` from triggering the not-in-enum warning the
+        # CLI helper raises for free-form manual link types.
+        "identifies",
     }
 )
 

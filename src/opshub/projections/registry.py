@@ -25,6 +25,8 @@ from opshub.projections.inbox import InboxProjection
 from opshub.projections.ingested_files import IngestedFilesProjection
 from opshub.projections.links import LinksProjector
 from opshub.projections.locks import LocksProjection
+from opshub.projections.person_identities import PersonIdentitiesProjection
+from opshub.projections.persons import PersonsProjection
 from opshub.projections.proposals import ProposalsProjection
 from opshub.projections.slack_demand_digest import SlackDemandDigestProjection
 from opshub.projections.sources import SourcesProjection
@@ -50,6 +52,17 @@ def all_projections() -> list[Projection]:
         BriefingsProjection(),
         ProposalsProjection(),
         LinksProjector(),
+        # Phase 25-B (ADR-0043): person-axis read models. ``PersonsProjection``
+        # owns the ``persons`` table and applies the cross-table merge /
+        # split events atomically, so it must run before the commitment
+        # ledger projection (25-C) that reads ``persons`` for direction.
+        # ``PersonIdentitiesProjection`` only INSERTs ``IdentityLinked``
+        # rows; the merge / split re-parent of its table is owned by
+        # ``PersonsProjection`` (one atomic apply per event), so the two
+        # registration order relative to each other is immaterial for
+        # correctness — persons is listed first for readability.
+        PersonsProjection(),
+        PersonIdentitiesProjection(),
         # Phase 18-B (ADR-0033): Slack mention / DM demand digest.
         # Consumes existing ``SourceObserved`` events (connector_name =
         # "slack") — no new fetcher / mapper / event. Registered last
