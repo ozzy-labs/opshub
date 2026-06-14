@@ -264,7 +264,8 @@ def test_link_types_mvp_matches_adr_0017_decision_b() -> None:
     outside this set; Phase 8 B2's auto-extraction emits only these
     values. Phase 10 step E2 widens the enum by two for the reply-
     draft provenance link types (ADR-0017 §決定 (b) Phase 10 改訂).
-    Pinning the literal set here keeps the ADR-0017 §決定 (b)
+    Phase 25-B adds the ``identifies`` person-axis edge (ADR-0017
+    §改訂 / ADR-0043). Pinning the literal set here keeps the ADR-0017
     Decision Record and the runtime contract in lock-step.
     """
     assert LINK_TYPES_MVP == frozenset(
@@ -277,5 +278,7 @@ def test_link_types_mvp_matches_adr_0017_decision_b() -> None:
             # Phase 10 step E2 (ADR-0017 §決定 (b) Phase 10 改訂):
             "reply_draft_replies_to",
             "referenced_in_reply_draft",
+            # Phase 25-B (ADR-0017 §改訂 / ADR-0043):
+            "identifies",
         }
     )

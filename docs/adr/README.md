@@ -115,6 +115,7 @@ NNNN-kebab-case-title.md
 | 0039 | [Slack Single-Workspace Non-Goal (+ team_id bind guard)](0039-slack-single-workspace-non-goal.md) | Superseded by ADR-0041 (Phase 24) |
 | 0040 | [Slack feature→scope SSOT + auth-test readiness (capability model)](0040-slack-feature-scope-ssot-and-readiness.md) | Accepted + Landed (Phase 23-I) |
 | 0041 | [Slack Multi-Workspace (alias × team_id 二層 identity)](0041-slack-multi-workspace.md) | Accepted (Phase 24) |
+| 0043 | [Cross-Source Identity Resolution (person-axis)](0043-cross-source-identity-resolution.md) | Accepted (Phase 25-B) |
 
 ## Open Questions
 

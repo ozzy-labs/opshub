@@ -41,6 +41,7 @@ if TYPE_CHECKING:
         InboxService,
         LinkService,
         LockService,
+        PersonResolutionService,
         ProposalService,
         RecallService,
         SearchService,
@@ -62,6 +63,7 @@ __all__ = [
     "build_inbox_service",
     "build_link_service",
     "build_lock_service",
+    "build_person_service",
     "build_proposal_service",
     "build_recall_service",
     "build_search_service",
@@ -630,6 +632,34 @@ def build_link_service(actor: str = "cli:link") -> LinkService:
 
     engine = build_engine()
     return LinkService(
+        engine=engine,
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(),
+        uow_factory=engine.begin,
+        actor=actor,
+    )
+
+
+def build_person_service(actor: str = "cli:person") -> PersonResolutionService:
+    """Wire a :class:`PersonResolutionService` for the configured database.
+
+    Phase 25-B (ADR-0043): the service is constructed with both the
+    read-only :class:`Engine` (used by :meth:`list_persons`) and the
+    writer dependencies (:class:`EventStore` + :class:`_PersistingProjector`
+    + ``engine.begin`` UoW factory) that :meth:`resolve` / :meth:`merge`
+    / :meth:`split` require. ``opshub person list`` resolves before it
+    lists, so every subcommand exercises the writer path.
+
+    ``actor`` defaults to ``"cli:person"``; the CLI subcommands pass
+    more specific values (``cli:person_merge`` / ``cli:person_split``)
+    so the event log distinguishes the verbs.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001).
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.services import PersonResolutionService
+
+    engine = build_engine()
+    return PersonResolutionService(
         engine=engine,
         store=SqlAlchemyEventStore(engine),
         projector=_PersistingProjector(),

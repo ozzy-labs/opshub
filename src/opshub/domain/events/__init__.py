@@ -51,6 +51,12 @@ from opshub.domain.events.file_ingest import FileIngested
 from opshub.domain.events.handoff import HandoffClosed, HandoffOpened
 from opshub.domain.events.inbox import ItemEnqueued, ItemTriaged
 from opshub.domain.events.link import LinkCreated, LinkDeleted
+from opshub.domain.events.person import (
+    IdentityLinked,
+    IdentityMerged,
+    IdentitySplit,
+    PersonIdentified,
+)
 from opshub.domain.events.proposal import (
     Candidate,
     DecisionCandidatePayload,
@@ -115,7 +121,11 @@ AllEvent = Annotated[
     | ProposalRejected
     | ProposalFailed
     | LinkCreated
-    | LinkDeleted,
+    | LinkDeleted
+    | PersonIdentified
+    | IdentityLinked
+    | IdentityMerged
+    | IdentitySplit,
     Field(discriminator="event_type"),
 ]
 
@@ -138,12 +148,16 @@ __all__ = [
     "FileIngested",
     "HandoffClosed",
     "HandoffOpened",
+    "IdentityLinked",
+    "IdentityMerged",
+    "IdentitySplit",
     "ItemEnqueued",
     "ItemTriaged",
     "LinkCreated",
     "LinkDeleted",
     "LockAcquired",
     "LockReleased",
+    "PersonIdentified",
     "ProposalApplied",
     "ProposalFailed",
     "ProposalGenerated",

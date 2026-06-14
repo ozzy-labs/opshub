@@ -38,6 +38,11 @@ from opshub.projections.ingested_files import (
 )
 from opshub.projections.links import LINK_TYPES_MVP, LinksProjector, links_table
 from opshub.projections.locks import LocksProjection, locks_table
+from opshub.projections.person_identities import (
+    PersonIdentitiesProjection,
+    person_identities_table,
+)
+from opshub.projections.persons import PersonsProjection, persons_table
 from opshub.projections.proposals import ProposalsProjection, proposals_table
 from opshub.projections.rebuild import rebuild_all
 from opshub.projections.registry import all_projections
@@ -60,6 +65,8 @@ __all__ = [
     "IngestedFilesProjection",
     "LinksProjector",
     "LocksProjection",
+    "PersonIdentitiesProjection",
+    "PersonsProjection",
     "Projection",
     "ProposalsProjection",
     "SlackDemandDigestProjection",
@@ -76,6 +83,8 @@ __all__ = [
     "ingested_files_table",
     "links_table",
     "locks_table",
+    "person_identities_table",
+    "persons_table",
     "proposals_table",
     "rebuild_all",
     "slack_demand_digest_table",
