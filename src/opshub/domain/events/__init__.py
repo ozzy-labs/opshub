@@ -28,6 +28,15 @@ from opshub.domain.events.briefing import (
     BriefingGenerated,
     BriefingRequested,
 )
+from opshub.domain.events.commitment import (
+    CommitmentDismissed,
+    CommitmentExtracted,
+    CommitmentReopened,
+    CommitmentResolved,
+    CommitmentScanCompleted,
+    CommitmentScanFailed,
+    CommitmentScanStarted,
+)
 from opshub.domain.events.connector import (
     ConnectorSyncCompleted,
     ConnectorSyncFailed,
@@ -125,7 +134,14 @@ AllEvent = Annotated[
     | PersonIdentified
     | IdentityLinked
     | IdentityMerged
-    | IdentitySplit,
+    | IdentitySplit
+    | CommitmentScanStarted
+    | CommitmentScanCompleted
+    | CommitmentScanFailed
+    | CommitmentExtracted
+    | CommitmentResolved
+    | CommitmentDismissed
+    | CommitmentReopened,
     Field(discriminator="event_type"),
 ]
 
@@ -137,6 +153,13 @@ __all__ = [
     "BriefingGenerated",
     "BriefingRequested",
     "Candidate",
+    "CommitmentDismissed",
+    "CommitmentExtracted",
+    "CommitmentReopened",
+    "CommitmentResolved",
+    "CommitmentScanCompleted",
+    "CommitmentScanFailed",
+    "CommitmentScanStarted",
     "ConnectorSyncCompleted",
     "ConnectorSyncFailed",
     "ConnectorSyncStarted",

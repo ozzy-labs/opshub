@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from opshub.services import (
         AgentRunService,
         BriefingService,
+        CommitmentScanService,
         DecisionService,
         DuplicateService,
         EmbeddingService,
@@ -54,6 +55,7 @@ if TYPE_CHECKING:
 __all__ = [
     "build_agent_run_service",
     "build_briefing_service",
+    "build_commitment_scan_service",
     "build_decision_service",
     "build_duplicate_service",
     "build_embedding_service",
@@ -661,6 +663,46 @@ def build_person_service(actor: str = "cli:person") -> PersonResolutionService:
     engine = build_engine()
     return PersonResolutionService(
         engine=engine,
+        store=SqlAlchemyEventStore(engine),
+        projector=_PersistingProjector(),
+        uow_factory=engine.begin,
+        actor=actor,
+    )
+
+
+def build_commitment_scan_service(actor: str = "cli:commitment") -> CommitmentScanService:
+    """Wire a :class:`CommitmentScanService` for the configured database + backend.
+
+    Phase 25-C (ADR-0042): the旗艦 commitment ledger. The service is
+    constructed with:
+
+    * the read-only :class:`Engine` powering :meth:`list_commitments` +
+      the cursor / state reads;
+    * the writer triplet (:class:`EventStore` + :class:`_PersistingProjector`
+      + ``engine.begin`` UoW factory) the scan + state transitions need;
+    * an :class:`~opshub.llm.client.LLMClient` resolved via
+      :func:`opshub.llm.factory.build_llm_client` — a
+      :class:`~opshub.llm.factory.NoOpLLMClient` when ``[llm] backend =
+      "disabled"`` so :meth:`scan` records :class:`CommitmentScanFailed`
+      and propagates :class:`ConfigError` while ``list`` / ``resolve`` /
+      ``dismiss`` / ``reopen`` still work (閲覧 / 状態遷移は LLM 不要).
+
+    ``actor`` defaults to ``"cli:commitment"``; the CLI subcommands pass
+    more specific values (``cli:commitment_scan`` / ``cli:commitment_resolve``
+    / …) so the event log distinguishes the verbs.
+    """
+    # Lazy imports: keep CLI cold start fast (ADR-0001). The LLM factory
+    # defers the heavy SDK import to the branch the operator selected.
+    from opshub.core.config import OpsHubSettings
+    from opshub.db import SqlAlchemyEventStore
+    from opshub.llm.factory import build_llm_client
+    from opshub.services import CommitmentScanService
+
+    settings = OpsHubSettings()
+    engine = build_engine()
+    return CommitmentScanService(
+        engine=engine,
+        llm_client=build_llm_client(settings),
         store=SqlAlchemyEventStore(engine),
         projector=_PersistingProjector(),
         uow_factory=engine.begin,
