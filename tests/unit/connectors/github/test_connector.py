@@ -78,6 +78,9 @@ class _RecordingSourceService:
         body: str | None = None,
         provenance_origin: str | None = None,
         provenance_trust: str | None = None,
+        author_id: str | None = None,
+        author_handle: str | None = None,
+        author_display: str | None = None,
     ) -> None:
         self.calls.append(
             {
@@ -90,6 +93,9 @@ class _RecordingSourceService:
                 "body": body,
                 "provenance_origin": provenance_origin,
                 "provenance_trust": provenance_trust,
+                "author_id": author_id,
+                "author_handle": author_handle,
+                "author_display": author_display,
             }
         )
 

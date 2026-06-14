@@ -281,6 +281,10 @@ class GoogleCalendarConnector:
                 body=mapped.body,
                 provenance_origin=mapped.provenance_origin,
                 provenance_trust=mapped.provenance_trust,
+                # Phase 25-A (ADR-0010 §改訂): the organiser author
+                # identity the mapper stamped onto the event.
+                author_handle=mapped.author_handle,
+                author_display=mapped.author_display,
             )
             observed += 1
         return cursor, observed
@@ -332,6 +336,10 @@ class GoogleCalendarConnector:
                 body=mapped.body,
                 provenance_origin=mapped.provenance_origin,
                 provenance_trust=mapped.provenance_trust,
+                # Phase 25-A (ADR-0010 §改訂): the organiser author
+                # identity the mapper stamped onto the event.
+                author_handle=mapped.author_handle,
+                author_display=mapped.author_display,
             )
             observed += 1
         return cursor, observed

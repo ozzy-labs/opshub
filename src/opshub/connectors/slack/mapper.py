@@ -67,6 +67,12 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from opshub.core.text_limits import clip_author_field
+from opshub.domain.events.source import (
+    AUTHOR_DISPLAY_MAX_CHARS,
+    AUTHOR_HANDLE_MAX_CHARS,
+)
+
 if TYPE_CHECKING:
     from opshub.connectors.slack.fetcher import RawSlackMessage
 
@@ -258,6 +264,16 @@ def map_message(raw: RawSlackMessage) -> dict[str, Any]:
         # fetcher yields the empty string) — normalise to ``None`` so the
         # column stores NULL rather than an empty string.
         "author_id": raw.user_id or None,
+        # Phase 25-A (ADR-0010 §改訂): the same Slack ``U...`` id flows
+        # onto the generalised cross-connector ``author_handle`` (the
+        # person-axis join key, 25-B) and the resolved display name onto
+        # ``author_display`` (recognition cue). ``author_id`` is kept
+        # populated above for the Phase 23-D ``slack_demand_digest``
+        # backward compatibility; new consumers read ``author_handle``.
+        "author_handle": clip_author_field(raw.user_id, max_chars=AUTHOR_HANDLE_MAX_CHARS),
+        "author_display": clip_author_field(
+            raw.user_display_name, max_chars=AUTHOR_DISPLAY_MAX_CHARS
+        ),
     }
 
 

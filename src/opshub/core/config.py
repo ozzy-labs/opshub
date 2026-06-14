@@ -761,6 +761,17 @@ class MS365ConnectorSettings(BaseModel):
     calendar_enabled: bool = True
     onedrive_enabled: bool = True
     outlook_enabled: bool = True
+    #: Phase 25-A (ADR-0010 §改訂): the operator's own Microsoft 365
+    #: email address (Outlook sender / Calendar organiser). The Phase 25
+    #: commitment ledger (25-C) reads it via
+    #: :func:`opshub.services.operator_identity.is_authored_by_operator`
+    #: to tell self-authored sources (``i_owe``) apart from inbound ones
+    #: (``owed_to_me``). Empty (the default) means "operator identity not
+    #: configured" — the helper then treats every ms365 source as
+    #: not-self. Override via ``OPSHUB_CONNECTORS__MS365__OPERATOR_EMAIL``.
+    #: Compared case-insensitively against the lower-cased
+    #: ``author_handle`` the mapper stamps.
+    operator_email: str = ""
 
 
 class BoxConnectorSettings(BaseModel):
@@ -1078,6 +1089,14 @@ class GoogleWorkspaceConnectorSettings(BaseModel):
     redirect_uri: str = "http://localhost"
     content_extraction: bool = False
     fallback_window_days: int = 30
+    #: Phase 25-A (ADR-0010 §改訂): the operator's own Google account
+    #: email (Drive ``lastModifyingUser`` / owner). Read by
+    #: :func:`opshub.services.operator_identity.is_authored_by_operator`
+    #: so the commitment ledger (25-C) can recognise operator-authored
+    #: Drive items. Empty (default) = not configured. Override via
+    #: ``OPSHUB_CONNECTORS__GOOGLE_WORKSPACE__OPERATOR_EMAIL``. Compared
+    #: case-insensitively against the lower-cased ``author_handle``.
+    operator_email: str = ""
 
 
 class GoogleCalendarConnectorSettings(BaseModel):
@@ -1139,6 +1158,14 @@ class GoogleCalendarConnectorSettings(BaseModel):
     calendar_id: str = "primary"
     time_min_days: int = 90
     time_max_days: int = 365
+    #: Phase 25-A (ADR-0010 §改訂): the operator's own Google account
+    #: email (Calendar organiser address). Read by
+    #: :func:`opshub.services.operator_identity.is_authored_by_operator`
+    #: so the commitment ledger (25-C) can recognise events the operator
+    #: organised. Empty (default) = not configured. Override via
+    #: ``OPSHUB_CONNECTORS__GOOGLE_CALENDAR__OPERATOR_EMAIL``. Compared
+    #: case-insensitively against the lower-cased ``author_handle``.
+    operator_email: str = ""
 
 
 class GoogleMailConnectorSettings(BaseModel):
@@ -1204,6 +1231,42 @@ class GoogleMailConnectorSettings(BaseModel):
     enabled: bool = False
     initial_window_days: int = 7
     fallback_window_days: int = 30
+    #: Phase 25-A (ADR-0010 §改訂): the operator's own Gmail address
+    #: (``From:`` sender). Read by
+    #: :func:`opshub.services.operator_identity.is_authored_by_operator`
+    #: so the commitment ledger (25-C) tells self-sent mail (``i_owe``)
+    #: apart from inbound mail (``owed_to_me``). Empty (default) = not
+    #: configured. Override via
+    #: ``OPSHUB_CONNECTORS__GOOGLE_MAIL__OPERATOR_EMAIL``. Compared
+    #: case-insensitively against the lower-cased ``author_handle``.
+    operator_email: str = ""
+
+
+class GitHubConnectorSettings(BaseModel):
+    """GitHub connector configuration (Phase 25-A, ADR-0010 §改訂).
+
+    The GitHub connector itself is configured operationally via the
+    ``OPSHUB_CONNECTOR_GITHUB_REPO`` env var (``owner/repo``) and a PAT
+    in the OS keyring per ADR-0014 — there is intentionally no
+    ``enabled`` flag or repo list in this settings model yet (Phase 3
+    deferred a config table to a later phase). Phase 25-A introduces this
+    section for the single piece of state the cross-connector author
+    normalisation needs: the operator's own GitHub login.
+
+    ``operator_login`` is the operator's GitHub username (the ``login``
+    field GitHub stamps on issue / PR authors). Read by
+    :func:`opshub.services.operator_identity.is_authored_by_operator` so
+    the Phase 25 commitment ledger (25-C) can tell issues / PRs the
+    operator opened (``i_owe``) apart from ones opened by others
+    (``owed_to_me``). Empty (the default) means "operator identity not
+    configured" — the helper then treats every GitHub source as
+    not-self. Override via
+    ``OPSHUB_CONNECTORS__GITHUB__OPERATOR_LOGIN``. GitHub logins are
+    case-insensitive, so the helper compares case-insensitively against
+    the ``author_handle`` the mapper stamps.
+    """
+
+    operator_login: str = ""
 
 
 class TeamsConnectorSettings(BaseModel):
@@ -1235,6 +1298,15 @@ class TeamsConnectorSettings(BaseModel):
 
     enabled: bool = False
     fallback_window_days: int = 30
+    #: Phase 25-A (ADR-0010 §改訂): the operator's own Teams user id
+    #: (Graph ``from.user.id``, an opaque GUID). Read by
+    #: :func:`opshub.services.operator_identity.is_authored_by_operator`
+    #: so the commitment ledger (25-C) can recognise operator-authored
+    #: chat messages. Empty (default) = not configured. Override via
+    #: ``OPSHUB_CONNECTORS__TEAMS__OPERATOR_ID``. Compared exactly (Graph
+    #: user ids are opaque GUIDs, no case folding) against the
+    #: ``author_handle`` the mapper stamps.
+    operator_id: str = ""
 
 
 class WebConnectorSettings(BaseModel):
@@ -1316,6 +1388,10 @@ class ConnectorSettings(BaseModel):
         default_factory=OneDriveDriveConnectorSettings
     )
     teams: TeamsConnectorSettings = Field(default_factory=TeamsConnectorSettings)
+    # Phase 25-A (ADR-0010 §改訂): the GitHub connector gains a settings
+    # section carrying only ``operator_login`` for cross-connector author
+    # self-identity (the connector is otherwise driven by env + keyring).
+    github: GitHubConnectorSettings = Field(default_factory=GitHubConnectorSettings)
     google_workspace: GoogleWorkspaceConnectorSettings = Field(
         default_factory=GoogleWorkspaceConnectorSettings
     )

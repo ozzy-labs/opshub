@@ -198,3 +198,22 @@ def test_map_event_body_equals_summary_provenance_tagged() -> None:
     assert observed.body is not None and observed.body.strip()
     assert observed.provenance_origin == "external"
     assert observed.provenance_trust == "untrusted"
+
+
+# ---------------------------------------------------------------------------
+# Phase 25-A (ADR-0010 §改訂): cross-connector author normalisation.
+# ---------------------------------------------------------------------------
+
+
+def test_box_actor_threaded_onto_author_fields() -> None:
+    """The Box event actor lands on ``author_handle`` (id) / ``author_display`` (name)."""
+    event = map_event(_raw_event(actor_id="12345", actor_name="Alice Box"))
+    assert event.author_handle == "12345"
+    assert event.author_display == "Alice Box"
+
+
+def test_box_empty_actor_yields_none_author_fields() -> None:
+    """A system event with no actor leaves both author fields ``None``."""
+    event = map_event(_raw_event(actor_id="", actor_name=""))
+    assert event.author_handle is None
+    assert event.author_display is None

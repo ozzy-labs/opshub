@@ -53,6 +53,12 @@ import html
 import re
 from typing import TYPE_CHECKING, Any
 
+from opshub.core.text_limits import clip_author_field
+from opshub.domain.events.source import (
+    AUTHOR_DISPLAY_MAX_CHARS,
+    AUTHOR_HANDLE_MAX_CHARS,
+)
+
 if TYPE_CHECKING:
     from opshub.connectors.teams.fetcher import RawTeamsChatMessage
 
@@ -170,6 +176,15 @@ def map_chat_message(raw: RawTeamsChatMessage) -> dict[str, Any]:
         "body": body,
         "provenance_origin": "external",
         "provenance_trust": "untrusted",
+        # Phase 25-A (ADR-0010 §改訂): the sender's Graph ``from.user.id``
+        # is the cross-connector author join key (25-B); the resolved
+        # ``from.user.displayName`` is the recognition cue. System
+        # messages (no human sender) yield empty strings — normalise to
+        # ``None`` so the columns store NULL rather than an empty string.
+        "author_handle": clip_author_field(raw.sender_id, max_chars=AUTHOR_HANDLE_MAX_CHARS),
+        "author_display": clip_author_field(
+            raw.sender_display_name, max_chars=AUTHOR_DISPLAY_MAX_CHARS
+        ),
     }
 
 

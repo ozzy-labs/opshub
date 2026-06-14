@@ -564,3 +564,22 @@ def test_build_source_observed_whitespace_only_url_normalises_to_none() -> None:
         body=None,
     )
     assert event.url is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 25-A (ADR-0010 §改訂): cross-connector author normalisation.
+# ---------------------------------------------------------------------------
+
+
+def test_organizer_email_threaded_onto_author_handle() -> None:
+    """The organiser email lands on ``author_handle`` (lower-cased)."""
+    event = map_calendar_event(_raw(organizer_email="Boss@Example.com"))
+    assert event.author_handle == "boss@example.com"
+    # Calendar exposes no separate organiser display name on the event.
+    assert event.author_display is None
+
+
+def test_empty_organizer_yields_none_author_handle() -> None:
+    """An empty organiser email leaves ``author_handle`` ``None``."""
+    event = map_calendar_event(_raw(organizer_email=""))
+    assert event.author_handle is None

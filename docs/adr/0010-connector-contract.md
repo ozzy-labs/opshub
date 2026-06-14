@@ -1,7 +1,7 @@
 # 0010. Connector Contract
 
 - Status: Accepted (revised 2026-06-07 for Phase 21 Sub-issue A)
-- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外); 2026-05-31 (Phase 11 改訂: Teams 追加 + 本文抽出契約 + delta-link cursor + User Token principal); 2026-05-31 (Phase 13 改訂: Google Workspace 追加 + Drive `changes.list` cursor + TTL fallback + Workspace export 本文抽出契約 + Google Refresh Token principal = MS365 / Box pattern 明文化); 2026-05-31 (Phase 14 改訂: Gmail + Google Calendar 追加 + delta-cursor 型 connector 全般 への TTL fallback 一般化 + Outlook 流本文抽出契約を Gmail / Calendar に拡張); 2026-06-07 (Phase 21 改訂: web connector 追加 + delta API なし connector の fingerprint 変更検知契約を web に適用 + crawler 非該当 posture); 2026-06-13 (issue #522 追記: 責務 5 の inbox enqueue が `source_ref` で冪等化される invariant を §不変条件 7 に明文化 — PR #529 が「ADR-0002 / ADR-0010 の延長」と位置づけた決定の記録漏れを是正)
+- Date: 2026-05-17 (initial); 2026-05-30 (Phase 10 §Write-back scope clarification: 当面 scope 外); 2026-05-31 (Phase 11 改訂: Teams 追加 + 本文抽出契約 + delta-link cursor + User Token principal); 2026-05-31 (Phase 13 改訂: Google Workspace 追加 + Drive `changes.list` cursor + TTL fallback + Workspace export 本文抽出契約 + Google Refresh Token principal = MS365 / Box pattern 明文化); 2026-05-31 (Phase 14 改訂: Gmail + Google Calendar 追加 + delta-cursor 型 connector 全般 への TTL fallback 一般化 + Outlook 流本文抽出契約を Gmail / Calendar に拡張); 2026-06-07 (Phase 21 改訂: web connector 追加 + delta API なし connector の fingerprint 変更検知契約を web に適用 + crawler 非該当 posture); 2026-06-13 (issue #522 追記: 責務 5 の inbox enqueue が `source_ref` で冪等化される invariant を §不変条件 7 に明文化 — PR #529 が「ADR-0002 / ADR-0010 の延長」と位置づけた決定の記録漏れを是正); 2026-06-14 (Phase 25-A 改訂: 横断 author/sender 正規化を connector contract に明記 — `author_handle` / `author_display` を全 SaaS connector mapper で populate + `sources` projection に author 列 + per-connector operator self-identity (`is_authored_by_operator`)、epic #566)
 - Deciders: ozzy
 - Related: [ADR-0036](0036-slack-sync-date-floor.md) — Slack sync の date floor (`[connectors.slack] sync_since` / per-channel `since`) は本 contract の cursor checkpoint の上に `oldest = max(cursor, floor)` で乗る (cursor authoritative、既存 sync 済み channel に無影響); [ADR-0037](0037-browser-read-layer-playwright.md) — Phase 21 で新設する web connector (Playwright browser read 層) は本 contract の Connector Protocol + 責務 1-6 + 禁止事項 1-7 をそのまま適用する (§Phase 21 改訂 (n)-(o)); [ADR-0041](0041-slack-multi-workspace.md) — Phase 24 で Slack connector の cursor schema (per-alias nest) と `external_id` 規約 (`f"{team_id}:{channel_id}:{ts}"` 3-token re-key) を改める。connector instance は `name = "slack"` 単一のまま (multi-instance 化は不採用)、本 contract の Connector Protocol + 責務 1-6 + 禁止事項 1-7 は不変
 
@@ -534,6 +534,36 @@ fingerprint 契約の不変条件:
 - **delta API なし connector の変更検知 SSOT を踏襲** — box_drive / onedrive_drive (local-FS、delta API なし) で確立した `sources.fingerprint` 列ベース変更検知を web (Web API、delta API なし) にも適用することで、「delta API を持つ connector は cursor + TTL fallback (§改訂 (j))、delta API を持たない connector は fingerprint 列比較 (§改訂 (o))」という 2 系統が ADR-0010 内で明確に整理される
 - **schema 変更不要** — [ADR-0019](0019-local-filesystem-backed-connector.md) §決定 (d) で既に追加済の `sources.fingerprint` 列 / `SourceObserved.fingerprint` field を再利用するため、migration / event schema 変更なし
 - **event noise 抑制** — 毎回 SourceObserved を発火すると event log が膨らむため、fingerprint 一致時 skip で「本文が変わった URL のみ event 化」を成立させる ([ADR-0019](0019-local-filesystem-backed-connector.md) §決定 (d) と同根拠)
+
+## Phase 25-A 改訂 (epic #566 / 横断 author 正規化、2026-06-14)
+
+Phase 25 (秘書化 v1、[epic #566](https://github.com/ozzy-labs/opshub/issues/566)) の人軸 identity (25-B) と commitment direction (25-C) は双方とも「**誰が書いたか**」を必要とする。Phase 23-D ([ADR-0033](0033-slack-demand-digest.md) §改訂) は Slack mapper のみが `SourceObserved.author_id` を populate していたが、本改訂で **author 識別を全 SaaS connector に一般化**する (Phase 10 改訂 §禁止事項 7 / Phase 11-21 改訂 (a)-(o) は **保持**、本節は **加算改訂**)。
+
+### Phase 25-A 改訂 (p) — author/sender を connector contract に明記
+
+連結子の責務 4 (`SourceObserved` 生成) に、**author 正規化**を追加する。各 mapper は観測 item の author を以下 2 つの正規化 field に流す (additive、frozen event に optional field 追加のため `schema_version` 据え置き):
+
+- **`author_handle`** — connector-native な author 識別子 = 人軸 resolver (25-B) が identity を束ねる join key。Slack `U...` / bot id、Gmail / Outlook / Calendar organiser の email address、GitHub login、Teams `from.user.id`、Box actor id、Google Drive `lastModifyingUser` email。email 系は lower-case 正規化 (case variant を 1 handle に寄せる)。
+- **`author_display`** — connector が表示名を持つ場合の人間可読名 (Teams / Drive `displayName`、Gmail `From:` の display part、Box actor name、Slack `user_display_name`)。recognition cue のみ、**join key にはしない** (表示名は人を跨いで衝突する)。
+
+不変条件:
+
+1. **author 不在は `None`** — local-FS connector (`box_drive` / `onedrive_drive`)・operator 列挙の `web` connector・author なき metadata path (GitHub notification、MS365 OneDrive metadata) は 3 field 全て `None` を emit する。空文字列ではなく `None` に正規化する (`normalise_optional_text` / `clip_author_field` 経由)。
+2. **schema cap で fail-safe** — `author_handle ≤ 320` (RFC 5321 email 上限)、`author_display ≤ 200` (summary と同 budget)。mapper は構築前に `clip_author_field` で切り詰め、pathological な sender (500 字の `From:` header 等) が mid-sync `ValidationError` を起こさないようにする。SSOT は `opshub.core.text_limits.clip_author_field`。
+3. **`author_id` は後方互換で保持** — Phase 23-D の `slack_demand_digest` projection が読む `author_id` は Slack mapper が引き続き populate する (新 `author_handle` と併存)。新規 consumer は `author_handle` / `author_display` を読む。
+
+`sources` projection は migration `0034_add_author_to_sources` で `author_handle` / `author_display` / `author_connector` 列を追加し、reducer が `event.author_handle` / `event.author_display` をそのまま、`author_connector` に `event.connector_name` を mirror する (人軸 resolver が `(author_connector, author_handle)` を 1 単位で読み、connector を跨いだ同形 handle の誤 merge を防ぐ)。既観測 item の back-fill は rebuild ではなく **full re-sync** を要する (旧 event は author 正規化以前のため `None`、`docs/upgrading.md` §Phase 25-A)。
+
+### Phase 25-A 改訂 (q) — operator self-identity を per-connector に持たせる
+
+commitment direction (`i_owe` / `owed_to_me`、25-C) は「自分が書いたか」で決まるため、connector ごとに「自分」を解決する。SSOT は `opshub.services.operator_identity.is_authored_by_operator(SourceAuthor) -> bool`:
+
+- **Slack** — 既存 per-workspace self user id を再利用 (`OPSHUB_SLACK_SELF_USER_ID__<ALIAS>` → keyring `auth.test`、[ADR-0041](0041-slack-multi-workspace.md) §(g))。source の `external_id` 先頭 token (`team_id`) で workspace を選ぶ。解決経路は `slack_demand_digest.resolve_self_user_ids_from_config()` に一本化 (projection と helper で同一 SSOT)。
+- **email 系** (Gmail / MS365 / Google Calendar / Google Workspace) — `[connectors.<conn>] operator_email` (env `OPSHUB_CONNECTORS__<CONN>__OPERATOR_EMAIL`)、case-insensitive 比較。
+- **GitHub** — `[connectors.github] operator_login` (env `OPSHUB_CONNECTORS__GITHUB__OPERATOR_LOGIN`)、case-insensitive (GitHub login は大小無視)。
+- **Teams** — `[connectors.teams] operator_id` (env `OPSHUB_CONNECTORS__TEAMS__OPERATOR_ID`)、完全一致 (Graph id は opaque GUID)。
+
+未設定 / author 不在 / self 概念なき connector は **`False` に degrade** する (helper は self を推測しない — 設定漏れは commitment を `owed_to_me` 側に over-count させるだけで、request を promise と誤標識しない)。
 
 ## 関連
 

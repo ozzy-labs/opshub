@@ -41,6 +41,21 @@ adversarial content (content poisoning / indirect prompt injection).
 ingest, opshub-generated text). Trusted by default.
 """
 
+#: Schema cap on :attr:`SourceObserved.author_handle` (Phase 25-A). 320
+#: chars accommodates the longest valid email address (RFC 5321: 64-char
+#: local-part + ``@`` + 255-char domain) — the widest ``author_handle``
+#: any connector ships — without letting a pathological payload bloat the
+#: event log. Mappers truncate to this cap before construction so an
+#: over-long sender never raises a mid-sync ``ValidationError``.
+AUTHOR_HANDLE_MAX_CHARS = 320
+
+#: Schema cap on :attr:`SourceObserved.author_display` (Phase 25-A). A
+#: display name is a recognition cue, never a join key, so 200 chars
+#: (the same budget as ``summary``) is generous. Mappers truncate to
+#: this cap before construction.
+AUTHOR_DISPLAY_MAX_CHARS = 200
+
+
 ProvenanceTrust = Literal["trusted", "untrusted"]
 """Trust level applied to an observed item's body (ADR-0020 §(e)).
 
@@ -239,6 +254,46 @@ class SourceObserved(DomainEvent):
     pre-Phase-23 Slack event (those events predate author threading, so a
     full re-sync — not just a rebuild — is required to back-fill the
     column; see ``docs/upgrading.md`` §Phase 23-D).
+
+    ``author_handle`` / ``author_display`` (Phase 25-A, ADR-0010 §改訂)
+    ------------------------------------------------------------------
+    Phase 25 (秘書化 v1, epic #566) needs "who wrote this" on **every**
+    connector — the person-axis entity resolution (25-B) names people
+    by their connector-native ids and the commitment ledger (25-C)
+    decides ``i_owe`` vs ``owed_to_me`` from whether the operator
+    authored the source. Phase 23-D's ``author_id`` only covered Slack;
+    Phase 25-A generalises the author identity into two normalised,
+    connector-agnostic fields the ``sources`` projection persists for
+    downstream services:
+
+    * ``author_handle`` — the connector-native identifier of the author
+      (Slack ``U...`` / bot id, an email address for Gmail / Outlook /
+      Calendar organiser, a GitHub login, the Teams ``from.user.id``,
+      the Box actor id, the Google Drive ``lastModifyingUser`` email).
+      It is the stable join key the person-axis resolver (25-B) groups
+      identities on, so it carries the raw native id rather than a
+      display label.
+    * ``author_display`` — the human-readable display name when the
+      connector exposes one (``displayName`` on Teams / Drive, the
+      parsed display part of a Gmail ``From:`` header, the Box actor
+      name, the Slack ``user_display_name``). Recognition cue only —
+      never a join key (display names collide across people).
+
+    ``author_id`` is retained for backward compatibility with the
+    Phase 23-D ``slack_demand_digest`` projection (the Slack mapper
+    keeps populating it alongside ``author_handle``); new consumers
+    read ``author_handle`` / ``author_display``. Local-filesystem
+    connectors (``box_drive`` / ``onedrive_drive``) and the operator-
+    listed ``web`` connector surface no SaaS author identity, so they
+    leave all three fields ``None``.
+
+    All three are backward-compatible optional-field additions
+    (ADR-0002 §4) so ``schema_version`` stays at ``1``; historic events
+    deserialise with the default ``None`` and a ``projections rebuild``
+    reproduces a ``NULL`` write. Back-filling the columns for already-
+    observed items requires a full re-sync, not just a rebuild (the
+    older events predate author normalisation; see
+    ``docs/upgrading.md`` §Phase 24 / §Phase 25-A).
     """
 
     event_type: Literal["source.observed"] = "source.observed"  # pyright: ignore[reportIncompatibleVariableOverride]
@@ -254,6 +309,8 @@ class SourceObserved(DomainEvent):
     provenance_origin: ProvenanceOrigin | None = None
     provenance_trust: ProvenanceTrust | None = None
     author_id: str | None = Field(default=None, max_length=200)
+    author_handle: str | None = Field(default=None, max_length=AUTHOR_HANDLE_MAX_CHARS)
+    author_display: str | None = Field(default=None, max_length=AUTHOR_DISPLAY_MAX_CHARS)
 
 
 class SourceReferenced(DomainEvent):

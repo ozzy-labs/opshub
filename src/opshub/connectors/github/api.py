@@ -140,6 +140,15 @@ class GitHubItem:
             uniform summary shape — see ADR-0010 Phase 7 Validation §3.
         updated_at: the API-reported ``updated_at`` (tz-aware UTC), used
             by the connector to advance its cursor.
+        author_handle: the GitHub login of the item's author (Phase 25-A,
+            ADR-0010 §改訂) — ``user.login`` for issues / PRs, ``None``
+            for notifications (the ``/notifications`` payload is
+            user-scoped and carries no per-item author). The connector
+            threads this onto :attr:`SourceObserved.author_handle` so the
+            Phase 25 person-axis resolver (25-B) can group GitHub logins
+            with the operator's other identities. GitHub does not return
+            a separate display name on the issue / PR list payloads, so
+            :attr:`SourceObserved.author_display` is left ``None``.
     """
 
     source_type: str
@@ -149,6 +158,7 @@ class GitHubItem:
     summary: str | None
     updated_at: datetime
     body: str | None = None
+    author_handle: str | None = None
 
 
 def list_issues_since(
@@ -318,6 +328,26 @@ def _parse_iso_utc(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
+def _author_login(item: dict[str, Any]) -> str | None:
+    """Return the GitHub login of an issue / PR author (Phase 25-A).
+
+    GitHub nests the author under ``user.login`` on the issue / PR list
+    payloads. A deleted / ghost account (rare) serialises ``user`` as
+    ``null``; we normalise that — and any whitespace-only login — to
+    ``None`` so :attr:`SourceObserved.author_handle` stores ``NULL``
+    rather than an empty string (mirrors the connector family's
+    empty→``None`` discipline). The login is the connector-native join
+    key the Phase 25 person-axis resolver (25-B) groups on.
+    """
+    user = item.get("user")
+    if not isinstance(user, dict):
+        return None
+    login = cast(dict[str, Any], user).get("login")
+    if not isinstance(login, str) or not login.strip():
+        return None
+    return login
+
+
 def _normalise_issue(repo: str, item: dict[str, Any]) -> GitHubItem:
     return GitHubItem(
         source_type="issue",
@@ -330,6 +360,8 @@ def _normalise_issue(repo: str, item: dict[str, Any]) -> GitHubItem:
         # above stays the ≤200-char preview; ``body`` carries the
         # untruncated markdown for body-based search (Sub-issue B).
         body=_body_text(item.get("body")),
+        # Phase 25-A (ADR-0010 §改訂): the issue author's GitHub login.
+        author_handle=_author_login(item),
     )
 
 
@@ -343,6 +375,8 @@ def _normalise_pull(repo: str, item: dict[str, Any], *, updated_at: datetime) ->
         updated_at=updated_at,
         # Phase 10 (ADR-0020): retain the full PR description body.
         body=_body_text(item.get("body")),
+        # Phase 25-A (ADR-0010 §改訂): the PR author's GitHub login.
+        author_handle=_author_login(item),
     )
 
 

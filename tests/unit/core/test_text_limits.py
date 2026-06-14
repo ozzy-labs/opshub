@@ -16,7 +16,38 @@ Covers:
 
 from __future__ import annotations
 
-from opshub.core.text_limits import normalise_optional_text, truncate_with_marker
+from opshub.core.text_limits import (
+    clip_author_field,
+    normalise_optional_text,
+    truncate_with_marker,
+)
+
+
+class TestClipAuthorField:
+    """Phase 25-A: SSOT author handle / display normalisation + cap."""
+
+    def test_returns_none_for_none(self) -> None:
+        assert clip_author_field(None, max_chars=320) is None
+
+    def test_returns_none_for_empty(self) -> None:
+        assert clip_author_field("", max_chars=320) is None
+
+    def test_returns_none_for_whitespace_only(self) -> None:
+        assert clip_author_field("   ", max_chars=320) is None
+
+    def test_strips_surrounding_whitespace(self) -> None:
+        assert clip_author_field("  alice@example.com  ", max_chars=320) == "alice@example.com"
+
+    def test_returns_value_under_cap_verbatim(self) -> None:
+        assert clip_author_field("octocat", max_chars=320) == "octocat"
+
+    def test_clips_over_cap_without_marker(self) -> None:
+        # No ellipsis — a handle is a join key, not a preview, so the
+        # clip stays usable as a prefix match.
+        clipped = clip_author_field("x" * 500, max_chars=320)
+        assert clipped is not None
+        assert len(clipped) == 320
+        assert "…" not in clipped
 
 
 class TestNormaliseOptionalText:

@@ -415,3 +415,43 @@ def test_mapper_parses_offset_iso_8601() -> None:
     """
     event = map_calendar_event(_calendar(last_modified_iso="2026-05-17T08:30:00+00:00"))
     assert event.occurred_at == datetime(2026, 5, 17, 8, 30, 0, tzinfo=UTC)
+
+
+# ---------------------------------------------------------------------------
+# Phase 25-A (ADR-0010 §改訂): cross-connector author normalisation.
+# ---------------------------------------------------------------------------
+
+
+def test_outlook_sender_threaded_onto_author_handle() -> None:
+    """The Outlook sender address lands on ``author_handle`` (lower-cased)."""
+    event = map_outlook_message(_outlook(sender="Alice@Example.com"))
+    assert event.author_handle == "alice@example.com"
+    # Graph's ``$select`` shape returns no display name here.
+    assert event.author_display is None
+
+
+def test_outlook_empty_sender_yields_none_author_handle() -> None:
+    """An empty sender leaves ``author_handle`` ``None`` (NULL in the projection)."""
+    event = map_outlook_message(_outlook(sender=""))
+    assert event.author_handle is None
+
+
+def test_calendar_organizer_threaded_onto_author_handle() -> None:
+    """The Graph ``organizer.emailAddress.address`` lands on ``author_handle``."""
+    raw = _calendar()
+    raw.raw["organizer"] = {"emailAddress": {"address": "Boss@Example.com", "name": "Boss"}}
+    event = map_calendar_event(raw)
+    assert event.author_handle == "boss@example.com"
+
+
+def test_calendar_no_organizer_yields_none_author_handle() -> None:
+    """A calendar event with no organiser branch yields ``author_handle = None``."""
+    event = map_calendar_event(_calendar())  # ``raw`` has no ``organizer`` key
+    assert event.author_handle is None
+
+
+def test_onedrive_item_has_no_author() -> None:
+    """OneDrive items are file metadata — no author identity."""
+    event = map_onedrive_item(_onedrive())
+    assert event.author_handle is None
+    assert event.author_display is None

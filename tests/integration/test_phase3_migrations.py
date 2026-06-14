@@ -108,6 +108,12 @@ def test_phase3_migrations_create_expected_columns(head_engine: Engine) -> None:
         "body": {"nullable": False},
         "provenance_origin": {"nullable": True},
         "provenance_trust": {"nullable": True},
+        # Phase 25-A (migration 0034, ADR-0010 §改訂): cross-connector
+        # author normalisation. ``NULL`` for the local-FS / ``web``
+        # connectors that surface no SaaS author identity.
+        "author_handle": {"nullable": True},
+        "author_display": {"nullable": True},
+        "author_connector": {"nullable": True},
     }
     assert set(sources_columns) == set(expected_sources), (
         f"sources column set mismatch; got {sorted(sources_columns)}"

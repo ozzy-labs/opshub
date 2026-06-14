@@ -75,9 +75,13 @@ from opshub.core.document_extract import (
     GOOGLE_WORKSPACE_SOURCE_TYPES,
 )
 from opshub.core.errors import ConnectorFailedError
-from opshub.core.text_limits import normalise_optional_text
+from opshub.core.text_limits import clip_author_field, normalise_optional_text
 from opshub.core.time import now_utc
-from opshub.domain.events.source import SourceObserved
+from opshub.domain.events.source import (
+    AUTHOR_DISPLAY_MAX_CHARS,
+    AUTHOR_HANDLE_MAX_CHARS,
+    SourceObserved,
+)
 
 if TYPE_CHECKING:
     from opshub.connectors.google_workspace.client import RawDriveItem
@@ -289,6 +293,14 @@ def map_drive_item(
             )
 
     summary = _build_summary(raw)
+    # Phase 25-A (ADR-0010 §改訂): for a Drive file the closest "author"
+    # of an *observation* is the last modifying user (who last touched
+    # the content); fall back to the owner when Drive omits
+    # ``lastModifyingUser`` (anonymous edits / system writes / shared
+    # drives). The email is the cross-connector join key (25-B), the
+    # display name is the recognition cue.
+    author_handle = raw.last_modifying_user_email or raw.owner_email or None
+    author_display = raw.last_modifying_user_display_name or raw.owner_display_name or None
 
     return _build_source_observed(
         external_id=raw.file_id,
@@ -299,6 +311,8 @@ def map_drive_item(
         occurred_at=_parse_iso_utc(raw.modified_time_iso),
         actor=actor,
         body=body,
+        author_handle=author_handle,
+        author_display=author_display,
     )
 
 
@@ -378,6 +392,8 @@ def _build_source_observed(
     occurred_at: datetime,
     actor: str,
     body: str | None,
+    author_handle: str | None = None,
+    author_display: str | None = None,
 ) -> SourceObserved:
     """Assemble a :class:`SourceObserved` from the mapper's inputs.
 
@@ -444,6 +460,16 @@ def _build_source_observed(
         body=resolved_body,
         provenance_origin="external",
         provenance_trust="untrusted",
+        # Phase 25-A (ADR-0010 §改訂): the last-modifying / owner email is
+        # the cross-connector author join key (lower-cased +
+        # whitespace-normalised + clipped so identity resolution (25-B)
+        # treats case variants as one handle); the display name is the
+        # recognition cue.
+        author_handle=clip_author_field(
+            author_handle.lower() if author_handle is not None else None,
+            max_chars=AUTHOR_HANDLE_MAX_CHARS,
+        ),
+        author_display=clip_author_field(author_display, max_chars=AUTHOR_DISPLAY_MAX_CHARS),
     )
 
 

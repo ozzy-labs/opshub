@@ -206,4 +206,8 @@ class BoxConnector:
             body=projected.body,
             provenance_origin=projected.provenance_origin,
             provenance_trust=projected.provenance_trust,
+            # Phase 25-A (ADR-0010 §改訂): the Box actor (event trigger)
+            # author identity the mapper stamped onto the event.
+            author_handle=projected.author_handle,
+            author_display=projected.author_display,
         )

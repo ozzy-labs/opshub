@@ -99,6 +99,9 @@ def test_map_chat_message_returns_observe_kwargs_shape() -> None:
         "body",
         "provenance_origin",
         "provenance_trust",
+        # Phase 25-A (ADR-0010 §改訂): cross-connector author normalisation.
+        "author_handle",
+        "author_display",
     }
     assert set(kwargs) == expected_keys
 
@@ -385,3 +388,22 @@ def test_map_chat_message_normalises_whitespace_only_to_none() -> None:
     assert kwargs_tab_newline["external_id"] == "19:abc@thread.v2:1700000000001"
     assert kwargs_tab_newline["connector_name"] == "teams"
     assert kwargs_tab_newline["source_type"] == SOURCE_TYPE
+
+
+# ---------------------------------------------------------------------------
+# Phase 25-A (ADR-0010 §改訂): cross-connector author normalisation.
+# ---------------------------------------------------------------------------
+
+
+def test_author_fields_from_sender() -> None:
+    """The Teams sender id/name flow onto ``author_handle`` / ``author_display``."""
+    kwargs = map_chat_message(_raw(sender_id="user-alice", sender_display_name="Alice"))
+    assert kwargs["author_handle"] == "user-alice"
+    assert kwargs["author_display"] == "Alice"
+
+
+def test_author_fields_none_for_system_message() -> None:
+    """A sender-less (system) message leaves both author fields ``None``."""
+    kwargs = map_chat_message(_raw(sender_id="", sender_display_name=""))
+    assert kwargs["author_handle"] is None
+    assert kwargs["author_display"] is None

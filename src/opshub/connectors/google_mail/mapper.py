@@ -72,13 +72,22 @@ that cannot preserve permanently-deleted content.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from email.utils import parseaddr
 from typing import TYPE_CHECKING, Final, Literal
 
 from opshub.core.errors import ConnectorFailedError
 from opshub.core.logging import get_logger
-from opshub.core.text_limits import normalise_optional_text, truncate_with_marker
+from opshub.core.text_limits import (
+    clip_author_field,
+    normalise_optional_text,
+    truncate_with_marker,
+)
 from opshub.core.time import now_utc
-from opshub.domain.events.source import SourceObserved
+from opshub.domain.events.source import (
+    AUTHOR_DISPLAY_MAX_CHARS,
+    AUTHOR_HANDLE_MAX_CHARS,
+    SourceObserved,
+)
 
 if TYPE_CHECKING:
     from opshub.connectors.google_mail.client import RawGmailMessage
@@ -225,6 +234,7 @@ def map_gmail_message(
 
     summary = _build_summary(raw)
     body = _build_body(raw)
+    author_handle, author_display = _parse_from_header(raw.from_header)
 
     return _build_source_observed(
         external_id=raw.message_id,
@@ -235,6 +245,8 @@ def map_gmail_message(
         occurred_at=_parse_internal_date(raw.internal_date_ms),
         actor=actor,
         body=body,
+        author_handle=author_handle,
+        author_display=author_display,
     )
 
 
@@ -342,6 +354,30 @@ def _truncate_body(body: str, *, message_id: str) -> str:
     return truncated
 
 
+def _parse_from_header(from_header: str) -> tuple[str | None, str | None]:
+    """Split a ``From:`` header into ``(email, display_name)`` (Phase 25-A).
+
+    Gmail's ``From:`` header follows RFC 5322 ``"Display Name"
+    <local@domain>`` (or a bare ``local@domain``). :func:`email.utils.parseaddr`
+    parses both shapes robustly. The email address is the cross-connector
+    ``author_handle`` join key (25-B) — symmetric with Outlook, which
+    ships its sender as a bare address; the display name is the
+    recognition cue ``author_display``.
+
+    Empty / whitespace-only components collapse to ``None`` so the
+    ``sources`` author columns store ``NULL`` rather than an empty
+    string, matching the connector family's empty→``None`` discipline.
+    The address is lower-cased so identity resolution (25-B) treats
+    ``Alice@Example.com`` and ``alice@example.com`` as one handle (email
+    local-parts are case-insensitive in practice for every major
+    provider; the domain is case-insensitive by RFC 1035).
+    """
+    display, address = parseaddr(from_header)
+    handle = address.strip().lower() or None
+    name = display.strip() or None
+    return handle, name
+
+
 def _build_source_observed(
     *,
     external_id: str,
@@ -352,6 +388,8 @@ def _build_source_observed(
     occurred_at: datetime,
     actor: str,
     body: str | None,
+    author_handle: str | None = None,
+    author_display: str | None = None,
 ) -> SourceObserved:
     """Assemble a :class:`SourceObserved` from the mapper's inputs.
 
@@ -407,6 +445,14 @@ def _build_source_observed(
         # preamble (ADR-0015 §決定 (f)).
         provenance_origin="external",
         provenance_trust="untrusted",
+        # Phase 25-A (ADR-0010 §改訂): the parsed ``From:`` sender — the
+        # email address is the cross-connector ``author_handle`` join key
+        # (symmetric with Outlook's bare-address sender), the display
+        # name is the ``author_display`` recognition cue. Clipped to the
+        # schema caps so a pathological ``From:`` header never raises a
+        # mid-sync ValidationError.
+        author_handle=clip_author_field(author_handle, max_chars=AUTHOR_HANDLE_MAX_CHARS),
+        author_display=clip_author_field(author_display, max_chars=AUTHOR_DISPLAY_MAX_CHARS),
     )
 
 

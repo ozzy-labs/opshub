@@ -1754,3 +1754,29 @@ opshub projections rebuild                                      # 念のため�
 - **MCP surface 不変**（19 tools）。skill catalog 不変（14、`test_skills_install_only_writes_14_assistant_skills` green）。
 - **scope SSOT 不変**: `FEATURE_SCOPES`（ADR-0040）は workspace 非依存のまま。`auth test` の readiness は per-workspace token で評価（`--workspace`）。
 - **スコープ外**: Enterprise Grid の cross-workspace ingestion / Slack 以外の connector の multi-account 化 / 旧データの自動 re-key migration / MCP `slack.demand.list` の workspace filter param（出力 field のみ先行）。
+
+## Phase 25-A: 横断 author/sender 正規化（commitment/person の前提土台、[ADR-0010 §改訂](adr/0010-connector-contract.md) / epic [#566](https://github.com/ozzy-labs/opshub/issues/566)）
+
+Phase 25 (秘書化 v1) の人軸 identity (25-B) と commitment direction (25-C) のための土台。全 SaaS connector が観測 item の author を正規化 field に流すようにし、`sources` projection に author 列を追加する。
+
+### 追加されたもの
+
+- `SourceObserved` に optional field `author_handle`（connector-native join key）/ `author_display`（表示名）を追加（additive、`schema_version` 据え置き）。既存 `author_id`（Slack 専用）は後方互換で保持。
+- `sources` projection に `author_handle` / `author_display` / `author_connector` 列を追加（migration `0034_add_author_to_sources`、いずれも nullable）。
+- per-connector operator self-identity 設定（commitment direction 判定用、`opshub.services.operator_identity.is_authored_by_operator`）:
+  - email 系: `[connectors.google_mail] operator_email` / `[connectors.ms365] operator_email` / `[connectors.google_calendar] operator_email` / `[connectors.google_workspace] operator_email`
+  - GitHub: `[connectors.github] operator_login`
+  - Teams: `[connectors.teams] operator_id`
+  - Slack: 既存 per-workspace self user id を再利用（新設定なし）
+
+### 必要な作業
+
+- **DB migration**: `uv run opshub db migrate` で `0034_add_author_to_sources` を適用する。新規 init では自動で head まで上がる。
+- **author 列の back-fill**: 既に観測済みの source 行に author を埋めるには **full re-sync が必要**（`projections rebuild` だけでは埋まらない — Phase 25-A 以前の event は author 正規化前のため `author_handle` が `None`）。`uv run opshub <connector> sync` を各 connector で再実行する。埋まっていなくても read 面は degrade（author が `None` の行は person/commitment 解析で「不明」扱い）するだけで壊れない。
+- **operator self-identity の設定**（任意、25-C を使うなら推奨）: 自分の email / GitHub login を上記 config に設定する。env override も可（`OPSHUB_CONNECTORS__GITHUB__OPERATOR_LOGIN` 等）。未設定でも壊れず、`is_authored_by_operator` は安全側（`False`）に倒れる。
+
+### 影響範囲
+
+- **MCP surface 不変**（19 tools）。skill catalog 不変（14、`test_skills_install_only_writes_14_assistant_skills` green）。
+- **既存挙動の維持**: Slack の `author_id` 経路（`slack_demand_digest`）は不変。他 connector の既存 field（title / summary / body / provenance）も不変。
+- **スコープ外**（後続 sub-issue）: 人軸 person entity / identity 解決（25-B）/ commitment 台帳本体（25-C）/ MCP・CLI surface（25-D 以降）。本 sub-issue は土台（event field + projection 列 + self-identity helper）のみ。

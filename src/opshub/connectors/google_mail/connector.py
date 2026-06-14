@@ -468,6 +468,10 @@ class GoogleMailConnector:
             body=event.body,
             provenance_origin=event.provenance_origin,
             provenance_trust=event.provenance_trust,
+            # Phase 25-A (ADR-0010 §改訂): the parsed ``From:`` sender
+            # identity the mapper stamped onto the event.
+            author_handle=event.author_handle,
+            author_display=event.author_display,
         )
         return True
 
