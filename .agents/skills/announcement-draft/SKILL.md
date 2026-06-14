@@ -119,5 +119,5 @@ text は user に提示するのみ。user は手で Slack / Notion / GitHub rel
 - ADR-0012 改訂 (本文 embedding hybrid recall)
 - ADR-0022 改訂 (MCP Server Surface、physical-column 時間フィルタ)
 - Phase 12 plan (`docs/phase-12-plan.md` §3 H5)
-- docs/assistant-agent.md (Skill catalog SSOT、14 skills 責務マップ)
+- docs/assistant-agent.md (Skill catalog SSOT、15 skills 責務マップ)
 - pair: handoff-draft (引き継ぎ書、こちらも text-only)

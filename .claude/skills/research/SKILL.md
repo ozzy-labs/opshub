@@ -159,4 +159,4 @@ input:
 - Phase 10 Sub-issue B (#214 merged、本文 FTS5 / search command)
 - Phase 11 plan (`docs/phase-11-plan.md`)
 - Phase 12 plan (`docs/phase-12-plan.md` §3 H2)
-- docs/assistant-agent.md (Skill catalog SSOT、14 skills 責務マップ)
+- docs/assistant-agent.md (Skill catalog SSOT、15 skills 責務マップ)

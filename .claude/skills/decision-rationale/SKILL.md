@@ -145,4 +145,4 @@ input:
 - ADR-0025 (Office 文書本文抽出、Phase 11)
 - Phase 10 plan §3-D (skill ↔ MCP tool マッピング)
 - Phase 12 plan (`docs/phase-12-plan.md` §3 H3)
-- docs/assistant-agent.md (Skill catalog SSOT、14 skills 責務マップ)
+- docs/assistant-agent.md (Skill catalog SSOT、15 skills 責務マップ)

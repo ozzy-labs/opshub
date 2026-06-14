@@ -189,4 +189,4 @@ Phase 25-D ([ADR-0042](../../adr/0042-commitment-ledger.md)) で追加された 
 - Phase 10 plan §3-D (skill ↔ MCP tool マッピング)
 - Phase 11 plan (`docs/phase-11-plan.md`)
 - Phase 12 plan (`docs/phase-12-plan.md` §3 H1)
-- docs/assistant-agent.md (Skill catalog SSOT、14 skills 責務マップ)
+- docs/assistant-agent.md (Skill catalog SSOT、15 skills 責務マップ)
