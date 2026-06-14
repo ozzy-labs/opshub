@@ -1,6 +1,6 @@
 # 0008. Naming: opshub
 
-- Status: Accepted
+- Status: Superseded by [ADR-0044](0044-rename-opshub-to-suasor.md) (2026-06-14 — 本 ADR §Positive #3「`opshub` という主要プロダクトは存在しない」の前提が `OpsHub, Inc.` (opshub.com、ALM/DevOps 統合ベンダー) の実在で覆り、製品名を **Suasor (スアソル)** に改名する判断に至った。実装は将来 Phase に defer)
 - Date: 2026-05-16
 - Deciders: ozzy
 

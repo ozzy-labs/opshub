@@ -88,7 +88,7 @@ _TOOL_NAMES: tuple[str, ...] = (
 # ``destructive`` invariant test below carves this name out so the
 # guard still catches the regression "new write tool forgot
 # destructive=true" for every other write category.
-_NON_DESTRUCTIVE_WRITES: frozenset[str] = frozenset({"propose.apply"})
+_NON_DESTRUCTIVE_WRITES: frozenset[str] = frozenset({"propose.apply", "catchup"})
 
 
 @pytest.fixture
@@ -402,18 +402,16 @@ def test_list_tools_expose_physical_column_time_filters(specs: list[Any]) -> Non
 
 
 def test_registry_surface_is_twenty_seven_tools(specs: list[Any]) -> None:
-    """The MCP surface is exactly 27 tools = 16 read + 11 write (Phase 25-D).
+    """The MCP surface is exactly 27 tools = 15 read + 12 write.
 
     Phase 21-D shipped 19 (13 read + 6 write). Phase 25-D (epic #566)
-    adds the 秘書化 v1 surface: read +3 (``commitment.list`` /
-    ``person.list`` / ``catchup``, ADR-0042 / ADR-0043) and write +5
-    (``commitment.scan`` / ``commitment.resolve`` / ``commitment.dismiss``
-    / ``person.merge`` / ``person.split``), bringing the total to 27 =
-    16 read + 11 write. (The epic body's "→ 24 tools" line is an
-    arithmetic slip — 13+3 read = 16 and 6+5 write = 11 sum to 27, which
-    is the read/write split it also states; the split is the
-    self-consistent SSOT.) The count pin makes any accidental add / drop
-    fail loud alongside the per-name
+    added the 秘書化 v1 surface: read +2 (``commitment.list`` /
+    ``person.list``, ADR-0042 / ADR-0043), write +6 (``commitment.scan``
+    / ``commitment.resolve`` / ``commitment.dismiss`` / ``person.merge``
+    / ``person.split`` + ``catchup``). ``catchup`` advances the seen
+    marker (a non-destructive state mutation), so it is a write — not a
+    read — bringing the total to 27 = 15 read + 12 write. The count pin
+    makes any accidental add / drop fail loud alongside the per-name
     :func:`test_registry_covers_phase_10_c2_surface` check (which catches
     *which* tool drifted; this one catches the *count* split between the
     read / write namespaces).
@@ -421,8 +419,8 @@ def test_registry_surface_is_twenty_seven_tools(specs: list[Any]) -> None:
     read_count = sum(1 for s in specs if isinstance(s.category, ReadCategory))
     write_count = sum(1 for s in specs if isinstance(s.category, WriteCategory))
     assert len(specs) == 27, f"expected 27 MCP tools, got {len(specs)}"
-    assert read_count == 16, f"expected 16 read tools, got {read_count}"
-    assert write_count == 11, f"expected 11 write tools, got {write_count}"
+    assert read_count == 15, f"expected 15 read tools, got {read_count}"
+    assert write_count == 12, f"expected 12 write tools, got {write_count}"
 
 
 def test_browser_fetch_is_open_world_write(specs: list[Any]) -> None:
@@ -433,9 +431,10 @@ def test_browser_fetch_is_open_world_write(specs: list[Any]) -> None:
     ``connector.sync`` — ``readOnlyHint=false`` (host prompts the
     operator), ``destructiveHint=true`` (observable upstream side
     effect), ``openWorldHint=true`` (network round-trip). It is NOT a
-    member of the ``_NON_DESTRUCTIVE_WRITES`` carve-out — only
-    ``propose.apply`` lives there. This pin keeps the "read tool = local
-    SQLite only" invariant honest: a regression that reclassifies
+    member of the ``_NON_DESTRUCTIVE_WRITES`` carve-out (which holds
+    ``propose.apply`` and ``catchup`` — local-only non-destructive
+    writes). This pin keeps the "read tool = local SQLite only"
+    invariant honest: a regression that reclassifies
     ``browser.fetch`` as a read tool (so a host auto-approves a network
     fetch) fails here.
     """
@@ -484,16 +483,18 @@ def test_browser_fetch_schema_takes_url_only(specs: list[Any]) -> None:
 
 
 def test_commitment_and_person_reads_are_closed_world(specs: list[Any]) -> None:
-    """``commitment.list`` / ``person.list`` / ``catchup`` are local reads.
+    """``commitment.list`` / ``person.list`` are local reads.
 
     ADR-0042 §閲覧 LLM 不要 / ADR-0043: viewing the ledger or the person
     graph never re-extracts (no LLM round-trip) and never leaves the box,
-    so all three must advertise ``read_only=true`` + ``destructive=false``
-    + ``open_world=false`` + ``idempotent=true``. A regression that
-    classifies any of them as a write (so a host prompts on a pure read)
-    or as open-world fails here.
+    so both must advertise ``read_only=true`` + ``destructive=false`` +
+    ``open_world=false`` + ``idempotent=true``. A regression that
+    classifies either as a write (so a host prompts on a pure read) or as
+    open-world fails here. (``catchup`` is deliberately NOT in this set —
+    it advances the seen marker, so it is a non-destructive write; see
+    :func:`test_catchup_is_non_destructive_closed_world_write`.)
     """
-    read_names = {"commitment.list", "person.list", "catchup"}
+    read_names = {"commitment.list", "person.list"}
     seen: set[str] = set()
     for spec in specs:
         if spec.name not in read_names:
@@ -562,6 +563,32 @@ def test_state_transition_writes_are_closed_world_destructive(specs: list[Any]) 
             f"{spec.name!r} is a real state mutation, not the propose.apply carve-out"
         )
     assert seen == transition_names, f"missing 秘書化 transition spec(s); saw {sorted(seen)}"
+
+
+def test_catchup_is_non_destructive_closed_world_write(specs: list[Any]) -> None:
+    """``catchup`` advances the seen marker → non-destructive local write.
+
+    Phase 25-E: catchup summarises the "前回見て以降" diff AND records a
+    ``SeenMarkerAdvanced`` so the next catchup resumes from here. That
+    mutation makes it a write (``read_only=false``), but a
+    **non-destructive** one (advisory bookkeeping over local SQLite, no
+    data loss, no network), so it joins ``propose.apply`` in the
+    ``_NON_DESTRUCTIVE_WRITES`` carve-out (``destructive=false``) while
+    staying closed-world (``open_world=false``) and non-idempotent
+    (``idempotent=false`` — each call moves the marker). A regression
+    that reclassifies it as a read (so a host auto-advances the marker
+    without prompting) fails here.
+    """
+    for spec in specs:
+        if spec.name == "catchup":
+            assert isinstance(spec.category, WriteCategory)
+            assert spec.policy.read_only is False
+            assert spec.policy.destructive is False
+            assert spec.policy.open_world is False
+            assert spec.policy.idempotent is False
+            assert spec.name in _NON_DESTRUCTIVE_WRITES
+            return
+    raise AssertionError("catchup spec missing from registry")
 
 
 def test_commitment_list_schema_filters(specs: list[Any]) -> None:

@@ -41,7 +41,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "build_brief_handler",
-    "build_catchup_handler",
     "build_commitment_list_handler",
     "build_decision_list_handler",
     "build_embeddings_find_duplicates_handler",
@@ -1143,37 +1142,6 @@ def build_person_list_handler(engine: Engine) -> ToolHandler:
     return handler
 
 
-# ---------------------------------------------------------------------- catchup
-
-
-def build_catchup_handler(engine: Engine) -> ToolHandler:
-    """Return the handler for ``catchup`` (Phase 25-E, epic #566).
-
-    Summarises the "since last seen" diff — new sources, overdue/open
-    commitments (25-C) and unhandled Slack demand (25-B) — by delegating to
-    :class:`~opshub.services.catchup.CatchupService`. Phase 25-D registered
-    the read tool and 25-E built the seen-marker machinery in parallel, so
-    the two landed without this wire; the follow-up reconnects them.
-
-    Because the tool is registered ``_policy_for_read()`` (read-only /
-    idempotent), the handler previews the diff with ``advance=False`` — it
-    does **not** move the seen marker. Advancing "ここまで見た" stays an
-    explicit write action via the ``opshub catchup`` CLI, keeping the MCP
-    read contract honest (repeated calls return the same digest).
-
-    ``engine`` is accepted for symmetry with the other read builders; the
-    service resolves its own engine from settings (like the other
-    ``build_*_service`` handlers).
-    """
-    _ = engine
-
-    async def handler(arguments: Mapping[str, Any]) -> str:
-        from opshub.cli._wiring import build_catchup_service
-        from opshub.services.catchup import digest_to_dict
-
-        limit = int(arguments.get("limit", 50))
-        service = build_catchup_service(actor="mcp:catchup")
-        digest = service.catchup(advance=False, limit=limit)
-        return _json_dump(digest_to_dict(digest))
-
-    return handler
+# NOTE: ``catchup`` advances the seen marker, so it is a non-destructive
+# *write* tool — its handler lives in ``_writes.py`` next to the other
+# WriteCategory builders.

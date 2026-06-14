@@ -1,7 +1,7 @@
 # 0022. MCP Server Surface
 
-- Status: Accepted (revised 2026-06-14 for Phase 25-D: 秘書化 v1 read/write tool 8 件 (`commitment.*` / `person.*` / `catchup`) の追加根拠を §決定 (h) で pin、surface 19 → 27 tools = 16 read + 11 write)
-- Date: 2026-05-30 (initial); 2026-05-31 (Phase 12 H1 改訂: + `search` FTS5 + `propose.apply` HITL idempotent + 4 read tools 物理列ベース時間フィルタ + MCP 引数名 → projection 物理列 写像表追加); 2026-06-03 (Phase 18 補遺: 新 read tool `slack.demand.list` の追加根拠を §決定 (f) 末尾に追記。ADR-0033 で詳細を pin、5 不変条件は継承、本 ADR の write tool 集合 / annotation pattern は不変); 2026-06-07 (Phase 21-D 改訂: 新 write tool `browser.fetch` を §決定 (g) で pin。外部ネットワーク egress = write 分類で「read tool = ローカル DB のみ」不変条件を維持、5 不変条件は継承、surface 18 → 19 tools = 13 read + 6 write); 2026-06-14 (Phase 25-D 改訂: 秘書化 v1 の 8 tool を §決定 (h) で pin = read `commitment.list` / `person.list` / `catchup` + write/HITL `commitment.scan` / `commitment.resolve` / `commitment.dismiss` / `person.merge` / `person.split`。5 不変条件は継承、surface 19 → 27 tools = 16 read + 11 write、[ADR-0042](0042-commitment-ledger.md) / [ADR-0043](0043-cross-source-identity-resolution.md)、epic #566)
+- Status: Accepted (revised 2026-06-14 for Phase 25-D: 秘書化 v1 read/write tool 8 件 (`commitment.*` / `person.*` / `catchup`) の追加根拠を §決定 (h) で pin、surface 19 → 27 tools = 15 read + 12 write)
+- Date: 2026-05-30 (initial); 2026-05-31 (Phase 12 H1 改訂: + `search` FTS5 + `propose.apply` HITL idempotent + 4 read tools 物理列ベース時間フィルタ + MCP 引数名 → projection 物理列 写像表追加); 2026-06-03 (Phase 18 補遺: 新 read tool `slack.demand.list` の追加根拠を §決定 (f) 末尾に追記。ADR-0033 で詳細を pin、5 不変条件は継承、本 ADR の write tool 集合 / annotation pattern は不変); 2026-06-07 (Phase 21-D 改訂: 新 write tool `browser.fetch` を §決定 (g) で pin。外部ネットワーク egress = write 分類で「read tool = ローカル DB のみ」不変条件を維持、5 不変条件は継承、surface 18 → 19 tools = 13 read + 6 write); 2026-06-14 (Phase 25-D 改訂: 秘書化 v1 の 8 tool を §決定 (h) で pin = read `commitment.list` / `person.list` + write `commitment.scan` / `commitment.resolve` / `commitment.dismiss` / `person.merge` / `person.split` / `catchup` (`catchup` は seen-marker を前進させる non-destructive write)。5 不変条件は継承、surface 19 → 27 tools = 15 read + 12 write、[ADR-0042](0042-commitment-ledger.md) / [ADR-0043](0043-cross-source-identity-resolution.md)、epic #566)
 - Deciders: ozzy
 
 ## Context
@@ -156,7 +156,7 @@ Phase 12 H1 (`docs/phase-12-plan.md` §3 H1-b) で MCP surface を 7 (Phase 10 C
 
 #### Phase 12 H1 時点の surface 一覧 (この時点で 17 tools = 12 read + 5 write)
 
-> 注: 以下は **Phase 12 H1 着地時点のスナップショット**。その後 Phase 18-C で read `slack.demand.list` が (→ 18 tools = 13 read + 5 write)、Phase 21-D で write `browser.fetch` が (→ 19 tools = 13 read + 6 write、§決定 (g))、Phase 25-D で 秘書化 v1 の 8 tool (`commitment.*` / `person.*` / `catchup`) が追加され (§決定 (h))、**現在の surface は 27 tools = 16 read + 11 write**。現行 surface の SSOT は本 §(g)(h) と `src/opshub/mcp/_registry.py` (test `tests/unit/mcp/test_registry_policy` が 16 read + 11 write を pin)。
+> 注: 以下は **Phase 12 H1 着地時点のスナップショット**。その後 Phase 18-C で read `slack.demand.list` が (→ 18 tools = 13 read + 5 write)、Phase 21-D で write `browser.fetch` が (→ 19 tools = 13 read + 6 write、§決定 (g))、Phase 25-D で 秘書化 v1 の 8 tool (`commitment.*` / `person.*` / `catchup`) が追加され (§決定 (h))、**現在の surface は 27 tools = 15 read + 12 write**。現行 surface の SSOT は本 §(g)(h) と `src/opshub/mcp/_registry.py` (test `tests/unit/mcp/test_registry_policy` が 15 read + 12 write を pin)。
 
 read (12、Phase 12 H1 時点): `recall.search` / `task.list` / `inbox.list` / `decision.list` / `brief` / `graph.related` / `graph.trace` / `graph.expand` / `source.list` / `source.get` / `embeddings.find_duplicates` / **`search`** (Phase 12 H1)
 
@@ -211,36 +211,38 @@ write (6): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` /
 #### Phase 21-D で導入される invariant
 
 - **`browser.fetch` = open-world write の policy guard**: `tests/unit/mcp/test_registry_policy` の `test_browser_fetch_is_open_world_write` が `readOnlyHint=false` + `destructiveHint=true` + `openWorldHint=true` を pin し、かつ `_NON_DESTRUCTIVE_WRITES` carve-out に**含まれない**ことを assert する。`browser.fetch` を read tool に reclassify する regression (host が network fetch を auto-approve してしまう) は即時 fail
-- **surface count pin**: surface count test が当時 19 tools = 13 read + 6 write を pin した (Phase 25-D で `test_registry_surface_is_twenty_seven_tools` に rename され 27 tools = 16 read + 11 write を pin、§決定 (h))。tool の追加 / 削除は count split で fail
+- **surface count pin**: surface count test が当時 19 tools = 13 read + 6 write を pin した (Phase 25-D で `test_registry_surface_is_twenty_seven_tools` に rename され 27 tools = 15 read + 12 write を pin、§決定 (h))。tool の追加 / 削除は count split で fail
 - **scheme 安全ゲート**: handler の unit test (`tests/unit/mcp/test_browser_fetch_handler`) が `file` / `data` / `javascript` / host-less URL を `OpsHubError` 拒否することを pin
 
 ### (h) Phase 25-D surface 拡張 — 秘書化 v1 (`commitment.*` / `person.*` / `catchup`、2026-06-14 改訂)
 
 Phase 25 (秘書化 v1、[epic #566](https://github.com/ozzy-labs/opshub/issues/566)) のコミットメント台帳 ([ADR-0042](0042-commitment-ledger.md)) / 人軸 identity ([ADR-0043](0043-cross-source-identity-resolution.md)) / catchup を本 ADR の MCP surface に追加する (Phase 25-D [#569](https://github.com/ozzy-labs/opshub/issues/569))。本 ADR の 5 不変条件 (stdio 一択 / token passthrough 禁止 / read/write 分離 / context 効率 / OTel naming) はすべて継承する。8 tool すべて既存の `CommitmentScanService` / `PersonResolutionService` (CLI と同経路) を funnel するので、validation / event-log immutability / server 境界の secret redaction (§決定 (b)) が同一に効く。
 
-#### (h-1) read +3 → 16
+#### (h-1) read +2 → 15
 
 - **`commitment.list`** (`ReadCategory.COMMITMENT_LIST`) — 双方向コミットメント台帳 (ADR-0042) を読む。`direction` (`i_owe` / `owed_to_me`) / `state` / `person` で filter。**LLM コールなし** (閲覧 LLM 不要、`commitment.scan` 経路が抽出済みのものを読むだけ)。`due_before` filter は**出さない** — `due` は LLM が読んだ free-form text で比較可能 date でない (ADR-0042 §決定 (h))。
 - **`person.list`** (`ReadCategory.PERSON_LIST`) — resolved な人軸 identity graph (ADR-0043) を読む。未 bind handle を idempotent に resolve してから一覧 (`opshub person list` と同経路)。
-- **`catchup`** (`ReadCategory.CATCHUP`) — 「前回見て以降」の差分 digest (Phase 25-E)。seen-marker projection を読む read-only tool。`since_last_seen` で marker 前進の有無を制御する。
-- 3 tool とも local SQLite のみを叩く (`open_world=false`、read tool 不変条件 = 「ローカル DB のみ」を維持)。
+- 2 tool とも local SQLite のみを叩く (`open_world=false`、read tool 不変条件 = 「ローカル DB のみ」を維持)。
+- (`catchup` は read **ではなく** non-destructive write。seen-marker を前進させる state mutation を伴うため (h-2) に置く。)
 
-#### (h-2) write/HITL +5 → 11
+#### (h-2) write +6 → 12
 
 - **`commitment.scan`** (`WriteCategory.COMMITMENT_SCAN`) — 旗艦の LLM 抽出パス (ADR-0042)。durable な `CommitmentExtracted` event を書き、外部 LLM backend に egress する **open-world write** (`browser.fetch` と同じく「ネットワークに出る = write 分類」)。`[llm] backend = disabled` なら clean な `ConfigError`。
 - **`commitment.resolve`** / **`commitment.dismiss`** / **`person.merge`** / **`person.split`** (`WriteCategory.COMMITMENT_RESOLVE` / `COMMITMENT_DISMISS` / `PERSON_MERGE` / `PERSON_SPLIT`) — local SQLite 上の **closed-world destructive 状態遷移**。各々が duplicate transition で fail-fast する実 mutation なので、`propose.apply` の non-destructive carve-out (`_NON_DESTRUCTIVE_WRITES`) には**含めない**。
+- **`catchup`** (`WriteCategory.CATCHUP`、Phase 25-E) — 「前回見て以降」の差分 digest を返し、**seen-marker を前進させる** (record `SeenMarkerAdvanced`)。その marker 前進こそ assistant 経路で catchup が有用な理由 (次回が前回以降の差分だけを返す) なので write 分類。ただし local SQLite 上の advisory bookkeeping = **non-destructive** (`destructive=false`、data 損失 / network なし) で `propose.apply` と同じ `_NON_DESTRUCTIVE_WRITES` carve-out に入る。各呼び出しが marker を進めるため `idempotent=false`、`open_world=false`。CLI の `opshub catchup --no-advance` は前進しない read-only preview。
 - annotation は write tool 共通パターン (`readOnlyHint=false`)。
 
-#### Phase 25-D 後の surface 一覧 (合計 27 = 16 read + 11 write)
+#### Phase 25-D 後の surface 一覧 (合計 27 = 15 read + 12 write)
 
-read (16): `recall.search` / `task.list` / `inbox.list` / `decision.list` / `brief` / `graph.related` / `graph.trace` / `graph.expand` / `source.list` / `source.get` / `embeddings.find_duplicates` / `search` / `slack.demand.list` / **`commitment.list`** / **`person.list`** / **`catchup`** (Phase 25-D)
+read (15): `recall.search` / `task.list` / `inbox.list` / `decision.list` / `brief` / `graph.related` / `graph.trace` / `graph.expand` / `source.list` / `source.get` / `embeddings.find_duplicates` / `search` / `slack.demand.list` / **`commitment.list`** / **`person.list`** (Phase 25-D)
 
-write (11): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` / `propose.apply` / `browser.fetch` / **`commitment.scan`** / **`commitment.resolve`** / **`commitment.dismiss`** / **`person.merge`** / **`person.split`** (Phase 25-D)
+write (12): `task.create` / `inbox.add` / `connector.sync` / `propose.generate` / `propose.apply` / `browser.fetch` / **`commitment.scan`** / **`commitment.resolve`** / **`commitment.dismiss`** / **`person.merge`** / **`person.split`** / **`catchup`** (Phase 25-D/E、non-destructive)
 
 #### Phase 25-D で導入される invariant
 
-- **surface count pin**: `test_registry_surface_is_twenty_seven_tools` が **27 tools = 16 read + 11 write** を pin (`tests/unit/mcp/test_registry_policy.py`)。epic #566 本文の「→ 24 tools」は算術ずれで、13+3 read = 16 / 6+5 write = 11 の合計 27 が self-consistent な SSOT (read/write split が一致する)。
-- **`_TOOL_NAMES` + read/write split pin**: 同 test が `_TOOL_NAMES` tuple と read 16 / write 11 の不変条件を pin。8 tool の追加 / 削除 / reclassify は count split で fail。
+- **surface count pin**: `test_registry_surface_is_twenty_seven_tools` が **27 tools = 15 read + 12 write** を pin (`tests/unit/mcp/test_registry_policy.py`)。read +2 (`commitment.list` / `person.list`) + write +6 (`commitment.scan` / `resolve` / `dismiss` / `person.merge` / `split` + `catchup`) = +8 で 19 → 27。`catchup` は seen-marker を前進させる non-destructive write のため read ではなく write に数える。
+- **`_TOOL_NAMES` + read/write split pin**: 同 test が `_TOOL_NAMES` tuple と read 15 / write 12 の不変条件を pin。8 tool の追加 / 削除 / reclassify は count split で fail。
+- **`catchup` = non-destructive write の policy guard**: `test_catchup_is_non_destructive_closed_world_write` が `readOnlyHint=false` + `destructiveHint=false` + `openWorldHint=false` + `idempotent=false` を pin し、`_NON_DESTRUCTIVE_WRITES` carve-out (= `propose.apply` + `catchup`) に含まれることを assert する。`catchup` を read に reclassify する regression (host が marker 前進を auto-approve せず黙って進めてしまう) は即時 fail。
 - **commitment.scan = open-world write の policy guard**: `commitment.scan` が `propose.apply` の non-destructive carve-out に含まれないことを policy test が assert する (host が LLM 抽出を auto-approve してしまう regression を防ぐ)。
 
 ## Consequences

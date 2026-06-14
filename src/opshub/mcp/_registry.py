@@ -88,13 +88,11 @@ class ReadCategory(StrEnum):
     # reads the resolved person-axis identity graph (ADR-0043). Both are
     # pure SQLite reads over the projections their Phase 25-B/25-C
     # services materialise — **no LLM call** (viewing the ledger /
-    # person graph is read-only, ADR-0042 §閲覧 LLM 不要). ``catchup`` is
-    # the read surface for the Phase 25-E "前回見て以降" diff digest; the
-    # registry registers the tool here (25-D) and 25-E (#570) wires the
-    # concrete handler body once the seen-marker projection lands.
+    # person graph is read-only, ADR-0042 §閲覧 LLM 不要).
+    # (``catchup`` is NOT here — it advances the seen marker, so it is a
+    # non-destructive WriteCategory tool; see below.)
     COMMITMENT_LIST = "commitment.list"
     PERSON_LIST = "person.list"
-    CATCHUP = "catchup"
 
 
 class WriteCategory(StrEnum):
@@ -180,6 +178,15 @@ class WriteCategory(StrEnum):
     COMMITMENT_DISMISS = "commitment.dismiss"
     PERSON_MERGE = "person.merge"
     PERSON_SPLIT = "person.split"
+    # ``catchup`` (Phase 25-E) summarises the "前回見て以降" diff AND
+    # advances the seen marker (records ``SeenMarkerAdvanced``). That
+    # state mutation is what makes catchup useful on the assistant path
+    # (next catchup resumes from here), so it is a write — but a
+    # **non-destructive** one (the marker is advisory bookkeeping over
+    # local SQLite, no data loss, no network). It shares the
+    # ``propose.apply`` non-destructive carve-out (``destructive=false``)
+    # while staying ``idempotent=false`` (each call advances the marker).
+    CATCHUP = "catchup"
 
 
 # Either a read or a write category.
@@ -1097,36 +1104,6 @@ def build_tool_specs(
             category=ReadCategory.PERSON_LIST,
             handler=handlers["person.list"],
         ),
-        ToolSpec(
-            name="catchup",
-            title="Summarise the 'since last seen' diff",
-            description=(
-                "Summarise everything since the operator last caught up — new"
-                " sources, overdue/open commitments (ADR-0042) and unhandled"
-                " Slack demand — priority-ordered (Phase 25-E, ADR-0015 応用)."
-                " Read-only over local SQLite: the diff is bounded at the"
-                " stored seen-marker but this tool does NOT advance it (a"
-                " repeated call returns the same digest). Advancing"
-                " 'ここまで見た' is an explicit write via the ``opshub"
-                " catchup`` CLI."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 200,
-                        "default": 50,
-                        "description": "Per-section cap on the returned items.",
-                    },
-                },
-                "additionalProperties": False,
-            },
-            policy=_policy_for_read(),
-            category=ReadCategory.CATCHUP,
-            handler=handlers["catchup"],
-        ),
         # ------------------------------------------------------------------
         # Step 1 widening — HITL-boundary write tool (proposal generation).
         # ProposalGenerated lands on the durable event log; apply still
@@ -1500,6 +1477,40 @@ def build_tool_specs(
             policy=_policy_for_write(open_world=False),
             category=WriteCategory.PERSON_SPLIT,
             handler=handlers["person.split"],
+        ),
+        ToolSpec(
+            name="catchup",
+            title="Catch up on the 'since last seen' diff (advances the marker)",
+            description=(
+                "Summarise everything since the operator last caught up — new"
+                " sources, overdue/open commitments (ADR-0042) and unhandled"
+                " Slack demand — priority-ordered (Phase 25-E, ADR-0015 応用),"
+                " then advance the seen marker so the next catchup resumes"
+                " from here ('ここまで見た' is recorded). The digest reflects"
+                " the pre-advance window. Non-destructive write over local"
+                " SQLite (no data loss, no network); a compliant host may"
+                " confirm before marking-seen. Use ``opshub catchup"
+                " --no-advance`` for a CLI preview that does not advance."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "default": 50,
+                        "description": "Per-section cap on the returned items.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            # Non-destructive write: advances the seen marker (mutation) but
+            # over local SQLite only (destructive=false, like propose.apply);
+            # idempotent stays false since each call moves the marker.
+            policy=_policy_for_write(open_world=False, destructive=False),
+            category=WriteCategory.CATCHUP,
+            handler=handlers["catchup"],
         ),
     ]
     return specs

@@ -83,7 +83,7 @@ NNNN-kebab-case-title.md
 | 0005 | [External Content Minimization](0005-external-content-minimization.md) | Accepted |
 | 0006 | [CLI-first MVP, defer MCP](0006-cli-first-mvp.md) | Accepted |
 | 0007 | [Single Python Package, defer Monorepo](0007-single-python-package.md) | Accepted |
-| 0008 | [Naming: opshub](0008-naming-opshub.md) | Accepted |
+| 0008 | [Naming: opshub](0008-naming-opshub.md) | Superseded by ADR-0044 (rename → Suasor) |
 | 0009 | [Multi-Agent Neutrality](0009-multi-agent-neutrality.md) | Accepted |
 | 0010 | [Connector Contract](0010-connector-contract.md) | Accepted |
 | 0011 | [Ozzy-Labs Ecosystem Adoption](0011-ozzy-labs-ecosystem-adoption.md) | Accepted |
@@ -117,6 +117,7 @@ NNNN-kebab-case-title.md
 | 0041 | [Slack Multi-Workspace (alias × team_id 二層 identity)](0041-slack-multi-workspace.md) | Accepted (Phase 24) |
 | 0042 | [Commitment Ledger (two-way, LLM-mined, manual scan)](0042-commitment-ledger.md) | Accepted (Phase 25-C) |
 | 0043 | [Cross-Source Identity Resolution (person-axis)](0043-cross-source-identity-resolution.md) | Accepted (Phase 25-B) |
+| 0044 | [Rename opshub → Suasor (deferred implementation)](0044-rename-opshub-to-suasor.md) | Accepted (implementation deferred) — Supersedes ADR-0008 |
 
 ## Open Questions
 

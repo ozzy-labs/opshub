@@ -1825,7 +1825,7 @@ opshub catchup [--since-last-seen|--no-advance] [--limit N] [--format text|json]
 
 ### Phase 25 影響範囲
 
-- **MCP surface 19 → 27 tools = 16 read + 11 write**（25-D / [ADR-0022 §決定 (h)](adr/0022-mcp-server-surface.md)）。read +3 = `commitment.list` / `person.list` / `catchup`、write/HITL +5 = `commitment.scan` / `commitment.resolve` / `commitment.dismiss` / `person.merge` / `person.split`。count pin は `tests/unit/mcp/test_registry_policy.py::test_registry_surface_is_twenty_seven_tools`。
+- **MCP surface 19 → 27 tools = 15 read + 12 write**（25-D / [ADR-0022 §決定 (h)](adr/0022-mcp-server-surface.md)）。read +2 = `commitment.list` / `person.list`、write +6 = `commitment.scan` / `commitment.resolve` / `commitment.dismiss` / `person.merge` / `person.split` / `catchup`。`catchup` は seen-marker を前進させる非破壊 write（`destructiveHint=false`）。count pin は `tests/unit/mcp/test_registry_policy.py::test_registry_surface_is_twenty_seven_tools`。
 - **skill catalog 14 → 15**（25-E、新規 `catchup`）。SSOT は `_skills_resources.py` の `ASSISTANT_SKILL_NAMES` tuple、pin は `test_skills_install_only_writes_15_assistant_skills`。
 - **督促境界の継承**: 台帳は読み取り signal。外部送信督促（HITL write-back）は別 Phase（[ADR-0010](adr/0010-connector-contract.md) §禁止事項 7 / ADR-0042 §督促境界）。状態遷移（resolve / dismiss / reopen / merge / split）は operator の明示 HITL 操作。
 - **replay 決定性**: LLM 抽出は `CommitmentExtracted` event に閉じ、`commitments` projection は純関数。`opshub projections rebuild` は台帳を同値復元し、commitment scan cursor / seen-marker も reset しない（replay で同形）。

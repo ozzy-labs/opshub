@@ -282,7 +282,7 @@ Drive 認証への依存に置換` する形で 5 つ目の connector category �
 - **Context-efficient returns** — `recall.search` / list 系は本文ではなく 200 文字 snippet を返す (ADR-0022 §(d))。データ持ち出し面と LLM context の両方を縮小。
 - **OTel GenAI naming** — `gen_ai.operation.name=execute_tool` / `gen_ai.tool.name=<name>` / `gen_ai.tool.call.id=<ulid>` を structlog に記録 (将来 `mcp-otel` extras で exporter に出す、ADR-0022 §(e))。
 
-Phase 10 C2 baseline + Step 1 widening (PR #231) + Phase 12 H1 (ADR-0022 改訂 §決定 (f)) + Phase 18-C (ADR-0033 §決定 (c)) + Phase 21-D (ADR-0037 §決定 (e) + ADR-0022 改訂 §決定 (g)) + Phase 25-D (ADR-0042 / ADR-0043 + ADR-0022 改訂 §決定 (h)) で出荷した tool 一覧 (`src/opshub/mcp/_registry.py`、計 **27 tools = read 16 + write 11**):
+Phase 10 C2 baseline + Step 1 widening (PR #231) + Phase 12 H1 (ADR-0022 改訂 §決定 (f)) + Phase 18-C (ADR-0033 §決定 (c)) + Phase 21-D (ADR-0037 §決定 (e) + ADR-0022 改訂 §決定 (g)) + Phase 25-D (ADR-0042 / ADR-0043 + ADR-0022 改訂 §決定 (h)) で出荷した tool 一覧 (`src/opshub/mcp/_registry.py`、計 **27 tools = read 15 + write 12**):
 
 | Kind | Name | 目的 |
 |---|---|---|
@@ -307,7 +307,7 @@ Phase 10 C2 baseline + Step 1 widening (PR #231) + Phase 12 H1 (ADR-0022 改訂 
 | write | `browser.fetch` | **Phase 21-D 新規** — `url` を headless Chromium で render し抽出後 DOM text snippet + `<title>` を返す (`WriteCategory.BROWSER_FETCH`、`readOnlyHint=false` / `destructiveHint=true` / `openWorldHint=true` = `connector.sync` と同パターン)。**persist なし** = ad-hoc read (durable 取り込みは Phase 21-C `web` connector の責務)。ネットワークに egress するため read tool ではなく write-category として HITL per call にする (「read tool = ローカル DB のみ」不変条件の維持)。`http` / `https` のみ許容、async handler は `asyncio.to_thread` 経由で sync browser core を呼ぶ。ADR-0037 §決定 (e)/(h) + ADR-0022 §決定 (g)) |
 | read | `commitment.list` | **Phase 25-D 新規** — 双方向コミットメント台帳 (ADR-0042) を読む (`ReadCategory.COMMITMENT_LIST`、`direction` / `state` / `person` filter、LLM コールなし。`due_before` filter は free-form text の `due` を比較可能 date 扱いしないため非露出) |
 | read | `person.list` | **Phase 25-D 新規** — 人軸 identity graph (ADR-0043) を読む (`ReadCategory.PERSON_LIST`、未 bind handle を idempotent に resolve してから一覧、`opshub person list` と同経路) |
-| read | `catchup` | **Phase 25-D/E 新規** — 「前回見て以降」の差分 digest (`ReadCategory.CATCHUP`、新規 source + 期日超過 commitment + 未処理 Slack demand を優先度順、`since_last_seen` で marker 前進を制御、ADR-0042 / ADR-0015 応用、digest body は Phase 25-E) |
+| write | `catchup` | **Phase 25-D/E 新規** — 「前回見て以降」の差分 digest (`WriteCategory.CATCHUP`、非破壊 write: 新規 source + 期日超過 commitment + 未処理 Slack demand を優先度順に要約し seen-marker を前進、ADR-0042 / ADR-0015 応用、digest body は Phase 25-E) |
 | write | `commitment.scan` | **Phase 25-D 新規** — 旗艦 LLM 抽出パス (ADR-0042、`WriteCategory.COMMITMENT_SCAN`、`open_world=true` = LLM round-trip で network egress、durable `CommitmentExtracted` event を書く。`[llm] backend = disabled` → `ConfigError`、`max_sources` で per-call cost cap) |
 | write | `commitment.resolve` | **Phase 25-D 新規** — commitment を done に (`WriteCategory.COMMITMENT_RESOLVE`、`open_world=false` = local SQLite state transition、`propose.apply` non-destructive carve-out に非該当) |
 | write | `commitment.dismiss` | **Phase 25-D 新規** — 抽出を false positive に (`WriteCategory.COMMITMENT_DISMISS`、`open_world=false`、optional `reason`) |
