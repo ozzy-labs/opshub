@@ -103,59 +103,16 @@ def catchup_command(
 
 
 def _digest_json(digest: object) -> dict[str, object]:
-    """Render a :class:`CatchupDigest` to a JSON-serialisable dict."""
-    from opshub.services.catchup import CatchupDigest
+    """Render a :class:`CatchupDigest` to a JSON-serialisable dict.
+
+    Delegates to :func:`opshub.services.catchup.digest_to_dict` — the wire
+    shape lives next to the dataclasses so the CLI and the MCP ``catchup``
+    tool share one serialiser (no drift).
+    """
+    from opshub.services.catchup import CatchupDigest, digest_to_dict
 
     assert isinstance(digest, CatchupDigest)
-
-    def _iso(value: object) -> str | None:
-        from datetime import datetime
-
-        return value.isoformat() if isinstance(value, datetime) else None
-
-    return {
-        "since": _iso(digest.since),
-        "advanced_to": _iso(digest.advanced_to),
-        "new_sources_total": digest.new_sources_total,
-        "new_sources": [
-            {
-                "id": s.id,
-                "connector_name": s.connector_name,
-                "source_type": s.source_type,
-                "title": s.title,
-                "url": s.url,
-                "observed_at": _iso(s.observed_at),
-            }
-            for s in digest.new_sources
-        ],
-        "open_commitments_total": digest.open_commitments_total,
-        "overdue_commitments_total": digest.overdue_commitments_total,
-        "open_commitments": [
-            {
-                "id": c.id,
-                "direction": c.direction,
-                "counterparty": c.counterparty,
-                "due": c.due,
-                "text": c.text,
-                "overdue": c.overdue,
-            }
-            for c in digest.open_commitments
-        ],
-        "new_demand_total": digest.new_demand_total,
-        "new_demand": [
-            {
-                "team_id": d.team_id,
-                "channel_id": d.channel_id,
-                "channel_name": d.channel_name,
-                "demand_kind": d.demand_kind,
-                "last_demand_user_id": d.last_demand_user_id,
-                "last_demand_excerpt": d.last_demand_excerpt,
-                "last_demand_permalink": d.last_demand_permalink,
-                "last_demand_at": _iso(d.last_demand_at),
-            }
-            for d in digest.new_demand
-        ],
-    }
+    return digest_to_dict(digest)
 
 
 def _render_text(digest: object) -> None:

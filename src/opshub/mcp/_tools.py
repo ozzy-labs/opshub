@@ -1147,29 +1147,33 @@ def build_person_list_handler(engine: Engine) -> ToolHandler:
 
 
 def build_catchup_handler(engine: Engine) -> ToolHandler:
-    """Return the handler bound to ``engine`` for ``catchup``.
+    """Return the handler for ``catchup`` (Phase 25-E, epic #566).
 
-    Phase 25-D registers the ``catchup`` read tool on the MCP surface so
-    the count is stable for the assistant skill that lands in 25-E, but
-    the concrete "前回見て以降" diff digest depends on the seen-marker
-    projection + ``opshub catchup`` machinery that Phase 25-E (#570)
-    builds. Until that lands, an invocation fails loud with a clean
-    :class:`~opshub.core.errors.OpsHubError` (rendered through the MCP
-    ``isError`` path) rather than returning a misleading empty digest.
-    25-E replaces this body with the real seen-marker-aware query.
+    Summarises the "since last seen" diff — new sources, overdue/open
+    commitments (25-C) and unhandled Slack demand (25-B) — by delegating to
+    :class:`~opshub.services.catchup.CatchupService`. Phase 25-D registered
+    the read tool and 25-E built the seen-marker machinery in parallel, so
+    the two landed without this wire; the follow-up reconnects them.
 
-    ``engine`` is accepted for symmetry with the other read builders.
+    Because the tool is registered ``_policy_for_read()`` (read-only /
+    idempotent), the handler previews the diff with ``advance=False`` — it
+    does **not** move the seen marker. Advancing "ここまで見た" stays an
+    explicit write action via the ``opshub catchup`` CLI, keeping the MCP
+    read contract honest (repeated calls return the same digest).
+
+    ``engine`` is accepted for symmetry with the other read builders; the
+    service resolves its own engine from settings (like the other
+    ``build_*_service`` handlers).
     """
     _ = engine
 
     async def handler(arguments: Mapping[str, Any]) -> str:
-        from opshub.core.errors import OpsHubError
+        from opshub.cli._wiring import build_catchup_service
+        from opshub.services.catchup import digest_to_dict
 
-        _ = arguments
-        raise OpsHubError(
-            "catchup is not implemented yet (Phase 25-E / #570): the MCP"
-            " surface is registered but the seen-marker digest body lands"
-            " in the next sub-issue."
-        )
+        limit = int(arguments.get("limit", 50))
+        service = build_catchup_service(actor="mcp:catchup")
+        digest = service.catchup(advance=False, limit=limit)
+        return _json_dump(digest_to_dict(digest))
 
     return handler

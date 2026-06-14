@@ -13,6 +13,7 @@ from opshub.services.catchup.service import (
     CatchupDigest,
     CatchupService,
     CatchupSource,
+    digest_to_dict,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "CatchupDigest",
     "CatchupService",
     "CatchupSource",
+    "digest_to_dict",
 ]
