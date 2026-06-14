@@ -54,8 +54,13 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from opshub.core.ids import new_ulid
+from opshub.core.text_limits import clip_author_field
 from opshub.core.time import to_utc
 from opshub.domain.events import SourceObserved
+from opshub.domain.events.source import (
+    AUTHOR_DISPLAY_MAX_CHARS,
+    AUTHOR_HANDLE_MAX_CHARS,
+)
 
 if TYPE_CHECKING:
     from opshub.connectors.box.fetcher import RawBoxEvent
@@ -150,6 +155,13 @@ def map_event(raw: RawBoxEvent, *, actor: str = "connector:box") -> SourceObserv
         body=summary,
         provenance_origin="external",
         provenance_trust="untrusted",
+        # Phase 25-A (ADR-0010 §改訂): the Box user who triggered the
+        # event is the cross-connector author — ``actor_id`` (numeric Box
+        # user id) is the join key (25-B), ``actor_name`` is the
+        # recognition cue. Empty strings (Box omits the actor on some
+        # system events) normalise to ``None`` so the columns store NULL.
+        author_handle=clip_author_field(raw.actor_id, max_chars=AUTHOR_HANDLE_MAX_CHARS),
+        author_display=clip_author_field(raw.actor_name, max_chars=AUTHOR_DISPLAY_MAX_CHARS),
     )
 
 

@@ -45,6 +45,14 @@ lands as ``NULL`` so the four pre-existing connectors (``github`` /
 ``slack`` / ``ms365`` / ``box``), which never populate the field,
 remain bit-for-bit identical in the read model.
 
+Phase 25-A (ADR-0010 §改訂) adds the ``author_handle`` /
+``author_display`` / ``author_connector`` columns (migration
+``0034_add_author_to_sources``) backing the 秘書化 v1 person-axis
+(25-B) + commitment ledger (25-C). The projector writes
+``event.author_handle`` / ``event.author_display`` straight through and
+mirrors ``event.connector_name`` onto ``author_connector``; the
+local-FS / ``web`` connectors leave all three ``NULL``.
+
 :class:`SourceReferenced` is a deliberate no-op for this projection:
 the reference graph is not stored in ``sources_table``. When a Phase 4
 ``links`` projection lands it will consume :class:`SourceReferenced`;
@@ -103,6 +111,15 @@ sources_table: Table = Table(
     Column("body", Text(), nullable=False),
     Column("provenance_origin", Text(), nullable=True),
     Column("provenance_trust", Text(), nullable=True),
+    # Phase 25-A (ADR-0010 §改訂): cross-connector author normalisation —
+    # the join key + display name + producing connector the Phase 25
+    # person-axis (25-B) and commitment ledger (25-C) read alongside the
+    # body. ``NULL`` for the local-FS (``box_drive`` / ``onedrive_drive``)
+    # and operator-listed ``web`` connectors that surface no SaaS author
+    # identity. Mirrors migration ``0034_add_author_to_sources``.
+    Column("author_handle", Text(), nullable=True),
+    Column("author_display", Text(), nullable=True),
+    Column("author_connector", Text(), nullable=True),
     UniqueConstraint(
         "connector_name",
         "external_id",
@@ -201,6 +218,15 @@ class SourcesProjection:
             body=event.body,
             provenance_origin=event.provenance_origin,
             provenance_trust=event.provenance_trust,
+            # Phase 25-A (ADR-0010 §改訂): the normalised author identity.
+            # ``author_connector`` mirrors ``connector_name`` so the
+            # person-axis resolver reads ``(author_connector,
+            # author_handle)`` as a self-describing unit (a ``U...``
+            # handle from Slack must not be merged with a like-shaped
+            # handle from a different connector on the handle alone).
+            author_handle=event.author_handle,
+            author_display=event.author_display,
+            author_connector=event.connector_name,
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=["connector_name", "external_id"],
@@ -216,6 +242,13 @@ class SourcesProjection:
                 "body": stmt.excluded.body,
                 "provenance_origin": stmt.excluded.provenance_origin,
                 "provenance_trust": stmt.excluded.provenance_trust,
+                # Phase 25-A (ADR-0010 §改訂): refresh the author identity
+                # on re-observation so an edited upstream item (e.g. a
+                # Slack message re-keyed to a different bot, a Drive file
+                # with a new ``lastModifyingUser``) updates the row.
+                "author_handle": stmt.excluded.author_handle,
+                "author_display": stmt.excluded.author_display,
+                "author_connector": stmt.excluded.author_connector,
             },
         )
         conn.execute(stmt)

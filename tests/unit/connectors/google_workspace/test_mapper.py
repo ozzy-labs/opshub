@@ -562,3 +562,36 @@ def test_build_source_observed_whitespace_only_url_normalises_to_none() -> None:
         body=None,
     )
     assert event.url is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 25-A (ADR-0010 §改訂): cross-connector author normalisation.
+# ---------------------------------------------------------------------------
+
+
+def test_author_prefers_last_modifying_user() -> None:
+    """``lastModifyingUser`` wins as the author (who last touched the content)."""
+    event = map_drive_item(
+        _raw(
+            owner_email="owner@example.com",
+            owner_display_name="Owner",
+            last_modifying_user_email="Editor@Example.com",
+            last_modifying_user_display_name="Editor",
+        )
+    )
+    assert event.author_handle == "editor@example.com"
+    assert event.author_display == "Editor"
+
+
+def test_author_falls_back_to_owner_when_no_last_modifier() -> None:
+    """With no ``lastModifyingUser`` the owner identity is used."""
+    event = map_drive_item(
+        _raw(
+            owner_email="Owner@Example.com",
+            owner_display_name="Owner",
+            last_modifying_user_email="",
+            last_modifying_user_display_name="",
+        )
+    )
+    assert event.author_handle == "owner@example.com"
+    assert event.author_display == "Owner"

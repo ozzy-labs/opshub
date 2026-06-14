@@ -496,3 +496,55 @@ def test_gmail_body_with_control_chars_replaced_or_kept() -> None:
     # U+FFFD survives intact (client's ``errors="replace"`` produces
     # it on malformed UTF-8; the mapper must not double-process).
     assert "�" in event.body
+
+
+# ---------------------------------------------------------------------------
+# Phase 25-A (ADR-0010 §改訂): cross-connector author normalisation.
+# ---------------------------------------------------------------------------
+
+
+def _raw_with_from(from_header: str) -> RawGmailMessage:
+    return RawGmailMessage(
+        message_id="m-author",
+        thread_id="t",
+        label_ids=(),
+        history_id="h",
+        internal_date_ms="0",
+        from_header=from_header,
+        subject_header="Subject",
+        snippet="",
+        body_text="body",
+        body_html="",
+        raw={},
+    )
+
+
+def test_author_handle_parses_display_and_address() -> None:
+    """A ``"Display <addr>"`` From: header splits into handle + display."""
+    event = map_gmail_message(_raw_with_from('"Alice Example" <Alice@Example.com>'))
+    # Email is the join key, lower-cased so identity resolution treats
+    # case variants as one handle.
+    assert event.author_handle == "alice@example.com"
+    assert event.author_display == "Alice Example"
+
+
+def test_author_handle_bare_address() -> None:
+    """A bare ``addr`` From: header yields the address as the handle, no display."""
+    event = map_gmail_message(_raw_with_from("bob@example.com"))
+    assert event.author_handle == "bob@example.com"
+    assert event.author_display is None
+
+
+def test_author_fields_none_when_from_header_empty() -> None:
+    """An empty From: header leaves both author fields ``None``."""
+    event = map_gmail_message(_raw_with_from(""))
+    assert event.author_handle is None
+    assert event.author_display is None
+
+
+def test_author_handle_clipped_to_cap() -> None:
+    """A pathological From: header does not raise — handle clips to the schema cap."""
+    long_local = "x" * 400
+    event = map_gmail_message(_raw_with_from(f"{long_local}@example.com"))
+    assert event.author_handle is not None
+    assert len(event.author_handle) <= 320

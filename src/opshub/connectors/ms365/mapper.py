@@ -76,9 +76,13 @@ from typing import TYPE_CHECKING, Any, cast
 
 from opshub.core.errors import ConnectorFailedError
 from opshub.core.logging import get_logger
-from opshub.core.text_limits import normalise_optional_text, truncate_with_marker
+from opshub.core.text_limits import (
+    clip_author_field,
+    normalise_optional_text,
+    truncate_with_marker,
+)
 from opshub.core.time import now_utc
-from opshub.domain.events.source import SourceObserved
+from opshub.domain.events.source import AUTHOR_HANDLE_MAX_CHARS, SourceObserved
 
 if TYPE_CHECKING:
     from opshub.connectors.ms365.fetcher import (
@@ -190,6 +194,10 @@ def map_calendar_event(raw: RawCalendarEvent, *, actor: str = DEFAULT_ACTOR) -> 
         # ``body.content``). ``/me/calendar/events`` has no ``$select``
         # so the body rides along in ``raw``.
         body=_body_from_raw(raw.raw),
+        # Phase 25-A (ADR-0010 §改訂): the organiser email is the
+        # cross-connector author join key (symmetric with the Google
+        # Calendar mapper's ``organizer_email``).
+        author_handle=_organizer_address(raw.raw),
     )
 
 
@@ -281,6 +289,9 @@ def map_outlook_message(raw: RawOutlookMessage, *, actor: str = DEFAULT_ACTOR) -
         # OQ2: outsize bodies are truncated above to keep projection /
         # recall rows bounded.
         body=body,
+        # Phase 25-A (ADR-0010 §改訂): the sender email address is the
+        # cross-connector author join key (25-B).
+        author_handle=raw.sender,
     )
 
 
@@ -307,6 +318,30 @@ def _body_from_raw(raw: dict[str, Any]) -> str | None:
     if not isinstance(content, str) or not content.strip():
         return None
     return content
+
+
+def _organizer_address(raw: dict[str, Any]) -> str | None:
+    """Lift the organiser email from a Graph calendar event payload (Phase 25-A).
+
+    Graph nests the organiser under
+    ``organizer.emailAddress.address``. A missing / malformed branch
+    (the ``/me/calendar/events`` payload always carries an organiser for
+    real events, but defensive against schema drift) normalises to
+    ``None`` so the ``author_handle`` column stores ``NULL`` rather than
+    an empty string. The address is the cross-connector author join key
+    (25-B), symmetric with the Google Calendar mapper's
+    ``organizer_email``.
+    """
+    organizer = raw.get("organizer")
+    if not isinstance(organizer, dict):
+        return None
+    email = cast("dict[str, Any]", organizer).get("emailAddress")
+    if not isinstance(email, dict):
+        return None
+    address = cast("dict[str, Any]", email).get("address")
+    if not isinstance(address, str) or not address.strip():
+        return None
+    return address
 
 
 #: Marker template shared between Phase 11 F3 (Outlook body) and the
@@ -375,6 +410,8 @@ def _build_source_observed(
     occurred_at: datetime,
     actor: str,
     body: str | None = None,
+    author_handle: str | None = None,
+    author_display: str | None = None,
 ) -> SourceObserved:
     """Assemble a :class:`SourceObserved`, normalising empty strings.
 
@@ -466,6 +503,19 @@ def _build_source_observed(
         body=resolved_body,
         provenance_origin="external",
         provenance_trust="untrusted",
+        # Phase 25-A (ADR-0010 §改訂): the cross-connector author — the
+        # Outlook sender address / Calendar organiser address is the
+        # ``author_handle`` join key (symmetric with Gmail's parsed
+        # ``From:`` address), lower-cased so identity resolution (25-B)
+        # treats case variants as one handle; Graph does not return a
+        # display name on the ``$select`` shape used here, so
+        # ``author_display`` stays ``None``. OneDrive items carry no
+        # author (file metadata only).
+        author_handle=clip_author_field(
+            author_handle.lower() if author_handle is not None else None,
+            max_chars=AUTHOR_HANDLE_MAX_CHARS,
+        ),
+        author_display=author_display,
     )
 
 

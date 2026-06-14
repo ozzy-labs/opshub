@@ -148,6 +148,15 @@ class GitHubConnector:
             body=resolved_body,
             provenance_origin="external",
             provenance_trust="untrusted",
+            # Phase 25-A (ADR-0010 §改訂): thread the issue / PR author's
+            # GitHub login onto the cross-connector ``author_handle`` so
+            # the Phase 25 person-axis resolver (25-B) can group it with
+            # the operator's other identities. Notifications carry no
+            # per-item author (the payload is user-scoped) so the
+            # normaliser leaves it ``None``. GitHub does not return a
+            # display name on the list payloads, so ``author_display``
+            # stays ``None``.
+            author_handle=item.author_handle,
         )
 
 

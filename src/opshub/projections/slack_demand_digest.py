@@ -536,17 +536,7 @@ class SlackDemandDigestProjection:
         """
         if self._explicit_self_user_ids is not None:
             return dict(self._explicit_self_user_ids)
-
-        resolved: dict[str, str] = {}
-        for alias in _configured_workspace_aliases():
-            entry = _self_id_from_env(alias)
-            if entry is None:
-                entry = _self_id_from_auth(alias)
-            if entry is None:
-                continue
-            team_id, user_id = entry
-            resolved[team_id] = user_id
-        return resolved
+        return resolve_self_user_ids_from_config()
 
     def _upsert_row(
         self,
@@ -843,6 +833,35 @@ def _build_excerpt(event: SourceObserved) -> str | None:
     if len(body) <= SUMMARY_MAX_CHARS:
         return body
     return body[: SUMMARY_MAX_CHARS - 1] + "…"
+
+
+def resolve_self_user_ids_from_config() -> dict[str, str]:
+    """Build the ``{team_id: self_user_id}`` map from config (Phase 24-C, ADR-0041 §(g)).
+
+    Runs the per-alias resolution cascade for every configured
+    ``[connectors.slack.workspaces.<alias>]`` table: per-alias env
+    override first (``OPSHUB_SLACK_SELF_USER_ID__<ALIAS>``,
+    team-qualified ``"T...:U..."``), then a per-alias
+    :meth:`SlackAuth.test_token` call. Per-alias failures are fail-soft
+    (skip) so one unreachable workspace never blinds the others.
+
+    Extracted as a module-level public helper (Phase 25-A) so the
+    Phase 25 :mod:`opshub.services.operator_identity` resolver can reuse
+    the exact same Slack self-id cascade as the ``slack_demand_digest``
+    projection — keeping a single SSOT for "who is the operator in
+    workspace ``team_id``" rather than reaching into the projection's
+    private helpers.
+    """
+    resolved: dict[str, str] = {}
+    for alias in _configured_workspace_aliases():
+        entry = _self_id_from_env(alias)
+        if entry is None:
+            entry = _self_id_from_auth(alias)
+        if entry is None:
+            continue
+        team_id, user_id = entry
+        resolved[team_id] = user_id
+    return resolved
 
 
 def _configured_workspace_aliases() -> list[str]:

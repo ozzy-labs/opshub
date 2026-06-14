@@ -30,11 +30,10 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import inspect, select, text
+from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from opshub.db.engine import create_engine_for_sqlite
-from opshub.projections import sources_table
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT_LOCATION = _REPO_ROOT / "src" / "opshub" / "db" / "migrations"
@@ -161,7 +160,21 @@ def test_upgrade_existing_row_reads_null(tmp_path: Path) -> None:
     engine = create_engine_for_sqlite(db_path)
     try:
         with engine.connect() as conn:
-            row = conn.execute(select(sources_table)).mappings().one()
+            # Select an explicit column list rather than the in-Python
+            # ``sources_table`` metadata: later migrations (0034 author
+            # columns) widen the Table stub, but at this mid-history
+            # revision those columns do not exist on disk, so
+            # ``select(sources_table)`` would emit "no such column".
+            row = (
+                conn.execute(
+                    text(
+                        "SELECT body, provenance_origin, provenance_trust, title, summary"
+                        " FROM sources"
+                    )
+                )
+                .mappings()
+                .one()
+            )
         assert row["body"] is None
         assert row["provenance_origin"] is None
         assert row["provenance_trust"] is None

@@ -185,6 +185,8 @@ class SourceService:
         provenance_origin: ProvenanceOrigin | None = None,
         provenance_trust: ProvenanceTrust | None = None,
         author_id: str | None = None,
+        author_handle: str | None = None,
+        author_display: str | None = None,
     ) -> tuple[SourceObserved, ItemEnqueued]:
         """Record a fresh observation of an external item.
 
@@ -254,6 +256,15 @@ class SourceService:
         projection can drop self-authored DMs / mentions (see
         :mod:`opshub.projections.slack_demand_digest`).
 
+        ``author_handle`` / ``author_display`` (Phase 25-A, ADR-0010
+        §改訂) are the generalised, cross-connector author identity that
+        the Phase 25 person-axis (25-B) + commitment ledger (25-C) build
+        on. ``author_handle`` carries the connector-native join key
+        (Slack ``U...`` / email / GitHub login / ...); ``author_display``
+        carries the human-readable name when the connector exposes one.
+        Both default to ``None`` and round-trip as ``NULL`` for the
+        local-FS / metadata-only paths that surface no author identity.
+
         Returns the ``(source_event, inbox_event)`` tuple so callers
         can render both ULIDs without re-querying the store.
         """
@@ -271,6 +282,8 @@ class SourceService:
             provenance_origin=provenance_origin,
             provenance_trust=provenance_trust,
             author_id=author_id,
+            author_handle=author_handle,
+            author_display=author_display,
         )
         # The inbox event borrows ``SourceService``'s configured actor.
         # In production the wiring helper passes the same actor to both

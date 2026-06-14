@@ -350,6 +350,10 @@ class GoogleWorkspaceConnector:
                 body=event.body,
                 provenance_origin=event.provenance_origin,
                 provenance_trust=event.provenance_trust,
+                # Phase 25-A (ADR-0010 §改訂): the last-modifying / owner
+                # author identity the mapper stamped onto the event.
+                author_handle=event.author_handle,
+                author_display=event.author_display,
             )
             observed += 1
         return cursor, observed
@@ -434,6 +438,10 @@ class GoogleWorkspaceConnector:
                     body=event.body,
                     provenance_origin=event.provenance_origin,
                     provenance_trust=event.provenance_trust,
+                    # Phase 25-A (ADR-0010 §改訂): the last-modifying /
+                    # owner author identity the mapper stamped.
+                    author_handle=event.author_handle,
+                    author_display=event.author_display,
                 )
                 observed += 1
 

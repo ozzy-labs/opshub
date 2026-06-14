@@ -489,6 +489,8 @@ def test_github_item_is_frozen_and_minimal() -> None:
         "summary",
         "body",
         "updated_at",
+        # Phase 25-A (ADR-0010 §改訂): cross-connector author normalisation.
+        "author_handle",
     }
 
 
@@ -774,3 +776,57 @@ def test_normalise_issue_body_none_when_missing() -> None:
 
     assert len(items) == 2
     assert all(it.body is None for it in items)
+
+
+# ---------------------------------------------------------------------------
+# Phase 25-A (ADR-0010 §改訂): cross-connector author normalisation.
+# ---------------------------------------------------------------------------
+
+
+def test_issue_author_login_threaded_onto_author_handle() -> None:
+    """``user.login`` on an issue payload lands on ``GitHubItem.author_handle``."""
+    payload = _issue_payload(1)
+    payload["user"] = {"login": "octocat"}
+    routes = {
+        ("GET", "/repos/owner/repo/issues"): httpx.Response(200, json=[payload]),
+    }
+    with _client(routes) as client:
+        items = list(list_issues_since("owner/repo", None, token=_TOKEN, client=client))
+    assert items[0].author_handle == "octocat"
+
+
+def test_pull_author_login_threaded_onto_author_handle() -> None:
+    """``user.login`` on a PR payload lands on ``GitHubItem.author_handle``."""
+    payload = _pr_payload(7, updated_at="2026-05-15T12:00:00Z")
+    payload["user"] = {"login": "hubber"}
+    routes = {
+        ("GET", "/repos/owner/repo/pulls"): httpx.Response(200, json=[payload]),
+    }
+    with _client(routes) as client:
+        items = list(list_pulls_since("owner/repo", None, token=_TOKEN, client=client))
+    assert items[0].author_handle == "hubber"
+
+
+def test_issue_author_handle_none_when_user_missing_or_ghost() -> None:
+    """A missing / ``null`` ``user`` (deleted account) yields ``author_handle = None``."""
+    payload_missing = _issue_payload(1)  # no ``user`` key
+    payload_ghost = _issue_payload(2)
+    payload_ghost["user"] = None
+    routes = {
+        ("GET", "/repos/owner/repo/issues"): httpx.Response(
+            200, json=[payload_missing, payload_ghost]
+        ),
+    }
+    with _client(routes) as client:
+        items = list(list_issues_since("owner/repo", None, token=_TOKEN, client=client))
+    assert all(item.author_handle is None for item in items)
+
+
+def test_notification_has_no_author_handle() -> None:
+    """The user-scoped notification payload carries no per-item author."""
+    routes = {
+        ("GET", "/notifications"): httpx.Response(200, json=[_notification_payload()]),
+    }
+    with _client(routes) as client:
+        items = list(list_notifications(token=_TOKEN, client=client))
+    assert items[0].author_handle is None

@@ -606,3 +606,110 @@ def test_reobservation_refreshes_body_and_provenance(engine: Engine) -> None:
         row = conn.execute(select(sources_table)).mappings().one()
     assert row["id"] == first_id  # first-observation id preserved
     assert row["body"] == "edited message text"  # body refreshed on re-observe
+
+
+# ---- Phase 25-A (ADR-0010 §改訂): author columns ---------------------------
+
+
+def test_source_observed_persists_author_columns(engine: Engine) -> None:
+    """Author handle / display persist; ``author_connector`` mirrors ``connector_name``."""
+    projection = SourcesProjection()
+    occurred = datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC)
+    event = SourceObserved(
+        aggregate_id=new_ulid(),
+        occurred_at=occurred,
+        recorded_at=occurred,
+        actor="test",
+        connector_name="slack",
+        external_id="T1:C1:1700000000.0001",
+        source_type="slack_message",
+        title="alice in #general: hi",
+        body="hi",
+        author_handle="U123",
+        author_display="alice",
+    )
+
+    with engine.begin() as conn:
+        projection.apply(conn, event)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(sources_table)).mappings().one()
+    assert row["author_handle"] == "U123"
+    assert row["author_display"] == "alice"
+    # ``author_connector`` mirrors ``connector_name`` so the person-axis
+    # resolver reads ``(author_connector, author_handle)`` as a unit.
+    assert row["author_connector"] == "slack"
+
+
+def test_source_observed_author_columns_default_null(engine: Engine) -> None:
+    """A connector that surfaces no author leaves the handle / display NULL.
+
+    ``author_connector`` still mirrors ``connector_name`` (it is always
+    populated from the event's connector identity, never NULL on a live
+    observation).
+    """
+    projection = SourcesProjection()
+    occurred = datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC)
+    event = SourceObserved(
+        aggregate_id=new_ulid(),
+        occurred_at=occurred,
+        recorded_at=occurred,
+        actor="test",
+        connector_name="web",
+        external_id="https://example.com/",
+        source_type="web_page",
+        title="Example",
+        body="rendered page text",
+    )
+
+    with engine.begin() as conn:
+        projection.apply(conn, event)
+
+    with engine.connect() as conn:
+        row = conn.execute(select(sources_table)).mappings().one()
+    assert row["author_handle"] is None
+    assert row["author_display"] is None
+    assert row["author_connector"] == "web"
+
+
+def test_reobservation_refreshes_author_columns(engine: Engine) -> None:
+    """Re-observing the same item updates the author identity in place."""
+    projection = SourcesProjection()
+    occurred = datetime(2026, 5, 17, 9, 0, 0, tzinfo=UTC)
+
+    first = SourceObserved(
+        aggregate_id=new_ulid(),
+        occurred_at=occurred,
+        recorded_at=occurred,
+        actor="test",
+        connector_name="slack",
+        external_id="T1:C1:1700000000.0001",
+        source_type="slack_message",
+        title="t",
+        body="b",
+        author_handle="U_OLD",
+        author_display="Old Name",
+    )
+    second = SourceObserved(
+        aggregate_id=new_ulid(),
+        occurred_at=occurred + timedelta(minutes=5),
+        recorded_at=occurred + timedelta(minutes=5),
+        actor="test",
+        connector_name="slack",
+        external_id="T1:C1:1700000000.0001",
+        source_type="slack_message",
+        title="t",
+        body="b",
+        author_handle="U_NEW",
+        author_display="New Name",
+    )
+
+    with engine.begin() as conn:
+        projection.apply(conn, first)
+        projection.apply(conn, second)
+
+    with engine.connect() as conn:
+        rows = conn.execute(select(sources_table)).mappings().all()
+    assert len(rows) == 1
+    assert rows[0]["author_handle"] == "U_NEW"
+    assert rows[0]["author_display"] == "New Name"

@@ -60,9 +60,9 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final, Literal
 
 from opshub.core.errors import ConnectorFailedError
-from opshub.core.text_limits import normalise_optional_text
+from opshub.core.text_limits import clip_author_field, normalise_optional_text
 from opshub.core.time import now_utc
-from opshub.domain.events.source import SourceObserved
+from opshub.domain.events.source import AUTHOR_HANDLE_MAX_CHARS, SourceObserved
 
 if TYPE_CHECKING:
     from opshub.connectors.google_calendar.client import RawCalendarEvent
@@ -193,6 +193,10 @@ def map_calendar_event(
         occurred_at=_parse_iso_utc(raw.last_modified_iso),
         actor=actor,
         body=body,
+        # Phase 25-A (ADR-0010 §改訂): the organiser email is the
+        # cross-connector author join key (25-B), symmetric with the
+        # MS365 Calendar mapper's organiser address.
+        author_handle=raw.organizer_email or None,
     )
 
 
@@ -289,6 +293,7 @@ def _build_source_observed(
     occurred_at: datetime,
     actor: str,
     body: str | None,
+    author_handle: str | None = None,
 ) -> SourceObserved:
     """Assemble a :class:`SourceObserved` from the mapper's inputs.
 
@@ -344,6 +349,15 @@ def _build_source_observed(
         # provenance shape.
         provenance_origin="external",
         provenance_trust="untrusted",
+        # Phase 25-A (ADR-0010 §改訂): the organiser email join key,
+        # lower-cased + whitespace-normalised + clipped so identity
+        # resolution (25-B) treats case variants as one handle. Calendar
+        # exposes no separate organiser display name on the event
+        # payload, so ``author_display`` stays ``None``.
+        author_handle=clip_author_field(
+            author_handle.lower() if author_handle is not None else None,
+            max_chars=AUTHOR_HANDLE_MAX_CHARS,
+        ),
     )
 
 

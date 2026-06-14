@@ -680,3 +680,46 @@ def test_rebuild_all_phase_3_projections_are_idempotent(
     assert len(sources_first) == 1
     assert len(cursors_first) == 1
     assert len(ingested_first) == 1
+
+
+def test_rebuild_replays_source_author_columns(migrated_engine: Engine) -> None:
+    """Phase 25-A: author columns survive a full rewind+replay identically.
+
+    Pins (issue #572 test plan) that ``author_handle`` / ``author_display``
+    / ``author_connector`` land on the ``sources`` row after
+    ``rebuild_all`` and that a second rebuild reproduces the same
+    snapshot (replay determinism, ADR-0002).
+    """
+    store = SqlAlchemyEventStore(migrated_engine)
+    t = datetime(2026, 6, 14, 9, 0, 0, tzinfo=UTC)
+    store.append(
+        SourceObserved(
+            aggregate_id="01HA0AUTH000000000000000AA",
+            occurred_at=t,
+            recorded_at=t,
+            actor="connector:slack",
+            connector_name="slack",
+            external_id="TACME:C1:1700000000.0001",
+            source_type="slack_message",
+            title="alice in #general: hi",
+            body="hi",
+            author_handle="USELF",
+            author_display="alice",
+        )
+    )
+
+    projections = all_projections()
+    rebuild_all(migrated_engine, store, projections)
+
+    def _read_author() -> dict[str, Any]:
+        with migrated_engine.connect() as conn:
+            return dict(conn.execute(select(sources_table)).mappings().one())
+
+    first = _read_author()
+    assert first["author_handle"] == "USELF"
+    assert first["author_display"] == "alice"
+    assert first["author_connector"] == "slack"
+
+    # Replay determinism: a second rebuild reproduces the same columns.
+    rebuild_all(migrated_engine, store, all_projections())
+    assert _read_author() == first

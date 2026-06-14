@@ -129,6 +129,11 @@ def test_map_message_basic_shape() -> None:
         # threaded onto the event (``_raw_message`` defaults user_id to
         # "U1").
         "author_id": "U1",
+        # Phase 25-A (ADR-0010 §改訂): the same id flows onto the
+        # generalised ``author_handle`` and the resolved display name
+        # onto ``author_display``.
+        "author_handle": "U1",
+        "author_display": "alice",
     }
 
 

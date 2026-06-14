@@ -61,7 +61,44 @@ body-side rule, not the summary-side discipline this module owns.
 
 from __future__ import annotations
 
-__all__ = ["normalise_optional_text", "truncate_with_marker"]
+__all__ = ["clip_author_field", "normalise_optional_text", "truncate_with_marker"]
+
+
+def clip_author_field(value: str | None, *, max_chars: int) -> str | None:
+    """Normalise + bound a cross-connector author field (Phase 25-A).
+
+    The SSOT for the ``author_handle`` / ``author_display`` side of the
+    Phase 25-A author normalisation: empty / whitespace-only input
+    collapses to ``None`` (same rule as :func:`normalise_optional_text`),
+    and an over-long value is truncated to ``max_chars`` so a
+    pathological sender (a 500-char ``From:`` header, a degenerate Drive
+    owner display name) never raises a mid-sync ``ValidationError``
+    against :class:`opshub.domain.events.source.SourceObserved`'s
+    ``max_length`` bound. Unlike the summary path no ``"…"`` marker is
+    appended — an author handle is a join key, not a preview, so a
+    silent clip keeps the stored value usable as a prefix match.
+
+    Parameters
+    ----------
+    value:
+        The candidate author handle / display string, or ``None``.
+    max_chars:
+        The schema cap for the target field
+        (:data:`opshub.domain.events.source.AUTHOR_HANDLE_MAX_CHARS` /
+        :data:`opshub.domain.events.source.AUTHOR_DISPLAY_MAX_CHARS`).
+
+    Returns
+    -------
+    str | None
+        ``None`` for missing / empty / whitespace-only input; otherwise
+        the stripped value clipped to ``max_chars``.
+    """
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return stripped[:max_chars]
 
 
 def normalise_optional_text(text: str | None) -> str | None:
