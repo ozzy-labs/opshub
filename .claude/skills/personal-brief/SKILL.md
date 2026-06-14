@@ -1,6 +1,6 @@
 ---
 name: personal-brief
-description: '「今日のまとめ」「今週どうなってる」「今月の動き」「先週の状況」「先月の振り返り」「最近どうなってる」「状況教えて」「自分の状況」と聞かれたら、opshub MCP の brief (LLM 要約) または recall.search / task.list / inbox.list / decision.list を順に叩いて指定期間 (デフォルト直近 24h) の主要な動きを要約する。Phase 18-C で slack.demand.list を追加し、Slack の @mention / DM 信号も「状況」に含める。期間は ISO 8601 timestamp を physical-column 時間フィルタ (updated_after/before / created_after/before / recorded_after/before) に渡してホスト側で組み立てる。LLM 推論ループは外部ホスト (Claude Code 等) 側、本 skill は手順書のみで実処理を持たない。pair: external-brief (外向き) と対をなす。'
+description: '「今日のまとめ」「今週どうなってる」「今月の動き」「先週の状況」「先月の振り返り」「最近どうなってる」「状況教えて」「自分の状況」と聞かれたら、opshub MCP の brief (LLM 要約) または recall.search / task.list / inbox.list / decision.list を順に叩いて指定期間 (デフォルト直近 24h) の主要な動きを要約する。Phase 18-C で slack.demand.list を追加し、Slack の @mention / DM 信号も「状況」に含める。Phase 25-D で commitment.list を追加し、相手待ちの件・期日のある約束も「状況」に含める。期間は ISO 8601 timestamp を physical-column 時間フィルタ (updated_after/before / created_after/before / recorded_after/before) に渡してホスト側で組み立てる。LLM 推論ループは外部ホスト (Claude Code 等) 側、本 skill は手順書のみで実処理を持たない。pair: external-brief (外向き) と対をなす。'
 ---
 
 # personal-brief — 自分向けの状況サマリを opshub から組み立てて返す
@@ -120,6 +120,21 @@ Phase 18-C ([ADR-0033 §決定 (c)](../../adr/0033-slack-mention-demand-digest.m
 
 `slack.demand.list` は read-only / `readOnlyHint=true` / `openWorldHint=false` (local SQLite のみ、Slack API 不発火)。Slack への投稿 / reaction は本 skill から行わない (ADR-0010 §禁止事項 7)。
 
+### Step 6 (Phase 25-D): コミットメント (相手待ち・期日のある約束) を「状況」に含める
+
+```text
+tool: commitment.list
+input:
+  state: "open"
+  limit: 20
+```
+
+Phase 25-D ([ADR-0042](../../adr/0042-commitment-ledger.md)) で追加された `commitment.list` は `commitment.scan` が既存 source から抽出した双方向コミットメント台帳を読む。`state=open` で「未解決の約束」を引き、`direction` で「自分が頼んで待っている件 (`owed_to_me`)」と「自分が負った約束 (`i_owe`)」を分けて状況に含めると、受信トレイだけでは見えない双方向の進捗が可視化される。「今週どうなってる」のような問い合わせで「相手のボールで止まっている件」「期日が迫っている自分の約束」を出せるのが固有価値。
+
+戻り値の `items[]` (`id` / `source_id` / `source_type` / `direction` / `counterparty` (`person:<id>` ref、未解決なら null) / `due` / `text` / `confidence` / `state`) を表示。`due` は LLM が読んだ**自由文** (「金曜まで」「2026-06-20」等) で構造化日付ではないため、期日超過の判定はホスト側で `due` を今日と突き合わせる (MCP に `due_before` フィルタは無い)。期間絞りは `commitment.list` 側には無いので、`state=open` を引いた上でホストが `due` / counterparty で取捨選択する。
+
+`commitment.list` は read-only / `readOnlyHint=true` / `openWorldHint=false` (LLM を叩かず local SQLite の `commitments` projection を読むだけ。閲覧で再抽出は走らない、ADR-0042 §閲覧 LLM 不要)。督促の外部送信 / 状態遷移は本 skill から行わない (状態遷移は別 skill / CLI、ADR-0042 §督促境界)。
+
 ## 出力フォーマット (ホスト側)
 
 ホストが以下のような構造でユーザーに返す。具体的な文面はホスト側 LLM が決める (本 skill は構造のみ pin)。
@@ -143,6 +158,10 @@ Phase 18-C ([ADR-0033 §決定 (c)](../../adr/0033-slack-mention-demand-digest.m
 ## Slack の demand 信号 (Phase 18-C、slack.demand.list)
 - [DM] @alice 2026-06-02: 「<excerpt>」 → permalink
 - [mention #general] @bob 2026-06-01: 「<excerpt>」 → permalink
+
+## コミットメント (Phase 25-D、commitment.list)
+- [相手待ち] @carol に依頼: 「<text>」 (due 2026-06-20)
+- [自分の約束] 「<text>」 (due 2026-06-18、期日超過なら ⚠️)
 ```
 
 ## 自律範囲
@@ -166,6 +185,7 @@ Phase 18-C ([ADR-0033 §決定 (c)](../../adr/0033-slack-mention-demand-digest.m
 - ADR-0010 §改訂 (connector contract、Phase 11 で Teams 追加)
 - ADR-0020 §改訂 (Outlook body deep retention、Phase 11)
 - ADR-0033 (Slack mention / DM demand digest、Phase 18) — `slack.demand.list` の根拠
+- ADR-0042 (Commitment ledger、Phase 25) — `commitment.list` の根拠
 - Phase 10 plan §3-D (skill ↔ MCP tool マッピング)
 - Phase 11 plan (`docs/phase-11-plan.md`)
 - Phase 12 plan (`docs/phase-12-plan.md` §3 H1)

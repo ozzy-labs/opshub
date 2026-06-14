@@ -527,7 +527,7 @@ def test_phase12_assistant_lifecycle(
         specs = build_tool_specs_for_engine(engine)
         specs_by_name = {spec.name: spec for spec in specs}
 
-        # Phase 21-D surface: 19 tools (13 read + 6 write).
+        # Phase 25-D surface: 27 tools (16 read + 11 write).
         assert set(specs_by_name) == {
             # Phase 10 C2 baseline.
             "recall.search",
@@ -554,6 +554,15 @@ def test_phase12_assistant_lifecycle(
             "slack.demand.list",
             # Phase 21-D widening (ADR-0037 §決定 (e) + ADR-0022 改訂).
             "browser.fetch",
+            # Phase 25-D widening (epic #566, ADR-0042 / ADR-0043).
+            "commitment.list",
+            "person.list",
+            "catchup",
+            "commitment.scan",
+            "commitment.resolve",
+            "commitment.dismiss",
+            "person.merge",
+            "person.split",
         }
 
         # ---- 4. Phase 12 H1 widening end-to-end -----------------------

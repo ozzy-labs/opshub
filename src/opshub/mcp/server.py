@@ -76,12 +76,15 @@ def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
     from opshub.mcp._registry import build_tool_specs
     from opshub.mcp._tools import (
         build_brief_handler,
+        build_catchup_handler,
+        build_commitment_list_handler,
         build_decision_list_handler,
         build_embeddings_find_duplicates_handler,
         build_graph_expand_handler,
         build_graph_related_handler,
         build_graph_trace_handler,
         build_inbox_list_handler,
+        build_person_list_handler,
         build_recall_search_handler,
         build_search_handler,
         build_slack_demand_list_handler,
@@ -91,8 +94,13 @@ def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
     )
     from opshub.mcp._writes import (
         build_browser_fetch_handler,
+        build_commitment_dismiss_handler,
+        build_commitment_resolve_handler,
+        build_commitment_scan_handler,
         build_connector_sync_handler,
         build_inbox_add_handler,
+        build_person_merge_handler,
+        build_person_split_handler,
         build_propose_apply_handler,
         build_propose_generate_handler,
         build_task_create_handler,
@@ -123,6 +131,18 @@ def build_tool_specs_for_engine(engine: Engine) -> list[ToolSpec]:
         # Phase 21-D (ADR-0037 §決定 (e) + ADR-0022 改訂): ad-hoc browser
         # page fetch (write-category, network egress, no persist).
         "browser.fetch": build_browser_fetch_handler(engine),
+        # Phase 25-D (epic #566, ADR-0042 / ADR-0043 + ADR-0022 改訂):
+        # 秘書化 v1 surface — commitment ledger + person graph + catchup.
+        # ``catchup`` registers the read tool here; its digest body is
+        # wired in Phase 25-E (#570) once the seen-marker projection lands.
+        "commitment.list": build_commitment_list_handler(engine),
+        "person.list": build_person_list_handler(engine),
+        "catchup": build_catchup_handler(engine),
+        "commitment.scan": build_commitment_scan_handler(engine),
+        "commitment.resolve": build_commitment_resolve_handler(engine),
+        "commitment.dismiss": build_commitment_dismiss_handler(engine),
+        "person.merge": build_person_merge_handler(engine),
+        "person.split": build_person_split_handler(engine),
     }
     return build_tool_specs(handlers=handlers)
 

@@ -45,7 +45,8 @@ from opshub.mcp._writes import (
 # indexes each one out of the ``handlers`` mapping, so the
 # dispatch-redaction test below must supply a handler (real or stub)
 # for all of them. Kept in lockstep with
-# ``tests/unit/mcp/test_registry_policy._TOOL_NAMES`` (19 tools).
+# ``tests/unit/mcp/test_registry_policy._TOOL_NAMES`` (27 tools after
+# Phase 25-D).
 _ALL_TOOL_NAMES: tuple[str, ...] = (
     "recall.search",
     "task.list",
@@ -66,6 +67,15 @@ _ALL_TOOL_NAMES: tuple[str, ...] = (
     "propose.apply",
     "slack.demand.list",
     "browser.fetch",
+    # Phase 25-D (epic #566, ADR-0042 / ADR-0043): 秘書化 v1 surface.
+    "commitment.list",
+    "person.list",
+    "catchup",
+    "commitment.scan",
+    "commitment.resolve",
+    "commitment.dismiss",
+    "person.merge",
+    "person.split",
 )
 
 

@@ -66,6 +66,18 @@ _TOOL_NAMES: tuple[str, ...] = (
     # Phase 21-D (ADR-0037 §決定 (e) + ADR-0022 改訂): ad-hoc browser fetch
     # (write-category, network egress, no persist). 18 → 19 tools.
     "browser.fetch",
+    # Phase 25-D (epic #566, ADR-0042 / ADR-0043 + ADR-0022 改訂): 秘書化 v1
+    # surface. read +3 (commitment.list / person.list / catchup),
+    # write +5 (commitment.scan / commitment.resolve / commitment.dismiss /
+    # person.merge / person.split). 19 → 27 tools = 16 read + 11 write.
+    "commitment.list",
+    "person.list",
+    "catchup",
+    "commitment.scan",
+    "commitment.resolve",
+    "commitment.dismiss",
+    "person.merge",
+    "person.split",
 )
 
 # Phase 12 H1: ``propose.apply`` is the only write-class tool with
@@ -389,21 +401,28 @@ def test_list_tools_expose_physical_column_time_filters(specs: list[Any]) -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_registry_surface_is_nineteen_tools(specs: list[Any]) -> None:
-    """The MCP surface is exactly 19 tools = 13 read + 6 write (Phase 21-D).
+def test_registry_surface_is_twenty_seven_tools(specs: list[Any]) -> None:
+    """The MCP surface is exactly 27 tools = 16 read + 11 write (Phase 25-D).
 
-    Phase 18-C shipped 18 (13 read + 5 write). Phase 21-D adds the
-    ``browser.fetch`` write tool (ADR-0037 §決定 (e)), bringing the total
-    to 19. The count pin makes any accidental add / drop fail loud
-    alongside the per-name :func:`test_registry_covers_phase_10_c2_surface`
-    check (which catches *which* tool drifted; this one catches the
-    *count* split between the read / write namespaces).
+    Phase 21-D shipped 19 (13 read + 6 write). Phase 25-D (epic #566)
+    adds the 秘書化 v1 surface: read +3 (``commitment.list`` /
+    ``person.list`` / ``catchup``, ADR-0042 / ADR-0043) and write +5
+    (``commitment.scan`` / ``commitment.resolve`` / ``commitment.dismiss``
+    / ``person.merge`` / ``person.split``), bringing the total to 27 =
+    16 read + 11 write. (The epic body's "→ 24 tools" line is an
+    arithmetic slip — 13+3 read = 16 and 6+5 write = 11 sum to 27, which
+    is the read/write split it also states; the split is the
+    self-consistent SSOT.) The count pin makes any accidental add / drop
+    fail loud alongside the per-name
+    :func:`test_registry_covers_phase_10_c2_surface` check (which catches
+    *which* tool drifted; this one catches the *count* split between the
+    read / write namespaces).
     """
     read_count = sum(1 for s in specs if isinstance(s.category, ReadCategory))
     write_count = sum(1 for s in specs if isinstance(s.category, WriteCategory))
-    assert len(specs) == 19, f"expected 19 MCP tools, got {len(specs)}"
-    assert read_count == 13, f"expected 13 read tools, got {read_count}"
-    assert write_count == 6, f"expected 6 write tools, got {write_count}"
+    assert len(specs) == 27, f"expected 27 MCP tools, got {len(specs)}"
+    assert read_count == 16, f"expected 16 read tools, got {read_count}"
+    assert write_count == 11, f"expected 11 write tools, got {write_count}"
 
 
 def test_browser_fetch_is_open_world_write(specs: list[Any]) -> None:
@@ -457,3 +476,136 @@ def test_browser_fetch_schema_takes_url_only(specs: list[Any]) -> None:
             assert url_schema.get("type") == "string"
             return
     raise AssertionError("browser.fetch spec missing from registry")
+
+
+# ---------------------------------------------------------------------------
+# Phase 25-D (epic #566, ADR-0042 / ADR-0043 + ADR-0022 改訂) — 秘書化 v1 pins.
+# ---------------------------------------------------------------------------
+
+
+def test_commitment_and_person_reads_are_closed_world(specs: list[Any]) -> None:
+    """``commitment.list`` / ``person.list`` / ``catchup`` are local reads.
+
+    ADR-0042 §閲覧 LLM 不要 / ADR-0043: viewing the ledger or the person
+    graph never re-extracts (no LLM round-trip) and never leaves the box,
+    so all three must advertise ``read_only=true`` + ``destructive=false``
+    + ``open_world=false`` + ``idempotent=true``. A regression that
+    classifies any of them as a write (so a host prompts on a pure read)
+    or as open-world fails here.
+    """
+    read_names = {"commitment.list", "person.list", "catchup"}
+    seen: set[str] = set()
+    for spec in specs:
+        if spec.name not in read_names:
+            continue
+        seen.add(spec.name)
+        assert isinstance(spec.category, ReadCategory), (
+            f"{spec.name!r} must be a ReadCategory tool (ADR-0042 / ADR-0043)"
+        )
+        assert spec.policy.read_only is True
+        assert spec.policy.destructive is False
+        assert spec.policy.open_world is False
+        assert spec.policy.idempotent is True
+    assert seen == read_names, f"missing 秘書化 read spec(s); saw {sorted(seen)}"
+
+
+def test_commitment_scan_is_open_world_write(specs: list[Any]) -> None:
+    """``commitment.scan`` is the open-world LLM extraction write (ADR-0042).
+
+    It calls the LLM (round-trip leaves the box) and mints durable
+    ``CommitmentExtracted`` events, so it sits with ``connector.sync`` /
+    ``propose.generate`` in the open-world destructive bucket:
+    ``read_only=false`` + ``destructive=true`` + ``open_world=true``. It
+    is NOT in the ``propose.apply`` non-destructive carve-out.
+    """
+    for spec in specs:
+        if spec.name == "commitment.scan":
+            assert isinstance(spec.category, WriteCategory)
+            assert spec.policy.read_only is False
+            assert spec.policy.destructive is True
+            assert spec.policy.open_world is True
+            assert spec.name not in _NON_DESTRUCTIVE_WRITES
+            return
+    raise AssertionError("commitment.scan spec missing from registry")
+
+
+def test_state_transition_writes_are_closed_world_destructive(specs: list[Any]) -> None:
+    """The transition writes stay closed-world destructive (no LLM / network).
+
+    ``commitment.resolve`` / ``commitment.dismiss`` / ``person.merge`` /
+    ``person.split`` flip ledger / identity state over local SQLite only —
+    no LLM, no network — so ``open_world`` must be ``false``. They keep
+    ``destructive=true`` (real state mutation; the service fail-fasts on a
+    duplicate transition, so a second call is NOT an observable no-op) and
+    are deliberately excluded from the ``propose.apply`` carve-out.
+    """
+    transition_names = {
+        "commitment.resolve",
+        "commitment.dismiss",
+        "person.merge",
+        "person.split",
+    }
+    seen: set[str] = set()
+    for spec in specs:
+        if spec.name not in transition_names:
+            continue
+        seen.add(spec.name)
+        assert isinstance(spec.category, WriteCategory)
+        assert spec.policy.read_only is False
+        assert spec.policy.destructive is True, (
+            f"{spec.name!r} flips durable state and must declare destructive=true"
+        )
+        assert spec.policy.open_world is False, (
+            f"{spec.name!r} hits local SQLite only; open_world must be false"
+        )
+        assert spec.name not in _NON_DESTRUCTIVE_WRITES, (
+            f"{spec.name!r} is a real state mutation, not the propose.apply carve-out"
+        )
+    assert seen == transition_names, f"missing 秘書化 transition spec(s); saw {sorted(seen)}"
+
+
+def test_commitment_list_schema_filters(specs: list[Any]) -> None:
+    """``commitment.list`` exposes direction / state / person filters, no due_before.
+
+    The service ``list_commitments`` supports ``direction`` / ``state`` /
+    ``person`` / ``limit``. ``due`` is the free-form text the model read
+    (not a structured date), so a ``due_before`` SQL comparison would be
+    unreliable — the MCP schema deliberately omits it. This pin catches a
+    regression that re-adds ``due_before`` (which ``additionalProperties:
+    false`` would then silently reject at the boundary anyway) and pins the
+    ``direction`` / ``state`` enums to the stored value sets.
+    """
+    for spec in specs:
+        if spec.name == "commitment.list":
+            properties: Any = spec.input_schema.get("properties", {})
+            assert "due_before" not in properties, (
+                "commitment.list must NOT expose ``due_before`` — ``due`` is"
+                " free-form text, not a comparable date (ADR-0042)"
+            )
+            assert set(properties) == {"direction", "state", "person", "limit"}, (
+                f"unexpected commitment.list filters: {sorted(properties)}"
+            )
+            assert properties["direction"]["enum"] == ["i_owe", "owed_to_me"]
+            assert properties["state"]["enum"] == ["open", "resolved", "dismissed"]
+            return
+    raise AssertionError("commitment.list spec missing from registry")
+
+
+def test_person_split_schema_takes_connector_and_handle(specs: list[Any]) -> None:
+    """``person.split`` takes ``connector`` + ``handle`` as separate fields.
+
+    Unlike the ``opshub person split`` CLI (single ``<connector>:<handle>``
+    argument), the MCP schema splits them so an email handle embedding a
+    colon never needs boundary-side disambiguation. Both are required.
+    """
+    for spec in specs:
+        if spec.name == "person.split":
+            properties: Any = spec.input_schema.get("properties", {})
+            assert set(properties) == {"connector", "handle"}, (
+                f"person.split must expose connector + handle; got {sorted(properties)}"
+            )
+            required: Any = spec.input_schema.get("required", [])
+            assert "connector" in required
+            assert "handle" in required
+            return
+    raise AssertionError("person.split spec missing from registry")

@@ -1,11 +1,11 @@
 ---
 name: next-actions
-description: 「次に何をする?」「やること教えて」「タスク何が残ってる?」「今日やること」「今週やること」「来週やること」「優先度高いのは?」と聞かれたら、opshub MCP の task.list と recall.search を使って優先度順の next-actions を組み立てる。Phase 18-C で slack.demand.list を追加し、Slack の @mention / DM を「読むべきが未処理」signal として priority 上位に組み込む。期間指定がある場合は task.list の updated_after / updated_before (ISO 8601、tasks.updated_at ベース) でフィルタする。新規 task の作成は task.create が write tool のためホスト側で人確認を促す (ADR-0022 §(c))。
+description: 「次に何をする?」「やること教えて」「タスク何が残ってる?」「今日やること」「今週やること」「来週やること」「優先度高いのは?」と聞かれたら、opshub MCP の task.list と recall.search を使って優先度順の next-actions を組み立てる。Phase 18-C で slack.demand.list を追加し、Slack の @mention / DM を「読むべきが未処理」signal として priority 上位に組み込む。Phase 25-D で commitment.list を追加し、相手に頼んで待っている件 (direction=owed_to_me) と期日のある約束を「督促候補・期日超過」signal として上位に組み込む。期間指定がある場合は task.list の updated_after / updated_before (ISO 8601、tasks.updated_at ベース) でフィルタする。新規 task の作成は task.create が write tool のためホスト側で人確認を促す (ADR-0022 §(c))。
 ---
 
 # next-actions — 「次にやること」を opshub から組み立てる
 
-opshub MCP server (`opshub mcp serve`、ADR-0022) 経由で「次にやること」リストを返す。Phase 10 Sub-issue D / ADR-0004 §(c) で確定した assistant agent skill の 1 つ。Phase 18-C ([ADR-0033](../../adr/0033-slack-mention-demand-digest.md)) で Slack mention / DM signal を `slack.demand.list` 経由で priority 上位に組み込めるよう拡張。
+opshub MCP server (`opshub mcp serve`、ADR-0022) 経由で「次にやること」リストを返す。Phase 10 Sub-issue D / ADR-0004 §(c) で確定した assistant agent skill の 1 つ。Phase 18-C ([ADR-0033](../../adr/0033-slack-mention-demand-digest.md)) で Slack mention / DM signal を `slack.demand.list` 経由で priority 上位に組み込めるよう拡張。Phase 25-D ([ADR-0042](../../adr/0042-commitment-ledger.md)) で commitment ledger signal を `commitment.list` 経由で組み込み、「相手に頼んで待っている件」(督促候補) と「期日のある約束」(期日超過) を上位に出せるよう拡張。
 
 ## 何が起きるか
 
@@ -70,6 +70,30 @@ input:
   limit: 50
 ```
 
+### Step 2.5 (Phase 25-D): 相手待ち・期日のある約束を commitment から拾う
+
+```text
+tool: commitment.list
+input:
+  direction: "owed_to_me"   # 相手に頼んで待っている件 = 督促候補
+  state: "open"
+  limit: 20
+```
+
+Phase 25-D ([ADR-0042](../../adr/0042-commitment-ledger.md)) で追加された `commitment.list` は、`commitment.scan` が既存 source から抽出した双方向コミットメント台帳を読む。`direction=owed_to_me` + `state=open` は「自分が誰かに頼んで、まだ返ってきていない件」= **督促候補**。これを task 列の上位 (「自分が待っている = 自分のボールではないが追わないと落ちる」signal) に並べると、受信トレイしか見えない他ツールには出せない双方向の見落としが拾える。
+
+戻り値の `items[]` は `id` / `source_id` / `source_type` / `direction` / `counterparty` (`person:<id>` ref、未解決なら null) / `due` / `text` / `confidence` / `state` を持つ。`due` は LLM が読んだ**自由文** (「金曜まで」「2026-06-20」等) で構造化日付ではないため、期日超過の判定はホスト側で `due` を今日と突き合わせて行う (MCP に `due_before` フィルタは無い)。自分が負った約束を見たいときは `direction: "i_owe"` を渡す。
+
+```text
+tool: commitment.list
+input:
+  direction: "i_owe"        # 自分が負った約束 = 期日が近いものを優先表示
+  state: "open"
+  limit: 20
+```
+
+`commitment.list` は read-only / `readOnlyHint=true` / `openWorldHint=false` (LLM を叩かず、local SQLite の `commitments` projection を読むだけ。閲覧で再抽出は走らない、ADR-0042 §閲覧 LLM 不要)。督促の外部送信は本 skill から行わない (ADR-0042 §督促境界 / ADR-0010 §禁止事項 7)。状態遷移 (`commitment.resolve` / `commitment.dismiss`) は write tool なので人確認必須。
+
 ### Step 3: 必要に応じて recall で文脈補強
 
 ユーザーが特定トピック (例:「PR レビュー周りで何が残ってる?」) で絞り込んでいる場合のみ:
@@ -109,6 +133,10 @@ input:
 - [DM] @alice: 2026-06-02 「<excerpt>」 → https://slack.com/...
 - [mention #general] @bob: 2026-06-01 「<excerpt>」 → https://slack.com/...
 
+## 相手待ち・期日のある約束 (Phase 25-D、commitment.list)
+- [待ち] @carol に依頼: 「<text>」 (due 2026-06-20、期日超過なら ⚠️)
+- [自分の約束] 「<text>」 (due 2026-06-18)
+
 ## 今すぐ
 - [P0] ...
 - [P1] ...
@@ -124,8 +152,8 @@ input:
 
 ## 自律範囲
 
-- **read tool (`task.list` / `slack.demand.list` / `recall.search`)** — 自律 OK
-- **write tool (`task.create`)** — 人確認必須
+- **read tool (`task.list` / `slack.demand.list` / `commitment.list` / `recall.search`)** — 自律 OK
+- **write tool (`task.create` / `commitment.resolve` / `commitment.dismiss`)** — 人確認必須
 
 ## できないこと / やらない
 
@@ -142,5 +170,6 @@ input:
 - ADR-0010 §改訂 (connector contract、Phase 11 で Teams 追加)
 - ADR-0020 §改訂 (Outlook body deep retention、Phase 11)
 - ADR-0033 (Slack mention / DM demand digest、Phase 18) — `slack.demand.list` の根拠
+- ADR-0042 (Commitment ledger、Phase 25) — `commitment.list` の根拠
 - Phase 11 plan (`docs/phase-11-plan.md`)
 - docs/assistant-agent.md

@@ -30,9 +30,10 @@ as an actual subprocess and driving it through the official Python
 Invariants pinned
 -----------------
 
-1. **19-tool surface (Phase 21-D / ADR-0022 改訂)** — the
-   ``tools/list`` reply contains exactly the 13 read + 6 write tools
-   the assistant 14-skill catalog + the Phase 21-D ``browser.fetch``
+1. **27-tool surface (Phase 25-D / ADR-0022 改訂)** — the
+   ``tools/list`` reply contains exactly the 16 read + 11 write tools
+   the assistant 14-skill catalog + the Phase 21-D ``browser.fetch`` +
+   the Phase 25-D 秘書化 v1 (commitment ledger / person graph / catchup)
    surface depend on. A regression that drops or renames any of them
    surfaces here as a missing-name assertion failure before it reaches
    a real agent host.
@@ -98,7 +99,7 @@ _PathsDict = dict[str, Path]
 # a blocking call before the JSON-RPC loop starts).
 _E2E_TIMEOUT_SECONDS = 30.0
 
-# MCP tool surface — 13 read + 6 write (Phase 21-D). The set is pinned
+# MCP tool surface — 16 read + 11 write (Phase 25-D). The set is pinned
 # verbatim against the names in :func:`opshub.mcp.server
 # .build_tool_specs_for_engine` (the in-process test in
 # :mod:`tests.integration.test_phase12_assistant_lifecycle` pins the
@@ -134,6 +135,16 @@ _EXPECTED_TOOL_NAMES: frozenset[str] = frozenset(
         # Phase 21-D widening (ADR-0037 §決定 (e) + ADR-0022 改訂) —
         # write-category ad-hoc browser fetch (network egress, no persist).
         "browser.fetch",
+        # Phase 25-D widening (epic #566, ADR-0042 / ADR-0043) — 秘書化 v1
+        # surface: commitment ledger + person graph + catchup.
+        "commitment.list",
+        "person.list",
+        "catchup",
+        "commitment.scan",
+        "commitment.resolve",
+        "commitment.dismiss",
+        "person.merge",
+        "person.split",
     }
 )
 
