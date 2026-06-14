@@ -59,7 +59,7 @@ The `*:history` scopes are checked per type only on the any-author axis: when `-
 
 ## 2. Initialise the database
 
-The MCP server reads the same SQLite store as the CLI, so `opshub init` (or `opshub db migrate` on an existing store) must have run before the agent connects. Since Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384), [ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) `opshub init` also installs the 14 assistant skills into `~/.claude/skills/` and `~/.agents/skills/` (prompting on a TTY, defaulting to install otherwise — see §3a). Pass `--no-install-skills` to opt out.
+The MCP server reads the same SQLite store as the CLI, so `opshub init` (or `opshub db migrate` on an existing store) must have run before the agent connects. Since Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384), [ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) `opshub init` also installs the 15 assistant skills into `~/.claude/skills/` and `~/.agents/skills/` (prompting on a TTY, defaulting to install otherwise — see §3a). Pass `--no-install-skills` to opt out.
 
 ```sh
 opshub init
@@ -77,7 +77,7 @@ opshub mcp tools -f json   # JSON form (matches the MCP annotations)
 
 The output reflects the policy-as-data registry in `src/opshub/mcp/_registry.py`. Read tools advertise `readOnlyHint=true`; write tools advertise `readOnlyHint=false` + `destructiveHint=true`. Hosts that honour the hints (Claude Code 等) will auto-approve reads and require human confirmation for writes (ADR-0022 §(c)).
 
-Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1 + Phase 18-C + Phase 21-D = **19 tools, 13 read + 6 write**):
+Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1 + Phase 18-C + Phase 21-D + Phase 25-D = **27 tools, 16 read + 11 write**):
 
 | Kind  | Name                          | Purpose                                                          |
 | ----- | ----------------------------- | ---------------------------------------------------------------- |
@@ -94,12 +94,20 @@ Current tools (Phase 10 C2 baseline + Step 1 widening + Phase 12 H1 + Phase 18-C
 | read  | `embeddings.find_duplicates`  | Scan embeddings for near-duplicate pairs above a threshold        |
 | read  | `search`                      | Body-level FTS5 search (Phase 12 H1, phrase-quoted by default)    |
 | read  | `slack.demand.list`           | List Slack `<@self>` mention / DM digest rows (Phase 18-C, ADR-0033) |
+| read  | `commitment.list`             | List two-way commitment ledger rows (`direction` / `state` / `person` filter, no LLM, Phase 25-D, ADR-0042) |
+| read  | `person.list`                 | List resolved person-axis identity graph (idempotent resolve then list, Phase 25-D, ADR-0043) |
+| read  | `catchup`                     | Summarise the "since last seen" diff, priority-ordered (Phase 25-D/E, ADR-0042) |
 | write | `task.create`                 | Create a new task                                                 |
 | write | `inbox.add`                   | Add an inbox item                                                 |
 | write | `connector.sync`              | Trigger a registered connector's sync (Slack: always all workspaces — ADR-0041 §(f)) |
 | write | `propose.generate`            | Generate next-action / reply-draft candidates (HITL apply)        |
 | write | `propose.apply`               | Apply a proposal candidate (HITL, idempotent, Phase 12 H1)        |
 | write | `browser.fetch`               | Render a Web page with headless Chromium, return extracted text + title (HITL, network egress, no persist, Phase 21-D, ADR-0037) |
+| write | `commitment.scan`             | Run the flagship LLM commitment-extraction pass (HITL, open world, ConfigError if no LLM, Phase 25-D, ADR-0042) |
+| write | `commitment.resolve`          | Mark a commitment done (HITL, local state transition, Phase 25-D, ADR-0042) |
+| write | `commitment.dismiss`          | Mark an extraction a false positive (HITL, local state transition, Phase 25-D, ADR-0042) |
+| write | `person.merge`                | Merge two persons (HITL, over-merge fix is `person.split`, Phase 25-D, ADR-0043) |
+| write | `person.split`                | Detach one identity to a new person (HITL, undo an over-merge, Phase 25-D, ADR-0043) |
 
 Step 1 widening (post Phase 10) added the 7 new read tools and the HITL write `propose.generate`. Phase 12 H1 (ADR-0022 改訂 §決定 (f)) added 4 new MCP tools / arguments:
 
@@ -116,15 +124,24 @@ Phase 21-D ([ADR-0037 §決定 (e)](adr/0037-browser-read-layer-playwright.md) +
 
 * **`browser.fetch` (write / HITL, Phase 21-D)** — render an `http` / `https` `url` with headless Chromium (the Playwright browser read layer, [ADR-0037](adr/0037-browser-read-layer-playwright.md)) and return the extracted post-render DOM text (200-char snippet, secret-redacted) plus the page `<title>`, `text_chars` (full length), `truncated` (browser core's 500K cap hit) and `persisted: false`. **Classified write-category even though it returns data**: the call **egresses the public network**, which the "read tool = local SQLite only" invariant reserves for the same HITL bucket as `connector.sync` (`readOnlyHint=false` / `destructiveHint=true` / `openWorldHint=true`). Nothing is persisted — durable ingestion is the `web` connector's job (`opshub web sync`). Requires the `browser` extra plus a one-time `playwright install chromium`; a `ConfigError` names the install command when Chromium is missing. The async MCP handler bridges to the sync browser core via `asyncio.to_thread` (Playwright's sync API cannot run inside the asyncio loop, ADR-0037 §決定 (h)). No assistant skill calls it as a primary path yet (the `research`-skill wiring is deferred to the operations phase, ADR-0037 §Non-goals).
 
-Phase 12 H1 also unified the original 5 skills (`personal-brief`, `next-actions`, `reply-draft`, `pr-review`, `find-document`) on the MCP surface — they call MCP tools directly instead of falling back to the CLI shell. Phase 12 H2-H5 added 9 new skills on top (see `docs/assistant-agent.md` for the 14-skill catalog).
+Phase 25-D ([ADR-0042](adr/0042-commitment-ledger.md) / [ADR-0043](adr/0043-cross-source-identity-resolution.md) + [ADR-0022 §決定 (h)](adr/0022-mcp-server-surface.md)) added the 秘書化 v1 surface — 3 read + 5 write tools, bringing the surface to **27 tools (16 read + 11 write)**:
 
-## 3a. Install the 14 assistant skills on the agent host
+* **`commitment.list` (read, Phase 25-D)** — list rows from the two-way commitment ledger ([ADR-0042](adr/0042-commitment-ledger.md)), filterable by `direction` (`i_owe` / `owed_to_me`), `state`, and `person`. **No LLM call** — the read just reflects what a prior `commitment.scan` mined. `due_before` is deliberately **not** exposed (`due` is free-form text the model read, not a comparable date). Used by `next-actions` (priority signal) and `personal-brief` (period summary).
+* **`person.list` (read, Phase 25-D)** — resolve any unbound `(connector, handle)` (idempotent) then list the person-axis identity graph ([ADR-0043](adr/0043-cross-source-identity-resolution.md)), mirroring `opshub person list`. Read-only over local SQLite.
+* **`catchup` (read, Phase 25-D/E)** — summarise everything since the operator last caught up (new sources + overdue commitments + unhandled Slack demand), priority-ordered ([ADR-0042](adr/0042-commitment-ledger.md), ADR-0015 応用). `since_last_seen` (default `true`) bounds the diff at the stored seen-marker.
+* **`commitment.scan` (write / HITL, Phase 25-D)** — the flagship LLM extraction pass: read the sources observed since the stored scan cursor and call the configured LLM once per source to mine two-way commitments, minting durable `CommitmentExtracted` events. **Open-world write** (the LLM round-trip egresses the network, same bucket as `connector.sync`); `[llm] backend = disabled` surfaces a clean `ConfigError`. `max_sources` caps the per-call cost (default 200; a large backlog drains across several scans).
+* **`commitment.resolve` / `commitment.dismiss` (write / HITL, Phase 25-D)** — closed-world destructive state transitions over local SQLite (mark a commitment done / a false positive). Not in the `propose.apply` non-destructive carve-out — each is a real mutation the service fail-fasts on duplicates of.
+* **`person.merge` / `person.split` (write / HITL, Phase 25-D)** — closed-world destructive identity-graph mutations (merge two persons / detach one identity to a new person). The resolver only auto-merges exact matches; fuzzy merges (and undoing an over-merge) are operator HITL via these tools ([ADR-0043](adr/0043-cross-source-identity-resolution.md) §決定 (c)).
 
-Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) confirms **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 14 assistant skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI; Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) wired it into `opshub init` so step §2 above also installs the 14 assistant skills (TTY prompt via `rich.prompt.Confirm`, default = yes; non-TTY default = install per ADR-0029 §決定 (d)).
+Phase 12 H1 also unified the original 5 skills (`personal-brief`, `next-actions`, `reply-draft`, `pr-review`, `find-document`) on the MCP surface — they call MCP tools directly instead of falling back to the CLI shell. Phase 12 H2-H5 added 9 new skills on top, and Phase 25-E added `catchup` (see `docs/assistant-agent.md` for the 15-skill catalog).
 
-If you ran `opshub init` already, the 14 skills are in place. Override with `opshub init --install-skills` / `opshub init --no-install-skills` for non-interactive scripts that need the explicit choice. Use `opshub skills install` directly to push later SSOT updates, add a `--scope project` install, or pass `--skip-existing` to preserve hand-edits. Flag details (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) and the `opshub skills list` status command live in [`docs/assistant-agent.md`](assistant-agent.md) §8.
+## 3a. Install the 15 assistant skills on the agent host
 
-The 14 skills are:
+Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) confirms **opshub package bundling + `opshub skills install`** as the canonical distribution channel for the 15 assistant skills (SSOT remains opshub `docs/skills/<name>/SKILL.md`, [ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)). Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) shipped the CLI; Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) wired it into `opshub init` so step §2 above also installs the 15 assistant skills (TTY prompt via `rich.prompt.Confirm`, default = yes; non-TTY default = install per ADR-0029 §決定 (d)).
+
+If you ran `opshub init` already, the 15 skills are in place. Override with `opshub init --install-skills` / `opshub init --no-install-skills` for non-interactive scripts that need the explicit choice. Use `opshub skills install` directly to push later SSOT updates, add a `--scope project` install, or pass `--skip-existing` to preserve hand-edits. Flag details (`--host` / `--scope` / `--skip-existing` / `--dry-run` / `--print-paths`) and the `opshub skills list` status command live in [`docs/assistant-agent.md`](assistant-agent.md) §8.
+
+The 15 skills are:
 
 | Tier | Skill | Trigger phrase examples |
 | --- | --- | --- |
@@ -138,6 +155,7 @@ The 14 skills are:
 | read | `decision-rationale` (Phase 12 H3) | "あの決定はなぜ" / "X を選んだ理由" |
 | read | `handoff-draft` (Phase 12 H5) | "引き継ぎ書作って" / "handoff 書く" |
 | read | `announcement-draft` (Phase 12 H5) | "リリース告知文書いて" / "announcement 作って" |
+| read | `catchup` (Phase 25-E) | "前回見て以降どうなった" / "久しぶりに状況確認" / "差分だけ教えて" |
 | HITL write | `reply-draft` | "返信案考えて" / "下書き作って" |
 | HITL write | `inbox-triage` (Phase 12 H4) | "受信箱整理して" / "inbox 仕分けて" |
 | HITL write | `source-extract` (Phase 12 H4) | "この資料から task 抽出" / "<source_id> から候補を" |

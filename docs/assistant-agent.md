@@ -2,7 +2,7 @@
 
 opshub は Phase 10 (アシスタントエージェント・プラットフォーム化) で「人間 → アシスタントエージェント → opshub コマンド」の三層モデルへ拡張され、Phase 12 (Assistant Skills 拡張) でアシスタント Skill レパートリーを **5 → 14** に拡張した。本 doc はアシスタントエージェントの使い方を、Skill catalog SSOT として 10 § 構成で集約する。
 
-本 doc は [ADR-0004 §決定 (c-2)](adr/0004-agent-runtime-boundary.md) で **Skill catalog SSOT** として明示された (Phase 12 H1)。14 skills 体制の責務マップ / HITL boundary / MCP tool 依存マップ / pair structure をここで一元管理する。Skill 配信機構は Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地)、Skill 本体 (SKILL.md) は引き続き opshub `docs/skills/<name>/SKILL.md` を SSOT として保持する。
+本 doc は [ADR-0004 §決定 (c-2)](adr/0004-agent-runtime-boundary.md) で **Skill catalog SSOT** として明示された (Phase 12 H1)。15 skills 体制の責務マップ / HITL boundary / MCP tool 依存マップ / pair structure をここで一元管理する。Skill 配信機構は Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地)、Skill 本体 (SKILL.md) は引き続き opshub `docs/skills/<name>/SKILL.md` を SSOT として保持する。
 
 設計の根拠は [ADR-0004 Agent Runtime Boundary](adr/0004-agent-runtime-boundary.md) (形A: opshub は MCP + Agent Skills のみ提供、runtime は外部ホスト) と [ADR-0022 MCP Server Surface](adr/0022-mcp-server-surface.md) (MCP tool 面) と [ADR-0016 §決定 (l)](adr/0016-action-loop-and-structured-output.md) (Phase 12 H1 で追加された draft 系統一方針: persist 境界 / `mode` 引数射程 / triage 射程 / Candidate union freeze)。
 
@@ -11,9 +11,9 @@ opshub は Phase 10 (アシスタントエージェント・プラットフォ�
 opshub 本体が提供するもの:
 
 1. **operational memory (①コア)** — events / projections / connectors / recall / propose / brief / graph
-2. **MCP サーバ (口)** — `opshub mcp serve` (stdio)。エージェント host が ①コアを叩く経路。Phase 12 H1 で `search` (FTS5) と `propose.apply` (HITL idempotent) と既存 4 read tools の physical column ベース時間フィルタを追加し、Phase 18-C で `slack.demand.list` (Slack mention / DM demand digest、ADR-0033) を、Phase 21-D で `browser.fetch` (ad-hoc な Web ページ render、ネットワークに出るため write-category / HITL、ADR-0037 §決定 (e) + ADR-0022 §決定 (g)) を追加して計 **19 tools (read 13 + write 6)** を公開
+2. **MCP サーバ (口)** — `opshub mcp serve` (stdio)。エージェント host が ①コアを叩く経路。Phase 12 H1 で `search` (FTS5) と `propose.apply` (HITL idempotent) と既存 4 read tools の physical column ベース時間フィルタを追加し、Phase 18-C で `slack.demand.list` (Slack mention / DM demand digest、ADR-0033) を、Phase 21-D で `browser.fetch` (ad-hoc な Web ページ render、ネットワークに出るため write-category / HITL、ADR-0037 §決定 (e) + ADR-0022 §決定 (g)) を、Phase 25-D で 秘書化 v1 の `commitment.*` / `person.*` / `catchup` (ADR-0042 / ADR-0043 + ADR-0022 §決定 (h)) を追加して計 **27 tools (read 16 + write 11)** を公開
 3. **Agent Skills (手順書)** — SKILL.md 標準。本 doc が catalog する **14 Skill** (Phase 12 H2-H5 で 9 新規 + Phase 12 H1 で rename 2 を含む)。`docs/skills/<name>/SKILL.md` を opshub SSOT、配信機構は Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (実装は Phase 16-B [#383](https://github.com/ozzy-labs/opshub/issues/383) で着地)
-4. **skill security scan** — `tools/skill_scan.py` (4 カテゴリ + frontmatter 隠し命令検出)、`tests/unit/skills/test_skill_specs.py` が 14 skills 全てに対して per-skill MCP dispatch pin + scan を実行
+4. **skill security scan** — `tools/skill_scan.py` (4 カテゴリ + frontmatter 隠し命令検出)、`tests/unit/skills/test_skill_specs.py` が 15 skills 全てに対して per-skill MCP dispatch pin + scan を実行
 
 opshub 本体が **持たない** もの:
 
@@ -42,19 +42,20 @@ opshub 本体が **持たない** もの:
 | 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」「昨日の会議どうだった」 | [meeting-followup](skills/meeting-followup/SKILL.md) | 直近の `ms365_calendar` を集め `source.get` + `recall.search` で context 化、`propose.generate (mode=meeting_followup)` で候補生成、HITL apply (Phase 12 H4、pair = meeting-prep) |
 | 「引き継ぎ書作って」「handoff 書く」「後任向け資料まとめて」「業務引継メモほしい」 | [handoff-draft](skills/handoff-draft/SKILL.md) | task.list (state=in_progress) + decision.list + recall.search + graph.related から引き継ぎ書 text を構成して返す (Phase 12 H5、persist なし、text-only) |
 | 「リリース告知文書いて」「announcement 作って」「アナウンス文章まとめて」「release notes 草案」 | [announcement-draft](skills/announcement-draft/SKILL.md) | recall.search + decision.list (`recorded_after=last_release`) + brief で告知文 text を構成して返す (Phase 12 H5、persist なし、text-only) |
+| 「前回見て以降どうなった」「久しぶりに状況確認」「差分だけ教えて」「last seen から何が変わった」 | [catchup](skills/catchup/SKILL.md) | seen-marker watermark 以降の新規 source + 期日超過コミットメント + 未処理 Slack demand を優先度順に要約し、marker を前進させる (Phase 25-E、pair = personal-brief、`catchup` MCP tool、ADR-0042) |
 
 ## 3. Skill catalog
 
-14 skills を read / HITL write の 2 ブロックに分割。各行は name / pair / 発火条件 / 使用 MCP tools / 出力形式。
+15 skills を read / HITL write の 2 ブロックに分割。各行は name / pair / 発火条件 / 使用 MCP tools / 出力形式。
 
-### 3.1 read 自律 OK (10 件)
+### 3.1 read 自律 OK (11 件)
 
 host LLM が auto-approve できる read 系。MCP annotation = `readOnlyHint=true, destructiveHint=false`。
 
 | skill | pair | 発火条件 | 使用 MCP tools | 出力形式 |
 |---|---|---|---|---|
-| [personal-brief](skills/personal-brief/SKILL.md) | ↔ external-brief | 「今日 / 今週 / 今月 / 先週 / 先月 のまとめ」「最近どうなってる」「状況教えて」 | `brief` または `recall.search` + `task.list` (`updated_after/before`) + `inbox.list` (`created_after/before`) + `decision.list` (`recorded_after/before`) | 散文サマリ + signals (期間 + 主要動き + active task + 未処理 inbox) |
-| [next-actions](skills/next-actions/SKILL.md) | stand-alone | 「次に何やる?」「やること教えて」「今週やること」「優先度高いのは?」 | `task.list` (`updated_after/before`) + `recall.search` (+ HITL `task.create`) | 優先度順リスト (state + due + 関連 source) |
+| [personal-brief](skills/personal-brief/SKILL.md) | ↔ external-brief | 「今日 / 今週 / 今月 / 先週 / 先月 のまとめ」「最近どうなってる」「状況教えて」 | `brief` または `recall.search` + `task.list` (`updated_after/before`) + `inbox.list` (`created_after/before`) + `decision.list` (`recorded_after/before`) + `slack.demand.list` + `commitment.list` (Phase 25-D、相手待ち・期日超過 signal) | 散文サマリ + signals (期間 + 主要動き + active task + 未処理 inbox + 督促候補) |
+| [next-actions](skills/next-actions/SKILL.md) | stand-alone | 「次に何やる?」「やること教えて」「今週やること」「優先度高いのは?」 | `task.list` (`updated_after/before`) + `recall.search` + `slack.demand.list` + `commitment.list` (Phase 25-D、`direction=owed_to_me` 督促候補 + 期日のある約束) (+ HITL `task.create`) | 優先度順リスト (state + due + 関連 source + 督促候補) |
 | [pr-review](skills/pr-review/SKILL.md) | stand-alone | 「PR #N レビューして」「この差分どう?」 | `recall.search` + `decision.list` (`recorded_after/before`) + `task.list` + `graph.related` / `graph.trace` | レビュー観点リスト (関連 decision + 過去 review + 関連 task) |
 | [find-document](skills/find-document/SKILL.md) | stand-alone | 「Box にあったあの資料」「<キーワード>含むファイル」「あの Word ドキュメント」「Teams で誰かが言ってた〜」「あの Google Doc」「Sheets の <X>」「Google Slides で説明したやつ」 | `search` (FTS5、Phase 12 H1) + 補助 `recall.search` / `source.list` (`observed_after/before`) / `source.get` | source 一覧 (source_type 別 / 新しい順、snippet 200 字) |
 | [meeting-prep](skills/meeting-prep/SKILL.md) | ↔ meeting-followup | 「来週の会議準備」「明日のミーティング前確認」「<会議名> の準備して」 | `source.list` (`source_type=ms365_calendar` または `google_calendar` + `observed_after/before`、Phase 14 で Google Calendar も対象) + `recall.search` + `graph.related` | 会議ごとに「目的 / 過去関連やりとり / 関連 decisions / 参考 sources」 |
@@ -63,6 +64,7 @@ host LLM が auto-approve できる read 系。MCP annotation = `readOnlyHint=tr
 | [decision-rationale](skills/decision-rationale/SKILL.md) | stand-alone | 「あの決定はなぜ」「X を選んだ理由」「Y の決定経緯」 | `decision.list` (topic 絞り) + `graph.trace` + `recall.search` | 決定 + 直接の根拠 source + 先行 decision + 関連 context |
 | [handoff-draft](skills/handoff-draft/SKILL.md) | draft family | 「引き継ぎ書作って」「handoff 書く」「後任向け資料まとめて」 | `task.list` (`state=in_progress`) + `decision.list` + `recall.search` + `graph.related` | 引き継ぎ書 text (Markdown、persist なし、ADR-0016 §決定 (l)(a)) |
 | [announcement-draft](skills/announcement-draft/SKILL.md) | draft family | 「リリース告知文書いて」「announcement 作って」「お知らせ案ほしい」 | `recall.search` + `decision.list` (`recorded_after=last_release`) + `brief` (announcement tone) | 告知文 text (Markdown、persist なし、ADR-0016 §決定 (l)(a)) |
+| [catchup](skills/catchup/SKILL.md) | ↔ personal-brief | 「前回見て以降どうなった」「久しぶりに状況確認」「差分だけ教えて」 | `catchup` (Phase 25-D/E、seen-marker 基準の差分、新規 source + 期日超過 commitment + 新着 Slack demand を 1 tool で集約) | 優先度順の「前回以降の差分」digest (seen-marker を前進、ADR-0042) |
 
 ### 3.2 HITL write (4 件)
 
@@ -75,30 +77,31 @@ host LLM が user 確認必須 (`propose.generate` で候補生成 → user 確�
 | [source-extract](skills/source-extract/SKILL.md) | ↔ inbox-triage | 「この資料から task 抽出」「これに含まれる decisions 教えて」「<source_id> から候補を」 | `source.get` + `propose.generate` (`mode=source_extract`) + `propose.apply` (HITL) | 1 source から抽出された task / decision / reply_draft 候補、user 個別承認分のみ保存 |
 | [meeting-followup](skills/meeting-followup/SKILL.md) | ↔ meeting-prep | 「会議後の action items」「ミーティングのフォローアップ」「議事録から task 抽出」 | `source.list` (`source_type=ms365_calendar` または `google_calendar` + `observed_after/before`、Phase 14 で Google Calendar も対象) + `source.get` + `recall.search` + `propose.generate` (`mode=meeting_followup`) + `propose.apply` (HITL) | 会議からの task / decision 候補、user 個別承認分のみ保存 |
 
-skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。配布は Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (Phase 16-B 着地後、[§8 セットアップ](#8-セットアップ) 参照)。`@ozzylabs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit 等、名前空間 disjoint) を引き続き担当し、アシスタント 14 skill 経路から carve out される ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md) §決定 (h))。
+skill 本体 (SKILL.md) は `docs/skills/<name>/SKILL.md` に置く reference 仕様。配布は Phase 16-A ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md)) で **opshub package 同梱 + `opshub skills install`** に確定 (Phase 16-B 着地後、[§8 セットアップ](#8-セットアップ) 参照)。`@ozzylabs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit 等、名前空間 disjoint) を引き続き担当し、アシスタント 15 skill 経路から carve out される ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md) §決定 (h))。
 
 ## 4. Pair structure
 
-host LLM の routing 精度向上のため、14 skills のうち 9 件を 4 pair として対称軸で配置 (draft family のみ 1:2 で reply-draft / handoff-draft / announcement-draft の 3 件)。pair の向き / タイミング / 粒度の軸で区別する。
+host LLM の routing 精度向上のため、15 skills のうち 11 件を 5 pair として対称軸で配置 (draft family のみ 1:2 で reply-draft / handoff-draft / announcement-draft の 3 件)。pair の向き / タイミング / 粒度の軸で区別する。
 
 | pair | A 側 | B 側 | 軸 |
 |---|---|---|---|
 | 自分向け ↔ 外向き | personal-brief (粒度細かめ、進行中タスクも含む、雑多 OK) | external-brief (完了 + 確定 decision 中心、tone 制御、要点先出し) | 向き |
+| 期間総覧 ↔ 差分 | personal-brief (期間ラベル基準、定点観測 / 振り返り) | catchup (seen-marker 基準、前回以降の差分のみ、marker を前進、Phase 25-E) | 基準 |
 | 会議前 ↔ 会議後 | meeting-prep (read-only、preparation context、目的 / 過去関連 / 関連 decisions / 参考 sources) | meeting-followup (HITL write、action items 抽出、`propose.generate` + `apply`) | タイミング |
 | 集合 ↔ 個別 | inbox-triage (集合、inbox 全体を一気に仕分け、複数 item の action 候補を batch 生成) | source-extract (個別、1 source から候補抽出、source 本文に依拠) | 粒度 |
 | draft family | reply-draft (persist、`reply_to_source_id` が natural key) | handoff-draft / announcement-draft (text-only、persist なし、自発生成で natural key なし、ADR-0016 §決定 (l)(a)) | persist 境界 |
 
-stand-alone (pair なし、5 件): `next-actions` / `pr-review` / `find-document` / `research` / `decision-rationale`。14 - pair 9 = stand-alone 5。stand-alone は用途が直交しているため pair 化せず単独で機能する (例: `find-document` は特定 1 ファイルを引く、`research` はトピック網羅。両者は用途が異なるが routing は別軸で発火する)。
+`personal-brief` は 2 pair に属する (external-brief とは向き軸、catchup とは基準軸)。stand-alone (pair なし、5 件): `next-actions` / `pr-review` / `find-document` / `research` / `decision-rationale`。stand-alone は用途が直交しているため pair 化せず単独で機能する (例: `find-document` は特定 1 ファイルを引く、`research` はトピック網羅。両者は用途が異なるが routing は別軸で発火する)。
 
 ## 5. HITL boundary
 
 ADR-0022 §決定 (c) annotation policy + ADR-0016 §決定 (c) auto-apply 禁止 + ADR-0010 §禁止事項 7 write-back 禁止の 3 層で構成。
 
-### 5.1 read 自律 OK (10 skill)
+### 5.1 read 自律 OK (11 skill)
 
-host LLM が auto-approve できる。MCP read tools (12) を組み合わせる。durable state を変えず、外部 SaaS にも書き込まない。
+host LLM が auto-approve できる。MCP read tools (16) を組み合わせる。durable state を変えず、外部 SaaS にも書き込まない。
 
-- personal-brief / next-actions (read 部分のみ) / pr-review / find-document / meeting-prep / research / external-brief / decision-rationale / handoff-draft / announcement-draft
+- personal-brief / next-actions (read 部分のみ) / pr-review / find-document / meeting-prep / research / external-brief / decision-rationale / handoff-draft / announcement-draft / catchup (Phase 25-E)
 
 ただし `next-actions` は `task.create` (write tool) を呼ぶ可能性があり、その場合は host LLM が user 確認を入れる (ADR-0022 §決定 (c))。
 
@@ -131,42 +134,52 @@ generate 時の同一 source open-proposal warning など自動 dedup 対策は�
 
 ## 6. MCP tool 依存マップ
 
-14 skills × 19 MCP tools (read 13 + write 6) のマトリクス。各 skill が呼び出す MCP tool を列挙。✓ = primary 経路、(✓) = 補助経路 (Step 2 以降の optional 呼び出し)。`browser.fetch` (Phase 21-D、write-category) は 14 skills のいずれからも primary 経路として呼ばれない (操作系 Phase で `research` skill 組込みを再訪、ADR-0037 §Non-goals) ため §6.2 表の最終行で「呼ばれない」を明示する。
+15 skills × 27 MCP tools (read 16 + write 11) のマトリクス。各 skill が呼び出す MCP tool を列挙。✓ = primary 経路、(✓) = 補助経路 (Step 2 以降の optional 呼び出し)。表は読みやすさのため Phase 12 の 14 skill を列に保ち、Phase 25-E の `catchup` 列を末尾に追加する。`browser.fetch` (Phase 21-D、write-category) は 15 skills のいずれからも primary 経路として呼ばれない (操作系 Phase で `research` skill 組込みを再訪、ADR-0037 §Non-goals) ため §6.2 表の最終行で「呼ばれない」を明示する。Phase 25-D の `commitment.*` / `person.*` の write 系 (`commitment.scan` / `resolve` / `dismiss` / `person.merge` / `split`) は operator が CLI / host から直接叩く運用で、15 skills のいずれからも primary 経路として呼ばれない (§6.2 表の最終行で明示)。
 
-### 6.1 Read tools (13)
+### 6.1 Read tools (16)
 
-| MCP tool | personal-brief | next-actions | reply-draft | pr-review | find-document | meeting-prep | research | external-brief | decision-rationale | handoff-draft | announcement-draft | inbox-triage | source-extract | meeting-followup |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| `recall.search` | ✓ | ✓ | ✓ | ✓ | (✓) | ✓ | ✓ |  | ✓ | ✓ | ✓ |  | (✓) | ✓ |
-| `task.list` | ✓ | ✓ |  | ✓ |  |  |  | ✓ |  | ✓ |  |  |  |  |
-| `inbox.list` | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |
-| `decision.list` | ✓ |  |  | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ |  |  |  |
-| `brief` | ✓ |  |  |  |  |  | ✓ | ✓ |  |  | ✓ |  |  |  |
-| `graph.related` |  |  |  | ✓ |  | ✓ | ✓ |  |  | ✓ |  |  |  |  |
-| `graph.trace` |  |  |  | ✓ |  |  | (✓) |  | ✓ |  |  |  |  |  |
-| `graph.expand` |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |
-| `source.list` |  |  |  |  | (✓) | ✓ |  |  |  |  |  |  | (✓) | ✓ |
-| `source.get` |  |  |  |  | (✓) | (✓) | (✓) |  | (✓) |  |  |  | ✓ | ✓ |
-| `embeddings.find_duplicates` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `search` (FTS5、Phase 12 H1) |  |  |  |  | ✓ |  | ✓ |  |  |  |  |  | (✓) |  |
-| `slack.demand.list` (Phase 18-C) | ✓ | ✓ |  |  |  |  |  |  |  |  |  | (✓) |  |  |
+| MCP tool | personal-brief | next-actions | reply-draft | pr-review | find-document | meeting-prep | research | external-brief | decision-rationale | handoff-draft | announcement-draft | inbox-triage | source-extract | meeting-followup | catchup |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `recall.search` | ✓ | ✓ | ✓ | ✓ | (✓) | ✓ | ✓ |  | ✓ | ✓ | ✓ |  | (✓) | ✓ |  |
+| `task.list` | ✓ | ✓ |  | ✓ |  |  |  | ✓ |  | ✓ |  |  |  |  |  |
+| `inbox.list` | ✓ |  |  |  |  |  |  |  |  |  |  | ✓ |  |  |  |
+| `decision.list` | ✓ |  |  | ✓ |  |  |  | ✓ | ✓ | ✓ | ✓ |  |  |  |  |
+| `brief` | ✓ |  |  |  |  |  | ✓ | ✓ |  |  | ✓ |  |  |  |  |
+| `graph.related` |  |  |  | ✓ |  | ✓ | ✓ |  |  | ✓ |  |  |  |  |  |
+| `graph.trace` |  |  |  | ✓ |  |  | (✓) |  | ✓ |  |  |  |  |  |  |
+| `graph.expand` |  |  |  |  |  |  | ✓ |  |  |  |  |  |  |  |  |
+| `source.list` |  |  |  |  | (✓) | ✓ |  |  |  |  |  |  | (✓) | ✓ |  |
+| `source.get` |  |  |  |  | (✓) | (✓) | (✓) |  | (✓) |  |  |  | ✓ | ✓ |  |
+| `embeddings.find_duplicates` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `search` (FTS5、Phase 12 H1) |  |  |  |  | ✓ |  | ✓ |  |  |  |  |  | (✓) |  |  |
+| `slack.demand.list` (Phase 18-C) | ✓ | ✓ |  |  |  |  |  |  |  |  |  | (✓) |  |  |  |
+| `commitment.list` (Phase 25-D) | ✓ | ✓ |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `person.list` (Phase 25-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `catchup` (Phase 25-D/E) |  |  |  |  |  |  |  |  |  |  |  |  |  |  | ✓ |
 
-### 6.2 Write tools (6、HITL)
+`person.list` は 15 skills のいずれからも primary 経路として呼ばれない (Phase 25-D は MCP surface に登録するが、人軸 graph の閲覧は operator が CLI / host から直接叩く運用)。`catchup` は同名 skill の唯一の primary tool。
 
-| MCP tool | personal-brief | next-actions | reply-draft | pr-review | find-document | meeting-prep | research | external-brief | decision-rationale | handoff-draft | announcement-draft | inbox-triage | source-extract | meeting-followup |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| `task.create` |  | ✓ (HITL) |  |  |  |  |  |  |  |  |  |  |  |  |
-| `inbox.add` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `connector.sync` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
-| `propose.generate` |  |  | ✓ (`reply_to_source_id`) |  |  |  |  |  |  |  |  | ✓ (`mode=inbox_triage`) | ✓ (`mode=source_extract`) | ✓ (`mode=meeting_followup`) |
-| `propose.apply` (Phase 12 H1) |  |  | ✓ (HITL、idempotent) |  |  |  |  |  |  |  |  | ✓ (HITL) | ✓ (HITL) | ✓ (HITL) |
-| `browser.fetch` (Phase 21-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+### 6.2 Write tools (11、HITL)
 
-`inbox.add` と `connector.sync` は 14 skills のいずれからも primary 経路として呼ばれない (host LLM の自律判断で呼ぶ余地は残す)。`embeddings.find_duplicates` も同様 (現状は CLI / operator が直接叩く用途)。`browser.fetch` (Phase 21-D、ADR-0037 §決定 (e)) も 14 skills のいずれからも呼ばれない — ad-hoc な Web ページ render は **ネットワークに egress する write-category tool** (HITL per call、`connector.sync` と同 bucket、`readOnlyHint=false` / `openWorldHint=true`) であり、durable な取り込みは Phase 21-C `web` connector の責務。`research` skill への組込みは操作系 (click / fill / submit) Phase とまとめて再訪する (ADR-0037 §Non-goals、14 skill 体制 / SKILL.md は Phase 21 で不変)。
+| MCP tool | personal-brief | next-actions | reply-draft | pr-review | find-document | meeting-prep | research | external-brief | decision-rationale | handoff-draft | announcement-draft | inbox-triage | source-extract | meeting-followup | catchup |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `task.create` |  | ✓ (HITL) |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `inbox.add` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `connector.sync` |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `propose.generate` |  |  | ✓ (`reply_to_source_id`) |  |  |  |  |  |  |  |  | ✓ (`mode=inbox_triage`) | ✓ (`mode=source_extract`) | ✓ (`mode=meeting_followup`) |  |
+| `propose.apply` (Phase 12 H1) |  |  | ✓ (HITL、idempotent) |  |  |  |  |  |  |  |  | ✓ (HITL) | ✓ (HITL) | ✓ (HITL) |  |
+| `browser.fetch` (Phase 21-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `commitment.scan` (Phase 25-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `commitment.resolve` (Phase 25-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `commitment.dismiss` (Phase 25-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `person.merge` (Phase 25-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| `person.split` (Phase 25-D) |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+
+`inbox.add` と `connector.sync` は 15 skills のいずれからも primary 経路として呼ばれない (host LLM の自律判断で呼ぶ余地は残す)。`embeddings.find_duplicates` も同様 (現状は CLI / operator が直接叩く用途)。`browser.fetch` (Phase 21-D、ADR-0037 §決定 (e)) も 15 skills のいずれからも呼ばれない — ad-hoc な Web ページ render は **ネットワークに egress する write-category tool** (HITL per call、`connector.sync` と同 bucket、`readOnlyHint=false` / `openWorldHint=true`) であり、durable な取り込みは Phase 21-C `web` connector の責務。`research` skill への組込みは操作系 (click / fill / submit) Phase とまとめて再訪する (ADR-0037 §Non-goals、SKILL.md は Phase 21 で不変)。Phase 25-D の `commitment.scan` (旗艦 LLM 抽出、open-world write) / `commitment.resolve` / `commitment.dismiss` / `person.merge` / `person.split` も 15 skills のいずれからも primary 経路として呼ばれない — コミットメント抽出 (`scan`) は operator がコストを握る手動オペレーションで、状態遷移 (`resolve` / `dismiss` / `merge` / `split`) は operator の明示 HITL 操作のため、skill から自動発火させない (ADR-0042 §督促境界 / ADR-0043 §決定 (c))。skill は `commitment.list` / `catchup` の **read 面** だけを利用する。
 
 ### 6.3 Phase 11 / Phase 13 / Phase 14 source_type 列挙
 
-Phase 11 で追加された source_type (`teams_message` / `ms365_outlook` (body deep retention) / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`) と Phase 13 で追加された source_type (`google_doc` / `google_slides` / `google_sheets` / `google_workspace_file` catch-all) と Phase 14 で追加された source_type (`gmail_message` / `google_calendar`) は、14 skills 全てから `recall.search` / `search` / `source.list` / `source.get` 経由で透過的に利用可能。mapper が `sources.body` に persist する限り skill 側に追加の変更は不要 (Phase 11 plan §7.3 step 1 / Phase 13 plan §7.3 step 4 / Phase 14 plan §6 step 2)。
+Phase 11 で追加された source_type (`teams_message` / `ms365_outlook` (body deep retention) / `word_document` / `excel_spreadsheet` / `powerpoint_slide_deck`) と Phase 13 で追加された source_type (`google_doc` / `google_slides` / `google_sheets` / `google_workspace_file` catch-all) と Phase 14 で追加された source_type (`gmail_message` / `google_calendar`) は、15 skills 全てから `recall.search` / `search` / `source.list` / `source.get` 経由で透過的に利用可能。mapper が `sources.body` に persist する限り skill 側に追加の変更は不要 (Phase 11 plan §7.3 step 1 / Phase 13 plan §7.3 step 4 / Phase 14 plan §6 step 2)。
 
 find-document が利用できる本文系 source_type は計 9 種 (Phase 11 office 3 種 + Phase 13 Google Workspace native 3 種 + Phase 14 Gmail / Google Calendar / Outlook の 3 種だが Outlook は Phase 11) + その他 metadata + body 各 connector で 1 つ MCP / 1 つ search だけで横断可能。`google_workspace_file` (catch-all、非 native = Drive にアップロードされた PDF / 画像 / フォルダ等) は metadata-only path で持ち、SourceObserved.body は mapper が `summary` を substitute して persist する (epic #470 で `sources.body NOT NULL` 化 + ADR-0010 §不変条件 6)。本文抽出は走らないため find-document の hit はファイル名 / パス / metadata ベース (title / URL / observed_at + body=summary) に留まる。
 
@@ -244,7 +257,7 @@ Phase 21 ([epic #504](https://github.com/ozzy-labs/opshub/issues/504)、[ADR-003
 
 **write 分類の根拠** = 「read tool = ローカル DB のみ参照」不変条件の維持 (ADR-0022 §決定 (g))。本 tool は data を返すだけで local state を変えないが、(1) 外部ネットワークに egress し remote 側の rate limit / audit log に痕跡を残す観測可能な副作用を持ち (`connector.sync` の write 分類と同論理)、(2) 取得した Web 本文が indirect prompt injection の運搬路になりうるため auto-approve せず host に人確認 (HITL per call) させる。read tool 群 (`recall.search` / `search` / `task.list` 等) は引き続きローカル SQLite のみを参照しネットワークに出ない (§6.1 表)。
 
-14 skills のいずれもこの tool を primary 経路として呼ばない (§6.2 表の最終行)。`research` skill への組込みは操作系 (click / fill / submit) Phase とまとめて再訪する (ADR-0037 §Non-goals)。セットアップは [`docs/mcp-setup.md`](mcp-setup.md) §3、トラブルシュート (chromium 未 install / headless 切替 / timeout) は [`docs/troubleshooting.md`](troubleshooting.md) §3.13 を参照。
+15 skills のいずれもこの tool を primary 経路として呼ばない (§6.2 表の最終行)。`research` skill への組込みは操作系 (click / fill / submit) Phase とまとめて再訪する (ADR-0037 §Non-goals)。セットアップは [`docs/mcp-setup.md`](mcp-setup.md) §3、トラブルシュート (chromium 未 install / headless 切替 / timeout) は [`docs/troubleshooting.md`](troubleshooting.md) §3.13 を参照。
 
 ## 7. できること / できないこと
 
@@ -254,23 +267,23 @@ Phase 21 ([epic #504](https://github.com/ozzy-labs/opshub/issues/504)、[ADR-003
 - 過去の decision / task / proposal / event を踏まえた **文脈付き** の応答 (knowledge graph 1-hop 拡張、ADR-0017 §決定 (e)+(f)、epic #470 以降は常時実行)
 - 返信下書きを「自分の過去送信 event」の文体を recall して再現 (ADR-0016 §決定 (k))
 - 複数 agent host (Claude Code / Codex CLI / Gemini CLI / GitHub Copilot CLI) から **同一の MCP 面** を叩いて同じ記憶を共有
-- Phase 11 で追加された **MS Office 由来の文脈**をアシスタントの素材として使う (14 skills 全てが `source.body` ベースで透過的に対応):
+- Phase 11 で追加された **MS Office 由来の文脈**をアシスタントの素材として使う (15 skills 全てが `source.body` ベースで透過的に対応):
   - **Teams chat 本文** (`teams_message`、Microsoft Graph delta query 経由、[Teams setup](teams-setup.md))
   - **Outlook 本文 deep retention** (Phase 10 で取り込み始めた summary に加え、Phase 11 で本文も `sources.body` に persist)
   - **Office 文書本文** (`.docx`/`.xlsx`/`.pptx`、markitdown 経由、`box_drive` / `onedrive_drive` の `content_extraction = true` opt-in、[ADR-0025](adr/0025-office-document-content-extraction.md))
-- Phase 13 で追加された **Google Workspace 由来の文脈**をアシスタントの素材として使う (14 skills 全てが `source.body` ベースで透過的に対応):
+- Phase 13 で追加された **Google Workspace 由来の文脈**をアシスタントの素材として使う (15 skills 全てが `source.body` ベースで透過的に対応):
   - **Google Docs 本文** (`google_doc`、Drive API `files.export(fileId, mimeType=docx)` → markitdown、`google_workspace` の `content_extraction = true` opt-in、[Google Workspace setup](google-workspace-setup.md))
   - **Google Slides 本文** (`google_slides`、Drive API export → pptx → markitdown)
   - **Google Sheets 本文** (`google_sheets`、Drive API export → xlsx → markitdown)
   - **Google Workspace metadata only** (`google_workspace_file` catch-all = Workspace 非 native ファイル / フォルダ、metadata のみ persist。Phase 13 G3 default 挙動)
-- Phase 14 で追加された **Gmail / Google Calendar 由来の文脈**をアシスタントの素材として使う (14 skills 全てが `source.body` ベースで透過的に対応、Outlook / ms365_calendar と symmetric):
+- Phase 14 で追加された **Gmail / Google Calendar 由来の文脈**をアシスタントの素材として使う (15 skills 全てが `source.body` ベースで透過的に対応、Outlook / ms365_calendar と symmetric):
   - **Gmail 本文** (`gmail_message`、Gmail API v1 `users.messages.get(format=full)` 経由、text/plain 優先 → text/html 生保持、markitdown なし、添付 retain なし、`[Labels: ...]` prepend、message 単位 = thread 単位ではなく threadId は field 保持。[Google Workspace setup](google-workspace-setup.md) §Gmail 節参照)
   - **Google Calendar 本文** (`google_calendar`、Calendar API v3 `events.list(syncToken=...)` 経由、master event only + RRULE field 保持、override は別 record として emit + body に back-pointer、summary = `start_iso - end_iso (N attendees)`、attendee email list / 議題 / 会議室は body に追記。[Google Workspace setup](google-workspace-setup.md) §Calendar 節参照)
   - Gmail 添付 / Calendar 添付の本文抽出は Phase 15+ で markitdown 経路追加 (ADR-0025 拡張)
 - Phase 21 で追加された **ブラウザレンダリングを要する Web ページ本文**をアシスタントの素材として使う ([ADR-0037](adr/0037-browser-read-layer-playwright.md)、Playwright browser read 層):
-  - **Web ページ本文** (`web_page`、Phase 21-C `web` connector。operator が `[connectors.web] pages` に明示登録した URL のみ、headless Chromium で render 後の DOM text を抽出 → `sources.body` に persist。crawler ではない = リンク追跡 / sitemap 巡回なし、ADR-0010 §Phase 21 改訂 (n))。14 skills 全てが `recall.search` / `search` / `source.list` / `source.get` 経由で透過的に hit する
-  - **ad-hoc な Web ページ render** (`browser.fetch` MCP tool、Phase 21-D。durable 取り込みを伴わない 1 回限りの read。**ネットワークに egress する write-category tool** で HITL per call、§6.7 参照)。現状 14 skills のいずれからも primary 経路として呼ばれず、`research` skill 組込みは操作系 Phase で再訪する
-- Phase 12 で追加された **アシスタントらしいユースケース** に対応 (5 → 14 skills 拡張):
+  - **Web ページ本文** (`web_page`、Phase 21-C `web` connector。operator が `[connectors.web] pages` に明示登録した URL のみ、headless Chromium で render 後の DOM text を抽出 → `sources.body` に persist。crawler ではない = リンク追跡 / sitemap 巡回なし、ADR-0010 §Phase 21 改訂 (n))。15 skills 全てが `recall.search` / `search` / `source.list` / `source.get` 経由で透過的に hit する
+  - **ad-hoc な Web ページ render** (`browser.fetch` MCP tool、Phase 21-D。durable 取り込みを伴わない 1 回限りの read。**ネットワークに egress する write-category tool** で HITL per call、§6.7 参照)。現状 15 skills のいずれからも primary 経路として呼ばれず、`research` skill 組込みは操作系 Phase で再訪する
+- Phase 12 で追加された **アシスタントらしいユースケース** に対応 (5 → 14 → 15 skills 拡張):
   - 「会議準備 / 会議後フォロー」(`meeting-prep` ↔ `meeting-followup`)
   - 「トピック横断調査」(`research`、recall + FTS5 + graph 拡張 + brief 統合)
   - 「外向きまとめ」(`external-brief`、外向き tone)
@@ -298,13 +311,13 @@ Phase 21 ([epic #504](https://github.com/ozzy-labs/opshub/issues/504)、[ADR-003
 ```bash
 # 環境準備
 uv tool install ozzylabs-opshub[mcp]
-opshub init   # 初回のみ。MCP server 初期化 + アシスタント 14 skill install (TTY 時は prompt、非対話は default install)
+opshub init   # 初回のみ。MCP server 初期化 + アシスタント 15 skill install (TTY 時は prompt、非対話は default install)
 
 # MCP server を stdio で起動 (host が subprocess として spawn する想定)
 opshub mcp serve
 ```
 
-### 8.2 アシスタント Skills 14 件をホストに配布する
+### 8.2 アシスタント Skills 15 件をホストに配布する
 
 Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で `opshub skills install` / `opshub skills list` が着地し、Phase 16-C ([#384](https://github.com/ozzy-labs/opshub/issues/384)) で `opshub init` 経由の自動 install (TTY prompt + `--install-skills` / `--no-install-skills` flag、非対話 default = install) が着地した。`[tool.hatch.build.force-include]` で `docs/skills/` → `src/opshub/_skills/` を build 時に copy し、wheel に同梱する ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md) §決定 (a))。
 
@@ -312,7 +325,7 @@ Phase 16-B ([#383](https://github.com/ozzy-labs/opshub/issues/383)) で `opshub 
 
 ```bash
 uv tool install ozzylabs-opshub[mcp]
-opshub init   # MCP server 初期化 + アシスタント 14 skill を ~/.claude/skills/ + ~/.agents/skills/ に install
+opshub init   # MCP server 初期化 + アシスタント 15 skill を ~/.claude/skills/ + ~/.agents/skills/ に install
 ```
 
 `opshub init` は次の 3 layer で skill install 判断を行う:
@@ -344,7 +357,7 @@ flags:
 #### `opshub skills list` — install 状況の確認
 
 ```bash
-opshub skills list                     # 全 host x 14 skill の install status を表示 (default: --host all --scope user)
+opshub skills list                     # 全 host x 15 skill の install status を表示 (default: --host all --scope user)
 opshub skills list --host claude-code  # 特定の host のみ
 opshub skills list --scope project     # CWD の ./.claude/skills/ / ./.agents/skills/ を見る
 ```
@@ -355,9 +368,9 @@ status の意味:
 - `missing` — host loader 配下に file が無い (一度も `opshub skills install` を実行していない / 別 scope を使った)
 - `modified` — file は存在するが SSOT と byte 差分がある (operator が手編集した、または stale な install を再 sync する必要あり)
 
-#### scope 境界 (アシスタント 14 skill vs ecosystem 共通 skill)
+#### scope 境界 (アシスタント 15 skill vs ecosystem 共通 skill)
 
-opshub 本体リポでは `docs/skills/<name>/SKILL.md` が引き続き **SSOT** として置かれる ([ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)、Phase 16-A 改訂後も位置は不変、wheel 同梱経路に切り替わったのみ)。`ozzy-labs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit / 等) を引き続き担当し、アシスタント 14 skill 経路と名前空間 disjoint に分担する ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md) §決定 (h))。`opshub skills install` は 14 assistant skill 名のみを touch するため、`@ozzylabs/skills` で配信される ecosystem 共通 skill を clobber することはない (この不変条件は `tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_14_assistant_skills` で pin されている)。
+opshub 本体リポでは `docs/skills/<name>/SKILL.md` が引き続き **SSOT** として置かれる ([ADR-0004 §決定 (c)](adr/0004-agent-runtime-boundary.md)、Phase 16-A 改訂後も位置は不変、wheel 同梱経路に切り替わったのみ)。`ozzy-labs/skills` Renovate preset 経路は ecosystem 共通 skill (drive / lint / commit / 等) を引き続き担当し、アシスタント 15 skill 経路と名前空間 disjoint に分担する ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md) §決定 (h))。`opshub skills install` は 15 assistant skill 名のみを touch するため、`@ozzylabs/skills` で配信される ecosystem 共通 skill を clobber することはない (この不変条件は `tests/unit/cli/test_skills_install.py::test_skills_install_only_writes_15_assistant_skills` で pin されている)。
 
 ### 8.3 ホストから skill を呼ぶ
 
@@ -367,11 +380,11 @@ opshub 本体リポでは `docs/skills/<name>/SKILL.md` が引き続き **SSOT**
 
 `tools/skill_scan.py` で 4 カテゴリ (プロンプトインジェクション / コマンドインジェクション / ハードコード鍵 / データ持ち出し) + frontmatter の隠しユニコード / 「ignore previous instructions」類のパターン検出を行う。
 
-- 本リポ内 (`docs/skills/<name>/SKILL.md`) の 14 skills 全てに test (`tests/unit/skills/test_skill_specs.py`) で適用済
-- 14 skills 全てに per-skill MCP dispatch pin (skill 内 MCP tool 名・引数 schema が opshub MCP surface と整合するか grep + JSON schema validation)
+- 本リポ内 (`docs/skills/<name>/SKILL.md`) の 15 skills 全てに test (`tests/unit/skills/test_skill_specs.py`) で適用済
+- 15 skills 全てに per-skill MCP dispatch pin (skill 内 MCP tool 名・引数 schema が opshub MCP surface と整合するか grep + JSON schema validation)
 - HITL boundary test pin (HITL write skill の `propose.apply` annotation = `read_only=false, destructive=false, idempotent=true`)
 - text-only boundary test pin (handoff/announcement-draft が persist 経路を持たない)
-- `tools/skill_scan.py` は本リポ内 14 skill spec (`docs/skills/<name>/SKILL.md`) に対し commit 時の test (`tests/unit/skills/test_skill_specs.py`) で適用する。`opshub skills install` の install 前 scan ゲートは現状実装していない (将来検討、[#396](https://github.com/ozzy-labs/opshub/issues/396))。アシスタント 14 skill の payload (`src/opshub/_skills/<name>/SKILL.md`) は build 時に `docs/skills/` SSOT から `[tool.hatch.build.force-include]` で取り込まれるため、install 経路で外部由来の SKILL.md が混入する余地が構造的になく、install 前 scan の優先度は低い。ecosystem 共通 skill は `ozzy-labs/skills` 側 CI で別途 scan される ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md))
+- `tools/skill_scan.py` は本リポ内 15 skill spec (`docs/skills/<name>/SKILL.md`) に対し commit 時の test (`tests/unit/skills/test_skill_specs.py`) で適用する。`opshub skills install` の install 前 scan ゲートは現状実装していない (将来検討、[#396](https://github.com/ozzy-labs/opshub/issues/396))。アシスタント 15 skill の payload (`src/opshub/_skills/<name>/SKILL.md`) は build 時に `docs/skills/` SSOT から `[tool.hatch.build.force-include]` で取り込まれるため、install 経路で外部由来の SKILL.md が混入する余地が構造的になく、install 前 scan の優先度は低い。ecosystem 共通 skill は `ozzy-labs/skills` 側 CI で別途 scan される ([ADR-0029](adr/0029-distribute-assistant-skills-via-opshub-package.md))
 - 検出ルールは scope 縮小設計 (高 precision / 中 recall)。誤検出は `# skill-scan: allow <category>` コメントで局所的に suppress 可能
 
 ## 10. 関連
@@ -384,5 +397,5 @@ opshub 本体リポでは `docs/skills/<name>/SKILL.md` が引き続き **SSOT**
 - [docs/mcp-setup.md](mcp-setup.md)
 - [Phase 10 Implementation Plan](phase-10-plan.md)
 - [Phase 12 Implementation Plan](phase-12-plan.md)
-- [ADR-0029 Distribute Assistant Skills via opshub Package Bundling (Phase 16-A)](adr/0029-distribute-assistant-skills-via-opshub-package.md) — アシスタント 14 skill 配信経路、`ozzy-labs/skills` Renovate preset 経路からの scope carve-out
-- handbook ADR-0016 (skills repo `ozzy-labs/skills` 配布機構、ecosystem 共通 skill 経路として継続。アシスタント 14 skill 経路は ADR-0029 で carve out)
+- [ADR-0029 Distribute Assistant Skills via opshub Package Bundling (Phase 16-A)](adr/0029-distribute-assistant-skills-via-opshub-package.md) — アシスタント 15 skill 配信経路、`ozzy-labs/skills` Renovate preset 経路からの scope carve-out
+- handbook ADR-0016 (skills repo `ozzy-labs/skills` 配布機構、ecosystem 共通 skill 経路として継続。アシスタント 15 skill 経路は ADR-0029 で carve out)
