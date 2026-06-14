@@ -1777,6 +1777,60 @@ Phase 25 (秘書化 v1) の人軸 identity (25-B) と commitment direction (25-C
 
 ### 影響範囲
 
-- **MCP surface 不変**（19 tools）。skill catalog 不変（14、`test_skills_install_only_writes_14_assistant_skills` green）。
+- **MCP surface 不変**（19 tools、Phase 25-D で 27 に拡張）。skill catalog 不変（14、Phase 25-E で 15 に拡張）。
 - **既存挙動の維持**: Slack の `author_id` 経路（`slack_demand_digest`）は不変。他 connector の既存 field（title / summary / body / provenance）も不変。
 - **スコープ外**（後続 sub-issue）: 人軸 person entity / identity 解決（25-B）/ commitment 台帳本体（25-C）/ MCP・CLI surface（25-D 以降）。本 sub-issue は土台（event field + projection 列 + self-identity helper）のみ。
+
+## Phase 25: 秘書化 v1 — コミットメント台帳 + 人軸エンティティ + catchup（[ADR-0042](adr/0042-commitment-ledger.md) / [ADR-0043](adr/0043-cross-source-identity-resolution.md) / [ADR-0017 §改訂](adr/0017-knowledge-graph.md)、epic [#566](https://github.com/ozzy-labs/opshub/issues/566)）
+
+Phase 25（秘書化 v1）は新 SaaS を一切足さず、既存コネクタが取り込み済みのデータ（特に **operator 自身の送信側メッセージ**）を掘り切る 3 本柱を追加した。25-A（上記）で横断 author 正規化の土台を敷いた上で、25-B〜25-E が機能を載せ、25-F（本 closeout）が ADR 確定 + docs + dogfood を仕上げる。
+
+- **コミットメント台帳**（旗艦、25-C / ADR-0042）— 自分が負った約束（`i_owe`）/ 相手に頼んで待っている件（`owed_to_me`）を双方向に追跡。`opshub commitment scan` 実行時のみ LLM 抽出、閲覧は LLM 不要。
+- **人軸エンティティ**（25-B / ADR-0043）— Slack `U...` / email / GitHub login を横断して同一人物を 1 ノードに束ねる。exact auto-merge / fuzzy HITL merge。
+- **catchup**（25-E）— 「前回見て以降」の差分だけを優先度順に要約する `opshub catchup`。seen-marker で「ここまで見た」を記録。
+
+### 追加された CLI
+
+```text
+opshub commitment scan [--since <source-id>] [--max-sources N]
+opshub commitment list [--direction i-owe|owed-to-me] [--open] [--person <id>] [--format table|json]
+opshub commitment resolve|dismiss|reopen <commitment_id> [--reason <text>]
+opshub person list [--format table|json]
+opshub person merge <a> <b>
+opshub person split <connector>:<handle>
+opshub catchup [--since-last-seen|--no-advance] [--limit N] [--format text|json]
+```
+
+`commitment scan` は長時間 CLI 進捗対象（[ADR-0026](adr/0026-cli-progress-reporting.md)）。`commitment scan` / `commitment.scan` MCP tool は LLM backend 必須で、`[llm] backend = disabled` では `ConfigError`（fail-loud、空抽出はしない）。`commitment list` / `person list` / `catchup` は projection の純読み出しで LLM 不要。
+
+### 新テーブル migration（0035-0039）
+
+| migration | テーブル | sub-issue |
+|---|---|---|
+| `0035_create_persons_table` | `persons`（person ULID + `display_name` + `is_operator`） | 25-B |
+| `0036_create_person_identities_table` | `person_identities`（`(connector, handle)` natural key → person FK） | 25-B |
+| `0037_create_commitments_table` | `commitments`（双方向台帳、`source_ref` natural key） | 25-C |
+| `0038_create_commitment_scan_cursor_table` | `commitment_scan_cursor`（増分スキャン watermark） | 25-C |
+| `0039_create_seen_markers_table` | `seen_markers`（catchup の singleton checkpoint） | 25-E |
+
+`0034_add_author_to_sources` は 25-A（上記 §Phase 25-A）。
+
+### Phase 25 必要な作業
+
+- **DB migration**: `uv run opshub db migrate` で `0035`〜`0039` を head まで適用する（新規 init では自動）。`0034`〜`0039` はいずれも additive（既存行を壊さない）。
+- **author 列の back-fill**: コミットメント抽出 / 人軸解決は `sources.author_handle` を読むため、Phase 25-A 以前に観測済みの行は **full re-sync** が必要（§Phase 25-A 参照）。`author_handle` が `None` の行は person/commitment 解析で「不明」扱いに degrade するだけで壊れない。
+- **operator self-identity の設定**（25-C を使うなら推奨）: 自分の email / GitHub login を per-connector config に設定する（§Phase 25-A の一覧）。env override も可（`OPSHUB_CONNECTORS__GITHUB__OPERATOR_LOGIN` 等）。未設定でも `is_authored_by_operator` は安全側（`False`）に倒れ、direction は `owed_to_me` 側に寄る。
+- **コミットメント抽出の初回**: `uv run opshub commitment scan` を実行する。LLM backend（`[llm] backend`）が設定済みであること。`max_sources`（default 200）で per-call コストを cap し、大量バックログは複数回 scan で drain する（cursor が前進する）。
+- **assistant skills の再 install**: `catchup` skill が増えたので `uv run opshub skills install`（既存 install を上書き）で 15 skill 体制に更新する。
+
+### Phase 25 影響範囲
+
+- **MCP surface 19 → 27 tools = 16 read + 11 write**（25-D / [ADR-0022 §決定 (h)](adr/0022-mcp-server-surface.md)）。read +3 = `commitment.list` / `person.list` / `catchup`、write/HITL +5 = `commitment.scan` / `commitment.resolve` / `commitment.dismiss` / `person.merge` / `person.split`。count pin は `tests/unit/mcp/test_registry_policy.py::test_registry_surface_is_twenty_seven_tools`。
+- **skill catalog 14 → 15**（25-E、新規 `catchup`）。SSOT は `_skills_resources.py` の `ASSISTANT_SKILL_NAMES` tuple、pin は `test_skills_install_only_writes_15_assistant_skills`。
+- **督促境界の継承**: 台帳は読み取り signal。外部送信督促（HITL write-back）は別 Phase（[ADR-0010](adr/0010-connector-contract.md) §禁止事項 7 / ADR-0042 §督促境界）。状態遷移（resolve / dismiss / reopen / merge / split）は operator の明示 HITL 操作。
+- **replay 決定性**: LLM 抽出は `CommitmentExtracted` event に閉じ、`commitments` projection は純関数。`opshub projections rebuild` は台帳を同値復元し、commitment scan cursor / seen-marker も reset しない（replay で同形）。
+- **スコープ外 / 将来**: commitment / person の embedding・`recall`/`search` 索引化（v1 は signal 面のみ）/ `workspace generate` での commitment markdown 描画 / 外部送信督促 / sync 時自動抽出（v1 確認後に再検討）。
+
+### 既知の制限（25-F closeout 時点）
+
+- **MCP `catchup` tool は未配線**: 25-E で `opshub catchup` CLI + seen-marker projection + `CatchupService` は着地したが、MCP `catchup` handler は 25-D の stub のまま（`OpsHubError("catchup is not implemented yet (Phase 25-E / #570)")`）。CLI の `opshub catchup` は機能する。MCP 経由の `catchup` skill は handler の再配線（read/write 分類 = marker 前進の扱い）が決まるまで not-implemented を返す。follow-up で配線予定。
