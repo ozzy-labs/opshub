@@ -71,7 +71,7 @@ opshub は個人向けの「助言する秘書エージェント」であって 
 3. **`suasor.com` は先行** (クリエイティブ代理店)。`.dev` / `.sh` 等を使用する。
 4. dev 界に薄い **"suasor＝recommender"** の足跡 (ラテン語義由来の古い習作)。実害ほぼなし。
 5. **"persuade / 説得"** の語感は HITL の控えめさよりやや能動寄り (purist 的指摘)。
-6. 実装は **~188 ファイル**の機械置換を伴う (別 Phase で実施)。
+6. 実装は機械置換を伴う (別 Phase で実施)。`OPSHUB_` を含むファイルだけで ~188、`opshub` / `OpsHub` 文字列・import path を含めると範囲はさらに広い。
 
 ## Deferred Rename Surface (実装は未実施・将来 Phase)
 
@@ -91,10 +91,10 @@ opshub は個人向けの「助言する秘書エージェント」であって 
 | docs / ADR / README / skills SSOT の `opshub` 文字列 | `opshub` | `suasor` |
 | **無影響** | ecosystem 共通 skill `@ozzylabs/skills` (別 namespace) | (触らない) |
 
-注意点 (実装 Phase で確定):
-- config dir / keyring slot が移るため、operator は **再 init + 再 auth** が必要。
-- DB 再 init の要否 (import path / env のリネーム自体は schema を変えないが、運用フロー上どこまで再構築させるか) は実装 Phase で確定する。
-- メモリ/慣習: 新 architectural pattern ではなく**機械的リネーム**なので、専用 Phase 1 本で完結させる。
+注意点:
+- リネームは **DB schema / `external_id` を変えない**ため、**DB 再構築は原則不要**。operator 影響は config dir + keyring slot の移行 (→ 再 init / 再 auth) に限られる (再構築の要否最終判断は実装 Phase で確定)。
+- **ADR ファイル (本 ADR / 0008 含む) はリネーム対象外** — 履歴として `opshub` 表記のまま残す (ADR immutability)。将来のリネームで ADR 本文を書き換えない。
+- 新 architectural pattern ではなく**機械的リネーム**なので、専用 Phase 1 本で完結させる。
 
 **本 ADR 確定時点ではコードは未変更**。`OPSHUB_*` / `opshub` 文字列・config dir・CLI 名は現状維持。
 
