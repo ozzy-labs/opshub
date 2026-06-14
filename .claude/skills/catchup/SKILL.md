@@ -1,6 +1,6 @@
 ---
 name: catchup
-description: '「前回見て以降どうなった」「久しぶりに状況確認」「最後に見てから何が変わった」「差分だけ教えて」「catchup したい」「未読を消化したい」と聞かれたら、opshub MCP の catchup tool を叩いて前回 catchup 以降に積み上がった差分 (新規 source / 期日超過を含む open commitment / 新着 Slack demand) だけを優先度順に要約する。catchup は seen-marker を前進させる非破壊 write tool で、実行すると「ここまで見た」が記録され「ここまで見た」が記録される (次回 catchup はその先の差分だけを返す)。LLM 推論ループは外部ホスト (Claude Code 等) 側、本 skill は手順書のみで実処理を持たない。pair: personal-brief (期間ベースの総覧) に対し、catchup は seen-marker ベースの「前回以降の差分」に特化する。'
+description: '「前回見て以降どうなった」「久しぶりに状況確認」「最後に見てから何が変わった」「差分だけ教えて」「catchup したい」「未読を消化したい」と聞かれたら、opshub MCP の catchup tool を叩いて前回 catchup 以降に積み上がった差分 (新規 source / 期日超過を含む open commitment / 新着 Slack demand) だけを優先度順に要約する。catchup は seen-marker を前進させる非破壊 write tool で、実行すると「ここまで見た」が記録される (次回 catchup はその先の差分だけを返す)。LLM 推論ループは外部ホスト (Claude Code 等) 側、本 skill は手順書のみで実処理を持たない。pair: personal-brief (期間ベースの総覧) に対し、catchup は seen-marker ベースの「前回以降の差分」に特化する。'
 ---
 
 # catchup — 前回見て以降の差分だけを優先度順に返す
