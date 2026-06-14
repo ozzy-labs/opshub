@@ -116,7 +116,16 @@ class Person:
 
 @dataclass(frozen=True, slots=True)
 class ResolveSummary:
-    """Outcome counts of a :meth:`PersonResolutionService.resolve` pass."""
+    """Outcome counts of a :meth:`PersonResolutionService.resolve` pass.
+
+    ``identities_merged`` is reserved and stays ``0`` for the v1 resolver:
+    exact email / operator bundling is modelled as an
+    :class:`~opshub.domain.events.IdentityLinked` onto the *existing*
+    person (counted under ``identities_linked``), not an
+    :class:`~opshub.domain.events.IdentityMerged`. ``IdentityMerged`` is
+    only emitted by the operator-driven :meth:`merge` path, never by
+    ``resolve``.
+    """
 
     persons_created: int
     identities_linked: int
