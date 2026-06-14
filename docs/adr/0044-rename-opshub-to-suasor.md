@@ -1,6 +1,6 @@
 # 0044. Rename opshub → Suasor (deferred implementation)
 
-- Status: Accepted (implementation deferred to a future top-level Phase) — Supersedes [ADR-0008](0008-naming-opshub.md)
+- Status: Superseded by [ADR-0046](0046-suasor-typescript-successor-product.md) (改名 → 別プロダクト新設に組み替え。opshub は改名せず legacy 凍結し、Suasor は TS で新築する。本 ADR の Suasor 名・根拠・命名最終形は 0046 が継承するが、§Decision の「opshub を改名する」は実行されない) — Supersedes [ADR-0008](0008-naming-opshub.md)
 - Date: 2026-06-14
 - Deciders: opshub maintainers
 - Related: [ADR-0008](0008-naming-opshub.md) (Naming: opshub — superseded by this ADR), [ADR-0004](0004-agent-runtime-boundary.md) (assistant agent direction — the "secretary that advises" the new name personifies), [ADR-0011](0011-ozzy-labs-ecosystem-adoption.md) (ozzy-labs naming rules), [ADR-0022](0022-mcp-server-surface.md) (MCP server name = `opshub`), [ADR-0032](0032-runtime-toml-config-loading.md) (`$XDG_CONFIG_HOME/opshub/` config dir), `pyproject.toml` (`ozzylabs-opshub` dist name / `[project.scripts]` bin)
@@ -92,6 +92,7 @@ opshub は個人向けの「助言する秘書エージェント」であって 
 | **無影響** | ecosystem 共通 skill `@ozzylabs/skills` (別 namespace) | (触らない) |
 
 注意点:
+
 - リネームは **DB schema / `external_id` を変えない**ため、**DB 再構築は原則不要**。operator 影響は config dir + keyring slot の移行 (→ 再 init / 再 auth) に限られる (再構築の要否最終判断は実装 Phase で確定)。
 - **ADR ファイル (本 ADR / 0008 含む) はリネーム対象外** — 履歴として `opshub` 表記のまま残す (ADR immutability)。将来のリネームで ADR 本文を書き換えない。
 - 新 architectural pattern ではなく**機械的リネーム**なので、専用 Phase 1 本で完結させる。
