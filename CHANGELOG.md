@@ -5,6 +5,45 @@ All notable changes to OpsHub will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/ozzy-labs/opshub/compare/v0.6.0...v0.7.0) (2026-07-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **mcp:** reclassify catchup as a non-destructive write (advances seen marker) ([#581](https://github.com/ozzy-labs/opshub/issues/581))
+* **slack:** flip workspace axis to per-alias config/auth/cursor/sync/CLI ([#555](https://github.com/ozzy-labs/opshub/issues/555)) (#561)
+* **slack:** re-key external_id with team_id prefix ([#554](https://github.com/ozzy-labs/opshub/issues/554)) (#560)
+
+### Added
+
+* **catchup:** seen-marker + opshub catchup + catchup skill (Phase 25-E) ([#576](https://github.com/ozzy-labs/opshub/issues/576)) ([46cd2a9](https://github.com/ozzy-labs/opshub/commit/46cd2a99d065bac4a09224b2434dcbc32ca7c24b))
+* **commitments:** commitment ledger core (Phase 25-C, ADR-0042) ([#575](https://github.com/ozzy-labs/opshub/issues/575)) ([41c51a7](https://github.com/ozzy-labs/opshub/commit/41c51a7bdf8993c21d771d9f0e134c5beec8c572))
+* **connectors:** cross-cutting author/sender normalisation (Phase 25-A) ([#573](https://github.com/ozzy-labs/opshub/issues/573)) ([cc989fa](https://github.com/ozzy-labs/opshub/commit/cc989faa2558ab94941c0789bc9231ce5bca979a))
+* **mcp:** expose commitment/person/catchup tools + wire skills (Phase 25-D) ([#577](https://github.com/ozzy-labs/opshub/issues/577)) ([a5785b9](https://github.com/ozzy-labs/opshub/commit/a5785b9873322f211435d4fff6f8786fce93d7cb))
+* **mcp:** reclassify catchup as a non-destructive write (advances seen marker) ([#581](https://github.com/ozzy-labs/opshub/issues/581)) ([8542aed](https://github.com/ozzy-labs/opshub/commit/8542aedf5df206aa0d6531f46ba77fce7010fcf2))
+* **persons:** person-axis identity resolution (Phase 25-B, ADR-0043) ([#574](https://github.com/ozzy-labs/opshub/issues/574)) ([e79feb8](https://github.com/ozzy-labs/opshub/commit/e79feb8ffa9d30fe2d64ff8c39dc53c56e0d0af4))
+* **slack:** flip workspace axis to per-alias config/auth/cursor/sync/CLI ([#555](https://github.com/ozzy-labs/opshub/issues/555)) ([#561](https://github.com/ozzy-labs/opshub/issues/561)) ([6bde38e](https://github.com/ozzy-labs/opshub/commit/6bde38e261e4131863766bf707b18d41c082b310))
+* **slack:** re-key demand digest on (team_id, channel) + MCP/CLI workspace labels ([#556](https://github.com/ozzy-labs/opshub/issues/556)) ([#562](https://github.com/ozzy-labs/opshub/issues/562)) ([52702a0](https://github.com/ozzy-labs/opshub/commit/52702a0856d68e166154bfe5a88b3c646b3532a7))
+* **slack:** re-key external_id with team_id prefix ([#554](https://github.com/ozzy-labs/opshub/issues/554)) ([#560](https://github.com/ozzy-labs/opshub/issues/560)) ([98ad197](https://github.com/ozzy-labs/opshub/commit/98ad1978284aed91af5d1716201f82f285a20c0f))
+
+
+### Fixed
+
+* gate pre-commit trivy on HIGH/CRITICAL severity ([#592](https://github.com/ozzy-labs/opshub/issues/592)) ([13d99f2](https://github.com/ozzy-labs/opshub/commit/13d99f289c697d049684b747122fb3514d48ccd1))
+* **mcp:** wire catchup tool to CatchupService (Phase 25 follow-up) ([#579](https://github.com/ozzy-labs/opshub/issues/579)) ([59ad35d](https://github.com/ozzy-labs/opshub/commit/59ad35d2dab6f3a3e5ad5e769cc4fd474bf01aa6))
+
+
+### Documentation
+
+* **adr:** add ADR-0041 Slack multi-workspace, supersede ADR-0039 ([#553](https://github.com/ozzy-labs/opshub/issues/553)) ([#558](https://github.com/ozzy-labs/opshub/issues/558)) ([7cd4c7b](https://github.com/ozzy-labs/opshub/commit/7cd4c7bdde77d69658d2c6fa6dec5e4c08091071))
+* **adr:** clarify ADR-0044 rename surface (scope, DB rebuild, ADR immutability) ([#582](https://github.com/ozzy-labs/opshub/issues/582)) ([1e8bec8](https://github.com/ozzy-labs/opshub/commit/1e8bec82c92f10e9ce2825768fe0d905d4f8e9d3))
+* **adr:** finalise ADR-0042 + Phase 25 docs sweep (19→27 tools, 14→15 skills) ([#571](https://github.com/ozzy-labs/opshub/issues/571)) ([#578](https://github.com/ozzy-labs/opshub/issues/578)) ([ceb1a98](https://github.com/ozzy-labs/opshub/commit/ceb1a982c0dc642d0358c5a9a8185b96a8979d29))
+* **adr:** record inbox source_ref idempotency invariant in ADR-0010 ([#522](https://github.com/ozzy-labs/opshub/issues/522)) ([#564](https://github.com/ozzy-labs/opshub/issues/564)) ([b2b3746](https://github.com/ozzy-labs/opshub/commit/b2b37463e0951d70437f4542a2b2be52fe1973ca))
+* **adr:** record language reassessment and Suasor TS successor fork ([#583](https://github.com/ozzy-labs/opshub/issues/583)) ([5da7191](https://github.com/ozzy-labs/opshub/commit/5da7191f9a5a4e7f98013747cdc61d07cd62f8d1))
+* **skills:** bump skill-catalog footer 14 → 15 skills (Phase 25 follow-up) ([#580](https://github.com/ozzy-labs/opshub/issues/580)) ([38f2187](https://github.com/ozzy-labs/opshub/commit/38f21872bf5dc55f215e5b3463aedac228f79127))
+* **slack:** fix Phase 24 doc divergences + cover auth-test/env-nest test gaps ([#552](https://github.com/ozzy-labs/opshub/issues/552)) ([#565](https://github.com/ozzy-labs/opshub/issues/565)) ([d08fd94](https://github.com/ozzy-labs/opshub/commit/d08fd945c44f1544a615e379ffda7aa1ee41b93e))
+* **slack:** Phase 24-E multi-workspace docs sweep + 2-workspace e2e (closeout [#557](https://github.com/ozzy-labs/opshub/issues/557)) ([#563](https://github.com/ozzy-labs/opshub/issues/563)) ([9ca08e8](https://github.com/ozzy-labs/opshub/commit/9ca08e845e9442012c66ecb3779d82db169d5384))
+
 ## [0.6.0](https://github.com/ozzy-labs/opshub/compare/v0.5.1...v0.6.0) (2026-06-09)
 
 ### ⚠ BREAKING CHANGES
